@@ -11,7 +11,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Int32Array, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, BooleanArray, BooleanBuilder, Int32Array, LargeListArray, ListArray,
+    OffsetSizeTrait, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute::take_arrays;
@@ -82,21 +83,41 @@ pub(crate) fn extract_list_values(
     list_array: &ArrayRef,
     return_type: &DataType,
 ) -> Result<ListValuesResult> {
+    // The early returns build arrays of the return type directly. Scalar values would
+    // rename the list field (for example, a Delta `element` field to `item`), and the
+    // result would then no longer match the planned return type.
     if list_array.null_count() == list_array.len() {
-        return Ok(ListValuesResult::EarlyReturn(ColumnarValue::Scalar(
-            ScalarValue::try_new_null(return_type)?,
+        return Ok(ListValuesResult::EarlyReturn(ColumnarValue::Array(
+            new_null_array(return_type, list_array.len()),
         )));
     }
 
     let values = list_values(list_array)?;
 
-    if values.is_empty()
-        && list_array.null_count() == 0
-        && matches!(return_type, DataType::List(_) | DataType::LargeList(_))
-    {
-        return Ok(ListValuesResult::EarlyReturn(ColumnarValue::Scalar(
-            ScalarValue::new_default(return_type)?,
-        )));
+    if values.is_empty() && list_array.null_count() == 0 {
+        match return_type {
+            DataType::List(field) => {
+                return Ok(ListValuesResult::EarlyReturn(ColumnarValue::Array(
+                    Arc::new(ListArray::new(
+                        Arc::clone(field),
+                        OffsetBuffer::new_zeroed(list_array.len()),
+                        new_empty_array(field.data_type()),
+                        None,
+                    )),
+                )));
+            }
+            DataType::LargeList(field) => {
+                return Ok(ListValuesResult::EarlyReturn(ColumnarValue::Array(
+                    Arc::new(LargeListArray::new(
+                        Arc::clone(field),
+                        OffsetBuffer::new_zeroed(list_array.len()),
+                        new_empty_array(field.data_type()),
+                        None,
+                    )),
+                )));
+            }
+            _ => {}
+        }
     }
 
     Ok(ListValuesResult::Values(values))
@@ -228,4 +249,50 @@ fn offsets_to_indices<O: OffsetSizeTrait>(
         out.extend(0..len);
     }
     Ok(Arc::new(Int32Array::from(out)) as ArrayRef)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{Array, ArrayRef, Int32Array, ListArray};
+    use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
+    use datafusion::arrow::datatypes::{DataType, Field};
+    use datafusion_common::Result;
+    use datafusion_expr::ColumnarValue;
+
+    use super::{ListValuesResult, extract_list_values};
+
+    fn element_list(offsets: Vec<i32>, nulls: Option<NullBuffer>) -> (ArrayRef, DataType) {
+        let field = Arc::new(Field::new("element", DataType::Int32, true));
+        let list = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            nulls,
+        );
+        (Arc::new(list), DataType::List(field))
+    }
+
+    fn early_return_type(list: &ArrayRef, return_type: &DataType) -> Result<Option<DataType>> {
+        Ok(match extract_list_values(list, return_type)? {
+            ListValuesResult::EarlyReturn(ColumnarValue::Array(array))
+                if array.len() == list.len() =>
+            {
+                Some(array.data_type().clone())
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn early_returns_keep_the_return_list_field() -> Result<()> {
+        let (empty, return_type) = element_list(vec![0, 0, 0], None);
+        assert_eq!(early_return_type(&empty, &return_type)?, Some(return_type));
+
+        let (null, return_type) =
+            element_list(vec![0, 0, 0], Some(NullBuffer::from(vec![false, false])));
+        assert_eq!(early_return_type(&null, &return_type)?, Some(return_type));
+        Ok(())
+    }
 }

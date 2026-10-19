@@ -13,7 +13,7 @@ use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_
 use crate::physical_plan::write_location;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
-use crate::spec::partition::{PartitionSpec, UnboundPartitionField, UnboundPartitionSpec};
+use crate::spec::partition::{PartitionSpec, UnboundPartitionSpec};
 use crate::spec::{FormatVersion, Schema as IcebergSchema, TableMetadata, TableRequirement};
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_expr,
@@ -101,21 +101,13 @@ impl IcebergWriteContext {
     }
 
     pub fn unbound_writer_partition_spec(&self) -> UnboundPartitionSpec {
-        let fields = self
-            .writer_partition_spec
+        self.writer_partition_spec
             .as_ref()
-            .map(|spec| {
-                spec.fields()
-                    .iter()
-                    .map(|field| UnboundPartitionField {
-                        source_id: field.source_id,
-                        name: field.name.clone(),
-                        transform: field.transform,
-                    })
-                    .collect()
+            .map(UnboundPartitionSpec::from)
+            .unwrap_or_else(|| UnboundPartitionSpec {
+                spec_id: None,
+                fields: vec![],
             })
-            .unwrap_or_default();
-        UnboundPartitionSpec { fields }
     }
 
     pub fn data_location(&self) -> Result<Url> {
@@ -191,15 +183,6 @@ pub fn prepare_iceberg_write_context(
             if !partition_columns.is_empty() {
                 let current_schema = &schema_outcome.iceberg_schema;
                 let mut builder = PartitionSpec::builder();
-                let next_spec_id = table_metadata
-                    .partition_specs
-                    .iter()
-                    .map(PartitionSpec::spec_id)
-                    .max()
-                    .unwrap_or(-1)
-                    + 1;
-                builder = builder.with_spec_id(next_spec_id);
-                let mut next_partition_id = table_metadata.last_partition_id + 1;
                 for field in partition_columns {
                     let field_id =
                         current_schema
@@ -211,34 +194,13 @@ pub fn prepare_iceberg_write_context(
                                 ))
                             })?;
                     let transform = iceberg_transform_from_partition_field(field);
-                    let partition_id = table_metadata
-                        .partition_specs
-                        .iter()
-                        .flat_map(|spec| spec.fields())
-                        .find(|previous| {
-                            previous.source_id == field_id && previous.transform == transform
-                        })
-                        .map(|previous| previous.field_id)
-                        .unwrap_or_else(|| {
-                            let id = next_partition_id;
-                            next_partition_id += 1;
-                            id
-                        });
-                    builder = builder.add_field_with_id(
-                        field_id,
-                        partition_id,
-                        partition_field_name(field),
-                        transform,
-                    );
+                    builder = builder.add_field(field_id, partition_field_name(field), transform);
                 }
-                let candidate = builder.build();
                 partition_spec = Some(
-                    table_metadata
-                        .partition_specs
-                        .iter()
-                        .find(|previous| previous.is_compatible_with(&candidate))
-                        .cloned()
-                        .unwrap_or(candidate),
+                    builder
+                        .build()
+                        .assign_ids(table_metadata)
+                        .map_err(DataFusionError::Plan)?,
                 );
             }
         } else {

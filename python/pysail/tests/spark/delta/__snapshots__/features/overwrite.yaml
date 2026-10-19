@@ -59,7 +59,7 @@ data:
             UnionExec
               ProjectionExec: expr=[CAST(CAST(column1@0 AS Int64) AS Int64) as id, CAST(column2@1 AS Utf8) as category, CAST(CAST(column3@2 AS Int64) AS Int64) as value]
                 DataSourceExec: partitions=1, partition_sizes=[1]
-              FilterExec: NOT category@1 = A
+              FilterExec: (category@1 = A) IS DISTINCT FROM true
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/, version=1, projection=None, limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
                     FilterExec: get_field(stats_parsed@7, minValues, category) IS NULL OR get_field(stats_parsed@7, maxValues, category) IS NULL OR get_field(stats_parsed@7, minValues, category) <= A AND get_field(stats_parsed@7, maxValues, category) >= A
@@ -91,7 +91,7 @@ data:
             UnionExec
               ProjectionExec: expr=[CAST(CAST(column1@0 AS Int64) AS Int64) as id, CAST(column2@1 AS Utf8) as category, CAST(CAST(column3@2 AS Int64) AS Int64) as value]
                 DataSourceExec: partitions=1, partition_sizes=[1]
-              FilterExec: NOT id@0 >= CAST(0 AS Int64)
+              FilterExec: (id@0 >= CAST(0 AS Int64)) IS DISTINCT FROM true
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_overwrite/, version=1, projection=None, limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_overwrite/)
                     FilterExec: get_field(stats_parsed@7, maxValues, id) IS NULL OR get_field(stats_parsed@7, maxValues, id) >= 0

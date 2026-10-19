@@ -166,6 +166,7 @@ pub enum TableRequirement {
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum TableUpdate {
     UpgradeFormatVersion {
+        #[serde(rename = "format-version")]
         format_version: FormatVersion,
     },
     AssignUuid {
@@ -186,6 +187,7 @@ pub enum TableUpdate {
         spec_id: i32,
     },
     AddSortOrder {
+        #[serde(rename = "sort-order")]
         sort_order: SortOrder,
     },
     SetDefaultSortOrder {

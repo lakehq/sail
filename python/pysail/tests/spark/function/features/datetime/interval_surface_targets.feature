@@ -964,7 +964,6 @@ Feature: the interval surface, vs Spark 4.2.0
         | v |
         | 26 |
 
-    @sail-bug
     Scenario: cast -- year to int answers what Spark says
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = true
@@ -977,7 +976,6 @@ Feature: the interval surface, vs Spark 4.2.0
         | v |
         | 2 |
 
-    @sail-bug
     Scenario: cast -- month to int answers what Spark says
       Given config spark.sql.session.timeZone = UTC
       And config spark.sql.ansi.enabled = true

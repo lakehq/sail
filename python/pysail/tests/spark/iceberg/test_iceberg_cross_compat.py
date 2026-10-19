@@ -86,7 +86,8 @@ def test_pyiceberg_read_after_sail_append(spark, tmp_path):
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
-def test_static_table_read_after_sail_overwrite(spark, tmp_path):
+@pytest.mark.parametrize("format_version", [1, 2])
+def test_static_table_read_after_sail_overwrite(spark, tmp_path, format_version):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.static_overwrite"
     schema = Schema(
@@ -94,7 +95,9 @@ def test_static_table_read_after_sail_overwrite(spark, tmp_path):
         NestedField(field_id=2, name="event", field_type=StringType(), required=False),
         NestedField(field_id=3, name="score", field_type=DoubleType(), required=False),
     )
-    table = catalog.create_table(identifier=identifier, schema=schema)
+    table = catalog.create_table(
+        identifier=identifier, schema=schema, properties={"format-version": str(format_version)}
+    )
     try:
         df = spark.createDataFrame(
             [(10, "A", 0.98), (11, "B", 0.54), (12, "A", 0.76)],

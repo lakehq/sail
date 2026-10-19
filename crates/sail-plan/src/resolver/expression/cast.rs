@@ -16,7 +16,7 @@ use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
+    SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -29,10 +29,10 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::interval::with_interval_range;
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::predicate::spark_interval_metadata_for_expression;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -45,6 +45,39 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        if let spec::DataType::UserDefined {
+            jvm_class,
+            python_class,
+            ..
+        } = &cast_to_type
+        {
+            let resolved = self
+                .resolve_named_expression(expr.clone(), schema, state)
+                .await?;
+            let field = resolved.expr.to_field(schema)?.1;
+            if let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_UDT_METADATA_KEY) {
+                let source: spec::SparkUdtMetadata = serde_json::from_str(metadata)
+                    .map_err(|e| PlanError::internal(format!("invalid UDT metadata: {e}")))?;
+                let same_type = match (&source.jvm_class, jvm_class) {
+                    (Some(source), Some(target)) => source == target,
+                    (None, None) => {
+                        source.python_class.is_some() && source.python_class == *python_class
+                    }
+                    _ => false,
+                };
+                if same_type {
+                    return Ok(resolved);
+                }
+                // Different JVM UDTs can accept each other's user classes through
+                // inheritance. Without that hierarchy, leave them unsupported.
+                if source.jvm_class.is_none() || jvm_class.is_none() {
+                    return Err(PlanError::analysis(
+                        "cannot cast between incompatible user-defined types",
+                    ));
+                }
+            }
+        }
+
         // CAST(expr AS VARIANT) → rewrite to SparkCastToVariant UDF
         // Must intercept before resolve_data_type converts Variant to Struct.
         if matches!(cast_to_type, spec::DataType::Variant) {
@@ -88,14 +121,34 @@ impl PlanResolver<'_> {
             },
             _ => None,
         };
-        // The interval fields are part of the Spark type but not of the Arrow type, so they are
-        // declared on the cast expression itself.
+        // A year-month interval cast to `INTERVAL YEAR` drops its months, the same way.
+        let year_month_truncation = matches!(
+            &cast_to_type,
+            spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::YearMonth,
+                start_field,
+                end_field,
+            } if end_field.or(*start_field) == Some(spec::IntervalFieldType::Year)
+        );
+        // The range the target type declares, which also names the column.
         let target_interval_range = match &cast_to_type {
             spec::DataType::Interval {
                 interval_unit,
                 start_field,
                 end_field,
             } => IntervalRange::from_declared(*interval_unit, *start_field, *end_field),
+            _ => None,
+        };
+        // The interval fields are part of the Spark type but not of the Arrow type, so they are
+        // declared on the cast expression itself.
+        let spark_interval_metadata = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => spec::SparkIntervalMetadata::try_new(*interval_unit, *start_field, *end_field)?
+                .map(spec::SparkIntervalMetadata::to_json)
+                .transpose()?,
             _ => None,
         };
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
@@ -225,6 +278,30 @@ impl PlanResolver<'_> {
                     to,
                 )
             }
+            (DataType::Interval(IntervalUnit::YearMonth), to, is_try) if to.is_integer() => {
+                let interval_metadata = expr_field
+                    .metadata()
+                    .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                    .map(|value| spec::SparkIntervalMetadata::from_json(value))
+                    .transpose()?;
+                let months = ScalarUDF::from(YearMonthIntervalMonths::new()).call(vec![expr]);
+                let value = if matches!(
+                    interval_metadata,
+                    Some(spec::SparkIntervalMetadata::YearMonth {
+                        end_field: spec::YearMonthIntervalField::Year,
+                        ..
+                    })
+                ) {
+                    months / lit(12_i32)
+                } else {
+                    months
+                };
+                if is_try {
+                    try_cast(value, to)
+                } else {
+                    cast(value, to)
+                }
+            }
             (
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
                 DataType::Interval(IntervalUnit::YearMonth),
@@ -257,13 +334,16 @@ impl PlanResolver<'_> {
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (_, DataType::LargeUtf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToLargeUtf8::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToLargeUtf8::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (_, DataType::Utf8View, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8View::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkToUtf8View::new())
+                    .call(spark_string_cast_arguments(expr, schema)?)
             }
             (DataType::Date32 | DataType::Date64, to, _)
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
@@ -289,6 +369,16 @@ impl PlanResolver<'_> {
                     cast(renamed, to)
                 }
             }
+            (
+                from,
+                DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale),
+                _,
+            ) if from.is_numeric()
+                && !self.config.ansi_mode
+                && (is_try || decimal_cast_can_overflow(&from, precision, scale)) =>
+            {
+                try_cast(expr, cast_to_type.clone())
+            }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
@@ -304,21 +394,40 @@ impl PlanResolver<'_> {
         };
         // The same holds for a year-month interval cast to `INTERVAL YEAR`: the months are
         // dropped, which Spark does by rebuilding the value from its years.
-        let expr = match target_interval_range {
-            Some(range)
-                if from_is_year_month_interval && range.end == spec::IntervalFieldType::Year =>
-            {
-                let years = ScalarUDF::from(SparkDatePart::new()).call(vec![lit("year"), expr]);
-                ScalarUDF::from(SparkMakeYmInterval::new(self.config.ansi_mode))
-                    .call(vec![years, lit(0)])
+        let expr = if from_is_year_month_interval && year_month_truncation {
+            let years = ScalarUDF::from(SparkDatePart::new()).call(vec![lit("year"), expr]);
+            ScalarUDF::from(SparkMakeYmInterval::new(self.config.ansi_mode))
+                .call(vec![years, lit(0)])
+        } else {
+            expr
+        };
+        Ok(match spark_interval_metadata {
+            Some(metadata) => {
+                // Nested expressions consume the Expr without its NamedExpr metadata.
+                // Keep the target qualifier on the cast field as well as the projection.
+                let field = expr.to_field(schema)?.1;
+                let mut field_metadata = field.metadata().clone();
+                field_metadata.insert(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata.clone(),
+                );
+                let field = Arc::new(field.as_ref().clone().with_metadata(field_metadata));
+                let expr = match expr {
+                    expr::Expr::Cast(cast) => {
+                        expr::Expr::Cast(expr::Cast::new_from_field(cast.expr, field))
+                    }
+                    expr::Expr::TryCast(cast) => {
+                        expr::Expr::TryCast(expr::TryCast::new_from_field(cast.expr, field))
+                    }
+                    expr => expr::Expr::Cast(expr::Cast::new_from_field(Box::new(expr), field)),
+                };
+                NamedExpr::new(name, expr).with_metadata(vec![(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])
             }
-            _ => expr,
-        };
-        let expr = match target_interval_range {
-            Some(range) => with_interval_range(expr, range, schema)?,
-            None => expr,
-        };
-        Ok(NamedExpr::new(name, expr))
+            None => NamedExpr::new(name, expr),
+        })
     }
 }
 
@@ -375,6 +484,36 @@ fn day_time_interval_to_number(
         try_cast(value, to),
     )
     .otherwise(overflow)?)
+}
+
+fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool {
+    let integer_digits = i16::from(precision) - i16::from(scale);
+    match from {
+        DataType::Decimal128(from_precision, from_scale)
+        | DataType::Decimal256(from_precision, from_scale) => {
+            let source_integer_digits = i16::from(*from_precision) - i16::from(*from_scale);
+            integer_digits < source_integer_digits
+                || (integer_digits == source_integer_digits && scale < *from_scale)
+        }
+        DataType::Int8 | DataType::UInt8 => scale < 0 || integer_digits < 3,
+        DataType::Int16 | DataType::UInt16 => scale < 0 || integer_digits < 5,
+        DataType::Int32 | DataType::UInt32 => scale < 0 || integer_digits < 10,
+        DataType::Int64 | DataType::UInt64 => scale < 0 || integer_digits < 20,
+        _ => true,
+    }
+}
+
+fn spark_string_cast_arguments(
+    expr: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let interval = spark_interval_metadata_for_expression(&expr, schema)?;
+    let mut arguments = vec![expr];
+    if let Some(interval) = interval {
+        // Physical expression serialization does not preserve intermediate field metadata.
+        arguments.push(lit(interval.to_json()?));
+    }
+    Ok(arguments)
 }
 
 /// Returns true if the cast from `from` to `to` involves a Struct

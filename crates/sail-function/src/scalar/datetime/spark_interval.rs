@@ -2,15 +2,18 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType, DurationMicrosecondType, IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType,
-    TimeUnit,
+    DataType, DurationMicrosecondType, Field, FieldRef, Int32Type, IntervalMonthDayNano,
+    IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion_common::arrow::array::{AsArray, PrimitiveArray};
 use datafusion_common::arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::literal::interval::IntervalValue;
@@ -98,6 +101,70 @@ define_interval_udf!(
     string_to_year_month_interval,
     ScalarValue::IntervalYearMonth,
 );
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct YearMonthIntervalMonths {
+    signature: Signature,
+}
+
+impl Default for YearMonthIntervalMonths {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl YearMonthIntervalMonths {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::exact(
+                vec![DataType::Interval(IntervalUnit::YearMonth)],
+                Volatility::Immutable,
+            ),
+        }
+    }
+}
+
+impl ScalarUDFImpl for YearMonthIntervalMonths {
+    fn name(&self) -> &str {
+        "year_month_interval_months"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int32)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [field] = take_function_args(self.name(), args.arg_fields)?;
+        // The numeric output must not retain interval qualifier metadata.
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Int32,
+            field.is_nullable(),
+        )))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args.one()? {
+            ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(months)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int32(months)))
+            }
+            ColumnarValue::Array(array)
+                if array.data_type() == &DataType::Interval(IntervalUnit::YearMonth) =>
+            {
+                Ok(ColumnarValue::Array(Arc::new(
+                    array
+                        .as_primitive::<IntervalYearMonthType>()
+                        .reinterpret_cast::<Int32Type>(),
+                )))
+            }
+            _ => exec_err!("expected year month interval"),
+        }
+    }
+}
 
 define_interval_udf!(
     SparkDayTimeInterval,

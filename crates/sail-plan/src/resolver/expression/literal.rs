@@ -1,13 +1,12 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
 use chrono::{NaiveTime, Timelike};
-use datafusion_expr::expr;
-use datafusion_expr::expr::FieldMetadata;
+use datafusion_expr::expr::{self, FieldMetadata};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
@@ -24,31 +23,16 @@ impl PlanResolver<'_> {
         literal: spec::Literal,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        // The interval fields are part of the Spark type but not of the Arrow type, so they are
-        // carried in the field metadata of the literal itself.
-        let range = match &literal {
-            spec::Literal::IntervalYearMonth {
-                months: _,
-                start_field,
-                end_field,
-            } => IntervalRange::from_declared(
-                spec::IntervalUnit::YearMonth,
-                *start_field,
-                *end_field,
-            ),
-            spec::Literal::DurationMicrosecond {
-                microseconds: _,
-                start_field,
-                end_field,
-            } => {
-                IntervalRange::from_declared(spec::IntervalUnit::DayTime, *start_field, *end_field)
-            }
-            _ => None,
-        };
-        let metadata = range
-            .map(|x| x.to_metadata())
-            .transpose()?
-            .map(FieldMetadata::from);
+        let field_metadata = literal
+            .spark_interval_metadata()?
+            .map(|metadata| {
+                let metadata = metadata.to_json()?;
+                Ok::<_, crate::error::PlanError>(FieldMetadata::from(HashMap::from([(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    metadata,
+                )])))
+            })
+            .transpose()?;
         let literal = self.resolve_literal(literal, state)?;
         let service = self.ctx.extension::<PlanService>()?;
         let name = service
@@ -56,7 +40,7 @@ impl PlanResolver<'_> {
             .literal_to_string(&literal, &self.config.session_timezone)?;
         Ok(NamedExpr::new(
             vec![name],
-            expr::Expr::Literal(literal, metadata),
+            expr::Expr::Literal(literal, field_metadata),
         ))
     }
 

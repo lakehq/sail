@@ -36,6 +36,7 @@ impl From<ExecutionError> for SessionError {
             ExecutionError::JsonError(e) => SessionError::InternalError(e.to_string()),
             ExecutionError::IoError(e) => SessionError::IoError(e),
             ExecutionError::TonicTransportError(e) => SessionError::InternalError(e.to_string()),
+            ExecutionError::FlightTransportError(e) => SessionError::InternalError(e.to_string()),
             ExecutionError::TonicStatusError(e) => SessionError::InternalError(e.to_string()),
             ExecutionError::KubernetesError(e) => SessionError::InternalError(e.to_string()),
             ExecutionError::InternalError(e) => SessionError::InternalError(e),

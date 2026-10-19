@@ -93,13 +93,8 @@ impl IntervalRange {
         let default = Self::default_for(data_type)?;
         let declared = metadata
             .get(SAIL_SPARK_INTERVAL_METADATA_KEY)
-            .and_then(|x| serde_json::from_str::<SparkIntervalMetadata>(x).ok())
-            .and_then(|x| match (x.start_field, x.end_field) {
-                (Some(start), Some(end)) => Some(Self::new(start, end)),
-                (Some(start), None) => Some(Self::single(start)),
-                // Spark ignores a trailing field without a leading one.
-                (None, _) => None,
-            })
+            .and_then(|x| SparkIntervalMetadata::from_json(x).ok())
+            .map(|x| Self::new(x.start_field(), x.end_field()))
             .filter(|x| x.is_valid_for(default));
         Some(declared.unwrap_or(default))
     }
@@ -108,18 +103,41 @@ impl IntervalRange {
         self.start <= self.end && default.start <= self.start && self.end <= default.end
     }
 
+    /// The default range of the family this range belongs to, which is what Spark declares for a
+    /// result that does not keep the range of its input.
+    pub fn family_default(self) -> Self {
+        match self.start {
+            IntervalFieldType::Year | IntervalFieldType::Month => Self::YEAR_MONTH,
+            _ => Self::DAY_TIME,
+        }
+    }
+
     /// The range of the result of adding or subtracting two intervals of the same family
     /// (`TypeCoercion.scala`, `findTightestCommonType`).
     pub fn widen(self, other: Self) -> Self {
         Self::new(self.start.min(other.start), self.end.max(other.end))
     }
 
+    /// The interval family the range belongs to, which the metadata is tagged with.
+    fn interval_unit(self) -> spec::IntervalUnit {
+        match self.start {
+            IntervalFieldType::Year | IntervalFieldType::Month => spec::IntervalUnit::YearMonth,
+            _ => spec::IntervalUnit::DayTime,
+        }
+    }
+
     pub fn to_metadata(self) -> Result<HashMap<String, String>> {
-        let value = serde_json::to_string(&SparkIntervalMetadata {
-            start_field: Some(self.start),
-            end_field: Some(self.end),
-        })
-        .map_err(|e| DataFusionError::Internal(format!("interval metadata: {e}")))?;
+        let internal = |e: sail_common::error::CommonError| {
+            DataFusionError::Internal(format!("interval metadata: {e}"))
+        };
+        let value =
+            SparkIntervalMetadata::try_new(self.interval_unit(), Some(self.start), Some(self.end))
+                .map_err(internal)?
+                .ok_or_else(|| {
+                    DataFusionError::Internal("interval metadata: no range".to_string())
+                })?
+                .to_json()
+                .map_err(internal)?;
         Ok(HashMap::from([(
             SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
             value,

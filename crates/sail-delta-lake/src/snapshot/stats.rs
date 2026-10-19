@@ -58,12 +58,6 @@ struct FileRowCounts {
     wide_bounds: bool,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct DeltaColumnStatistics {
-    pub data_type: ArrowDataType,
-    pub statistics: ColumnStatistics,
-}
-
 // TODO validate this works with "wide and narrow" builds / stats
 
 fn partition_value_matches_scalar(partition_value: &str, value: &ScalarValue) -> bool {
@@ -409,7 +403,7 @@ impl<'a> SnapshotPruningStats<'a> {
             .unwrap_or(Precision::Absent)
     }
 
-    fn build_column_path_stats(&self, logical_path: &[String]) -> Option<DeltaColumnStatistics> {
+    fn build_column_path_stats(&self, logical_path: &[String]) -> Option<ColumnStatistics> {
         let (physical_path, data_type, is_partition) = self.resolve_logical_path(logical_path)?;
         let null_count = if is_partition {
             self.partition_null_count(physical_path.first()?)
@@ -485,29 +479,18 @@ impl<'a> SnapshotPruningStats<'a> {
             max_value = max_value.map(widen_timestamp_max_scalar).to_inexact();
         }
 
-        Some(DeltaColumnStatistics {
-            data_type,
-            statistics: ColumnStatistics {
-                null_count,
-                max_value,
-                min_value,
-                sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
-                byte_size: Precision::Absent,
-            },
+        Some(ColumnStatistics {
+            null_count,
+            max_value,
+            min_value,
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Absent,
         })
     }
 
     pub(crate) fn column_stats(&self, name: impl AsRef<str>) -> Option<ColumnStatistics> {
         self.build_column_path_stats(&[name.as_ref().to_string()])
-            .map(|stats| stats.statistics)
-    }
-
-    pub(crate) fn exact_column_stats(
-        &self,
-        logical_path: &[String],
-    ) -> Option<DeltaColumnStatistics> {
-        self.build_column_path_stats(logical_path)
     }
 
     pub(crate) fn statistics(&self) -> Option<Statistics> {
@@ -733,5 +716,21 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
         }
 
         Some(BooleanArray::from(contains))
+    }
+}
+
+impl sail_common_datafusion::metadata_aggregate::ExactAggregateStatistics
+    for SnapshotPruningStats<'_>
+{
+    fn schema(&self) -> datafusion::arrow::datatypes::SchemaRef {
+        Arc::new(self.snapshot.schema().clone())
+    }
+
+    fn row_count(&self) -> Option<usize> {
+        self.exact_num_records()
+    }
+
+    fn column_statistics(&self, logical_path: &[String]) -> Option<ColumnStatistics> {
+        self.build_column_path_stats(logical_path)
     }
 }

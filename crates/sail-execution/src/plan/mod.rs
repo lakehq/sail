@@ -6,6 +6,7 @@ pub(crate) use shuffle_read::ShuffleReadExec;
 pub(crate) use shuffle_write::{ShufflePartitioning, ShuffleWriteExec};
 pub(crate) use stage_input::StageInputExec;
 
+#[expect(clippy::enum_variant_names)]
 pub(crate) mod r#gen {
     tonic::include_proto!("sail.plan");
 }

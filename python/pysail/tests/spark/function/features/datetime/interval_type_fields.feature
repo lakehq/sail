@@ -406,7 +406,6 @@ Feature: Leading and trailing fields of the interval types
          |    |-- a: interval hour (nullable = false)
         """
 
-    @sail-bug
     Scenario: The qualifier survives a map
       When query
         """

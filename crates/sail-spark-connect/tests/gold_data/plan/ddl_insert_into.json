@@ -653,7 +653,7 @@
                   "part",
                   {
                     "literal": {
-                      "durationMicrosecond": {
+                      "intervalDayTimeMicrosecond": {
                         "microseconds": 93784128462,
                         "startField": "day",
                         "endField": "second"

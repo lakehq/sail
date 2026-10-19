@@ -3,12 +3,13 @@ use std::sync::Arc;
 use datafusion_common::DFSchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::{Filter, Projection};
-use datafusion_expr::{Expr, LogicalPlan, expr_fn};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, expr_fn};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::predicate::coerce_timestamp_in_subquery_pair;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -20,8 +21,8 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expression(expr, schema, state).await?;
-        let subquery = {
+        let mut expr = self.resolve_expression(expr, schema, state).await?;
+        let mut subquery = {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             let plan = self.resolve_query_plan(subquery, scope.state()).await?;
             // Wrap in a Projection so that DataFusion's head_output_expr() works
@@ -41,6 +42,37 @@ impl PlanResolver<'_> {
                 LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(plan))?)
             }
         };
+        // The RHS is not part of the parent expression tree, so timestamp coercion must update
+        // both plans before DataFusion analyzes the IN-subquery comparison.
+        if subquery.schema().fields().len() == 1 {
+            let left_type = expr.get_type(schema.as_ref())?;
+            let right_type = subquery.schema().field(0).data_type().clone();
+            let right_column = subquery
+                .schema()
+                .columns()
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    PlanError::internal("IN subquery should expose one output column")
+                })?;
+            let (coerced_left, coerced_right, _, right_changed) =
+                coerce_timestamp_in_subquery_pair(
+                    expr,
+                    &left_type,
+                    schema,
+                    Expr::Column(right_column.clone()),
+                    &right_type,
+                    subquery.schema(),
+                    &self.config,
+                )?;
+            expr = coerced_left;
+            if right_changed {
+                subquery = LogicalPlan::Projection(Projection::try_new(
+                    vec![coerced_right.alias(right_column.name)],
+                    Arc::new(subquery),
+                )?);
+            }
+        }
         let in_subquery = if !negated {
             expr_fn::in_subquery(expr, Arc::new(subquery))
         } else {
@@ -131,7 +163,25 @@ impl PlanResolver<'_> {
         let filter_expr = outer_refs
             .into_iter()
             .zip(subquery_cols)
-            .map(|(outer, inner_col)| Expr::eq(Expr::Column(inner_col), outer))
+            .map(|(outer, inner_col)| -> PlanResult<Expr> {
+                let outer_type = outer.get_type(schema.as_ref())?;
+                let (_, inner_field) = subquery_plan
+                    .schema()
+                    .qualified_field_from_column(&inner_col)?;
+                let inner_type = inner_field.data_type().clone();
+                let (outer, inner, _, _) = coerce_timestamp_in_subquery_pair(
+                    outer,
+                    &outer_type,
+                    schema,
+                    Expr::Column(inner_col),
+                    &inner_type,
+                    subquery_plan.schema(),
+                    &self.config,
+                )?;
+                Ok(Expr::eq(inner, outer))
+            })
+            .collect::<PlanResult<Vec<_>>>()?
+            .into_iter()
             .reduce(Expr::and)
             .ok_or_else(|| PlanError::invalid("empty IN subquery values"))?;
         let filtered = LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(subquery_plan))?);

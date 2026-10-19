@@ -1,6 +1,7 @@
 use chumsky::Parser;
 use chumsky::input::Input;
 use chumsky::span::SimpleSpan;
+use sail_common::spec;
 use sail_sql_parser::ast::data_type::DataType;
 use sail_sql_parser::ast::expression::{Expr, IntervalLiteral};
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
@@ -16,6 +17,7 @@ use sail_sql_parser::parser::{
 use sail_sql_parser::token::{Punctuation, Token};
 
 use crate::error::{SqlError, SqlResult};
+use crate::expression::from_ast_expression;
 use crate::literal::datetime::{
     DateValue, TimeValue, TimestampValue, create_date_parser, create_time_parser,
     create_timestamp_parser,
@@ -28,15 +30,19 @@ fn map_parser_input<'a, C>(
     (t, s)
 }
 
+fn tokenize<'a>(
+    input: &'a str,
+    options: &ParserOptions,
+) -> SqlResult<Vec<(Token<'a>, SimpleSpan<usize>)>> {
+    let lexer = create_lexer::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(options);
+    lexer.parse(input).into_result().map_err(SqlError::parser)
+}
+
 macro_rules! parse {
     ($input:ident, $parser:ident $(,)?) => {{
         let options = ParserOptions::default();
         let length = $input.len();
-        let lexer = create_lexer::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
-        let tokens = lexer
-            .parse($input)
-            .into_result()
-            .map_err(SqlError::parser)?;
+        let tokens = tokenize($input, &options)?;
         let tokens = tokens
             .as_slice()
             .map((length..length).into(), map_parser_input);
@@ -53,9 +59,7 @@ macro_rules! parse_simple {
 }
 
 pub fn rewrite_positional_parameter_markers(s: &str) -> SqlResult<(String, usize)> {
-    let options = ParserOptions::default();
-    let lexer = create_lexer::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
-    let tokens = lexer.parse(s).into_result().map_err(SqlError::parser)?;
+    let tokens = tokenize(s, &ParserOptions::default())?;
 
     let mut output = String::with_capacity(s.len());
     let mut last = 0;
@@ -79,6 +83,27 @@ pub fn parse_data_type(s: &str) -> SqlResult<DataType> {
 
 pub fn parse_expression(s: &str) -> SqlResult<Expr> {
     parse!(s, create_expression_parser)
+}
+
+/// Ignores SQL comments and decodes string literals for native configuration settings.
+pub fn parse_native_config_value(s: &str) -> SqlResult<String> {
+    let tokens = tokenize(s, &ParserOptions::default())?;
+    let mut value = String::with_capacity(s.len());
+    let mut last = 0;
+    for (token, span) in tokens {
+        if matches!(
+            token,
+            Token::SingleLineComment { .. } | Token::MultiLineComment { .. }
+        ) {
+            value.push_str(&s[last..span.start]);
+            last = span.end;
+        }
+    }
+    value.push_str(&s[last..]);
+    match parse_expression(&value).and_then(from_ast_expression) {
+        Ok(spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) })) => Ok(value),
+        _ => Ok(value.trim().to_string()),
+    }
 }
 
 pub fn parse_statements(s: &str) -> SqlResult<Vec<Statement>> {
@@ -150,7 +175,18 @@ mod tests {
     }
 
     #[test]
+    fn test_hint_requires_parameters_inside_parentheses() {
+        for hint in ["REPARTITION", "COALESCE", "UNKNOWN_HINT"] {
+            let sql = format!("SELECT /*+ {hint}() */ 1");
+            assert!(parse_one_statement(&sql).is_err(), "{sql}");
+        }
+        assert!(parse_one_statement("SELECT /*+ REPARTITION */ 1").is_ok());
+    }
+
+    #[test]
     fn test_unparse() -> SqlResult<()> {
+        let hint_sql = "SELECT /*+ REPARTITION ( 3 , id ) , COALESCE ( 2 ) */ id FROM t ";
+        assert_eq!(parse_one_statement(hint_sql)?.text(), hint_sql);
         assert_eq!(
             parse_one_statement("/* */ SELECT 1+1")?.text(),
             "SELECT 1 + 1 "
@@ -166,6 +202,23 @@ mod tests {
         assert_eq!(
             parse_one_statement("SELECT U&\"a#2014b#+002014c\"   UESCAPE '#'")?.text(),
             "SELECT U&\"a#2014b#+002014c\" UESCAPE '#' "
+        );
+        assert_eq!(
+            parse_one_statement("SET k=` a;b``c `")?.text(),
+            "SET k = ` a;b``c ` "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_call_procedure() -> SqlResult<()> {
+        let statement = parse_one_statement(
+            "CALL sail.system.rollback_to_snapshot(table => 'events', snapshot_id => 42)",
+        )?;
+        assert!(matches!(statement, Statement::CallProcedure { .. }));
+        assert_eq!(
+            statement.text(),
+            "CALL sail . system . rollback_to_snapshot ( table => 'events' , snapshot_id => 42 ) "
         );
         Ok(())
     }

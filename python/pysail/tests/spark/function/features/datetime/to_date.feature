@@ -430,3 +430,51 @@ Feature: to_date with an argument coming from a column
         | 2025-11-02 23:30:45.123456       | 2025-11-02 23:30:45.123456 | 2025-11-02 23:30:45.123456 | 2025-11-02 | 2025-11-02 |
         | 2025-11-02 23:30:45.123456-08:00 | 2025-11-02 23:30:45.123456 | 2025-11-03 07:30:45.123456 | 2025-11-02 | 2025-11-03 |
         | 2025-11-02 23:30:45.123456+01:00 | 2025-11-02 23:30:45.123456 | 2025-11-02 22:30:45.123456 | 2025-11-02 | 2025-11-02 |
+
+  Rule: Strings Spark's date cast accepts
+    # Spark parses a date-ish string with the hand-written parseTimestampString, not with a
+    # DateTimeFormatter. That parser trims leading and trailing whitespace (and ISO control
+    # characters) and accepts an ISO `T` separator, so all of these succeed.
+    #
+    # The forms Sail ALREADY handles are kept in the first table as the contrasting half:
+    # a parser that simply rejected "unusual" strings would fail those too, so listing only
+    # the broken ones would not discriminate a narrow parser from a correct one.
+    # All values measured on Spark JVM 4.2.0, session time zone UTC.
+
+    Scenario Outline: Accepted date string: <case>
+      When query
+        """
+        SELECT to_date(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                       | input                                  | result       |
+        | trailing whitespace        | '2024-01-15 '                          | 2024-01-15   |
+        | single-digit month and day | '2024-1-5'                             | 2024-01-05   |
+        | leading plus on the year   | '+2024-01-15'                          | 2024-01-15   |
+        | zone designator suffix     | '2024-01-15 12:00:00Z'                 | 2024-01-15   |
+        | numeric offset suffix      | '2024-01-15 12:00:00+05:30'            | 2024-01-15   |
+        | region zone suffix         | '2024-01-15 12:00:00 America/New_York' | 2024-01-15   |
+        | year zero                  | '0000-12-31'                           | 0000-12-31   |
+        | five-digit year            | '10000-01-01'                          | +10000-01-01 |
+
+    @sail-bug
+    Scenario Outline: Accepted date string that Sail rejects: <case>
+      # Under ANSI these raise CAST_INVALID_INPUT in Sail; with ANSI off they come back as
+      # NULL. Both are wrong — Spark parses all three.
+      When query
+        """
+        SELECT to_date(<input>) AS result
+        """
+      Then query result
+        | result     |
+        | 2024-01-15 |
+
+      Examples:
+        | case                   | input                 |
+        | ISO T separator        | '2024-01-15T12:00:00' |
+        | leading whitespace     | ' 2024-01-15'         |
+        | surrounding whitespace | '  2024-01-15  '      |

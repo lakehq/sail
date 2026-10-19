@@ -24,6 +24,10 @@ use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
+use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
+use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
+use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 
 use crate::plan::r#gen;
 use crate::plan::r#gen::higher_order_udf::HigherOrderUdfKind;
@@ -179,6 +183,17 @@ pub(super) fn try_decode_higher_order_udf(
         .cloned()
         .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
     Ok(match udf_kind {
+        HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new()))
+        }
+        HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new()))
+        }
+        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf { last_value_wins }) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
+                last_value_wins,
+            )))
+        }
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf { index_first }) => {
             if index_first {
                 Arc::new(HigherOrderUDF::new_from_impl(
@@ -212,6 +227,9 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::Forall(r#gen::SparkArrayForallUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()))
         }
+        HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf { ansi_mode }) => Arc::new(
+            HigherOrderUDF::new_from_impl(SparkRegexpInstr::new(ansi_mode)),
+        ),
         HigherOrderUdfKind::Sort(r#gen::SparkArraySortUdf { swapped }) => {
             if swapped {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()))

@@ -24,10 +24,11 @@ use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_python_udf::udf::expr_contains_python_udf;
 
 use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput, expr_contains_python_udf};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::interval::{
     common_interval_range, element_interval_range, preserve_element_interval_range,
     with_element_interval_range,
@@ -389,7 +390,7 @@ fn sequence_cast(
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
         ) => ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-            .call(vec![sequence_trim_string(argument)]),
+            .call(vec![argument]),
         (
             DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
             DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),

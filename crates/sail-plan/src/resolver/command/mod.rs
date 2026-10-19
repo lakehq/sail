@@ -20,8 +20,10 @@ mod explain;
 mod function;
 mod insert;
 mod merge;
+mod procedure;
 mod row_level;
 mod show;
+mod table_properties;
 mod update;
 mod variable;
 mod with_relations;
@@ -47,6 +49,14 @@ impl PlanResolver<'_> {
                 self.resolve_command_with_relations(*root, references, state)
                     .await
             }
+            CommandNode::CallProcedure {
+                procedure,
+                arguments,
+                named_arguments,
+            } => {
+                self.resolve_command_call_procedure(procedure, arguments, named_arguments, state)
+                    .await
+            }
             CommandNode::CurrentDatabase => {
                 self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
             }
@@ -60,6 +70,9 @@ impl PlanResolver<'_> {
                     qualifier: qualifier.map(|x| x.into()).unwrap_or_default(),
                     pattern,
                 })
+            }
+            CommandNode::ShowTableProperties { table, property } => {
+                self.resolve_show_table_properties(table, property).await
             }
             CommandNode::ShowTables { database, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ShowTables {
@@ -137,6 +150,7 @@ impl PlanResolver<'_> {
             CommandNode::FunctionExists { function } => {
                 self.resolve_catalog_command(CatalogCommand::FunctionExists {
                     function: function.into(),
+                    system_functions: list_built_in_function_statuses(),
                 })
             }
             CommandNode::CreateTable { table, definition } => {
@@ -284,6 +298,12 @@ impl PlanResolver<'_> {
             CommandNode::MergeInto(merge) => self.resolve_command_merge_into(merge, state).await,
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
+            }
+            CommandNode::ResetVariable {
+                variable: Some(variable),
+            } => Ok(self.resolve_command_reset_variable(variable)),
+            CommandNode::ResetVariable { variable: None } => {
+                Err(PlanError::unsupported("RESET requires a Spark session"))
             }
             CommandNode::Update {
                 table,

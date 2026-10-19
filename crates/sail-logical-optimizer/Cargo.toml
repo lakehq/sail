@@ -2,11 +2,15 @@
 name = "sail-logical-optimizer"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
+sail-logical-plan = { path = "../sail-logical-plan" }
+sail-python-udf = { path = "../sail-python-udf" }
+
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }

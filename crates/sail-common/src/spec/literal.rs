@@ -92,23 +92,18 @@ pub enum Literal {
     },
     DurationMicrosecond {
         microseconds: Option<i64>,
-        /// The Spark day-time interval fields, when the literal comes from a qualified interval
-        /// expression. `None` means the Spark default (`DAY TO SECOND`).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        start_field: Option<spec::IntervalFieldType>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        end_field: Option<spec::IntervalFieldType>,
     },
     DurationNanosecond {
         nanoseconds: Option<i64>,
     },
     IntervalYearMonth {
         months: Option<i32>,
-        /// The Spark year-month interval fields, when the literal comes from a qualified interval
-        /// expression. `None` means the Spark default (`YEAR TO MONTH`).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         start_field: Option<spec::IntervalFieldType>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_field: Option<spec::IntervalFieldType>,
+    },
+    IntervalDayTimeMicrosecond {
+        microseconds: Option<i64>,
+        start_field: Option<spec::IntervalFieldType>,
         end_field: Option<spec::IntervalFieldType>,
     },
     IntervalDayTime {
@@ -209,6 +204,32 @@ pub struct IntervalMonthDayNano {
     pub nanoseconds: i64,
 }
 
+impl Literal {
+    pub fn spark_interval_metadata(&self) -> CommonResult<Option<spec::SparkIntervalMetadata>> {
+        match self {
+            Literal::IntervalYearMonth {
+                start_field,
+                end_field,
+                ..
+            } => spec::SparkIntervalMetadata::try_new(
+                spec::IntervalUnit::YearMonth,
+                *start_field,
+                *end_field,
+            ),
+            Literal::IntervalDayTimeMicrosecond {
+                start_field,
+                end_field,
+                ..
+            } => spec::SparkIntervalMetadata::try_new(
+                spec::IntervalUnit::DayTime,
+                *start_field,
+                *end_field,
+            ),
+            _ => Ok(None),
+        }
+    }
+}
+
 fn serialize_optional<T, S>(value: &Option<T>, serializer: S) -> Result<S::Ok, S::Error>
 where
     T: ToString,
@@ -285,11 +306,7 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
         spec::DataType::Duration { time_unit } => match time_unit {
             spec::TimeUnit::Second => Ok(Literal::DurationSecond { seconds: None }),
             spec::TimeUnit::Millisecond => Ok(Literal::DurationMillisecond { milliseconds: None }),
-            spec::TimeUnit::Microsecond => Ok(Literal::DurationMicrosecond {
-                microseconds: None,
-                start_field: None,
-                end_field: None,
-            }),
+            spec::TimeUnit::Microsecond => Ok(Literal::DurationMicrosecond { microseconds: None }),
             spec::TimeUnit::Nanosecond => Ok(Literal::DurationNanosecond { nanoseconds: None }),
         },
         spec::DataType::Interval {
@@ -302,7 +319,7 @@ pub fn data_type_to_null_literal(data_type: spec::DataType) -> CommonResult<Lite
                 start_field,
                 end_field,
             }),
-            spec::IntervalUnit::DayTime => Ok(Literal::DurationMicrosecond {
+            spec::IntervalUnit::DayTime => Ok(Literal::IntervalDayTimeMicrosecond {
                 microseconds: None,
                 start_field,
                 end_field,

@@ -48,8 +48,16 @@ pub(crate) fn append_lineage_fields(schema: &Schema) -> Result<Schema> {
 pub(crate) fn materialize_lineage(
     batch: &RecordBatch,
     lineage: RowLineage,
-    row_offset: i64,
+    row_positions: &Int64Array,
 ) -> Result<Vec<ArrayRef>> {
+    if row_positions.len() != batch.num_rows()
+        || row_positions.null_count() != 0
+        || row_positions.values().iter().any(|position| *position < 0)
+    {
+        return Err(exec_datafusion_err!(
+            "Invalid Iceberg physical row positions"
+        ));
+    }
     let mut columns = batch.columns().to_vec();
     for name in LINEAGE_COLUMNS {
         let index = batch.schema().index_of(name)?;
@@ -71,11 +79,8 @@ pub(crate) fn materialize_lineage(
                 lineage
                     .first_row_id
                     .map(|first| {
-                        let position = i64::try_from(row)
-                            .ok()
-                            .and_then(|row| row_offset.checked_add(row));
-                        position
-                            .and_then(|position| first.checked_add(position))
+                        first
+                            .checked_add(row_positions.value(row))
                             .filter(|id| *id >= 0)
                             .ok_or_else(|| exec_datafusion_err!("Iceberg row ID overflow"))
                     })
@@ -107,11 +112,11 @@ mod tests {
                 first_row_id: Some(100),
                 data_sequence_number: 7,
             },
-            4096,
+            &Int64Array::from(vec![4096, 4098, 4100]),
         )?;
         assert_eq!(
             columns[0].as_ref(),
-            &Int64Array::from(vec![4196, 20, 4198]) as &dyn Array
+            &Int64Array::from(vec![4196, 20, 4200]) as &dyn Array
         );
         assert_eq!(
             columns[1].as_ref(),
@@ -124,7 +129,7 @@ mod tests {
                     first_row_id: Some(i64::MAX),
                     data_sequence_number: 7
                 },
-                1
+                &Int64Array::from(vec![1, 2, 3])
             )
             .is_err()
         );

@@ -62,6 +62,7 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
@@ -78,6 +79,7 @@ use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
+use sail_plan::procedure::LakeProcedureNode;
 
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
@@ -90,12 +92,15 @@ impl QueryPlanner for ExtensionQueryPlanner {
         session: &dyn Session,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         // TODO: show rewriters and the final logical plan in `EXPLAIN`.
-        let rewriters: Vec<Box<dyn LogicalRewriter + '_>> =
-            vec![Box::new(DeltaMetadataAggregateRewriter::new(session))];
+        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
+            Box::new(DeltaMetadataAggregateRewriter),
+            Box::new(sail_iceberg::logical::IcebergMetadataAggregateRewriter),
+        ];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
-            logical_plan = rewriter.rewrite(logical_plan)?.data;
+            logical_plan = rewriter.rewrite(logical_plan, session).await?.data;
         }
+        logical_plan = sail_plan::function::prepare_async_functions(logical_plan)?;
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),
@@ -200,6 +205,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 object_store_url.clone(),
                 prefix.clone(),
                 Arc::clone(&storage_schema),
+                input.output_ordering().cloned(),
             )?);
             Arc::new(RemoteCheckpointCommitExec::new(
                 writer,
@@ -524,6 +530,20 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         } else if let Some(node) = node.as_any().downcast_ref::<CatalogCommandNode>() {
             let schema = node.schema().inner().clone();
             Arc::new(CatalogCommandExec::new(node.command().clone(), schema))
+        } else if let Some(node) = node.as_any().downcast_ref::<LakeProcedureNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("LakeProcedure requires exactly one physical input");
+            };
+            sail_iceberg::physical_plan::validate_iceberg_procedure_call_identity(
+                input,
+                node.call(),
+            )?;
+            let procedure = LakeProcedureExec::try_new(
+                node.call().clone(),
+                input.clone(),
+                node.root_placement(),
+            )?;
+            Arc::new(procedure)
         } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
             let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(format!(

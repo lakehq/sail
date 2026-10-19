@@ -1,4 +1,4 @@
-use chumsky::container::{Container, OrderedSeq};
+use chumsky::container::OrderedSeq;
 use chumsky::extra::ParserExtra;
 use chumsky::prelude::{any, choice, just, none_of};
 use chumsky::{IterParser, Parser};
@@ -158,7 +158,7 @@ where
     E: ParserExtra<'a, &'a str> + 'a,
     D: OrderedSeq<'a, char> + Clone,
     P: Parser<'a, &'a str, C, E>,
-    StringValue: Container<C>,
+    StringValue: FromIterator<C>,
 {
     character.repeated().collect().padded_by(just(delimiter))
 }
@@ -326,49 +326,47 @@ impl Default for StringValue {
     }
 }
 
-impl Container<Char<'_>> for StringValue {
-    fn with_capacity(n: usize) -> Self {
-        StringValue::Valid {
-            value: String::with_capacity(n),
-            prefix: None,
-        }
-    }
-
-    fn push(&mut self, item: Char) {
-        match item {
-            Char::One(c) => {
-                if let StringValue::Valid { value, .. } = self {
-                    value.push(c);
-                }
-            }
-            Char::Two(c1, c2) => {
-                if let StringValue::Valid { value, .. } = self {
-                    value.push(c1);
-                    value.push(c2);
-                }
-            }
-            Char::Invalid(s) => {
-                if matches!(self, StringValue::Valid { .. }) {
-                    *self = StringValue::Invalid {
-                        reason: format!("invalid character: {s}"),
-                    };
+impl<'a> FromIterator<Char<'a>> for StringValue {
+    fn from_iter<T: IntoIterator<Item = Char<'a>>>(iter: T) -> Self {
+        let mut output = StringValue::default();
+        // Consume the iterator even after an error because it drives the parser.
+        for item in iter {
+            if let StringValue::Valid { value, .. } = &mut output {
+                match item {
+                    Char::One(c) => value.push(c),
+                    Char::Two(c1, c2) => {
+                        value.push(c1);
+                        value.push(c2);
+                    }
+                    Char::Invalid(s) => {
+                        output = StringValue::invalid(format!("invalid character: {s}"));
+                    }
                 }
             }
         }
+        output
     }
 }
 
-impl Container<char> for StringValue {
-    fn with_capacity(n: usize) -> Self {
-        StringValue::Valid {
-            value: String::with_capacity(n),
-            prefix: None,
-        }
+impl FromIterator<char> for StringValue {
+    fn from_iter<T: IntoIterator<Item = char>>(iter: T) -> Self {
+        StringValue::valid(String::from_iter(iter))
     }
+}
 
-    fn push(&mut self, item: char) {
-        if let StringValue::Valid { value, .. } = self {
-            value.push(item);
-        }
+#[cfg(test)]
+mod tests {
+    use super::StringValue;
+    use crate::options::ParserOptions;
+    use crate::token::StringStyle;
+
+    #[test]
+    fn test_invalid_escape_preserves_first_error() {
+        let value = StringStyle::SingleQuoted { prefix: None }
+            .parse(r"'\uD800a\uDFFF'", &ParserOptions::default());
+        assert!(matches!(
+            value,
+            StringValue::Invalid { reason } if reason == r"invalid character: \uD800"
+        ));
     }
 }

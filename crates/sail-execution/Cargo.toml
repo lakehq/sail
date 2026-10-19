@@ -2,6 +2,7 @@
 name = "sail-execution"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -31,6 +32,11 @@ tonic-types = { workspace = true }
 tonic-prost = { workspace = true }
 fastrace = { workspace = true }
 tower = { workspace = true }
+hyper = { workspace = true }
+http-body-util = { workspace = true }
+hyper-util = { workspace = true }
+hyper-rustls = { workspace = true }
+rustls = { workspace = true }
 prost = { workspace = true }
 opentelemetry-proto = { workspace = true }
 datafusion = { workspace = true }
@@ -55,3 +61,6 @@ bytes = { workspace = true }
 [build-dependencies]
 prost-build = { workspace = true }
 tonic-prost-build = { workspace = true }
+
+[dev-dependencies]
+h2 = { workspace = true }

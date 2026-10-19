@@ -56,6 +56,7 @@ lazy_static! {
 }
 
 fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
     if args
@@ -66,16 +67,32 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     {
         return Ok(lit(ScalarValue::Null));
     }
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    let result = expr::Expr::AggregateFunction(AggregateFunction {
         func: average::avg_udaf(),
         params: AggregateFunctionParams {
-            args,
+            args: args.clone(),
             distinct: input.distinct,
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
         },
-    }))
+    });
+    // `Average` does NOT keep the child's range: it declares the default one
+    // (`Average.scala:70-71`). Saying so here is what stops the range of the child from being
+    // read as the average's own.
+    reset_interval_range(result, &args, schema)
+}
+
+/// Declares the default range of its family on a result whose interval range Spark resets.
+fn reset_interval_range(
+    result: expr::Expr,
+    arguments: &[expr::Expr],
+    schema: &DFSchema,
+) -> PlanResult<expr::Expr> {
+    match common_interval_range(arguments, schema) {
+        Some(range) => with_interval_range(result, range.family_default(), schema),
+        None => Ok(result),
+    }
 }
 
 /// An aggregate that declares the CHILD's type keeps its Spark interval range: `Sum.scala:79-80` and

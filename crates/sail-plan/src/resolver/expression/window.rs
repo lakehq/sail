@@ -17,7 +17,9 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
-use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
+use sail_python_udf::udf::pyspark_udaf::{
+    PySparkAggregateMode, PySparkGroupAggKind, PySparkGroupAggregateUDF,
+};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
@@ -227,6 +229,7 @@ impl PlanResolver<'_> {
                         };
                         let udaf = PySparkGroupAggregateUDF::new(
                             kind,
+                            PySparkAggregateMode::Window,
                             get_udf_name(&function_name, &payload),
                             payload,
                             deterministic,
@@ -324,6 +327,7 @@ impl PlanResolver<'_> {
         };
         let new_udaf = PySparkGroupAggregateUDF::new(
             kind,
+            PySparkAggregateMode::Window,
             get_udf_name(function_name, &payload),
             payload,
             udaf.deterministic(),
@@ -596,17 +600,17 @@ fn keep_window_interval_range(
     function_name: &str,
     schema: &DFSchemaRef,
 ) -> PlanResult<expr::Expr> {
-    if !WINDOW_FUNCTIONS_KEEPING_THE_CHILD_TYPE
-        .contains(&function_name.to_ascii_lowercase().as_str())
-    {
-        return Ok(window);
-    }
+    let keeps_the_child_type = WINDOW_FUNCTIONS_KEEPING_THE_CHILD_TYPE
+        .contains(&function_name.to_ascii_lowercase().as_str());
     let expr::Expr::WindowFunction(function) = &window else {
         return Ok(window);
     };
     let arguments = function.params.args.clone();
     match common_interval_range(&arguments, schema.as_ref()) {
-        Some(range) => with_interval_range(window, range, schema.as_ref()),
+        // A function that does not keep the child's type declares the default range of the family
+        // (`Average.scala:70-71`), which also stops the child's range from being read as its own.
+        Some(range) if keeps_the_child_type => with_interval_range(window, range, schema.as_ref()),
+        Some(range) => with_interval_range(window, range.family_default(), schema.as_ref()),
         None => Ok(window),
     }
 }

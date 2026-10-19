@@ -22,7 +22,7 @@ use crate::datasource::scan::{
     map_statistics_to_schema,
 };
 use crate::datasource::{
-    DeltaMetadataAggregateConfig, DeltaScanConfig, df_logical_schema,
+    DeltaMetadataAggregateConfig, DeltaScanConfig, df_logical_schema, predicate_uses_struct_value,
     rewrite_predicate_for_column_mapping, simplify_expr,
 };
 use crate::delta_log::LogStoreRef;
@@ -162,6 +162,13 @@ pub(crate) async fn plan_delta_scan(
             }
             datafusion::logical_expr::TableProviderFilterPushDown::Unsupported => {}
         }
+    }
+    if kmode != ColumnMappingMode::None {
+        // Struct fields in the data files use physical names, so a predicate using a whole
+        // struct value cannot be evaluated against the files. Such predicates are still
+        // applied to the scan output since Inexact filters are re-evaluated after the scan.
+        let df_schema = full_logical_schema.clone().to_dfschema()?;
+        parquet_pushdown_filters.retain(|filter| !predicate_uses_struct_value(filter, &df_schema));
     }
 
     let stats_source_schema = Arc::new(snapshot.schema().clone());
@@ -309,7 +316,8 @@ pub(crate) async fn plan_delta_scan(
             },
             session,
             file_schema,
-        )?;
+        )
+        .await?;
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
         return align_delta_scan_output(scan_exec, output_schema);
@@ -490,7 +498,7 @@ async fn build_replayed_adds_input(
     )?))
 }
 
-fn build_eager_adds_input(
+pub(crate) fn build_eager_adds_input(
     adds: &[Add],
     target_partitions: usize,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -531,7 +539,7 @@ fn build_eager_adds_input(
     Ok(input)
 }
 
-fn align_delta_scan_output(
+pub(crate) fn align_delta_scan_output(
     input: Arc<dyn ExecutionPlan>,
     target_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {

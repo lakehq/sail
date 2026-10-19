@@ -31,14 +31,15 @@ use super::utils::{
     LogReplayOptions, build_log_replay_pipeline_with_options, prepare_delta_writer_input,
 };
 use crate::datasource::{
-    DeltaScanConfig, PATH_COLUMN, df_logical_schema, rewrite_predicate_for_column_mapping,
+    DeltaScanConfig, PATH_COLUMN, df_logical_schema, physical_predicate_uses_struct_value,
+    rewrite_predicate_for_column_mapping,
 };
 use crate::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
     DeltaCommitContext, DeltaDecodePath, DeltaDiscoveryExec, DeltaScanByAddsExec,
     DeltaWriterExecOptions, prepare_delta_write_context,
 };
-use crate::spec::DeltaOperation;
+use crate::spec::{ColumnMappingMode, DeltaOperation};
 
 pub async fn build_delete_plan(
     ctx: &PlannerContext<'_>,
@@ -148,6 +149,20 @@ pub async fn build_delete_plan(
         .rewrite(physical_retention_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+    let change_data = if crate::change_data_feed::enabled(snapshot_state.metadata()) {
+        let deleted = Arc::new(datafusion::physical_expr::expressions::NotExpr::new(
+            adapted_retention_condition.clone(),
+        ));
+        let scan = datafusion::physical_plan::execution_plan::reset_plan_states(scan_exec.clone())?;
+        let matches = Arc::new(FilterExec::try_new(deleted, scan)?);
+        Some(super::change_data::tag_change_rows(
+            matches,
+            &table_schema,
+            "delete",
+        )?)
+    } else {
+        None
+    };
     let filter_exec: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(adapted_retention_condition, scan_exec)?);
     let writer_input = prepare_delta_writer_input(filter_exec, &partition_columns, None)?;
@@ -168,9 +183,21 @@ pub async fn build_delete_plan(
         operation,
     )?;
 
+    let change_data_writer = change_data
+        .map(|input| {
+            super::change_data::build_change_data_writer(
+                ctx,
+                input,
+                writer_options.clone(),
+                &write_context,
+                &partition_columns,
+            )
+        })
+        .transpose()?;
     assemble_commit_plan(
         writer_input,
         Some(find_files_remove),
+        change_data_writer,
         Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         writer_options,
@@ -278,16 +305,29 @@ pub async fn build_delete_plan_mor(
         .into_iter()
         .map(|column| column.index())
         .collect::<Vec<_>>();
+    let change_data_enabled = crate::change_data_feed::enabled(snapshot_state.metadata());
+    if change_data_enabled {
+        projection = (0..table_schema.fields().len()).collect();
+    }
     projection.sort_unstable();
     projection.dedup();
     projection.push(scan_schema.index_of(PATH_COLUMN)?);
     projection.push(scan_schema.index_of(MERGE_ROW_INDEX_COLUMN)?);
     let scan_schema = Arc::new(scan_schema.project(&projection)?);
-    let pushdown_filter = rewrite_predicate_for_column_mapping(
-        Arc::clone(&physical_condition),
-        &table_schema,
-        snapshot_state.effective_column_mapping_mode(),
-    )?;
+    let column_mapping_mode = snapshot_state.effective_column_mapping_mode();
+    // Struct fields in the data files of column-mapped tables use physical names, so a
+    // condition using a whole struct value is only evaluated on the scan output below.
+    let pushdown_filter = if column_mapping_mode != ColumnMappingMode::None
+        && physical_predicate_uses_struct_value(&physical_condition, &table_schema)
+    {
+        None
+    } else {
+        Some(rewrite_predicate_for_column_mapping(
+            Arc::clone(&physical_condition),
+            &table_schema,
+            column_mapping_mode,
+        )?)
+    };
     let scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanByAddsExec::new(
         find_files,
         ctx.table_url().clone(),
@@ -297,7 +337,7 @@ pub async fn build_delete_plan_mor(
         scan_config,
         Some(projection),
         None,
-        Some(pushdown_filter),
+        pushdown_filter,
         ctx.lakehouse_table().cloned(),
         snapshot_state.load_config().catalog_managed_commits.clone(),
     ));
@@ -305,6 +345,31 @@ pub async fn build_delete_plan_mor(
         .create(Arc::clone(&table_schema), Arc::clone(&scan_schema))?
         .rewrite(physical_condition)?;
     let matches: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(physical_condition, scan)?);
+    let change_data_writer = if change_data_enabled {
+        let input = datafusion::physical_plan::execution_plan::reset_plan_states(matches.clone())?;
+        let input = super::change_data::tag_change_rows(input, &table_schema, "delete")?;
+        let options = DeltaWriterExecOptions::from(ctx.options().clone());
+        let write_context = prepare_delta_write_context(
+            ctx.table_url(),
+            Some(snapshot_state.as_ref()),
+            &options,
+            ctx.metadata_configuration(),
+            &partition_columns,
+            &sail_common_datafusion::datasource::PhysicalSinkMode::Append,
+            true,
+            &table_schema,
+            None,
+        )?;
+        Some(super::change_data::build_change_data_writer(
+            ctx,
+            input,
+            options,
+            &write_context,
+            &partition_columns,
+        )?)
+    } else {
+        None
+    };
     let positions = [PATH_COLUMN, MERGE_ROW_INDEX_COLUMN]
         .into_iter()
         .map(|name| {
@@ -346,6 +411,12 @@ pub async fn build_delete_plan_mor(
             }),
         ),
     )?);
+
+    let dv_writer = if let Some(change_data) = change_data_writer {
+        datafusion::physical_plan::union::UnionExec::try_new(vec![dv_writer, change_data])?
+    } else {
+        dv_writer
+    };
 
     // Wrap in CoalescePartitions → DeltaCommitExec for final commit
     let coalesced: Arc<dyn ExecutionPlan> = Arc::new(

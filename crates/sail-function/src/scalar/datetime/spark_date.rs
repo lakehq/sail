@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Date32Array, new_null_array};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
-use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_date;
 
 use crate::scalar::datetime::format::DateTimeFormat;
+use crate::scalar::datetime::utils::string_array_iter;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDate {
@@ -116,42 +116,19 @@ impl ScalarUDFImpl for SparkDate {
                     Some(ColumnarValue::Array(_)) => unreachable!(),
                     None => None,
                 };
-                let array = match array.data_type() {
-                    DataType::Utf8 => as_string_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                Some(format) => Self::formatted_string_to_date32(v, format, is_try),
-                                None => Self::string_to_date32(v, is_try),
+                let array = string_array_iter(array.as_ref())?
+                    .map(|value| {
+                        value
+                            .map(|value| match &format {
+                                Some(format) => {
+                                    Self::formatted_string_to_date32(value, format, is_try)
+                                }
+                                None => Self::string_to_date32(value, is_try),
                             })
                             .transpose()
-                            .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<Date32Array>>()?,
-                    DataType::LargeUtf8 => as_large_string_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                Some(format) => Self::formatted_string_to_date32(v, format, is_try),
-                                None => Self::string_to_date32(v, is_try),
-                            })
-                            .transpose()
-                            .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<Date32Array>>()?,
-                    DataType::Utf8View => as_string_view_array(&array)?
-                        .iter()
-                        .map(|x| {
-                            x.map(|v| match &format {
-                                Some(format) => Self::formatted_string_to_date32(v, format, is_try),
-                                None => Self::string_to_date32(v, is_try),
-                            })
-                            .transpose()
-                            .map(|opt| opt.flatten())
-                        })
-                        .collect::<Result<Date32Array>>()?,
-                    _ => return exec_err!("expected string array for `date`"),
-                };
+                            .map(Option::flatten)
+                    })
+                    .collect::<Result<Date32Array>>()?;
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ColumnarValue::Scalar(scalar), format) => {
@@ -202,21 +179,8 @@ fn parse_array_with_format_array(
         return exec_err!("spark_date value and format arrays must have the same length");
     }
     let mut cache = HashMap::<String, DateTimeFormat>::new();
-    let array = match format_array.data_type() {
-        DataType::Utf8 => {
-            let formats = as_string_array(format_array)?;
-            parse_array_with_formats(array, formats.iter(), &mut cache, is_try)?
-        }
-        DataType::LargeUtf8 => {
-            let formats = as_large_string_array(format_array)?;
-            parse_array_with_formats(array, formats.iter(), &mut cache, is_try)?
-        }
-        DataType::Utf8View => {
-            let formats = as_string_view_array(format_array)?;
-            parse_array_with_formats(array, formats.iter(), &mut cache, is_try)?
-        }
-        _ => return exec_err!("spark_date format argument must be a string array"),
-    };
+    let formats = string_array_iter(format_array.as_ref())?;
+    let array = parse_array_with_formats(array, formats, &mut cache, is_try)?;
     Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
@@ -226,18 +190,7 @@ fn parse_array_with_formats<'f>(
     cache: &mut HashMap<String, DateTimeFormat>,
     is_try: bool,
 ) -> Result<Date32Array> {
-    match array.data_type() {
-        DataType::Utf8 => {
-            parse_values_with_formats(as_string_array(array)?.iter(), formats, cache, is_try)
-        }
-        DataType::LargeUtf8 => {
-            parse_values_with_formats(as_large_string_array(array)?.iter(), formats, cache, is_try)
-        }
-        DataType::Utf8View => {
-            parse_values_with_formats(as_string_view_array(array)?.iter(), formats, cache, is_try)
-        }
-        _ => exec_err!("expected string array for `date`"),
-    }
+    parse_values_with_formats(string_array_iter(array.as_ref())?, formats, cache, is_try)
 }
 
 fn parse_values_with_formats<'v, 'f>(

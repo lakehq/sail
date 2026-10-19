@@ -310,7 +310,11 @@ impl IcebergTableWriter {
         let (writer, file_path) = self.finish_partition_state(state, partition_dir).await?;
         let (_, meta) = writer.close().await?;
         let mut df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
-            .finish_with_schema(meta, self.config.iceberg_schema.as_ref())?
+            .finish_with_schema(
+                meta,
+                self.config.iceberg_schema.as_ref(),
+                &self.config.metrics,
+            )?
             .data_file;
         df.sort_order_id = self.config.sort_order_id;
         self.written.push(df);

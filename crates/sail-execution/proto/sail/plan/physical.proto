@@ -70,7 +70,20 @@ message ExtendedPhysicalPlanNode {
     IcebergMergeMetadataExecNode iceberg_merge_metadata = 55;
     IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 56;
     PartitionedTopKExecNode partitioned_top_k = 57;
+    IcebergMetadataScanExecNode iceberg_metadata_scan = 58;
+    LakeProcedureExecNode lake_procedure = 59;
+    IcebergProcedureExecNode iceberg_procedure = 60;
+    IcebergMetadataRelationExecNode iceberg_metadata_relation = 61;
+    IcebergFileTasksExecNode iceberg_file_tasks = 62;
+    IcebergRewriteExecNode iceberg_rewrite = 63;
+    InputFileMetadataExecNode input_file_metadata = 64;
   }
+}
+
+message InputFileMetadataExecNode {
+  // A ProjectionExec over the unwrapped file source. Encoding the complete
+  // plan preserves physical expressions, aliases, and schema metadata.
+  bytes projection_plan = 1;
 }
 
 message RemoteCheckpointWriteExecNode {
@@ -78,6 +91,7 @@ message RemoteCheckpointWriteExecNode {
   string object_store_url = 2;
   string prefix = 3;
   bytes storage_schema = 4;
+  LexOrdering input_ordering = 5;
 }
 
 message RemoteCheckpointCommitExecNode {
@@ -151,6 +165,10 @@ message HigherOrderUdf {
     SparkArraySortUdf sort = 6;
     SparkSequenceUdf spark_sequence_lazy = 7;
     ConvertTzUdf convert_tz_lazy = 8;
+    SparkMapFilterUdf map_filter = 9;
+    SparkRegexpInstrUdf regexp_instr = 10;
+    SparkTransformValuesUdf transform_values = 11;
+    SparkTransformKeysUdf transform_keys = 12;
   }
 }
 
@@ -160,7 +178,19 @@ message SparkArrayAggregateUdf {
 
 message SparkArrayExistsUdf {}
 
+message SparkRegexpInstrUdf {
+  bool ansi_mode = 1;
+}
+
 message SparkArrayForallUdf {}
+
+message SparkMapFilterUdf {}
+
+message SparkTransformValuesUdf {}
+
+message SparkTransformKeysUdf {
+  bool last_value_wins = 1;
+}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -230,14 +260,12 @@ message ExtendedScalarUdf {
     SparkFromXmlUdf spark_from_xml = 32;
     SparkCeilUdf spark_ceil = 33;
     SparkFloorUdf spark_floor = 34;
-    SparkTryToTimestampUdf spark_try_to_timestamp = 35;
-    SparkDateFormatUdf spark_date_format = 36;
-    SparkMapFromArraysUdf spark_map_from_arrays = 37;
-    SparkMapFromEntriesUdf spark_map_from_entries = 38;
-    StrToMapUdf str_to_map = 39;
-    SparkSequenceUdf spark_sequence = 40;
-    // 41 and 42 are left for the calendar interval scaling UDFs of `poc/aritmetic_reject`.
-    SparkMakeYmIntervalUdf spark_make_ym_interval = 43;
+    SparkDateFormatUdf spark_date_format = 35;
+    SparkMapFromArraysUdf spark_map_from_arrays = 36;
+    SparkMapFromEntriesUdf spark_map_from_entries = 37;
+    StrToMapUdf str_to_map = 38;
+    SparkSequenceUdf spark_sequence = 39;
+    SparkMakeYmIntervalUdf spark_make_ym_interval = 40;
   }
 }
 
@@ -245,7 +273,15 @@ message ExtendedStreamUdf {
   oneof StreamUdfKind {
     PySparkMapIterUdf py_spark_map_iter = 1;
     PySparkUdtf py_spark_udtf = 2;
+    PySparkScalarPandasIterUdf py_spark_scalar_pandas_iter = 3;
   }
+}
+
+message PySparkScalarPandasIterUdf {
+  string name = 1;
+  bytes payload = 2;
+  bytes output_schema = 3;
+  PySparkUdfConfig config = 4;
 }
 
 message ExtendedAggregateUdf {
@@ -360,10 +396,6 @@ message SparkDateUdf {
   bool is_try = 1;
 }
 
-message SparkTryToTimestampUdf {
-  optional string timezone = 1;
-}
-
 message SparkVariantGetUdf {
   bool safe = 1;
 }
@@ -471,6 +503,11 @@ enum PySparkGroupAggKind {
   PY_SPARK_GROUP_AGG_KIND_ARROW = 1;
 }
 
+enum PySparkAggregateMode {
+  PY_SPARK_AGGREGATE_MODE_GROUPED = 0;
+  PY_SPARK_AGGREGATE_MODE_WINDOW = 1;
+}
+
 message PySparkGroupAggUdaf {
   string name = 1;
   bytes payload = 2;
@@ -484,6 +521,7 @@ message PySparkGroupAggUdaf {
   // Absent for backward compatibility: if not set, defaults to input_types.len().
   // When a dummy Int64 argument has been injected (0-arg UDF), this is 0.
   optional uint64 actual_arg_count = 9;
+  PySparkAggregateMode mode = 10;
 }
 
 message PySparkGroupMapUdaf {
@@ -699,6 +737,7 @@ message ParquetExecNode {
   bytes output_partitioning = 4;
   StructFieldMatching struct_field_matching = 5;
   SchemaEvolutionTimezoneMode timezone_mode = 6;
+  repeated bytes virtual_columns = 7;
 }
 
 message ArrowExecNode {
@@ -850,6 +889,7 @@ message DeltaScanByAddsExecNode {
   optional bytes statistics = 10;
   string lakehouse_table_json = 11;
   string catalog_managed_commits_json = 12;
+  repeated PhysicalProjectionExpr input_file_projection = 13;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -977,6 +1017,11 @@ message PhysicalProjection {
   repeated uint64 columns = 1;
 }
 
+message PhysicalProjectionExpr {
+  bytes expression = 1;
+  string alias = 2;
+}
+
 enum CompressionTypeVariant {
   COMPRESSION_TYPE_VARIANT_GZIP = 0;
   COMPRESSION_TYPE_VARIANT_BZIP2 = 1;
@@ -1026,6 +1071,7 @@ enum IcebergSnapshotUpdateKind {
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_DELTA = 3;
   ICEBERG_SNAPSHOT_UPDATE_KIND_COPY_ON_WRITE = 4;
   ICEBERG_SNAPSHOT_UPDATE_KIND_ROW_LEVEL_REWRITE = 5;
+  ICEBERG_SNAPSHOT_UPDATE_KIND_REWRITE_DATA_FILES = 6;
 }
 
 message IcebergCommitExecNode {
@@ -1045,6 +1091,7 @@ message IcebergManifestScanExecNode {
   string table_url = 1;
   // Iceberg Snapshot serialized as JSON.
   string snapshot_json = 2;
+  string pruning_json = 3;
 }
 
 message IcebergDiscoveryExecNode {
@@ -1057,7 +1104,17 @@ message IcebergDiscoveryExecNode {
 message IcebergScanByDataFilesExecNode {
   bytes input = 1;
   string table_url = 2;
-  bytes output_schema = 3;
+  bytes file_schema = 3;
+  repeated uint64 projection = 4;
+  bool has_projection = 5;
+  optional bytes predicate = 6;
+  optional uint64 limit = 7;
+  bool preserve_file_groups = 8;
+  repeated PhysicalProjectionExpr input_file_projection = 9;
+}
+
+message IcebergMetadataScanExecNode {
+  bytes input = 1;
 }
 
 message IcebergDeleteApplyExecNode {
@@ -1067,6 +1124,7 @@ message IcebergDeleteApplyExecNode {
   string equality_deletes_json = 4;
   string table_url = 5;
   string iceberg_schema_json = 6;
+  repeated PhysicalProjectionExpr input_file_projection = 7;
 }
 
 message IcebergRowLineage {
@@ -1080,7 +1138,7 @@ message IcebergMergeMetadataExecNode {
   optional string file_column_name = 3;
   optional string row_index_column_name = 4;
   optional int32 data_file_partition_spec_id = 5;
-  optional string data_file_partition_json = 6;
+  optional string data_file_metadata_json = 6;
   IcebergRowLineage row_lineage = 7;
   map<string, IcebergRowLineage> file_lineage = 8;
 }
@@ -1172,10 +1230,52 @@ message CatalogCommandExecNode {
   string command = 2;
 }
 
+message LakeProcedureExecNode {
+  // Schema for the procedure output.
+  bytes schema = 1;
+  // JSON-encoded LakeProcedureCall.
+  string call = 2;
+  // Provider-planned procedure implementation.
+  bytes input = 3;
+  // 0 = coordinator, 1 = distributed.
+  uint32 root_placement = 4;
+}
+
+message IcebergProcedureExecNode {
+  // JSON-encoded LakeProcedureCall.
+  string call = 1;
+  // JSON-encoded table state for a worker-side metadata read. Empty for coordinator commits,
+  // which reacquire the table immediately before execution.
+  string planned_table = 2;
+  // Worker-side writer action stream for rewrite_data_files. Empty for leaf procedures.
+  bytes input = 3;
+  // JSON-encoded RewriteDataFilesPlan. Empty for other procedures.
+  string rewrite_data_files = 4;
+}
+
 message BarrierExecNode {
   // Precondition plans to be exhausted before the main plan starts.
   // Each element is a DataFusion PhysicalPlanNode encoded as bytes.
   repeated bytes preconditions = 1;
   // The main plan to execute after all preconditions are exhausted.
   bytes plan = 2;
+}
+
+message IcebergMetadataRelationExecNode {
+  bytes schema = 1;
+  string scan = 2;
+}
+
+message IcebergFileTasksExecNode {
+  string groups = 1;
+}
+
+message IcebergRewriteExecNode {
+  bytes input = 1;
+  // Group partition indices assigned to each sequential worker task.
+  repeated IcebergRewriteGroupAssignment assignments = 2;
+}
+
+message IcebergRewriteGroupAssignment {
+  repeated uint64 groups = 1;
 }

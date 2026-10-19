@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use datafusion_common::{Result, plan_datafusion_err};
+use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan, LogicalPlanBuilder, col, lit, when};
 use sail_common_datafusion::datasource::{
-    DeleteInfo, MERGE_FILE_COLUMN, OPERATION_COLUMN, RowLevelCommand, RowLevelOperationType,
-    RowLevelWriteMode,
+    DeleteInfo, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, OPERATION_COLUMN, RowLevelCommand,
+    RowLevelOperationType, RowLevelWriteMode,
 };
 use sail_logical_plan::row_level::{
     RowLevelWriteNode, rewrite_row_level_target_condition, row_level_expr_contains_subquery,
@@ -26,22 +26,20 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         info.target_plan.schema(),
         &info.resolved_target_field_names,
     )?;
-    let target_plan = if mode == RowLevelWriteMode::CopyOnWrite {
-        let target = ensure_merge_metadata_columns(
-            info.target_plan.as_ref().clone(),
-            MERGE_FILE_COLUMN,
-            None,
-        )?;
-        super::row_level::select_copy_on_write_candidates(
-            target,
-            condition
-                .as_ref()
-                .map(|predicate| predicate.expr.clone())
-                .unwrap_or_else(|| lit(true)),
-        )?
-    } else {
-        info.target_plan.as_ref().clone()
-    };
+    let merge_on_read = mode == RowLevelWriteMode::MergeOnRead;
+    let target_plan = ensure_merge_metadata_columns(
+        info.target_plan.as_ref().clone(),
+        MERGE_FILE_COLUMN,
+        merge_on_read.then_some(MERGE_ROW_INDEX_COLUMN),
+    )?;
+    // Prune whole files without filtering rows before assigning their positions.
+    let target_plan = super::row_level::select_copy_on_write_candidates(
+        target_plan,
+        condition
+            .as_ref()
+            .map(|predicate| predicate.expr.clone())
+            .unwrap_or_else(|| lit(true)),
+    )?;
     let mut projection = target_plan
         .schema()
         .fields()
@@ -52,12 +50,20 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
                 .alias(name)
         })
         .collect::<Vec<_>>();
-    if mode == RowLevelWriteMode::CopyOnWrite {
-        projection.push(col(MERGE_FILE_COLUMN));
+    projection.push(col(MERGE_FILE_COLUMN));
+    projection.extend(
+        super::row_level::lineage_columns(&target_plan)?
+            .iter()
+            .map(|name| col(*name)),
+    );
+    if merge_on_read {
         projection.extend(
-            super::row_level::lineage_columns(&target_plan)?
-                .iter()
-                .map(|name| col(*name)),
+            [
+                MERGE_ROW_INDEX_COLUMN,
+                crate::row_level_metadata::MERGE_PARTITION_SPEC_ID_COLUMN,
+                crate::row_level_metadata::MERGE_FILE_METADATA_COLUMN,
+            ]
+            .map(col),
         );
     }
     let target_plan = LogicalPlanBuilder::from(target_plan)
@@ -99,11 +105,22 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         };
         super::row_level::select_copy_on_write_rows(rows)?
     } else {
-        let predicate = condition.as_ref().ok_or_else(|| {
-            plan_datafusion_err!("Iceberg equality-delete MOR DELETE requires a WHERE condition")
-        })?;
-        LogicalPlanBuilder::from(target_plan.clone())
-            .filter(predicate.expr.clone())?
+        let predicate = condition
+            .as_ref()
+            .map(|condition| condition.expr.clone())
+            .unwrap_or_else(|| lit(true));
+        let rows = LogicalPlanBuilder::from(target_plan.clone())
+            .filter(predicate)?
+            .build()?;
+        let mut projection = rows
+            .schema()
+            .columns()
+            .into_iter()
+            .map(datafusion_expr::Expr::Column)
+            .collect::<Vec<_>>();
+        projection.push(lit(RowLevelOperationType::Delete.as_i32()).alias(OPERATION_COLUMN));
+        LogicalPlanBuilder::from(rows)
+            .project(projection)?
             .build()?
     };
     let node = RowLevelWriteNode::new_delete(

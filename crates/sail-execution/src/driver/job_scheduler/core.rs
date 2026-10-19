@@ -1150,6 +1150,9 @@ mod tests {
             JobGraphOptions {
                 shuffle_backend: ShuffleBackendKind::Flight {
                     compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
                 },
             },
         )?;

@@ -41,7 +41,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 86401000000,
                     "startField": "day",
                     "endField": "second"
@@ -71,7 +71,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -86400000000,
                     "startField": "day",
                     "endField": "second"
@@ -131,7 +131,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -69497123456,
                     "startField": "hour",
                     "endField": "second"
@@ -191,10 +191,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -604800000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -221,10 +221,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -604800000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -251,10 +251,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -25200000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -281,10 +281,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -25200000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -311,10 +311,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -341,10 +341,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -371,10 +371,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -401,10 +401,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -431,10 +431,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -420000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -461,10 +461,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -420000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -494,7 +494,7 @@
                   "intervalYearMonth": {
                     "months": -7,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -524,7 +524,7 @@
                   "intervalYearMonth": {
                     "months": -7,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -551,10 +551,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -581,10 +581,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -611,10 +611,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -4233600000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -641,10 +641,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -4233600000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -674,7 +674,7 @@
                   "intervalYearMonth": {
                     "months": -84,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -704,7 +704,7 @@
                   "intervalYearMonth": {
                     "months": -84,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -731,7 +731,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -8594553123456,
                     "startField": "day",
                     "endField": "second"
@@ -761,10 +761,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -791,10 +791,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -821,10 +821,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -851,10 +851,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -881,10 +881,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -911,10 +911,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -941,10 +941,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -971,10 +971,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1001,10 +1001,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -1031,10 +1031,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -1064,7 +1064,7 @@
                   "intervalYearMonth": {
                     "months": 0,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -1094,7 +1094,7 @@
                   "intervalYearMonth": {
                     "months": 0,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -1121,10 +1121,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1151,10 +1151,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1181,10 +1181,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -1211,10 +1211,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -1244,7 +1244,7 @@
                   "intervalYearMonth": {
                     "months": 0,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -1274,7 +1274,7 @@
                   "intervalYearMonth": {
                     "months": 0,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -1301,7 +1301,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "hour",
                     "endField": "second"
@@ -1331,7 +1331,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1000000,
                     "startField": "hour",
                     "endField": "second"
@@ -1361,7 +1361,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 86400000000,
                     "startField": "day",
                     "endField": "second"
@@ -1391,7 +1391,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 86401000000,
                     "startField": "day",
                     "endField": "second"
@@ -1421,7 +1421,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 93784005006,
                     "startField": "day",
                     "endField": "second"
@@ -1481,7 +1481,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 896887123456,
                     "startField": "day",
                     "endField": "second"
@@ -1511,10 +1511,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 864000000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -1541,10 +1541,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 864000000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -1571,10 +1571,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 36000000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -1601,10 +1601,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 36000000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -1631,10 +1631,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1661,10 +1661,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1691,10 +1691,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1721,10 +1721,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1751,10 +1751,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 600000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -1781,10 +1781,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 600000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -1814,7 +1814,7 @@
                   "intervalYearMonth": {
                     "months": 10,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -1844,7 +1844,7 @@
                   "intervalYearMonth": {
                     "months": 10,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -1871,10 +1871,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1901,10 +1901,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -1931,10 +1931,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 6048000000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -1961,10 +1961,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 6048000000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -1994,7 +1994,7 @@
                   "intervalYearMonth": {
                     "months": 120,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -2024,7 +2024,7 @@
                   "intervalYearMonth": {
                     "months": 120,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -2051,7 +2051,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 40953123456,
                     "startField": "hour",
                     "endField": "second"
@@ -2111,10 +2111,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1814400000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -2141,10 +2141,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1814400000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -2171,10 +2171,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 75600000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -2201,10 +2201,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 75600000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -2231,10 +2231,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2261,10 +2261,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2291,10 +2291,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2321,10 +2321,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2351,10 +2351,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1260000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -2381,10 +2381,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1260000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -2414,7 +2414,7 @@
                   "intervalYearMonth": {
                     "months": 21,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -2444,7 +2444,7 @@
                   "intervalYearMonth": {
                     "months": 21,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -2471,10 +2471,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2501,10 +2501,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2531,10 +2531,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 12700800000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -2561,10 +2561,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 12700800000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -2594,7 +2594,7 @@
                   "intervalYearMonth": {
                     "months": 252,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -2624,7 +2624,7 @@
                   "intervalYearMonth": {
                     "months": 252,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -2713,7 +2713,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 8594553123456,
                     "startField": "day",
                     "endField": "second"
@@ -2743,7 +2743,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 32887123456,
                     "startField": "hour",
                     "endField": "second"
@@ -2773,10 +2773,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -13123456,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2803,10 +2803,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -604800000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -2833,10 +2833,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -604800000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -2863,10 +2863,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -25200000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -2893,10 +2893,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -25200000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -2923,10 +2923,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2953,10 +2953,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -2983,10 +2983,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3013,10 +3013,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3043,10 +3043,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -420000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -3073,10 +3073,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -420000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -3106,7 +3106,7 @@
                   "intervalYearMonth": {
                     "months": -7,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -3136,7 +3136,7 @@
                   "intervalYearMonth": {
                     "months": -7,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -3163,10 +3163,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3193,10 +3193,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -7000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3223,10 +3223,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -4233600000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -3253,10 +3253,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": -4233600000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -3286,7 +3286,7 @@
                   "intervalYearMonth": {
                     "months": -84,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -3316,7 +3316,7 @@
                   "intervalYearMonth": {
                     "months": -84,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -3343,10 +3343,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -3373,10 +3373,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -3403,10 +3403,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -3433,10 +3433,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -3463,10 +3463,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3493,10 +3493,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3523,10 +3523,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3553,10 +3553,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3583,10 +3583,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -3613,10 +3613,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -3646,7 +3646,7 @@
                   "intervalYearMonth": {
                     "months": 0,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -3676,7 +3676,7 @@
                   "intervalYearMonth": {
                     "months": 0,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -3703,10 +3703,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3733,10 +3733,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3763,10 +3763,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -3793,10 +3793,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 0,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -3826,7 +3826,7 @@
                   "intervalYearMonth": {
                     "months": 0,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -3856,7 +3856,7 @@
                   "intervalYearMonth": {
                     "months": 0,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -3883,10 +3883,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1001000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -3913,10 +3913,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 864000000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -3943,10 +3943,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 864000000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -3973,10 +3973,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 36000000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -4003,10 +4003,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 36000000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -4033,10 +4033,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4063,10 +4063,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4093,10 +4093,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4123,10 +4123,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4153,10 +4153,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 600000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -4183,10 +4183,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 600000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -4216,7 +4216,7 @@
                   "intervalYearMonth": {
                     "months": 10,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -4246,7 +4246,7 @@
                   "intervalYearMonth": {
                     "months": 10,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -4273,10 +4273,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4303,10 +4303,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 10000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4333,10 +4333,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 6048000000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -4363,10 +4363,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 6048000000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -4396,7 +4396,7 @@
                   "intervalYearMonth": {
                     "months": 120,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -4426,7 +4426,7 @@
                   "intervalYearMonth": {
                     "months": 120,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -4483,10 +4483,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 13123456,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4513,10 +4513,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 13123456,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4543,10 +4543,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1814400000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -4573,10 +4573,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1814400000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -4603,10 +4603,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 75600000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -4633,10 +4633,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 75600000000,
                     "startField": "hour",
-                    "endField": "hour"
+                    "endField": null
                   }
                 }
               }
@@ -4663,10 +4663,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4693,10 +4693,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4723,10 +4723,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4753,10 +4753,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4783,10 +4783,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1260000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -4813,10 +4813,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 1260000000,
                     "startField": "minute",
-                    "endField": "minute"
+                    "endField": null
                   }
                 }
               }
@@ -4846,7 +4846,7 @@
                   "intervalYearMonth": {
                     "months": 21,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -4876,7 +4876,7 @@
                   "intervalYearMonth": {
                     "months": 21,
                     "startField": "month",
-                    "endField": "month"
+                    "endField": null
                   }
                 }
               }
@@ -4903,10 +4903,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4933,10 +4933,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 21000000,
                     "startField": "second",
-                    "endField": "second"
+                    "endField": null
                   }
                 }
               }
@@ -4963,10 +4963,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 12700800000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -4993,10 +4993,10 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 12700800000000,
                     "startField": "day",
-                    "endField": "day"
+                    "endField": null
                   }
                 }
               }
@@ -5026,7 +5026,7 @@
                   "intervalYearMonth": {
                     "months": 252,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -5056,7 +5056,7 @@
                   "intervalYearMonth": {
                     "months": 252,
                     "startField": "year",
-                    "endField": "year"
+                    "endField": null
                   }
                 }
               }
@@ -5089,7 +5089,7 @@
             "arguments": [
               {
                 "literal": {
-                  "durationMicrosecond": {
+                  "intervalDayTimeMicrosecond": {
                     "microseconds": 698601000000,
                     "startField": "day",
                     "endField": "second"
@@ -5113,7 +5113,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 93784005006,
               "startField": "day",
               "endField": "second"
@@ -5174,7 +5174,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 93784005006,
               "startField": "day",
               "endField": "second"
@@ -5253,7 +5253,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 86401000000,
               "startField": "day",
               "endField": "second"
@@ -5267,7 +5267,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -86400000000,
               "startField": "day",
               "endField": "second"
@@ -5295,7 +5295,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -69497123456,
               "startField": "hour",
               "endField": "second"
@@ -5323,10 +5323,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -604800000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5337,10 +5337,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -604800000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5351,10 +5351,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -25200000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -5365,10 +5365,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -25200000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -5379,10 +5379,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5393,10 +5393,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5407,10 +5407,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5421,10 +5421,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5435,10 +5435,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -420000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -5449,10 +5449,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -420000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -5466,7 +5466,7 @@
             "intervalYearMonth": {
               "months": -7,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -5480,7 +5480,7 @@
             "intervalYearMonth": {
               "months": -7,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -5491,10 +5491,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5505,10 +5505,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5519,10 +5519,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -4233600000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5533,10 +5533,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -4233600000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5550,7 +5550,7 @@
             "intervalYearMonth": {
               "months": -84,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -5564,7 +5564,7 @@
             "intervalYearMonth": {
               "months": -84,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -5575,7 +5575,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -8594553123456,
               "startField": "day",
               "endField": "second"
@@ -5589,10 +5589,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5603,10 +5603,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5617,10 +5617,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -5631,10 +5631,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -5645,10 +5645,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5659,10 +5659,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5673,10 +5673,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5687,10 +5687,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5701,10 +5701,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -5715,10 +5715,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -5732,7 +5732,7 @@
             "intervalYearMonth": {
               "months": 0,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -5746,7 +5746,7 @@
             "intervalYearMonth": {
               "months": 0,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -5757,10 +5757,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5771,10 +5771,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5785,10 +5785,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5799,10 +5799,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5816,7 +5816,7 @@
             "intervalYearMonth": {
               "months": 0,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -5830,7 +5830,7 @@
             "intervalYearMonth": {
               "months": 0,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -5841,7 +5841,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "hour",
               "endField": "second"
@@ -5855,7 +5855,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1000000,
               "startField": "hour",
               "endField": "second"
@@ -5869,7 +5869,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 86400000000,
               "startField": "day",
               "endField": "second"
@@ -5883,7 +5883,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 86401000000,
               "startField": "day",
               "endField": "second"
@@ -5913,7 +5913,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 896887123456,
               "startField": "day",
               "endField": "second"
@@ -5927,10 +5927,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 864000000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5941,10 +5941,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 864000000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -5955,10 +5955,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 36000000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -5969,10 +5969,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 36000000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -5983,10 +5983,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -5997,10 +5997,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6011,10 +6011,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6025,10 +6025,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6039,10 +6039,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 600000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -6053,10 +6053,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 600000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -6070,7 +6070,7 @@
             "intervalYearMonth": {
               "months": 10,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -6091,7 +6091,7 @@
             "intervalYearMonth": {
               "months": 10,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -6102,10 +6102,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6116,10 +6116,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6130,10 +6130,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 6048000000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6144,10 +6144,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 6048000000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6161,7 +6161,7 @@
             "intervalYearMonth": {
               "months": 120,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -6175,7 +6175,7 @@
             "intervalYearMonth": {
               "months": 120,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -6186,7 +6186,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 40953123456,
               "startField": "hour",
               "endField": "second"
@@ -6214,10 +6214,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1814400000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6228,10 +6228,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1814400000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6242,10 +6242,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 75600000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -6256,10 +6256,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 75600000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -6270,10 +6270,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6284,10 +6284,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6298,10 +6298,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6312,10 +6312,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6326,10 +6326,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1260000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -6340,10 +6340,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1260000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -6357,7 +6357,7 @@
             "intervalYearMonth": {
               "months": 21,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -6371,7 +6371,7 @@
             "intervalYearMonth": {
               "months": 21,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -6382,10 +6382,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6396,10 +6396,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6410,10 +6410,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 12700800000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6424,10 +6424,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 12700800000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6441,7 +6441,7 @@
             "intervalYearMonth": {
               "months": 252,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -6455,7 +6455,7 @@
             "intervalYearMonth": {
               "months": 252,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -6480,7 +6480,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 8594553123456,
               "startField": "day",
               "endField": "second"
@@ -6494,7 +6494,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 32887123456,
               "startField": "hour",
               "endField": "second"
@@ -6508,10 +6508,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -13123456,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6522,10 +6522,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -604800000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6536,10 +6536,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -604800000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6550,10 +6550,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -25200000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -6564,10 +6564,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -25200000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -6578,10 +6578,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6592,10 +6592,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6606,10 +6606,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6620,10 +6620,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6634,10 +6634,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -420000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -6648,10 +6648,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -420000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -6665,7 +6665,7 @@
             "intervalYearMonth": {
               "months": -7,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -6679,7 +6679,7 @@
             "intervalYearMonth": {
               "months": -7,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -6690,10 +6690,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6704,10 +6704,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -7000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6718,10 +6718,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -4233600000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6732,10 +6732,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": -4233600000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6749,7 +6749,7 @@
             "intervalYearMonth": {
               "months": -84,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -6763,7 +6763,7 @@
             "intervalYearMonth": {
               "months": -84,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -6774,10 +6774,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6788,10 +6788,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6802,10 +6802,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -6816,10 +6816,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -6830,10 +6830,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6844,10 +6844,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6858,10 +6858,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6872,10 +6872,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6886,10 +6886,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -6900,10 +6900,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -6917,7 +6917,7 @@
             "intervalYearMonth": {
               "months": 0,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -6931,7 +6931,7 @@
             "intervalYearMonth": {
               "months": 0,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -6942,10 +6942,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6956,10 +6956,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -6970,10 +6970,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -6984,10 +6984,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 0,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7001,7 +7001,7 @@
             "intervalYearMonth": {
               "months": 0,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -7015,7 +7015,7 @@
             "intervalYearMonth": {
               "months": 0,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -7026,10 +7026,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1001000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7040,10 +7040,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 864000000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7054,10 +7054,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 864000000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7068,10 +7068,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 36000000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -7082,10 +7082,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 36000000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -7096,10 +7096,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7110,10 +7110,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7124,10 +7124,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7138,10 +7138,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7152,10 +7152,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 600000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -7166,10 +7166,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 600000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -7183,7 +7183,7 @@
             "intervalYearMonth": {
               "months": 10,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -7197,7 +7197,7 @@
             "intervalYearMonth": {
               "months": 10,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -7208,10 +7208,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7222,10 +7222,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 10000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7236,10 +7236,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 6048000000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7250,10 +7250,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 6048000000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7267,7 +7267,7 @@
             "intervalYearMonth": {
               "months": 120,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -7281,7 +7281,7 @@
             "intervalYearMonth": {
               "months": 120,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -7306,10 +7306,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 13123456,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7320,10 +7320,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 13123456,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7334,10 +7334,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1814400000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7348,10 +7348,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1814400000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7362,10 +7362,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 75600000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -7376,10 +7376,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 75600000000,
               "startField": "hour",
-              "endField": "hour"
+              "endField": null
             }
           }
         }
@@ -7390,10 +7390,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7404,10 +7404,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7418,10 +7418,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7432,10 +7432,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7446,10 +7446,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1260000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -7460,10 +7460,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 1260000000,
               "startField": "minute",
-              "endField": "minute"
+              "endField": null
             }
           }
         }
@@ -7477,7 +7477,7 @@
             "intervalYearMonth": {
               "months": 21,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -7491,7 +7491,7 @@
             "intervalYearMonth": {
               "months": 21,
               "startField": "month",
-              "endField": "month"
+              "endField": null
             }
           }
         }
@@ -7502,10 +7502,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7516,10 +7516,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 21000000,
               "startField": "second",
-              "endField": "second"
+              "endField": null
             }
           }
         }
@@ -7530,10 +7530,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 12700800000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7544,10 +7544,10 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 12700800000000,
               "startField": "day",
-              "endField": "day"
+              "endField": null
             }
           }
         }
@@ -7561,7 +7561,7 @@
             "intervalYearMonth": {
               "months": 252,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -7575,7 +7575,7 @@
             "intervalYearMonth": {
               "months": 252,
               "startField": "year",
-              "endField": "year"
+              "endField": null
             }
           }
         }
@@ -7592,7 +7592,7 @@
       "output": {
         "success": {
           "literal": {
-            "durationMicrosecond": {
+            "intervalDayTimeMicrosecond": {
               "microseconds": 698601000000,
               "startField": "day",
               "endField": "second"

@@ -39,6 +39,21 @@ def test_basic_query_execution(spark):
     assert result[0]["result"] == 2  # noqa: PLR2004
 
 
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        pytest.param("upper(key) = 'MODE'", id="string"),
+        pytest.param("size(split(key, 'o')) = 2 AND reverse(key) = 'edom'", id="array-length"),
+        pytest.param("cardinality(str_to_map(key, 'o', ':')) = 2 AND reverse(key) = 'edom'", id="map-cardinality"),
+    ],
+)
+def test_builtin_functions_in_driver_system_table_filter(spark, predicate):
+    # Pushed system-table filters are decoded on the driver, whose task context
+    # does not register DataFusion's default scalar functions.
+    rows = spark.table("system.session.options").where(predicate).select("key").collect()
+    assert [row.key for row in rows] == ["mode"]
+
+
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize(
     ("with_replacement", "expected"),

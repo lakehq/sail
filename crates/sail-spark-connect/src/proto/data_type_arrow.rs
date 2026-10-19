@@ -4,7 +4,6 @@ use sail_common::spec;
 use sail_common_datafusion::variant::is_variant_storage_field;
 
 use crate::error::{SparkError, SparkResult};
-use crate::proto::data_type::interval_fields;
 use crate::spark::connect::{DataType, data_type as sdt};
 
 /// Spark geometry and geography type metadata.
@@ -112,12 +111,10 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     type_variation_reference: 0,
                 })),
             }
-        } else if let Some(interval_metadata) =
-            field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+        } else if let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
         {
-            let interval_metadata: spec::SparkIntervalMetadata =
-                serde_json::from_str(interval_metadata)?;
-            interval_data_type(field.data_type(), &interval_metadata)?
+            let metadata = spec::SparkIntervalMetadata::from_json(metadata)?;
+            spark_interval_data_type(field.data_type(), metadata)?
         } else {
             field.data_type().clone().try_into()?
         };
@@ -130,59 +127,38 @@ impl TryFrom<adt::Field> for sdt::StructField {
     }
 }
 
-/// Builds a Spark interval type with its leading and trailing fields, which are not part of the
-/// Arrow data type. Spark numbers the fields within each interval type, while the Sail
-/// specification numbers them across both, so the fields are mapped rather than cast.
-fn interval_data_type(
-    data_type: &adt::DataType,
-    interval: &spec::SparkIntervalMetadata,
+fn spark_interval_data_type(
+    arrow_type: &adt::DataType,
+    metadata: spec::SparkIntervalMetadata,
 ) -> SparkResult<DataType> {
-    use spec::IntervalFieldType;
-
-    let year_month = |field: IntervalFieldType| match field {
-        IntervalFieldType::Year => Ok(0),
-        IntervalFieldType::Month => Ok(1),
-        x => Err(SparkError::invalid(format!(
-            "year month interval field: {x:?}"
-        ))),
-    };
-    let day_time = |field: IntervalFieldType| match field {
-        IntervalFieldType::Day => Ok(0),
-        IntervalFieldType::Hour => Ok(1),
-        IntervalFieldType::Minute => Ok(2),
-        IntervalFieldType::Second => Ok(3),
-        x => Err(SparkError::invalid(format!(
-            "day time interval field: {x:?}"
-        ))),
-    };
-    let kind = match data_type {
-        adt::DataType::Interval(adt::IntervalUnit::YearMonth) => {
-            let (start_field, end_field) = interval_fields(
-                interval.start_field,
-                interval.end_field,
-                IntervalFieldType::Year,
-                IntervalFieldType::Month,
-            );
+    let interval_unit = metadata.interval_unit();
+    let kind = match metadata {
+        spec::SparkIntervalMetadata::YearMonth {
+            start_field,
+            end_field,
+        } if arrow_type == &adt::DataType::Interval(adt::IntervalUnit::YearMonth) => {
             sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
-                start_field: start_field.map(year_month).transpose()?,
-                end_field: end_field.map(year_month).transpose()?,
+                start_field: Some(start_field as i32),
+                end_field: Some(end_field as i32),
                 type_variation_reference: 0,
             })
         }
-        adt::DataType::Duration(adt::TimeUnit::Microsecond) => {
-            let (start_field, end_field) = interval_fields(
-                interval.start_field,
-                interval.end_field,
-                IntervalFieldType::Day,
-                IntervalFieldType::Second,
-            );
+        spec::SparkIntervalMetadata::DayTime {
+            start_field,
+            end_field,
+        } if arrow_type == &adt::DataType::Duration(adt::TimeUnit::Microsecond) => {
             sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
-                start_field: start_field.map(day_time).transpose()?,
-                end_field: end_field.map(day_time).transpose()?,
+                start_field: Some(start_field as i32),
+                end_field: Some(end_field as i32),
                 type_variation_reference: 0,
             })
         }
-        x => return x.clone().try_into(),
+        _ => {
+            return Err(SparkError::invalid(format!(
+                "Spark interval metadata {:?} does not match Arrow type {arrow_type}",
+                interval_unit
+            )));
+        }
     };
     Ok(DataType { kind: Some(kind) })
 }
@@ -573,5 +549,35 @@ mod tests {
         // Time64 Nanosecond - valid Arrow but rejected by Spark (only precision 0, 3, 6 supported)
         let arrow_type = adt::DataType::Time64(adt::TimeUnit::Nanosecond);
         assert!(DataType::try_from(arrow_type).is_err());
+    }
+
+    #[test]
+    fn test_qualified_interval_field_to_proto() -> SparkResult<()> {
+        let interval = spec::SparkIntervalMetadata::DayTime {
+            start_field: spec::DayTimeIntervalField::Hour,
+            end_field: spec::DayTimeIntervalField::Second,
+        };
+        let field = adt::Field::new(
+            "duration",
+            adt::DataType::Duration(adt::TimeUnit::Microsecond),
+            false,
+        )
+        .with_metadata(HashMap::from([(
+            spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+            interval.to_json()?,
+        )]));
+
+        let proto: sdt::StructField = field.try_into()?;
+        assert_eq!(
+            proto.data_type,
+            Some(DataType {
+                kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
+                    start_field: Some(1),
+                    end_field: Some(3),
+                    type_variation_reference: 0,
+                })),
+            })
+        );
+        Ok(())
     }
 }

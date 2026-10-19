@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::Column;
 use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias, cast, col, lit,
+    Expr, ExprSchemable, LogicalPlan, Projection, UNNAMED_TABLE, cast, col, lit,
 };
 use indexmap::IndexMap;
 use sail_common::spec;
@@ -26,25 +26,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let schema = input.schema();
-        if columns.len() != schema.fields().len() {
-            return Err(PlanError::invalid(format!(
-                "number of column names ({}) does not match number of columns ({})",
-                columns.len(),
-                schema.fields().len()
-            )));
-        }
-        let expr = schema
-            .columns()
-            .into_iter()
-            .zip(columns)
-            .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
-            .collect();
-        let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        Self::rename_query_output(input, columns, state)
     }
 
     pub(super) async fn resolve_query_to_schema(
@@ -108,18 +90,17 @@ impl PlanResolver<'_> {
             .columns()
             .into_iter()
             .map(|column| {
-                let name = state.get_field_info(column.name())?.name();
-                match rename_columns_map.get(name) {
-                    Some(n) => Ok(NamedExpr::new(vec![n.clone()], Expr::Column(column))),
-                    None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
-                }
+                let name = state.get_field_info(column.name())?.name().to_string();
+                // Spark aliases each renamed column, even to its own name, so only
+                // the columns that are not renamed remain the same attributes.
+                let field_id = match rename_columns_map.get(&name) {
+                    Some(n) => state.register_field_name(n),
+                    None => state.register_identity_field(name, column.name())?,
+                };
+                Ok(Expr::Column(column).alias(field_id))
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        Self::projection_reusing_input_fields(expr, input)
     }
 
     pub(super) async fn resolve_query_drop(
@@ -187,13 +168,6 @@ impl PlanResolver<'_> {
         type AliasEntry = (Expr, bool, Option<Vec<(String, String)>>);
 
         let input = self.resolve_query_plan(input, state).await?;
-        // If the input is a SubqueryAlias, save the alias and re-apply it after building the
-        // projection. A Projection node strips qualifiers from its output schema, so without
-        // re-wrapping, subsequent operations could no longer reference columns by the qualified name.
-        let input_alias = match &input {
-            LogicalPlan::SubqueryAlias(sa) => Some(sa.alias.clone()),
-            _ => None,
-        };
         let schema = input.schema();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
         let mut aliases: IndexMap<String, AliasEntry> = async {
@@ -213,18 +187,37 @@ impl PlanResolver<'_> {
                     _ => return Err(PlanError::invalid("alias expression expected for column")),
                 };
                 let expr = self.resolve_expression(expr, schema, state).await?;
+                // Replacements are new attributes in Spark, even when their value is
+                // another column. Only untouched columns inherit their input plan IDs.
+                let expr = if matches!(expr, Expr::Column(_)) {
+                    expr.alias(name.as_ref())
+                } else {
+                    expr
+                };
                 results.insert(name.into(), (expr, false, metadata));
             }
             Ok(results) as PlanResult<_>
         }
         .await?;
+        // Index replacements once instead of scanning them for every input column.
+        let mut alias_indices = HashMap::with_capacity(aliases.len());
+        for (index, name) in aliases.keys().enumerate() {
+            alias_indices
+                .entry(self.merge_name_key(name))
+                .or_insert(index);
+        }
         let mut expr = schema
             .columns()
             .into_iter()
             .map(|column| {
                 let name = state.get_field_info(column.name())?.name();
-                match aliases.get_mut(name) {
-                    Some((e, exists, metadata)) => {
+                // Spark replaces a column whose name matches a new column (case-insensitively
+                // by default), and the replacement takes the name of the new column.
+                match alias_indices
+                    .get(&self.merge_name_key(name))
+                    .and_then(|index| aliases.get_index_mut(*index))
+                {
+                    Some((name, (e, exists, metadata))) => {
                         *exists = true;
                         match metadata {
                             Some(m) if !m.is_empty() => {
@@ -258,16 +251,23 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let expr = self.rewrite_named_expressions(expr, state)?;
-        let result = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
-        if let Some(alias) = input_alias {
-            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                Arc::new(result),
-                alias,
-            )?))
-        } else {
-            Ok(result)
+        let mut expr = self.rewrite_named_expressions(expr, state)?;
+        // Spark preserves qualifiers only on untouched columns. Keep them on the
+        // projection expressions so missing-input recovery can cross this project.
+        // DataFusion's placeholder for unnamed sources is not a Spark qualifier.
+        for expr in &mut expr {
+            if let Expr::Alias(alias) = expr
+                && !aliases.contains_key(state.get_field_info(&alias.name)?.name())
+                && let Expr::Column(column) = alias.expr.as_ref()
+                && column
+                    .relation
+                    .as_ref()
+                    .is_some_and(|relation| relation.table() != UNNAMED_TABLE)
+            {
+                alias.relation = column.relation.clone();
+            }
         }
+        Self::projection_reusing_input_fields(expr, input)
     }
 
     pub(super) async fn resolve_query_replace(

@@ -1,15 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, cast};
 use sail_common::spec;
-use sail_common_datafusion::interval::IntervalRange;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::interval::with_interval_range;
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::{NamedExpr, spark_interval_metadata_for_expression};
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -20,14 +20,20 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let schema = Arc::new(DFSchema::empty());
         let values: Vec<Vec<Expr>> = async {
-            let mut results: Vec<Vec<Expr>> = Vec::with_capacity(values.len());
+            let mut results: Vec<Vec<NamedExpr>> = Vec::with_capacity(values.len());
             for value in values {
-                let value = self.resolve_expressions(value, &schema, state).await?;
+                let value = self
+                    .resolve_named_expressions(value, &schema, state)
+                    .await?;
                 results.push(value);
             }
+            Self::resolve_values_interval_metadata(&mut results, &schema)?;
+            let mut results = results
+                .into_iter()
+                .map(|row| row.into_iter().map(|value| value.expr).collect())
+                .collect::<Vec<Vec<Expr>>>();
             let _nan_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
             let _map_column_indices = Self::resolve_values_map_types(&mut results, &schema)?;
-            Self::resolve_values_interval_ranges(&mut results, &schema)?;
             Ok::<_, PlanError>(results)
         }
         .await?;
@@ -47,50 +53,61 @@ impl PlanResolver<'_> {
         )?))
     }
 
-    /// An interval literal carries its Spark range in its field metadata, and DataFusion requires
-    /// the rows of a VALUES column to agree on it. A column whose rows disagree -- a NULL beside an
-    /// interval, or intervals of different ranges -- takes the range that covers them all.
-    fn resolve_values_interval_ranges(
-        values: &mut [Vec<Expr>],
+    fn resolve_values_interval_metadata(
+        values: &mut [Vec<NamedExpr>],
         schema: &DFSchemaRef,
     ) -> PlanResult<()> {
-        let Some(n_cols) = values.first().map(|row| row.len()) else {
+        let Some(column_count) = values.first().map(Vec::len) else {
             return Ok(());
         };
-        for j in 0..n_cols {
-            let mut fields = Vec::with_capacity(values.len());
+        if values.iter().any(|row| row.len() != column_count) {
+            return Ok(());
+        }
+
+        for column_index in 0..column_count {
+            let mut common_interval = None::<spec::SparkIntervalMetadata>;
             for row in values.iter() {
-                fields.push(row[j].to_field(schema)?.1);
+                let value = &row[column_index];
+                let metadata = value
+                    .metadata
+                    .iter()
+                    .find(|(key, _)| key == spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+                    .map(|(_, value)| spec::SparkIntervalMetadata::from_json(value))
+                    .transpose()?
+                    .or(spark_interval_metadata_for_expression(&value.expr, schema)?);
+                let Some(metadata) = metadata else {
+                    continue;
+                };
+                common_interval = Some(match common_interval {
+                    None => metadata,
+                    Some(current) => current.wider(metadata).ok_or_else(|| {
+                        PlanError::invalid("incompatible interval types in VALUES column")
+                    })?,
+                });
             }
-            if fields
-                .windows(2)
-                .all(|w| w[0].metadata() == w[1].metadata())
-            {
-                continue;
-            }
-            let ranges = fields
-                .iter()
-                .filter(|f| {
-                    f.metadata()
-                        .contains_key(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
-                })
-                .filter_map(|f| IntervalRange::from_field(f).map(|r| (r, f.data_type().clone())))
-                .collect::<Vec<_>>();
-            let Some((first, data_type)) = ranges.first().cloned() else {
+
+            let Some(common_interval) = common_interval else {
                 continue;
             };
-            if ranges.iter().any(|(_, t)| t != &data_type) {
-                continue;
-            }
-            let range = ranges.iter().fold(first, |acc, (r, _)| acc.widen(*r));
+            let serialized = common_interval.to_json()?;
             for row in values.iter_mut() {
-                let value = std::mem::replace(&mut row[j], Expr::Literal(ScalarValue::Null, None));
-                let value = if value.get_type(schema)? == DataType::Null {
-                    cast(value, data_type.clone())
-                } else {
-                    value
+                let value = &mut row[column_index];
+                let mut metadata: HashMap<String, String> =
+                    value.expr.metadata(schema)?.to_hashmap();
+                metadata.extend(value.metadata.iter().cloned());
+                metadata.insert(
+                    spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                    serialized.clone(),
+                );
+                let metadata = Some(FieldMetadata::from(metadata));
+                let expression = std::mem::take(&mut value.expr);
+                value.expr = match expression {
+                    Expr::Literal(value, _) => Expr::Literal(value, metadata),
+                    expression => expression.alias_with_metadata(
+                        format!("__sail_values_interval_{column_index}"),
+                        metadata,
+                    ),
                 };
-                row[j] = with_interval_range(value, range, schema)?;
             }
         }
         Ok(())
