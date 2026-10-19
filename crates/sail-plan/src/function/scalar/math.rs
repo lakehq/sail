@@ -785,7 +785,11 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("e", F::nullary(eulers_constant)),
         ("exp", F::unary(double(expr_fn::exp))),
         ("expm1", F::unary(math_fn::expm1)),
-        ("factorial", F::unary(expr_fn::factorial)),
+        // Spark implicitly casts the argument to `int`, so decimals and doubles are truncated.
+        (
+            "factorial",
+            F::unary(|arg| expr_fn::factorial(cast(arg, DataType::Int32))),
+        ),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         ("greatest", F::var_arg(expr_fn::greatest)),
         ("hex", F::unary(math_fn::hex)),
