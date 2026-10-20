@@ -1,15 +1,20 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, PrimitiveArray, StringArray, StringBuilder, as_largestring_array,
-    as_string_array, new_null_array,
+    Array, ArrayRef, AsArray, Decimal128Array, Int64Array, PrimitiveArray, StringArray,
+    StringBuilder, as_largestring_array, as_string_array, new_null_array,
 };
-use datafusion::arrow::datatypes::{DataType, Float64Type, Int64Type};
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, Int64Type,
+};
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::scalar::math::spark_cast_bigint::{decimal_array_to_i64, double_to_i64, float_to_i64};
 
 const BIN_SUPPORTED_TYPES: &str = "numeric or string";
 
@@ -51,12 +56,38 @@ impl ScalarUDFImpl for SparkBin {
         Ok(DataType::Utf8)
     }
 
+    // TODO: Spark's `Bin` is not nullable for a non-nullable integer input, and is nullable for a
+    //   string or a fractional or decimal one (`Cast.forceNullable`, Spark 4.2.0 `Cast.scala:433,446`),
+    //   but DataFusion 55.1.0 gives a scalar subquery the nullability of its field and ignores that it
+    //   can return no rows, so a non-nullable `bin` inside one would declare a field that carries a
+    //   NULL, and writing it fails. Keep it nullable until a DataFusion upgrade brings the `min_rows`
+    //   rule.
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // Arity is enforced by `coerce_types` at planning time.
         let ansi = self.ansi_mode;
         match &args.args[0] {
             ColumnarValue::Scalar(ScalarValue::Int64(value)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(value.map(bin))))
+            }
+            ColumnarValue::Scalar(ScalarValue::Decimal128(value, precision, scale)) => {
+                let array = Decimal128Array::from(vec![*value])
+                    .with_precision_and_scale(*precision, *scale)?;
+                let longs = decimal_array_to_i64(&array, *precision, *scale, ansi)?;
+                let text = bin_int_array_to_string(longs.as_primitive::<Int64Type>());
+                Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                    &text, 0,
+                )?))
+            }
+            ColumnarValue::Scalar(ScalarValue::Float32(value)) => {
+                let out = match value {
+                    Some(v) => Some(bin(float_to_i64(*v, ansi)?)),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(out)))
             }
             ColumnarValue::Scalar(ScalarValue::Float64(value)) => {
                 let out = match value {
@@ -93,6 +124,25 @@ impl ScalarUDFImpl for SparkBin {
                     DataType::Int64 => {
                         let array = array.as_primitive::<Int64Type>();
                         Ok(ColumnarValue::Array(bin_int_array_to_string(array)))
+                    }
+                    DataType::Decimal128(precision, scale) => {
+                        let longs = decimal_array_to_i64(
+                            array.as_primitive::<Decimal128Type>(),
+                            *precision,
+                            *scale,
+                            ansi,
+                        )?;
+                        Ok(ColumnarValue::Array(bin_int_array_to_string(
+                            longs.as_primitive::<Int64Type>(),
+                        )))
+                    }
+                    DataType::Float32 => {
+                        let longs = array
+                            .as_primitive::<Float32Type>()
+                            .iter()
+                            .map(|v| v.map(|v| float_to_i64(v, ansi)).transpose())
+                            .collect::<Result<Int64Array>>()?;
+                        Ok(ColumnarValue::Array(bin_int_array_to_string(&longs)))
                     }
                     DataType::Float64 => {
                         let array = array.as_primitive::<Float64Type>();
@@ -148,13 +198,21 @@ impl ScalarUDFImpl for SparkBin {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
-            | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Null => Ok(vec![DataType::Int64]),
+            // Spark's DECIMAL -> BIGINT cast wraps (ANSI off) or overflows (ANSI on), which
+            // DataFusion's cast does not do: `bin` converts the DECIMAL itself.
+            DataType::Decimal32(p, s) | DataType::Decimal64(p, s) => {
+                Ok(vec![DataType::Decimal128(*p, *s)])
+            }
+            DataType::Decimal128(_, _) => Ok(vec![arg_types[0].clone()]),
             // Keep floats as DOUBLE: DataFusion's Float->Int64 cast errors on
             // NaN/Infinity, so `bin` applies Spark's saturating cast itself.
-            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
-                Ok(vec![DataType::Float64])
+            DataType::Float16 | DataType::Float64 => Ok(vec![DataType::Float64]),
+            DataType::Float32 => Ok(vec![DataType::Float32]),
+            // An Arrow dictionary is one more storage shape of its value type, not a Spark type.
+            DataType::Dictionary(_, value_type) => {
+                self.coerce_types(&[value_type.as_ref().clone()])
             }
             other => Err(unsupported_data_type_exec_err(
                 "bin",
@@ -253,27 +311,6 @@ fn cast_invalid_input_err(value: &str) -> datafusion_common::DataFusionError {
     exec_datafusion_err!(
         "[CAST_INVALID_INPUT] The value '{value}' of the type \"STRING\" cannot be cast to \"BIGINT\" because it is malformed."
     )
-}
-
-fn cast_overflow_err(value: f64) -> datafusion_common::DataFusionError {
-    exec_datafusion_err!(
-        "[CAST_OVERFLOW] The value {value}D of the type \"DOUBLE\" cannot be cast to \"BIGINT\" due to an overflow."
-    )
-}
-
-/// Spark's DOUBLE -> BIGINT cast: Rust's `as` matches the JVM's `(long) double`
-/// (NaN -> 0, +/-Infinity -> i64::MAX/MIN, truncate toward zero, finite
-/// out-of-range saturates). ANSI mode instead raises CAST_OVERFLOW for any value
-/// outside the BIGINT range — NaN, +/-Infinity, and finite overflow alike.
-fn double_to_i64(value: f64, ansi: bool) -> Result<i64> {
-    // `2^63` (= i64::MAX + 1) is the first f64 above the BIGINT range; i64::MIN
-    // (`-2^63`) is exactly representable. The comparisons also cover +/-Infinity;
-    // NaN needs an explicit check since all NaN comparisons are false.
-    const I64_RANGE_LIMIT: f64 = 9223372036854775808.0;
-    if ansi && (value.is_nan() || value < i64::MIN as f64 || value >= I64_RANGE_LIMIT) {
-        return Err(cast_overflow_err(value));
-    }
-    Ok(value as i64)
 }
 
 fn bin_float_array(array: &PrimitiveArray<Float64Type>, ansi: bool) -> Result<StringArray> {
