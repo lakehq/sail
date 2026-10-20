@@ -12,6 +12,7 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{cast_temporal, coerce_temporal_arguments};
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -88,7 +89,14 @@ fn coerce_string_temporal_values(
                 arguments
                     .into_iter()
                     .zip(data_types.iter())
-                    .map(|(arg, data_type)| coerce_to_temporal(arg, data_type, &temporal_type))
+                    .map(|(arg, data_type)| {
+                        coerce_to_temporal(
+                            arg,
+                            data_type,
+                            &temporal_type,
+                            &function_context.plan_config.session_timezone,
+                        )
+                    })
                     .collect::<PlanResult<Vec<_>>>()?
             } else {
                 arguments
@@ -107,7 +115,7 @@ fn coerce_string_temporal_values(
             arguments
         }
     } else {
-        arguments
+        coerce_temporal_arguments(arguments, function_context)?
     };
     Ok(arguments)
 }
@@ -116,6 +124,7 @@ fn coerce_to_temporal(
     arg: expr::Expr,
     data_type: &DataType,
     target_type: &DataType,
+    timezone: &Arc<str>,
 ) -> PlanResult<expr::Expr> {
     if data_type == target_type {
         return Ok(arg);
@@ -133,7 +142,13 @@ fn coerce_to_temporal(
             _ => Ok(cast(arg, target_type.clone())),
         }
     } else if is_temporal_type(data_type) {
-        Ok(cast(arg, target_type.clone()))
+        Ok(cast_temporal(
+            arg,
+            data_type,
+            target_type.clone(),
+            timezone,
+            false,
+        )?)
     } else {
         Ok(arg)
     }
