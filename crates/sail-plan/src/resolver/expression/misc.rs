@@ -201,7 +201,7 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        use regex::Regex;
+        use fancy_regex::Regex;
         use sail_function::scalar::multi_expr::MultiExpr;
 
         let schema = &Self::local_schema(schema, state);
@@ -218,8 +218,16 @@ impl PlanResolver<'_> {
             plan_id
         };
 
-        // Add anchors to match the entire column name (like Spark does)
-        let anchored_pattern = format!("^{}$", pattern_str);
+        // Spark matches the entire column name with a Java regular expression, which
+        // is case-insensitive unless `spark.sql.caseSensitive` is enabled. The pattern is
+        // grouped so that the anchors apply to every alternative. A backtracking engine is
+        // used for Java constructs such as possessive quantifiers and atomic groups.
+        let flags = if self.config.case_sensitive {
+            ""
+        } else {
+            "(?i)"
+        };
+        let anchored_pattern = format!("^{flags}(?:{pattern_str})$");
 
         // Compile the regex pattern
         let pattern = Regex::new(&anchored_pattern).map_err(|e| {
@@ -243,7 +251,12 @@ impl PlanResolver<'_> {
 
             // Check if the field name matches the pattern and plan_id
             let field_name = info.name();
-            if pattern.is_match(field_name) && info.matches(field_name, plan_id) {
+            let is_match = pattern.is_match(field_name).map_err(|e| {
+                PlanError::invalid(format!(
+                    "failed to match regex pattern '{pattern_str}': {e}"
+                ))
+            })?;
+            if is_match && info.matches(field_name, plan_id) {
                 matching_columns.push(expr::Expr::Column(Column::new(
                     qualifier.cloned(),
                     field.name(),
