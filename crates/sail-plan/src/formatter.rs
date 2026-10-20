@@ -436,6 +436,11 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
             }
             "~" => Ok(format!("{name}{}", arguments.one()?)),
+            // Spark adds the identity function as the finish function when it is not given.
+            "aggregate" | "reduce" if arguments.len() == 3 => Ok(format!(
+                "{name}({}, lambdafunction(namedlambdavariable(), namedlambdavariable()))",
+                arguments.join(", ")
+            )),
             "+" | "-" => {
                 if arguments.len() < 2 {
                     Ok(format!("({name} {})", arguments.one()?))
