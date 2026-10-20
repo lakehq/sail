@@ -154,7 +154,7 @@ pub fn parse_time(s: &str) -> SqlResult<TimeValue> {
 #[cfg(test)]
 mod tests {
     use sail_sql_parser::ast::query::Query;
-    use sail_sql_parser::ast::statement::Statement;
+    use sail_sql_parser::ast::statement::{DescribeItem, Statement};
     use sail_sql_parser::tree::TreeText;
 
     use crate::error::SqlResult;
@@ -220,6 +220,155 @@ mod tests {
             statement.text(),
             "CALL sail . system . rollback_to_snapshot ( table => 'events' , snapshot_id => 42 ) "
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_describe_table_and_query_disambiguation() -> SqlResult<()> {
+        for sql in [
+            "DESCRIBE t",
+            "DESC default.t",
+            "DESCRIBE TABLE t",
+            "DESCRIBE table",
+            "DESCRIBE table.t",
+            "DESCRIBE TABLE table",
+            "DESCRIBE TABLE table.t",
+            "DESCRIBE EXTENDED t",
+            "DESCRIBE TABLE FORMATTED t",
+            "DESCRIBE FORMATTED t PARTITION (p = 1) c",
+            "DESCRIBE formatted",
+            "DESCRIBE TABLE formatted",
+            "DESCRIBE TABLE formatted.t",
+            "DESCRIBE TABLE formatted PARTITION (p = 1)",
+            "DESCRIBE TABLE extended",
+            "DESCRIBE TABLE extended.t",
+            "DESCRIBE TABLE extended PARTITION (p = 1)",
+            "DESCRIBE SELECT a",
+            "DESCRIBE SELECT 1m",
+            "DESCRIBE SELECT `1`",
+            "DESCRIBE VALUES x",
+            "DESCRIBE QUERY t",
+            "DESCRIBE `query`",
+        ] {
+            assert!(
+                matches!(
+                    parse_one_statement(sql)?,
+                    Statement::Describe {
+                        item: DescribeItem::Table { .. },
+                        ..
+                    }
+                ),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "DESCRIBE SELECT 1",
+            "DESCRIBE SELECT 1L",
+            "DESCRIBE SELECT 1.2",
+            "DESCRIBE SELECT a FROM t",
+            "DESCRIBE TABLE t ORDER BY a",
+            "DESCRIBE VALUES (1)",
+            "DESCRIBE VALUES 1",
+            "DESCRIBE (SELECT 1)",
+            "DESCRIBE WITH s AS (SELECT 1) SELECT * FROM s",
+            "DESCRIBE QUERY SELECT a",
+            "DESCRIBE QUERY SELECT a FROM t",
+            "DESCRIBE QUERY TABLE t",
+            "DESCRIBE QUERY WITH s AS (SELECT 1) SELECT * FROM s",
+        ] {
+            assert!(
+                matches!(
+                    parse_one_statement(sql)?,
+                    Statement::Describe {
+                        item: DescribeItem::Query { .. },
+                        ..
+                    }
+                ),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "DESCRIBE SELECT a FROM",
+            "DESCRIBE t c unexpected",
+            "DESCRIBE QUERY SELECT 1 unexpected trailing",
+        ] {
+            assert!(parse_one_statement(sql).is_err(), "{sql}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_describe_statement_boundaries() -> SqlResult<()> {
+        let statements = parse_statements(
+            "DESCRIBE SELECT a /* table and column */; \
+             DESCRIBE SELECT a FROM t /* query */; \
+             EXPLAIN DESCRIBE SELECT a FROM t; SELECT 1",
+        )?;
+        assert!(matches!(
+            statements.as_slice(),
+            [
+                Statement::Describe {
+                    item: DescribeItem::Table { .. },
+                    ..
+                },
+                Statement::Describe {
+                    item: DescribeItem::Query { .. },
+                    ..
+                },
+                Statement::Explain { .. },
+                Statement::Query(_),
+            ]
+        ));
+        assert!(matches!(
+            parse_one_statement("EXPLAIN DESCRIBE SELECT a FROM t")?,
+            Statement::Explain { statement, .. }
+                if matches!(statement.as_ref(), Statement::Describe {
+                    item: DescribeItem::Query { .. },
+                    ..
+                })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_with_ctes() -> SqlResult<()> {
+        let statement = parse_one_statement(
+            "WITH s AS (SELECT 1 AS x) INSERT INTO t \
+             WITH s AS (SELECT 2 AS x) SELECT x FROM s",
+        )?;
+        assert!(matches!(
+            statement,
+            Statement::InsertInto {
+                with: Some(_),
+                query: Query { with: Some(_), .. },
+                ..
+            }
+        ));
+        for sql in [
+            "WITH s AS (SELECT 1 AS x) INSERT OVERWRITE TABLE t (x) SELECT x FROM s",
+            "WITH s AS (SELECT 1 AS x) INSERT INTO t BY NAME SELECT x FROM s",
+            "WITH s AS (SELECT 1 AS x) INSERT INTO t PARTITION (p = 1) SELECT x FROM s",
+        ] {
+            assert!(
+                matches!(
+                    parse_one_statement(sql)?,
+                    Statement::InsertInto { with: Some(_), .. }
+                ),
+                "{sql}"
+            );
+        }
+        assert!(matches!(
+            parse_one_statement(
+                "WITH s AS (SELECT 1 AS x) INSERT INTO t REPLACE WHERE x = 1 SELECT x FROM s"
+            )?,
+            Statement::InsertIntoAndReplace { with: Some(_), .. }
+        ));
+        assert!(matches!(
+            parse_one_statement(
+                "WITH s AS (SELECT 1 AS x) INSERT OVERWRITE DIRECTORY '/tmp/t' USING parquet SELECT x FROM s"
+            )?,
+            Statement::InsertOverwriteDirectory { with: Some(_), .. }
+        ));
         Ok(())
     }
 }
