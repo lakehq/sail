@@ -974,7 +974,7 @@
   default:
     value: "\n"
     parser: crate::options::parsers::parse_string
-  supported: false
+  supported: true
   rust_type: String
   scopes:
     - write

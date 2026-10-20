@@ -723,3 +723,19 @@ def test_csv_read_field_count_mismatch(spark, tmp_path):
     _write_csv(path, "data", b"a,b,c\n1\n1,2\n")
     df = spark.read.option("header", True).option("allowTruncatedRows", True).csv(str(path))
     assert df.select("c", "a").collect() == [Row(c=None, a="1"), Row(c=None, a="1")]
+
+
+@pytest.mark.parametrize(
+    ("line_sep", "read_options"),
+    [("|", {"lineSep": "|"}), ("\r\n", {})],
+    ids=["pipe", "crlf"],
+)
+def test_csv_write_line_sep(spark, tmp_path, line_sep, read_options):
+    path = tmp_path / "csv_line_sep"
+    df = spark.createDataFrame([(1, "a"), (2, "b")], "id int, v string")
+    df.coalesce(1).write.csv(str(path), lineSep=line_sep)
+    [file] = glob.glob(str(path / "*.csv"))
+    with open(file, newline="") as f:
+        assert f.read() == f"1,a{line_sep}2,b{line_sep}"
+    actual = spark.read.schema("id int, v string").options(**read_options).csv(str(path))
+    assert sorted(actual.collect()) == [Row(id=1, v="a"), Row(id=2, v="b")]
