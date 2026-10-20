@@ -26,4 +26,3 @@ pub mod spark_year;
 pub mod timestamp_now;
 pub(crate) mod timestamp_parser;
 pub(crate) mod utils;
-pub use utils::is_fixed_zero_offset_timezone;

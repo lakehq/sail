@@ -26,7 +26,7 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{cast_temporal, common_temporal_type, timestamp_epoch_units};
+use crate::function::datetime_utils::{cast_temporal, common_temporal_type, timestamp_epoch_units};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::spark_interval_metadata_for_expression;

@@ -29,9 +29,9 @@ use sail_python_udf::udf::expr_contains_python_udf;
 use super::datetime::fold_datetime_argument;
 use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{
-    FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
-    coerce_temporal_arguments, common_temporal_type,
+use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{
+    cast_temporal, coerce_temporal_arguments, common_temporal_type,
 };
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 

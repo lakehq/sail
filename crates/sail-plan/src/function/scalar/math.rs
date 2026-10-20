@@ -38,10 +38,8 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{
-    FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
-    coerce_temporal_arguments,
-};
+use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{cast_temporal, coerce_temporal_arguments};
 
 fn timestamp_plus_interval(timestamp: Expr, interval: Expr) -> Expr {
     ScalarUDF::from(SparkTimestampAdd::new()).call(vec![timestamp, interval])

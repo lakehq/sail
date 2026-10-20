@@ -10,7 +10,6 @@ use datafusion::arrow::temporal_conversions::as_datetime;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::ColumnarValue;
-pub use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 use sail_common::utils::datetime::{MICROS_PER_DAY, civil_from_days};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 

@@ -9,7 +9,7 @@ use datafusion_expr::{
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{cast_temporal, common_temporal_type};
+use crate::function::datetime_utils::{cast_temporal, common_temporal_type};
 use crate::resolver::PlanResolver;
 use crate::resolver::interval::{IntervalShape, plan_interval_shapes};
 use crate::resolver::state::PlanResolverState;

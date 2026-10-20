@@ -14,7 +14,7 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
-use crate::function::common::{cast_temporal, common_temporal_type};
+use crate::function::datetime_utils::{cast_temporal, common_temporal_type};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;

@@ -55,8 +55,10 @@ use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::formatter::SparkPlanFormatter;
 use crate::function::common::{
-    FunctionContextInput, ScalarFunction, ScalarFunctionInput, cast_temporal,
-    cast_timestamp_ntz_to_ltz, expr_contains_spark_cast_to_variant, timestamp_epoch_units,
+    FunctionContextInput, ScalarFunction, ScalarFunctionInput, expr_contains_spark_cast_to_variant,
+};
+use crate::function::datetime_utils::{
+    cast_temporal, cast_timestamp_ntz_to_ltz, timestamp_epoch_units,
 };
 
 fn wrong_datetime_arity(name: &str, expected: &str, actual: usize) -> PlanError {
