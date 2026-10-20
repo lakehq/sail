@@ -627,9 +627,9 @@ fn non_ansi_cast_to_int32(arg: Expr, data_type: Option<DataType>) -> Expr {
         Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
             ScalarUDF::from(SparkCastStringToInt32::new()).call(vec![arg])
         }
-        Some(DataType::Float16 | DataType::Float32 | DataType::Float64) => {
-            try_cast(expr_fn::nanvl(arg, lit(0.0_f64)), DataType::Int32)
-        }
+        // `nanvl` takes the type of both arguments: a FLOAT literal keeps a FLOAT column as is.
+        Some(DataType::Float32) => try_cast(expr_fn::nanvl(arg, lit(0.0_f32)), DataType::Int32),
+        Some(DataType::Float64) => try_cast(expr_fn::nanvl(arg, lit(0.0_f64)), DataType::Int32),
         Some(DataType::Int64) => try_cast(wrap_low_32_bits(arg), DataType::Int32),
         // TODO: A DECIMAL beyond BIGINT wraps in Spark (via `Decimal.toLong`) and is NULL here, and
         //  the ANSI cast of a DECIMAL of more than 18 digits goes through DOUBLE in Spark. Both belong
@@ -642,11 +642,10 @@ fn non_ansi_cast_to_int32(arg: Expr, data_type: Option<DataType>) -> Expr {
     }
 }
 
-/// The value modulo 2^32, in `[0, 2^32)`. A result of 2^31 or more is a negative INT in Java, and
-/// the `try_cast` to INT that follows turns it into NULL, as `factorial` does for any negative.
+/// The low 32 bits of the value, in `[0, 2^32)`. A result of 2^31 or more is a negative INT in Java,
+/// and the `try_cast` to INT that follows turns it into NULL, as `factorial` does for any negative.
 fn wrap_low_32_bits(arg: Expr) -> Expr {
-    const MODULUS: i64 = 1 << 32;
-    (arg % lit(MODULUS) + lit(MODULUS)) % lit(MODULUS)
+    arg & lit(i64::from(u32::MAX))
 }
 
 fn spark_sqrt(arg: Expr) -> Expr {
