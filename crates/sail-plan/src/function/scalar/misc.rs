@@ -12,7 +12,9 @@ use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBloc
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
-use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+use sail_function::scalar::misc::monotonically_increasing_id::{
+    SparkDistributedSequenceId, SparkMonotonicallyIncreasingId,
+};
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -292,6 +294,10 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         (
             "input_file_block_length",
             F::nullary(input_file_block_length),
+        ),
+        (
+            "distributed_sequence_id",
+            F::udf(SparkDistributedSequenceId::new()),
         ),
         ("input_file_block_start", F::nullary(input_file_block_start)),
         ("input_file_name", F::nullary(input_file_name)),

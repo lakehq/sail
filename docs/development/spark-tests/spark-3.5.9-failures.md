@@ -419,4 +419,6 @@ For `test_schema`, Sail returns the same schema as a Spark Connect 3.5.9 server 
   `test_scalar_iter_udf_init` still fails intermittently. It seeds the global NumPy random number generator with the partition ID, and the partitions run concurrently in the same process, so they share that generator, while Spark runs each partition in its own Python worker process.
 - In `test_udf` and `test_udtf`, the `AssertionError` is raised by `pyspark.sql.functions.udf` in the classic session, before the Sail session is used. These failures come from the test setup rather than from Sail, so both tests are skipped.
 
-**Proposed fix.** Implement `observe` and `distributed_sequence_id`.
+**Fix (in this pull request).** `distributed_sequence_id` is planned like `monotonically_increasing_id`, after the input partitions are concatenated in order into a single partition, so the IDs are consecutive from zero in partition order, as with Spark's `AttachDistributedSequence`.
+
+**Proposed fix.** Implement `observe`.

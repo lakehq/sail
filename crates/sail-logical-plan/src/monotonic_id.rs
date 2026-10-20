@@ -12,12 +12,23 @@ use sail_common_datafusion::utils::items::ItemTaker;
 pub struct MonotonicIdNode {
     input: Arc<LogicalPlan>,
     column_name: String,
+    /// Whether the IDs are consecutive row numbers in the order of the input partitions,
+    /// as for Spark's `distributed_sequence_id`.
+    consecutive: bool,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
 impl MonotonicIdNode {
     pub fn try_new(input: Arc<LogicalPlan>, column_name: String) -> Result<Self> {
+        Self::try_new_with_consecutive(input, column_name, false)
+    }
+
+    pub fn try_new_with_consecutive(
+        input: Arc<LogicalPlan>,
+        column_name: String,
+        consecutive: bool,
+    ) -> Result<Self> {
         let mut qualified_fields = input
             .schema()
             .iter()
@@ -33,6 +44,7 @@ impl MonotonicIdNode {
         Ok(Self {
             input,
             column_name,
+            consecutive,
             schema: Arc::new(schema),
         })
     }
@@ -43,6 +55,10 @@ impl MonotonicIdNode {
 
     pub fn column_name(&self) -> &str {
         &self.column_name
+    }
+
+    pub fn consecutive(&self) -> bool {
+        self.consecutive
     }
 }
 
@@ -64,13 +80,17 @@ impl UserDefinedLogicalNodeCore for MonotonicIdNode {
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "MonotonicId")
+        if self.consecutive {
+            write!(f, "MonotonicId: consecutive")
+        } else {
+            write!(f, "MonotonicId")
+        }
     }
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
         exprs.zero()?;
         let input = Arc::new(inputs.one()?);
-        Self::try_new(input, self.column_name.clone())
+        Self::try_new_with_consecutive(input, self.column_name.clone(), self.consecutive)
     }
 
     fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {

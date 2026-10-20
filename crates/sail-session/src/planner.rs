@@ -63,6 +63,7 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -399,8 +400,16 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             let [input] = physical_inputs else {
                 return internal_err!("MonotonicIdExec requires exactly one physical input");
             };
+            // Consecutive IDs are assigned after the input partitions are concatenated
+            // in order into a single partition.
+            let input: Arc<dyn ExecutionPlan> =
+                if node.consecutive() && input.output_partitioning().partition_count() > 1 {
+                    Arc::new(CoalesceExec::new(input.clone(), 1))
+                } else {
+                    input.clone()
+                };
             Arc::new(MonotonicIdExec::try_new(
-                input.clone(),
+                input,
                 node.column_name().to_string(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             )?)
