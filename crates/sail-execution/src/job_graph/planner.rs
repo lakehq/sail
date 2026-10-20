@@ -925,16 +925,18 @@ fn shuffle_output_mode(graph: &JobGraph) -> OutputMode {
         ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Flight { .. } => {
             OutputMode::Pipelined
         }
-        ShuffleBackendKind::Celeborn { .. } => OutputMode::Blocking,
+        ShuffleBackendKind::Celeborn { .. } | ShuffleBackendKind::Riffle { .. } => {
+            OutputMode::Blocking
+        }
     }
 }
 
 fn scalar_subquery_output_mode(graph: &JobGraph) -> OutputMode {
     match graph.options.shuffle_backend {
         ShuffleBackendKind::Flight { .. } => OutputMode::Pipelined,
-        ShuffleBackendKind::Storage { .. } | ShuffleBackendKind::Celeborn { .. } => {
-            OutputMode::Blocking
-        }
+        ShuffleBackendKind::Storage { .. }
+        | ShuffleBackendKind::Celeborn { .. }
+        | ShuffleBackendKind::Riffle { .. } => OutputMode::Blocking,
     }
 }
 

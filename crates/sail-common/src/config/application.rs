@@ -321,6 +321,13 @@ pub enum ShuffleBackend {
     Flight(FlightShuffleBackend),
     Storage(StorageShuffleBackend),
     Celeborn(CelebornShuffleBackend),
+    Riffle(RiffleShuffleBackend),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RiffleShuffleBackend {
+    pub coordinator_quorum: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -462,6 +469,7 @@ mod shuffle_backend {
         Flight,
         Storage,
         Celeborn,
+        Riffle,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -471,6 +479,8 @@ mod shuffle_backend {
         pub flight: super::FlightShuffleBackend,
         pub storage: super::StorageShuffleBackend,
         pub celeborn: super::CelebornShuffleBackend,
+        #[serde(default)]
+        pub riffle: super::RiffleShuffleBackend,
     }
 
     impl From<ShuffleBackend> for super::ShuffleBackend {
@@ -479,6 +489,7 @@ mod shuffle_backend {
                 Type::Flight => super::ShuffleBackend::Flight(value.flight),
                 Type::Storage => super::ShuffleBackend::Storage(value.storage),
                 Type::Celeborn => super::ShuffleBackend::Celeborn(value.celeborn),
+                Type::Riffle => super::ShuffleBackend::Riffle(value.riffle),
             }
         }
     }
@@ -487,6 +498,7 @@ mod shuffle_backend {
         fn from(value: super::ShuffleBackend) -> Self {
             match value {
                 super::ShuffleBackend::Flight(flight) => ShuffleBackend {
+                    riffle: Default::default(),
                     r#type: Type::Flight,
                     flight,
                     storage: super::StorageShuffleBackend {
@@ -504,6 +516,7 @@ mod shuffle_backend {
                     },
                 },
                 super::ShuffleBackend::Storage(storage) => ShuffleBackend {
+                    riffle: Default::default(),
                     r#type: Type::Storage,
                     flight: super::FlightShuffleBackend {
                         compression: super::ShuffleCompression::None,
@@ -522,6 +535,7 @@ mod shuffle_backend {
                     },
                 },
                 super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
+                    riffle: Default::default(),
                     r#type: Type::Celeborn,
                     flight: super::FlightShuffleBackend {
                         compression: super::ShuffleCompression::None,
@@ -535,6 +549,29 @@ mod shuffle_backend {
                         compression: super::ShuffleCompression::None,
                     },
                     celeborn,
+                },
+                super::ShuffleBackend::Riffle(riffle) => ShuffleBackend {
+                    r#type: Type::Riffle,
+                    riffle,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
+                    storage: super::StorageShuffleBackend {
+                        path: None,
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                    celeborn: super::CelebornShuffleBackend {
+                        master_endpoints: vec![],
+                        compression: super::CelebornCompressionCodec::default(),
+                        heartbeat_interval_secs: 10,
+                        endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
+                    },
                 },
             }
         }
@@ -1048,6 +1085,7 @@ impl ClusterConfigEnv {
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
         SHUFFLE_BACKEND__TYPE,
+        SHUFFLE_BACKEND__RIFFLE__COORDINATOR_QUORUM,
         SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
         SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT,
         SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE,

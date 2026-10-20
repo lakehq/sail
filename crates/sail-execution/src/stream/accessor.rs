@@ -22,6 +22,7 @@ pub struct TaskStreamFactory {
     handle: ActorHandle<TaskRunnerActor>,
     context: Arc<TaskContext>,
     celeborn: bool,
+    riffle: Option<crate::stream::riffle::RiffleStreams>,
     mappers: usize,
 }
 
@@ -31,6 +32,7 @@ impl Clone for TaskStreamFactory {
             handle: self.handle.clone(),
             context: self.context.clone(),
             celeborn: self.celeborn,
+            riffle: self.riffle.clone(),
             mappers: self.mappers,
         }
     }
@@ -41,12 +43,14 @@ impl TaskStreamFactory {
         handle: ActorHandle<TaskRunnerActor>,
         context: Arc<TaskContext>,
         celeborn: bool,
+        riffle: Option<crate::stream::riffle::RiffleStreams>,
         mappers: usize,
     ) -> Self {
         Self {
             handle,
             context,
             celeborn,
+            riffle,
             mappers,
         }
     }
@@ -57,6 +61,14 @@ impl TaskStreamFactory {
         input: TaskInput,
         schema: SchemaRef,
     ) -> Arc<dyn TaskStreamReader> {
+        if let Some(riffle) = &self.riffle
+            && matches!(
+                input.locator.as_ref(),
+                TaskInputLocator::ShuffleService { .. }
+            )
+        {
+            return riffle.reader(key, input, schema);
+        }
         Arc::new(MultiChannelTaskStreamReader::new(
             self.handle.clone(),
             self.context.clone(),
@@ -72,6 +84,11 @@ impl TaskStreamFactory {
         output: TaskOutput,
         schema: SchemaRef,
     ) -> Arc<dyn TaskStreamWriter> {
+        if let Some(riffle) = &self.riffle
+            && matches!(output.locator, TaskOutputLocator::Blocking)
+        {
+            return riffle.writer(key, self.mappers, output.channels());
+        }
         if self.celeborn && matches!(output.locator, TaskOutputLocator::Blocking) {
             Arc::new(CelebornTaskStreamWriter::new(
                 self.handle.clone(),

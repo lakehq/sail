@@ -37,6 +37,7 @@ pub struct DriverOptions {
 }
 
 pub struct DriverComponents {
+    pub riffle_managers: Option<std::sync::Arc<riffle_client::ManagerRpcService>>,
     pub worker_manager: Box<dyn WorkerManager>,
     pub event_reporter: SystemEventReporter,
 }
@@ -49,6 +50,16 @@ impl DriverOptions {
         driver_id: DriverId,
         driver_server_port: u16,
     ) -> ExecutionResult<Self> {
+        if config.cluster.enable_tls
+            && matches!(
+                config.cluster.shuffle_backend,
+                sail_common::config::ShuffleBackend::Riffle(_)
+            )
+        {
+            return Err(ExecutionError::InvalidArgument(
+                "Riffle shuffle currently requires plaintext gRPC".into(),
+            ));
+        }
         if config.cluster.worker_task_slots == 0 {
             return Err(ExecutionError::InvalidArgument(
                 "worker task slots must be greater than zero".to_string(),

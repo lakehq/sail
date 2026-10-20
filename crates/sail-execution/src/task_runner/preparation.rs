@@ -32,6 +32,7 @@ pub(super) struct TaskPreparation {
     pub session_id: String,
     pub handle: ActorHandle<TaskRunnerActor>,
     pub celeborn: bool,
+    pub riffle: Option<crate::stream::riffle::RiffleStreams>,
 }
 
 impl TaskPreparation {
@@ -130,8 +131,13 @@ impl TaskPreparation {
         context: Arc<TaskContext>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
         let mappers = plan.output_partitioning().partition_count();
-        let streams =
-            TaskStreamFactory::new(self.handle.clone(), context.clone(), self.celeborn, mappers);
+        let streams = TaskStreamFactory::new(
+            self.handle.clone(),
+            context.clone(),
+            self.celeborn,
+            self.riffle.clone(),
+            mappers,
+        );
         let result = {
             let streams = streams.clone();
             plan.transform(move |node| {

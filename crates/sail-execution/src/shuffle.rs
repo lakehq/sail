@@ -11,6 +11,9 @@ use sail_common::config::{CelebornCompressionCodec, CelebornPartitionSplitMode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShuffleBackendKind {
+    Riffle {
+        coordinator_quorum: Vec<String>,
+    },
     Flight {
         compression: ShuffleCompression,
         connection_count: NonZeroUsize,
@@ -41,6 +44,9 @@ pub struct ShuffleEndpointOverride {
 impl From<&sail_common::config::ShuffleBackend> for ShuffleBackendKind {
     fn from(value: &sail_common::config::ShuffleBackend) -> Self {
         match value {
+            sail_common::config::ShuffleBackend::Riffle(riffle) => Self::Riffle {
+                coordinator_quorum: riffle.coordinator_quorum.clone(),
+            },
             sail_common::config::ShuffleBackend::Flight(flight) => Self::Flight {
                 compression: flight.compression.clone().into(),
                 connection_count: flight.connection_count,
@@ -86,7 +92,9 @@ impl ShuffleBackendKind {
     pub fn flight_compression(&self) -> ShuffleCompression {
         match self {
             Self::Flight { compression, .. } => *compression,
-            Self::Storage { .. } | Self::Celeborn { .. } => ShuffleCompression::None,
+            Self::Storage { .. } | Self::Celeborn { .. } | Self::Riffle { .. } => {
+                ShuffleCompression::None
+            }
         }
     }
 
@@ -95,7 +103,7 @@ impl ShuffleBackendKind {
             Self::Flight {
                 connection_count, ..
             } => *connection_count,
-            Self::Storage { .. } | Self::Celeborn { .. } => NonZeroUsize::MIN,
+            Self::Storage { .. } | Self::Celeborn { .. } | Self::Riffle { .. } => NonZeroUsize::MIN,
         }
     }
 
@@ -105,7 +113,7 @@ impl ShuffleBackendKind {
                 initial_stream_window_size,
                 ..
             } => *initial_stream_window_size,
-            Self::Storage { .. } | Self::Celeborn { .. } => None,
+            Self::Storage { .. } | Self::Celeborn { .. } | Self::Riffle { .. } => None,
         }
     }
 
@@ -115,7 +123,7 @@ impl ShuffleBackendKind {
                 initial_connection_window_size,
                 ..
             } => *initial_connection_window_size,
-            Self::Storage { .. } | Self::Celeborn { .. } => None,
+            Self::Storage { .. } | Self::Celeborn { .. } | Self::Riffle { .. } => None,
         }
     }
 

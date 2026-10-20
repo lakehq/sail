@@ -6,6 +6,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::WorkerId;
 use crate::stream::celeborn::CelebornStreamManager;
 use crate::stream::local::LocalStreamManager;
+use crate::stream::riffle::RiffleStreams;
 use crate::stream::storage::StorageStreamManager;
 use crate::worker::WorkerActor;
 use crate::worker::peer_tracker::PeerTracker;
@@ -14,6 +15,7 @@ pub struct TaskRunnerExtensions {
     pub local_streams: LocalStreamManager,
     pub storage_streams: Option<StorageStreamManager>,
     pub celeborn_streams: Option<CelebornStreamManager>,
+    pub riffle_streams: Option<RiffleStreams>,
 }
 
 impl TaskRunnerExtensions {

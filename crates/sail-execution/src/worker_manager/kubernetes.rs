@@ -252,6 +252,7 @@ impl KubernetesWorkerService {
                         ShuffleBackendKind::Flight { .. } => "flight",
                         ShuffleBackendKind::Storage { .. } => "storage",
                         ShuffleBackendKind::Celeborn { .. } => "celeborn",
+                        ShuffleBackendKind::Riffle { .. } => "riffle",
                     }
                     .to_string(),
                 ),

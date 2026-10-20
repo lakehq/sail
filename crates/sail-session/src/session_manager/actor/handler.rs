@@ -80,6 +80,10 @@ impl SessionManagerActor {
         let runner = match self.job_runner_factory.create(
             ctx.children_mut(),
             SessionJobRunnerInfo {
+                riffle_managers: self
+                    .driver_gateway
+                    .as_ref()
+                    .map(|gateway| gateway.riffle_managers()),
                 session_id: session_id.clone(),
                 driver_id,
                 driver_server_port: self.driver_gateway.as_ref().map(|x| x.port()),

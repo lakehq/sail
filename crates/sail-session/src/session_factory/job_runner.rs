@@ -42,6 +42,7 @@ impl SessionJobRunner {
 }
 
 pub struct SessionJobRunnerInfo {
+    pub riffle_managers: Option<Arc<sail_execution::driver::ManagerRpcService>>,
     pub session_id: String,
     pub driver_id: DriverId,
     pub driver_server_port: Option<u16>,
@@ -83,6 +84,7 @@ impl ServerSessionJobRunnerFactory {
             port,
         )?;
         let components = DriverComponents {
+            riffle_managers: info.riffle_managers,
             worker_manager,
             event_reporter: info.event_reporter,
         };
