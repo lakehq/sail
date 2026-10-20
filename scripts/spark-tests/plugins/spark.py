@@ -259,6 +259,11 @@ def _spark_major_version() -> int:
     return int(pyspark.__version__.split(".", maxsplit=1)[0])
 
 
+_PARTITIONING_DIFFERENCE = (
+    "Compares sampled rows with Spark, which samples each partition with its own seed, "
+    "while Sail keeps range and local relations in one partition by default"
+)
+
 SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_can_create_multiple_sessions_to_different_remotes"],
@@ -603,6 +608,31 @@ SKIPPED_SPARK_TESTS = [
         spark_major_version_less_than=4,
     ),
     TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_stat_sample_by"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.sampleBy"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrameStatFunctions.sampleBy"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_random_split"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.randomSplit"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_stat_freq_items"],
         reason=(
             "Compares freqItems arrays element by element with the JVM session, "
@@ -637,6 +667,12 @@ def add_pyspark_test_markers(items: list[pytest.Item]):
             ):
                 continue
             if all(k in item.keywords for k in test.keywords):
+                dtest = getattr(item, "dtest", None)
+                if dtest is not None and dtest.lineno is None:
+                    # pytest reports a skipped test at its line, but doctests of methods whose
+                    # docstring is copied from another method (e.g. `DataFrameStatFunctions.sampleBy`)
+                    # do not have a line number.
+                    dtest.lineno = 0
                 item.add_marker(pytest.mark.skip(reason=test.reason))
 
 

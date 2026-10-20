@@ -190,8 +190,9 @@ With `numPartitions=4`, Sail returns the same rows as Spark.
 **Fix (in this pull request).** Bernoulli sampling (`sample`, `randomSplit`, `sampleBy`, and `TABLESAMPLE`) draws from a generator per partition, seeded with `seed + partition index`, that advances across batches.
 `sampleBy` also keeps a row only when the random number is below the fraction, as Spark does.
 
-**Open question.** Defaulting `range` to the default parallelism (the `TODO` in `resolve_query_range`) makes these tests pass,
+**Decision.** Defaulting `range` to the default parallelism (the `TODO` in `resolve_query_range`) makes these tests pass,
 but it changes the order of rows returned after a Python UDF on a `range`, and some plan snapshots in the PySail tests.
+The partitioning is kept as is, and these tests, along with the `randomSplit` tests below, are skipped as known differences.
 
 ## Artifacts
 
