@@ -245,9 +245,7 @@ The doctests pass an array of percentiles, which Spark accepts and answers with 
 The accuracy argument is not the problem, since `approx_percentile_cont` takes a third argument.
 `approx_count_distinct` is mapped to DataFusion's `approx_distinct`, which has no implementation for floating-point input.
 
-**Proposed fix.** Resolve an array of percentiles into one `approx_percentile_cont` call per percentile (or a multi-percentile accumulator, as `percentile_disc` already has) and return the results as an array.
-Spark returns the input type for `percentile_approx`, so the results also need a cast back to it.
-For `approx_count_distinct` on `float` and `double`, the values can be hashed by their bit pattern, after normalizing `-0.0` and NaN as Spark does.
+**Fix (in this pull request).** `percentile_approx` and `approx_percentile` are computed with `percentile_disc`, which returns values of the column, as Spark does, and the exact percentile is within any accuracy. An array of percentages returns an array of the column type without null elements. `approx_count_distinct` counts floating-point values by their string representation after normalizing `-0.0` to `0.0`. The `percentile_approx` and `approx_count_distinct` doctests pass.
 
 ### Higher-Order Functions
 

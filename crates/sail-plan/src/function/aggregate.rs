@@ -4,9 +4,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions::expr_fn::coalesce;
 use datafusion::functions_aggregate::{
-    approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, stddev, sum,
-    variance,
+    approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
+    covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -401,6 +400,44 @@ fn percentile_disc(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment: get_null_treatment(input.ignore_nulls),
         },
     }))
+}
+
+/// Spark's `percentile_approx` returns values of the column, and the exact percentile is
+/// within any accuracy, so it is computed with `percentile_disc`. The percentage can be
+/// an array, which returns an array of percentiles of the column type.
+fn percentile_approx(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let (value, percentage) = match input.arguments.as_slice() {
+        [value, percentage] | [value, percentage, _] => (value.clone(), percentage.clone()),
+        _ => {
+            return Err(PlanError::invalid(format!(
+                "percentile_approx requires 2 or 3 arguments, got {}",
+                input.arguments.len()
+            )));
+        }
+    };
+    let value_type = value.get_type(schema)?;
+    let return_type = match percentage.get_type(schema)? {
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            DataType::List(Arc::new(Field::new(
+                SAIL_LIST_FIELD_NAME,
+                value_type,
+                false,
+            )))
+        }
+        _ => value_type,
+    };
+    let percentile = expr::Expr::AggregateFunction(AggregateFunction {
+        func: percentile_disc_udaf(input.function_context.plan_config.ansi_mode),
+        params: AggregateFunctionParams {
+            args: vec![value.clone(), percentage],
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: vec![value.sort(true, false)],
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    });
+    Ok(cast(percentile, return_type))
 }
 
 fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -817,11 +854,26 @@ fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    // The optional relative standard deviation only tunes the precision of the estimate.
+    let (value, _) = input.arguments.clone().at_least_one()?;
+    // DataFusion cannot count floating-point values, so they are counted by their string
+    // representation, which is unique for each value once `-0.0` is normalized to `0.0`
+    // as Spark does.
+    let value = match value.get_type(input.function_context.schema)? {
+        data_type @ (DataType::Float16 | DataType::Float32 | DataType::Float64) => {
+            let zero = cast(lit(0.0), data_type);
+            cast(
+                when(value.clone().eq(zero.clone()), zero).otherwise(value)?,
+                DataType::Utf8,
+            )
+        }
+        _ => value,
+    };
     Ok(cast(
         expr::Expr::AggregateFunction(AggregateFunction {
             func: approx_distinct::approx_distinct_udaf(),
             params: AggregateFunctionParams {
-                args: input.arguments.clone(),
+                args: vec![value],
                 distinct: input.distinct,
                 order_by: input.order_by,
                 filter: input.filter,
@@ -912,10 +964,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("any", F::default(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
         ("approx_count_distinct", F::custom(approx_count_distinct)),
-        (
-            "approx_percentile",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("approx_percentile", F::custom(percentile_approx)),
         ("array_agg", F::custom(array_agg_compacted)),
         ("avg", F::custom(avg)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
@@ -973,10 +1022,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
-        (
-            "percentile_approx",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("percentile_approx", F::custom(percentile_approx)),
         ("percentile_cont", F::custom(percentile_cont)),
         ("percentile_disc", F::custom(percentile_disc)),
         ("product", F::custom(product)),
