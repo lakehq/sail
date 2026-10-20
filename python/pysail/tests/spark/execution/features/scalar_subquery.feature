@@ -693,6 +693,16 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query plan matches snapshot
 
+  Scenario: COUNT accepts a correlated scalar subquery directly as its argument
+    When query
+      """
+      SELECT count((SELECT o.id FROM range(1))) AS n
+      FROM range(2) o
+      """
+    Then query result
+      | n |
+      | 2 |
+
   # TODO: DataFusion rejects these correlated scalar projections. Its scalar
   # nullability also makes COUNT include the missing uncorrelated result.
   # Recheck the empty uncorrelated example after the next DataFusion release

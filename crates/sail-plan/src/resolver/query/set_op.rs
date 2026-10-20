@@ -51,6 +51,7 @@ impl PlanResolver<'_> {
                     target.clone(),
                     &self.config.session_timezone,
                     false,
+                    None,
                 )?
                 .alias_qualified(left_column.relation, left_column.name);
                 right_expr = cast_temporal(
@@ -59,6 +60,7 @@ impl PlanResolver<'_> {
                     target,
                     &self.config.session_timezone,
                     false,
+                    None,
                 )?
                 .alias_qualified(right_column.relation, right_column.name);
             } else {

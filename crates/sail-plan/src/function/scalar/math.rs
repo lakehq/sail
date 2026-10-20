@@ -82,6 +82,7 @@ fn date_plus_day_time(
         DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(timezone))),
         timezone,
         false,
+        None,
     )?;
     Ok(if subtract {
         ScalarUDF::from(SparkTimestampAdd::new_subtract(
@@ -111,6 +112,7 @@ fn subtract_timestamps(
             target.clone(),
             timezone,
             false,
+            None,
         )?)
     };
     Ok(cast(
@@ -170,7 +172,7 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context,
     } = input;
     if arguments.len() < 2 {
-        Ok(arguments.one()?)
+        Ok(positive(arguments.one()?, &function_context))
     } else {
         let (left, right) = arguments.two()?;
         let (left_type, right_type) = (
@@ -514,15 +516,26 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     // is raised when the division is evaluated (see `make_safe_divisor`).
     let ansi_mode = function_context.plan_config.ansi_mode;
     if !ansi_mode && is_zero_literal(&divisor) {
-        return Ok(Expr::Literal(ScalarValue::Null, None));
+        return Ok(Expr::Literal(ScalarValue::Int64(None), None));
     }
     // Spark widens narrow integers before DIV, so INT_MIN / -1 fits in BIGINT.
-    let promote_integer = |argument: Expr| match argument.get_type(function_context.schema) {
+    let promote_integer = |argument: Expr, other: &Expr| match argument
+        .get_type(function_context.schema)
+    {
         Ok(DataType::Int8 | DataType::Int16 | DataType::Int32) => cast(argument, DataType::Int64),
+        Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+            if ansi_mode
+                && matches!(
+                    other.get_type(function_context.schema),
+                    Ok(DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64)
+                ) =>
+        {
+            string_to_numeric(argument, DataType::Int64, ansi_mode)
+        }
         _ => argument,
     };
-    let dividend = promote_integer(dividend);
-    let divisor = promote_integer(divisor);
+    let dividend = promote_integer(dividend, &divisor);
+    let divisor = promote_integer(divisor, &dividend);
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -567,8 +580,8 @@ fn hypot(expr1: Expr, expr2: Expr) -> Expr {
     cast(expr_fn::sqrt(sum_squared), DataType::Float64)
 }
 
-fn positive(expr: Expr) -> Expr {
-    expr
+fn positive(expr: Expr, context: &FunctionContextInput<'_>) -> Expr {
+    coerce_numeric_string(expr, DataType::Float64, context)
 }
 
 fn rint(expr: Expr) -> Expr {
@@ -590,10 +603,18 @@ fn eulers_constant() -> Expr {
 
 fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
     let ScalarFunctionInput {
-        arguments,
+        mut arguments,
         function_context,
     } = input;
     let ansi_mode = function_context.plan_config.ansi_mode;
+    let string_type = if arguments.len() == 2 {
+        DataType::Decimal128(38, 18)
+    } else {
+        DataType::Float64
+    };
+    if let Some(argument) = arguments.first_mut() {
+        *argument = coerce_numeric_string(argument.clone(), string_type, &function_context);
+    }
     // DataFusion bug: `ReturnTypeArgs.scalar_arguments` is None if scalar argument is nested
     let arguments = if arguments.len() == 2 {
         let (arg, target_scale) = arguments.two()?;
@@ -773,18 +794,36 @@ fn negate_literal(arg: &Expr) -> Option<Expr> {
     Some(lit(negated))
 }
 
-fn string_to_double(arg: Expr, ansi_mode: bool) -> Expr {
+fn string_to_numeric(arg: Expr, data_type: DataType, ansi_mode: bool) -> Expr {
     if ansi_mode {
-        cast(arg, DataType::Float64)
+        cast(arg, data_type)
     } else {
-        try_cast(arg, DataType::Float64)
+        try_cast(arg, data_type)
+    }
+}
+
+fn coerce_numeric_string(
+    arg: Expr,
+    data_type: DataType,
+    context: &FunctionContextInput<'_>,
+) -> Expr {
+    if matches!(
+        arg.get_type(context.schema),
+        Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    ) {
+        string_to_numeric(arg, data_type, context.plan_config.ansi_mode)
+    } else {
+        arg
     }
 }
 
 // TODO: Spark rounds a DOUBLE via `BigDecimal(d).setScale(scale, HALF_UP)` on the shortest
 //  decimal representation, while DataFusion computes `(x * 10^scale).round() / 10^scale`,
 //  so inexact binary ties differ (e.g. `round('1.005', 2)` is 1.01 in Spark but 1.0 in Sail).
-fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
+fn spark_round(
+    input: ScalarFunctionInput,
+    function: impl FnOnce(Vec<Expr>) -> Expr,
+) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         mut arguments,
         function_context,
@@ -809,11 +848,15 @@ fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
             when(scale.is_null(), lit(ScalarValue::Utf8(None))).otherwise(value.clone())?;
         // Preserve Spark's nullable result; the inner ANSI cast still propagates errors.
         *value = try_cast(
-            string_to_double(guarded, function_context.plan_config.ansi_mode),
+            string_to_numeric(
+                guarded,
+                DataType::Float64,
+                function_context.plan_config.ansi_mode,
+            ),
             DataType::Float64,
         );
     }
-    Ok(expr_fn::round(arguments))
+    Ok(function(arguments))
 }
 
 /// Spark unary minus / `negative(x)`. Duration negation goes through
@@ -828,10 +871,10 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
         // cast honors ANSI mode: an invalid string is NULL under ANSI off and
         // errors under ANSI on. (Without this, the `SparkNegative` signature
         // would coerce the string to an interval instead.)
-        Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
-            ScalarUDF::from(SparkNegative::new(ansi_mode))
-                .call(vec![string_to_double(arg, ansi_mode)])
-        }
+        Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => ScalarUDF::from(
+            SparkNegative::new(ansi_mode),
+        )
+        .call(vec![string_to_numeric(arg, DataType::Float64, ansi_mode)]),
         // Floating-point negation never overflows and is identical in both ANSI
         // modes, so use the native (vectorized, foldable) operator.
         Ok(DataType::Float16 | DataType::Float32 | DataType::Float64) => {
@@ -878,7 +921,12 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("atan2", F::binary(double2(expr_fn::atan2))),
         ("atanh", F::unary(double(expr_fn::atanh))),
         ("bin", F::custom(spark_bin)),
-        ("bround", F::udf(SparkBRound::new())),
+        (
+            "bround",
+            F::custom(|input| {
+                spark_round(input, |args| ScalarUDF::from(SparkBRound::new()).call(args))
+            }),
+        ),
         ("cbrt", F::unary(double(expr_fn::cbrt))),
         ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
@@ -904,7 +952,16 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
             }),
         ),
         ("hex", F::unary(math_fn::hex)),
-        ("hypot", F::binary(hypot)),
+        (
+            "hypot",
+            F::custom(|input| {
+                let (left, right) = input.arguments.two()?;
+                Ok(hypot(
+                    coerce_numeric_string(left, DataType::Float64, &input.function_context),
+                    coerce_numeric_string(right, DataType::Float64, &input.function_context),
+                ))
+            }),
+        ),
         (
             "least",
             F::custom(|input| {
@@ -923,7 +980,10 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("negative", F::custom(spark_negative)),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::custom(spark_pmod)),
-        ("positive", F::unary(positive)),
+        (
+            "positive",
+            F::custom(|input| Ok(positive(input.arguments.one()?, &input.function_context))),
+        ),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
         ("radians", F::unary(double(expr_fn::radians))),
@@ -931,8 +991,20 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("random_poisson", F::udf(RandPoisson::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
-        ("rint", F::unary(rint)),
-        ("round", F::custom(spark_round)),
+        (
+            "rint",
+            F::custom(|input| {
+                Ok(rint(coerce_numeric_string(
+                    input.arguments.one()?,
+                    DataType::Float64,
+                    &input.function_context,
+                )))
+            }),
+        ),
+        (
+            "round",
+            F::custom(|input| spark_round(input, expr_fn::round)),
+        ),
         ("sec", F::unary(double(|arg| lit(1.0) / expr_fn::cos(arg)))),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
@@ -948,6 +1020,17 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_subtract", F::udf(SparkTrySubtract::new())),
         ("unhex", F::udf(SparkUnHex::new())),
         ("uniform", F::udf(SparkUniform::new())),
-        ("width_bucket", F::quaternary(math_fn::width_bucket)),
+        (
+            "width_bucket",
+            F::custom(|input| {
+                let (value, min, max, count) = input.arguments.four()?;
+                Ok(math_fn::width_bucket(
+                    coerce_numeric_string(value, DataType::Float64, &input.function_context),
+                    coerce_numeric_string(min, DataType::Float64, &input.function_context),
+                    coerce_numeric_string(max, DataType::Float64, &input.function_context),
+                    coerce_numeric_string(count, DataType::Int64, &input.function_context),
+                ))
+            }),
+        ),
     ]
 }

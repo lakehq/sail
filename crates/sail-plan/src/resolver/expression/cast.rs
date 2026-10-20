@@ -194,7 +194,7 @@ impl PlanResolver<'_> {
                     DataType::Timestamp(_, _) | DataType::Date32 | DataType::Date64
                 ) =>
             {
-                cast_temporal(expr, &from, to, &self.config.session_timezone, is_try)?
+                cast_temporal(expr, &from, to, &self.config.session_timezone, is_try, None)?
             }
             (from, to, is_try)
                 if from.is_nested()
@@ -205,7 +205,7 @@ impl PlanResolver<'_> {
                     )
                     .is_some() =>
             {
-                cast_temporal(expr, &from, to, &self.config.session_timezone, is_try)?
+                cast_temporal(expr, &from, to, &self.config.session_timezone, is_try, None)?
             }
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
@@ -343,6 +343,7 @@ impl PlanResolver<'_> {
                         to,
                         &self.config.session_timezone,
                         is_try,
+                        None,
                     )?
                 }
             }

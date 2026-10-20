@@ -188,9 +188,14 @@ fn apply_timestamp_string_in_coercion(
                         .call(vec![expression])
                 }
                 DataType::Null => cast(expression, target_type),
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                    cast_temporal(expression, data_type, target_type, session_timezone, false)?
-                }
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => cast_temporal(
+                    expression,
+                    data_type,
+                    target_type,
+                    session_timezone,
+                    false,
+                    None,
+                )?,
                 _ => expression,
             })
         }
@@ -429,6 +434,7 @@ pub(super) fn coerce_timestamp_string_predicate(
                     target.clone(),
                     &config.session_timezone,
                     false,
+                    None,
                 )?;
                 list = list
                     .into_iter()
@@ -440,6 +446,7 @@ pub(super) fn coerce_timestamp_string_predicate(
                             target.clone(),
                             &config.session_timezone,
                             false,
+                            None,
                         )
                     })
                     .collect::<DataFusionResult<Vec<_>>>()?;
@@ -518,8 +525,16 @@ pub(in crate::resolver) fn coerce_timestamp_pair(
                 target.clone(),
                 &config.session_timezone,
                 false,
+                None,
             )?,
-            cast_temporal(right, &right_type, target, &config.session_timezone, false)?,
+            cast_temporal(
+                right,
+                &right_type,
+                target,
+                &config.session_timezone,
+                false,
+                None,
+            )?,
         ));
     }
 
@@ -700,6 +715,7 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
                 target.clone(),
                 &config.session_timezone,
                 false,
+                None,
             )?,
             cast_temporal(
                 right,
@@ -707,6 +723,7 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
                 target,
                 &config.session_timezone,
                 false,
+                None,
             )?,
             true,
             true,

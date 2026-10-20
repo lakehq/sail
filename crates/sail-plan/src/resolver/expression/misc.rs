@@ -400,10 +400,15 @@ impl PlanResolver<'_> {
                         "invalid extraction value for array: {extraction}"
                     )));
                 };
-                let index_expr = lit(ScalarValue::Int64(index));
+                // Spark narrows integral subscripts to INT before checking bounds.
+                let index = index.map(|x| x as i32);
+                let index_expr = lit(ScalarValue::Int32(index));
                 let element = array_element(
                     expr.clone(),
-                    lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
+                    // DataFusion counts negative positions from the end; zero is out of bounds.
+                    lit(ScalarValue::Int64(
+                        index.map(|x| i64::from(x.checked_add(1).unwrap_or(0).max(0))),
+                    )),
                 );
                 if self.config.ansi_mode {
                     let length = cast(array_length(expr.clone()), DataType::Int64);

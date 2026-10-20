@@ -511,6 +511,202 @@ Feature: Timestamp operations preserve instants and session-local calendar value
       | wall    | TIMESTAMP_LTZ | 0  | 2020-03-08 03:30:00 |
       | instant | TIMESTAMP_NTZ | 2  | 2019-12-31 16:30:00 |
 
+  Scenario Outline: Temporal map writes apply LAST_WIN in <container>
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    And config spark.sql.mapKeyDedupPolicy = LAST_WIN
+    And config spark.sql.ansi.enabled = true
+    And variable destination for temporary directory timestamp_map_insert
+    And final statement
+      """
+      DROP TABLE IF EXISTS timestamp_map_insert
+      """
+    And statement template
+      """
+      CREATE TABLE timestamp_map_insert (id BIGINT, payload <target>)
+      USING parquet LOCATION {{ destination.sql }}
+      """
+    And statement
+      """
+      INSERT INTO timestamp_map_insert
+      SELECT id, <source>
+      FROM (
+        SELECT id, CASE id
+          WHEN 0 THEN map(TIMESTAMP_LTZ '2024-11-03 01:30:00-07:00', 1,
+                          TIMESTAMP_LTZ '2024-11-03 01:30:00-08:00', 2)
+          WHEN 1 THEN CAST(NULL AS MAP<TIMESTAMP_LTZ, INT>)
+          WHEN 2 THEN CAST(map() AS MAP<TIMESTAMP_LTZ, INT>)
+          ELSE map(TIMESTAMP_LTZ '2024-11-03 01:30:00-07:00', 1,
+                   TIMESTAMP_LTZ '2024-11-03 02:30:00-08:00', 3)
+        END AS m
+        FROM range(4)
+      )
+      """
+    When query
+      """
+      SELECT id, size(<result>) AS entries,
+             element_at(<result>, TIMESTAMP_NTZ '2024-11-03 01:30:00') AS value
+      FROM timestamp_map_insert ORDER BY id
+      """
+    Then query result ordered
+      | id | entries | value |
+      | 0  | 1       | 2     |
+      | 1  | NULL    | NULL  |
+      | 2  | 0       | NULL  |
+      | 3  | 2       | 1     |
+
+    Examples:
+      | container | target                                                        | source                                     | result                |
+      | a map     | MAP<TIMESTAMP_NTZ, INT>                                        | m                                          | payload               |
+      | nested maps | MAP<STRING, ARRAY<STRUCT<m: MAP<TIMESTAMP_NTZ, INT>>>>        | map('outer', array(named_struct('m', m)))    | payload['outer'][0].m |
+
+  Scenario Outline: Temporal map writes reject duplicate keys in <container>
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    And config spark.sql.mapKeyDedupPolicy = EXCEPTION
+    And variable destination for temporary directory timestamp_map_insert
+    And final statement
+      """
+      DROP TABLE IF EXISTS timestamp_map_insert
+      """
+    And statement template
+      """
+      CREATE TABLE timestamp_map_insert (payload <target>)
+      USING parquet LOCATION {{ destination.sql }}
+      """
+    When query
+      """
+      INSERT INTO timestamp_map_insert
+      SELECT <source>
+      FROM (
+        SELECT map(TIMESTAMP_LTZ '2024-11-03 01:30:00-07:00', 1,
+                   TIMESTAMP_LTZ '2024-11-03 01:30:00-08:00', 2) AS m
+      )
+      """
+    Then query error DUPLICATED_MAP_KEY
+
+    Examples:
+      | container   | target                                                   | source                                  |
+      | a map       | MAP<TIMESTAMP_NTZ, INT>                                   | m                                       |
+      | nested maps | MAP<STRING, ARRAY<STRUCT<m: MAP<TIMESTAMP_NTZ, INT>>>>     | map('outer', array(named_struct('m', m))) |
+
+  Scenario: Temporal map writes convert every value before LAST_WIN
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    And config spark.sql.mapKeyDedupPolicy = LAST_WIN
+    And config spark.sql.storeAssignmentPolicy = ANSI
+    And variable destination for temporary directory timestamp_map_insert
+    And final statement
+      """
+      DROP TABLE IF EXISTS timestamp_map_insert
+      """
+    And statement template
+      """
+      CREATE TABLE timestamp_map_insert (m MAP<TIMESTAMP_NTZ, INT>)
+      USING parquet LOCATION {{ destination.sql }}
+      """
+    When query
+      """
+      INSERT INTO timestamp_map_insert
+      SELECT map(TIMESTAMP_LTZ '2024-11-03 01:30:00-07:00', 2147483648L + id,
+                 TIMESTAMP_LTZ '2024-11-03 01:30:00-08:00', 2L)
+      FROM range(1)
+      """
+    Then query error (?i)(overflow|out of range|can't cast value)
+
+  Scenario: Temporal map writes rebuild maps when only values change
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    And config spark.sql.mapKeyDedupPolicy = LAST_WIN
+    And variable destination for temporary directory timestamp_map_insert
+    And final statement
+      """
+      DROP TABLE IF EXISTS timestamp_map_insert
+      """
+    And statement template
+      """
+      CREATE TABLE timestamp_map_insert (m MAP<TIMESTAMP_NTZ, TIMESTAMP_NTZ>)
+      USING parquet LOCATION {{ destination.sql }}
+      """
+    And statement
+      """
+      INSERT INTO timestamp_map_insert
+      SELECT CAST(map(
+        TIMESTAMP_LTZ '2024-11-03 01:30:00-07:00', TIMESTAMP_LTZ '2024-11-04 01:00:00-08:00',
+        TIMESTAMP_LTZ '2024-11-03 01:30:00-08:00', TIMESTAMP_LTZ '2024-11-04 02:00:00-08:00'
+      ) AS MAP<TIMESTAMP_NTZ, TIMESTAMP_LTZ>)
+      """
+    When query
+      """
+      SELECT size(m) AS entries,
+             CAST(element_at(m, TIMESTAMP_NTZ '2024-11-03 01:30:00') AS STRING) AS value
+      FROM timestamp_map_insert
+      """
+    Then query result
+      | entries | value               |
+      | 1       | 2024-11-04 02:00:00 |
+
+  Scenario Outline: Temporal map writes preserve unchanged duplicate keys under <policy>
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    And config spark.sql.mapKeyDedupPolicy = <policy>
+    And variable destination for temporary directory timestamp_map_insert
+    And final statement
+      """
+      DROP TABLE IF EXISTS timestamp_map_insert
+      """
+    And statement template
+      """
+      CREATE TABLE timestamp_map_insert (m MAP<TIMESTAMP_NTZ, INT>)
+      USING parquet LOCATION {{ destination.sql }}
+      """
+    And statement
+      """
+      INSERT INTO timestamp_map_insert
+      SELECT CAST(map(
+        TIMESTAMP_LTZ '2024-11-03 01:30:00-07:00', 1,
+        TIMESTAMP_LTZ '2024-11-03 01:30:00-08:00', 2
+      ) AS MAP<TIMESTAMP_NTZ, INT>)
+      """
+    When query
+      """
+      SELECT size(m) AS entries, map_values(m) AS values
+      FROM timestamp_map_insert
+      """
+    Then query result
+      | entries | values |
+      | 2       | [1, 2] |
+
+    Examples:
+      | policy    |
+      | EXCEPTION |
+      | LAST_WIN  |
+
+  Scenario: Temporal map writes preserve unchanged LTZ keys across session timezones
+    Given config spark.sql.mapKeyDedupPolicy = EXCEPTION
+    And variable destination for temporary directory timestamp_map_insert
+    And final statement
+      """
+      DROP TABLE IF EXISTS timestamp_map_insert
+      """
+    And statement template
+      """
+      CREATE TABLE timestamp_map_insert (m MAP<TIMESTAMP_LTZ, INT>)
+      USING parquet LOCATION {{ destination.sql }}
+      """
+    And config spark.sql.session.timeZone = America/Los_Angeles
+    And statement
+      """
+      INSERT INTO timestamp_map_insert
+      SELECT CAST(map(
+        TIMESTAMP_NTZ '2020-03-08 02:30:00', 1,
+        TIMESTAMP_NTZ '2020-03-08 03:30:00', 2
+      ) AS MAP<TIMESTAMP_LTZ, INT>)
+      """
+    When query
+      """
+      SELECT size(m) AS entries, map_values(m) AS values
+      FROM timestamp_map_insert
+      """
+    Then query result
+      | entries | values |
+      | 2       | [1, 2] |
+
   Scenario: Date comparison resolves a skipped local date
     Given config spark.sql.session.timeZone = Pacific/Apia
     When query

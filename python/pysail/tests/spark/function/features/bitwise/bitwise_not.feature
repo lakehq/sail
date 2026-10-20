@@ -1,5 +1,21 @@
 Feature: Bitwise complement preserves integer width
 
+  Scenario Outline: Bitwise NULL complement promotes downstream tiny integer arithmetic with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT typeof(~NULL) AS null_type,
+             coalesce(~NULL, CAST(127 AS TINYINT)) + CAST(1 AS TINYINT) AS result
+      """
+    Then query result
+      | null_type | result |
+      | int       | 128    |
+
+    Examples:
+      | ansi  |
+      | true  |
+      | false |
+
   Scenario Outline: Bitwise complement handles minimum integers with ANSI <ansi>
     Given config spark.sql.ansi.enabled = <ansi>
     When query

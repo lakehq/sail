@@ -98,6 +98,7 @@ pub(super) fn datetime_date(expr: Expr, context: &FunctionContextInput<'_>) -> P
         DataType::Date32,
         &context.plan_config.session_timezone,
         false,
+        None,
     )?;
     // Spark's Cast.forceNullable includes TIMESTAMP_NTZ to DATE.
     declare_nullable_result(
@@ -519,6 +520,7 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                     DataType::Timestamp(TimeUnit::Microsecond, None),
                     timezone,
                     false,
+                    None,
                 )?)
             };
             let start = local(start)?;
@@ -589,6 +591,7 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 DataType::Date32,
                 &input.function_context.plan_config.session_timezone,
                 false,
+                None,
             )?)
         }
     } else if input.arguments.len() == 2 {
@@ -658,6 +661,7 @@ fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 DataType::Date32,
                 &timezone,
                 false,
+                None,
             )?)
         }
         _ => Err(PlanError::invalid("try_to_date requires 1 or 2 arguments")),
@@ -848,6 +852,7 @@ fn datetime_timestamp(
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
             &context.plan_config.session_timezone,
             is_try,
+            None,
         )?)
     }
 }
@@ -1230,6 +1235,7 @@ fn utc_ntz_timestamp_and_unit(
                 DataType::Timestamp(unit, Some(session_tz.clone())),
                 session_tz,
                 false,
+                None,
             )?;
             (ts, unit)
         }
@@ -1242,6 +1248,7 @@ fn utc_ntz_timestamp_and_unit(
                 DataType::Timestamp(unit, Some(session_tz.clone())),
                 session_tz,
                 false,
+                None,
             )?;
             (ts, unit)
         }

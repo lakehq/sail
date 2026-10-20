@@ -13,11 +13,14 @@ use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date_trunc::SparkStartOfDay;
 use sail_function::scalar::datetime::spark_timestamp_to_number::SparkTimestampToNumber;
+use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_from::SparkMapFromEntries;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::spark_struct_cast::SparkStructCast;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 
+use crate::config::MapKeyDedupPolicy;
 use crate::error::PlanResult;
 use crate::function::common::FunctionContextInput;
 use crate::function::is_spark_compatible_arrow_fixed_offset;
@@ -29,6 +32,7 @@ pub(crate) fn cast_temporal(
     to: DataType,
     session_timezone: &Arc<str>,
     is_try: bool,
+    map_key_dedup_policy: Option<MapKeyDedupPolicy>,
 ) -> DataFusionResult<expr::Expr> {
     if from == &to {
         // Folding can narrow nested fields after this common type has been selected.
@@ -46,10 +50,13 @@ pub(crate) fn cast_temporal(
                 return Ok(cast(expression, to));
             };
             let mut result = expression;
+            let mut converted = false;
             for (index, (source, target)) in source.iter().zip(target).enumerate() {
                 if source.data_type() == target.data_type() {
                     continue;
                 }
+                converted |= with_session_timezone(source.data_type(), session_timezone)
+                    != with_session_timezone(target.data_type(), session_timezone);
                 let parameters = vec![
                     "__sail_timestamp_key".to_string(),
                     "__sail_timestamp_value".to_string(),
@@ -64,6 +71,7 @@ pub(crate) fn cast_temporal(
                     target.data_type().clone(),
                     session_timezone,
                     is_try,
+                    map_key_dedup_policy,
                 )?;
                 let function = if index == 0 {
                     HigherOrderUDF::new_from_impl(
@@ -76,6 +84,14 @@ pub(crate) fn cast_temporal(
                     Arc::new(function),
                     vec![result, expr::Expr::Lambda(Lambda::new(parameters, body))],
                 ));
+            }
+            if let Some(policy) = map_key_dedup_policy.filter(|_| converted) {
+                // Writes validate keys after all values are converted, including discarded entries.
+                let entries = ScalarUDF::from(SparkMapEntries::new()).call(vec![result]);
+                result = ScalarUDF::from(SparkMapFromEntries::new(
+                    policy == MapKeyDedupPolicy::LastWin,
+                ))
+                .call(vec![entries]);
             }
             Ok(cast(result, to))
         }
@@ -99,6 +115,7 @@ pub(crate) fn cast_temporal(
                 target.data_type().clone(),
                 session_timezone,
                 is_try,
+                map_key_dedup_policy,
             )?;
             let transformed = expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())),
@@ -138,6 +155,7 @@ pub(crate) fn cast_temporal(
                     target.data_type().clone(),
                     session_timezone,
                     is_try,
+                    map_key_dedup_policy,
                 )?;
                 arguments.push(expr::Expr::Lambda(Lambda::new(vec![parameter], body)));
             }
@@ -390,6 +408,7 @@ pub(crate) fn coerce_temporal_arguments(
                 target.clone(),
                 timezone,
                 false,
+                None,
             )?)
         })
         .collect()
@@ -494,7 +513,7 @@ pub(crate) fn coerce_temporal_array_element(
         field.as_ref().clone().with_data_type(target.clone()),
     ));
     Ok((
-        cast_temporal(array, &array_type, array_target, timezone, false)?,
-        cast_temporal(element, &element_type, target, timezone, false)?,
+        cast_temporal(array, &array_type, array_target, timezone, false, None)?,
+        cast_temporal(element, &element_type, target, timezone, false, None)?,
     ))
 }

@@ -221,6 +221,7 @@ impl PlanResolver<'_> {
                 target.clone(),
                 &self.config.session_timezone,
                 false,
+                Some(self.config.map_key_dedup_policy),
             )?)
         } else {
             Ok(value.cast_to(target, schema)?)

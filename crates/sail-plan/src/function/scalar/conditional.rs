@@ -218,6 +218,7 @@ fn coerce_to_temporal(
             target_type.clone(),
             timezone,
             false,
+            None,
         )?)
     } else {
         Ok(arg)

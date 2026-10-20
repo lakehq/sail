@@ -34,6 +34,31 @@ Feature: Sort reference resolution
       """
     Then query error (?i)(position|pos_out_of_range)
 
+  Scenario Outline: BIGINT sort literals remain constants
+    When query
+      """
+      SELECT id FROM range(3) ORDER BY <constant>, id DESC
+      """
+    Then query result ordered
+      | id |
+      | 2  |
+      | 1  |
+      | 0  |
+
+    Examples:
+      | constant              |
+      | -1L                   |
+      | 1L                    |
+      | -2147483649           |
+      | -9223372036854775808L  |
+
+  Scenario: A negative INT sort literal remains an invalid ordinal
+    When query
+      """
+      SELECT id FROM range(3) ORDER BY -1, id DESC
+      """
+    Then query error (?i)(position|pos_out_of_range)
+
   Scenario Outline: Missing literal function names precede hidden sort columns
     When query
       """
