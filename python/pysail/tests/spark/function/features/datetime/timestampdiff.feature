@@ -64,3 +64,69 @@ Feature: timestampdiff calendar units
         root
          |-- result: long (nullable = false)
         """
+
+  Rule: Timestamp differences use recurring timezone rules for local wall time
+
+    # Spark's DateTimeUtils.timestampDiff and subtractTimestamps compare local datetimes.
+    # Future timestamps must keep recurring DST rules, including southern-hemisphere rules.
+    Scenario Outline: Future timestamp differences in <timezone>: <case>
+      Given config spark.sql.session.timeZone = <timezone>
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT timestampdiff(SECOND, TIMESTAMP '<start>', TIMESTAMP '<end>') AS seconds,
+               timestampdiff(DAY, TIMESTAMP '<start>', TIMESTAMP '<end>') AS days,
+               CAST(TIMESTAMP '<end>' - TIMESTAMP '<start>' AS STRING) AS duration
+        """
+      Then query result
+        | seconds   | days   | duration                              |
+        | <seconds> | <days> | INTERVAL '<duration>' DAY TO SECOND |
+
+      Examples:
+        | timezone            | case                   | start                     | end                       | seconds     | days   | duration          |
+        | America/Los_Angeles | same summer offset     | 2024-07-01 00:00:00+00:00 | 2100-07-01 00:00:00+00:00 | 2398291200  | 27758  | 27758 00:00:00    |
+        | America/Los_Angeles | reverse summer offset  | 2100-07-01 00:00:00+00:00 | 2024-07-01 00:00:00+00:00 | -2398291200 | -27758 | -27758 00:00:00   |
+        | America/New_York    | same summer offset     | 2024-07-01 00:00:00+00:00 | 2100-07-01 00:00:00+00:00 | 2398291200  | 27758  | 27758 00:00:00    |
+        | Australia/Sydney    | same winter offset     | 2024-07-01 00:00:00+00:00 | 2100-07-01 00:00:00+00:00 | 2398291200  | 27758  | 27758 00:00:00    |
+        | America/Los_Angeles | winter to summer       | 2100-01-01 00:00:00+00:00 | 2100-07-01 00:00:00+00:00 | 15642000    | 181    | 181 01:00:00      |
+        | Australia/Sydney    | summer to winter       | 2100-01-01 00:00:00+00:00 | 2100-07-01 00:00:00+00:00 | 15634800    | 180    | 180 23:00:00      |
+        | America/Los_Angeles | future leap century    | 2400-01-01 00:00:00+00:00 | 2400-07-01 00:00:00+00:00 | 15728400    | 182    | 182 01:00:00      |
+        | America/Los_Angeles | beyond Jiff calendar   | +10000-01-01 00:00:00+00:00 | +10000-07-01 00:00:00+00:00 | 15728400    | 182    | 182 01:00:00      |
+        | UTC                 | no timezone adjustment | 2100-01-01 00:00:00+00:00 | 2100-07-01 00:00:00+00:00 | 15638400    | 181    | 181 00:00:00      |
+        | +05:30              | fixed offset           | 2100-01-01 00:00:00+00:00 | 2100-07-01 00:00:00+00:00 | 15638400    | 181    | 181 00:00:00      |
+
+    # Epoch constructors cover supported timestamp values beyond Chrono's calendar range.
+    Scenario: Future timestamp differences beyond the Chrono calendar retain DST
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT timestampdiff(SECOND, start_ts, end_ts) AS seconds,
+               timestampdiff(DAY, start_ts, end_ts) AS days,
+               CAST(end_ts - start_ts AS STRING) AS duration
+        FROM (
+          SELECT timestamp_micros(8931564144000000000L) AS start_ts,
+                 timestamp_micros(8931579782400000000L) AS end_ts
+        )
+        """
+      Then query result
+        | seconds  | days | duration                            |
+        | 15642000 | 181  | INTERVAL '181 01:00:00' DAY TO SECOND |
+
+    Scenario Outline: Future timestamp differences preserve microseconds at the Jiff boundary
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT timestampdiff(MICROSECOND, timestamp_micros(<start>),
+                             timestamp_micros(<end>)) AS micros
+        """
+      Then query result
+        | micros |
+        | 1      |
+
+      Examples:
+        | start               | end                 |
+        | 253402207200000000L | 253402207200000001L |
+        | 253402207200999998L | 253402207200999999L |
+        | 253402207200999999L | 253402207201000000L |
