@@ -68,24 +68,29 @@ impl ScalarUDFImpl for NegateDuration {
                 args.len()
             );
         };
-        let result = match arg {
-            ColumnarValue::Scalar(ScalarValue::DurationSecond(value)) => {
-                ScalarValue::DurationSecond(value.map(i64::neg_checked).transpose()?)
-            }
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::DurationSecond(value)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::DurationSecond(value.map(i64::neg_checked).transpose()?),
+            )),
             ColumnarValue::Scalar(ScalarValue::DurationMillisecond(value)) => {
-                ScalarValue::DurationMillisecond(value.map(i64::neg_checked).transpose()?)
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationMillisecond(
+                    value.map(i64::neg_checked).transpose()?,
+                )))
             }
             ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(value)) => {
-                ScalarValue::DurationMicrosecond(value.map(i64::neg_checked).transpose()?)
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(
+                    value.map(i64::neg_checked).transpose()?,
+                )))
             }
             ColumnarValue::Scalar(ScalarValue::DurationNanosecond(value)) => {
-                ScalarValue::DurationNanosecond(value.map(i64::neg_checked).transpose()?)
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationNanosecond(
+                    value.map(i64::neg_checked).transpose()?,
+                )))
             }
             ColumnarValue::Array(array) if matches!(array.data_type(), DataType::Duration(_)) => {
-                return Ok(ColumnarValue::Array(neg(array.as_ref())?));
+                Ok(ColumnarValue::Array(neg(array.as_ref())?))
             }
-            _ => return exec_err!("Unsupported arg {arg:?} for function negate_duration"),
-        };
-        Ok(ColumnarValue::Scalar(result))
+            _ => exec_err!("Unsupported arg {arg:?} for function negate_duration"),
+        }
     }
 }
