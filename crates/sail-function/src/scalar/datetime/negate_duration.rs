@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
+use datafusion::arrow::array::ArrowNativeTypeOp;
 use datafusion::arrow::compute::kernels::numeric::neg;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
-
-use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NegateDuration {
@@ -69,9 +68,24 @@ impl ScalarUDFImpl for NegateDuration {
                 args.len()
             );
         };
-        if !matches!(arg.data_type(), DataType::Duration(_)) {
-            return exec_err!("Unsupported arg {arg:?} for function negate_duration");
-        }
-        make_scalar_function(|args| Ok(neg(args[0].as_ref())?))(&args)
+        let result = match arg {
+            ColumnarValue::Scalar(ScalarValue::DurationSecond(value)) => {
+                ScalarValue::DurationSecond(value.map(i64::neg_checked).transpose()?)
+            }
+            ColumnarValue::Scalar(ScalarValue::DurationMillisecond(value)) => {
+                ScalarValue::DurationMillisecond(value.map(i64::neg_checked).transpose()?)
+            }
+            ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(value)) => {
+                ScalarValue::DurationMicrosecond(value.map(i64::neg_checked).transpose()?)
+            }
+            ColumnarValue::Scalar(ScalarValue::DurationNanosecond(value)) => {
+                ScalarValue::DurationNanosecond(value.map(i64::neg_checked).transpose()?)
+            }
+            ColumnarValue::Array(array) if matches!(array.data_type(), DataType::Duration(_)) => {
+                return Ok(ColumnarValue::Array(neg(array.as_ref())?));
+            }
+            _ => return exec_err!("Unsupported arg {arg:?} for function negate_duration"),
+        };
+        Ok(ColumnarValue::Scalar(result))
     }
 }
