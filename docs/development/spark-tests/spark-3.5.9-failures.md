@@ -166,7 +166,7 @@ For example, Spark 3.5.9 returns `[99]` for `freqItems(["col1"], 0.4)` on a Data
 
 An aggregate function that implements the same algorithm (including null keys, which Spark counts) would make `test_freqItems` pass, since that test only checks that the frequent items are present.
 `test_stat_freq_items` compares the arrays with the output of the JVM Spark session element by element, so it can only pass if the partitioning and the hash map iteration order also match.
-That test is probably better kept as a known difference.
+That test is skipped as a known difference.
 
 ### Sampling by Stratum
 
@@ -313,7 +313,7 @@ All four tests use `first()`.
 **Root cause.** The tests look for Spark's operator names in the `explain()` output.
 Sail plans the hinted join as DataFusion's `HashJoinExec: mode=CollectLeft`, which is the equivalent operator, but the text does not match.
 
-**Proposed fix.** These are probably best kept as known differences, since matching them would mean printing Spark's operator names in `explain()`.
+**Decision.** The tests are skipped as known differences, since matching them would mean printing Spark's operator names in `explain()`.
 
 ## Data Sources
 
@@ -332,7 +332,7 @@ Sail plans the hinted join as DataFusion's `HashJoinExec: mode=CollectLeft`, whi
 
 **Root cause.** Each row is a missing data source or option.
 `test_multi_paths` looks like a row-order problem in the report, but the rows are the same. Spark sorts the fields of an inferred JSON schema by name (`age`, `name`), and Sail keeps them in the order they appear (`name`, `age`).
-The JDBC tests depend on a JVM JDBC driver, so they cannot pass with Sail's Python JDBC data source and are best skipped.
+The JDBC tests depend on a JVM JDBC driver, so they cannot pass with Sail's Python JDBC data source and are skipped.
 
 **Proposed fix.** Sort inferred JSON fields by name, then add the JSON and CSV options one at a time, since each is small and can be tested on its own. ORC and bucketed writes are larger features.
 
@@ -374,7 +374,7 @@ A Python UDF whose return type is a UDT is rejected, because a UDT is only accep
 | `SparkConnectBasicTests.test_schema`  | nested nullability differs from the classic session (not explained yet)                          |
 
 **Root cause.** `DataFrame.to()` resolves every field by name and fails if one is missing, where Spark adds a missing nullable field as `NULL`. It also does not check nullability.
-Microsecond timestamps are intentional in Sail, as noted in `normalize_datetime_dtypes` in the test utilities.
+Microsecond timestamps are intentional in Sail, as noted in `normalize_datetime_dtypes` in the test utilities, so `test_to_pandas` is skipped.
 For `test_schema`, Sail returns the same schema as a Spark Connect 3.5.9 server for the failing query, so the difference is with the classic session that the test compares against, and it needs more investigation.
 
 **Proposed fix.** Fill missing nullable fields with `NULL` in `to()`, and raise `NULLABLE_COLUMN_OR_FIELD` when a nullable column is assigned to a non-nullable field.
@@ -396,6 +396,6 @@ For `test_schema`, Sail returns the same schema as a Spark Connect 3.5.9 server 
 - `randomSplit` uses a different random number generator from Spark, as with `sampleBy`.
 - `` `(Col1)?+.+` `` uses a possessive quantifier from Java regular expressions. In Java, `(Col1)?+` does not give back `Col1`, so the pattern does not match the column `Col1`. Sail treats it as a greedy quantifier, which can backtrack, so it matches.
 - The Python worker does not set up a `TaskContext`, so `partitionId()` is not available.
-- In `test_udf` and `test_udtf`, the `AssertionError` is raised by `pyspark.sql.functions.udf` in the classic session, before the Sail session is used. These failures come from the test setup rather than from Sail.
+- In `test_udf` and `test_udtf`, the `AssertionError` is raised by `pyspark.sql.functions.udf` in the classic session, before the Sail session is used. These failures come from the test setup rather than from Sail, so both tests are skipped.
 
 **Proposed fix.** Implement `observe` and `distributed_sequence_id`, reject or translate possessive quantifiers in `colRegex`, and pass a `TaskContext` with the partition ID to the Python worker.

@@ -570,6 +570,61 @@ SKIPPED_SPARK_TESTS = [
         ),
         spark_major_version_less_than=4,
     ),
+    # The following tests are known differences analyzed in
+    # `docs/development/spark-tests/spark-3.5.9-failures.md`.
+    TestMarker(
+        keywords=["test_parity_datasources.py", "DataSourcesParityTests", "test_jdbc"],
+        reason="Creates an embedded Derby database through the JVM JDBC driver",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_datasources.py", "DataSourcesParityTests", "test_jdbc_format"],
+        reason="Creates an embedded Derby database through the JVM JDBC driver",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_join_hint"],
+        reason="Looks for Spark's BroadcastHashJoin in the plan text, where Sail shows HashJoinExec",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_dataframe.py", "DataFrameParityTests", "test_generic_hints"],
+        reason="Looks for Spark's BroadcastHashJoin in the plan text, where Sail shows HashJoinExec",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_functions.py", "FunctionsParityTests", "test_functions_broadcast"],
+        reason="Looks for Spark's BroadcastHashJoin in the plan text, where Sail shows HashJoinExec",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.hint"],
+        reason="Looks for Spark's BroadcastHashJoin in the plan text, where Sail shows HashJoinExec",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_stat_freq_items"],
+        reason=(
+            "Compares freqItems arrays element by element with the JVM session, "
+            "while the extra items and their order depend on the partitioning"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_dataframe.py", "DataFrameParityTests", "test_to_pandas"],
+        reason="Expects datetime64[ns] timestamps, while Sail returns microsecond timestamps by design",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_udf"],
+        reason="Fails in the classic Spark session's udf() before the Sail session is used",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_udtf"],
+        reason="Fails in the classic Spark session's udf() before the Sail session is used",
+        spark_major_version_less_than=4,
+    ),
 ]
 
 
