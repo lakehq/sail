@@ -17,12 +17,12 @@ use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, Volatility, cast,
 };
-use sail_common::utils::datetime::{MICROS_PER_DAY, timezone_alias_to_timezone};
+use sail_common::utils::datetime::{
+    MICROS_PER_DAY, is_fixed_zero_offset_timezone, timezone_alias_to_timezone,
+};
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::datetime::utils::{
-    add_ltz_interval, add_ntz_interval, is_fixed_zero_offset_timezone,
-};
+use crate::scalar::datetime::utils::{add_ltz_interval, add_ntz_interval};
 
 // Spark timestamp arithmetic: calendar intervals and session-local differences.
 // Interval addition, TIMESTAMPADD, and SEQUENCE share the calendar kernel.

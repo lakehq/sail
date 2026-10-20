@@ -34,9 +34,9 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common::utils::datetime::{is_fixed_zero_offset_timezone, time_unit_to_multiplier};
 
-use crate::scalar::datetime::utils::{is_fixed_zero_offset_timezone, string_array_iter};
+use crate::scalar::datetime::utils::string_array_iter;
 
 pub fn parse_granularity(value: &str) -> Result<DatePart> {
     // Extraction aliases are not truncation units; the planner normalizes Spark's aliases.

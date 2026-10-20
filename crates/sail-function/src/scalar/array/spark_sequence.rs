@@ -20,16 +20,14 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
 };
-use sail_common::utils::datetime::MICROS_PER_DAY;
+use sail_common::utils::datetime::{MICROS_PER_DAY, is_fixed_zero_offset_timezone};
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
 use crate::functions_nested_utils::{
     evaluate_lambda_rows, evaluate_lambdas_until_null, make_scalar_function, scatter_active_rows,
 };
-use crate::scalar::datetime::utils::{
-    add_ltz_interval, add_ntz_interval, is_fixed_zero_offset_timezone,
-};
+use crate::scalar::datetime::utils::{add_ltz_interval, add_ntz_interval};
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_MONTH: i64 = 28 * MICROS_PER_DAY;
