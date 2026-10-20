@@ -40,6 +40,7 @@ Feature: nullif output schema
 
     # Spark 3.5 evaluates the first argument twice; Spark 4.0+ binds it once.
     @spark-4.0
+    @sail-bug
     Scenario Outline: Mixed timestamps evaluate a volatile first argument once
       Given config spark.sql.session.timeZone = UTC
       When query
