@@ -3,6 +3,49 @@ Feature: Timestamp arithmetic rejects overflow and retains supported wide dates
   Background:
     Given config spark.sql.session.timeZone = UTC
 
+  Scenario Outline: Month arithmetic crosses the local calendar boundary in <timezone>
+    Given config spark.sql.session.timeZone = <timezone>
+    When query
+      """
+      SELECT id,
+             unix_micros(timestamp_micros(<start>) + INTERVAL '<months>' MONTH) AS scalar,
+             unix_micros(ts + INTERVAL '<months>' MONTH) AS interval_result,
+             unix_micros(timestampadd(MONTH, <months>, ts)) AS timestampadd_result,
+             unix_micros(ts + make_interval(0, <months>, 0, 0, 0, 0, 0)) AS calendar_result
+      FROM (
+        SELECT id, CASE WHEN id = 0 THEN timestamp_micros(<start> + id) END AS ts
+        FROM range(2)
+      )
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | scalar   | interval_result | timestampadd_result | calendar_result |
+      | 0  | <result> | <result>        | <result>            | <result>        |
+      | 1  | <result> | NULL            | NULL                | NULL            |
+
+    Examples:
+      | timezone | start                 | months | result               |
+      | -01:00   | -8334601228800000000L | 1      | -8334598550400000000 |
+      | +01:00   | 8210266876799999999L  | -1     | 8210264198399999999  |
+      | UTC      | -8334601228800000000L | 1      | -8334598550400000000 |
+      | UTC      | 8210266876799999999L  | -1     | 8210264198399999999  |
+
+  Scenario Outline: Calendar days handle an overflowing starting local calendar in <timezone>
+    Given config spark.sql.session.timeZone = <timezone>
+    When query
+      """
+      SELECT unix_micros(ts + make_interval(0, 0, 0, <days>)) - unix_micros(ts) AS elapsed
+      FROM (SELECT timestamp_micros(<start> + id) AS ts FROM range(1))
+      """
+    Then query result
+      | elapsed   |
+      | <elapsed> |
+
+    Examples:
+      | timezone | start                 | days | elapsed      |
+      | -01:00   | -8334601228800000000L | 1    | 86400000000  |
+      | +01:00   | 8210266876799999999L  | -1   | -86400000000 |
+
   Scenario Outline: Zero additions preserve <type> values in <timezone>
     Given config spark.sql.session.timeZone = <timezone>
     When query
@@ -547,3 +590,163 @@ Feature: Timestamp arithmetic rejects overflow and retains supported wide dates
       | hi - lo                            | false |
       | timestampdiff(MICROSECOND, lo, hi) | true  |
       | timestampdiff(MICROSECOND, lo, hi) | false |
+
+  Rule: Timestamp construction and local calendar operations share timezone rules
+
+    Background:
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+
+    Scenario: Timestamp differences do not manufacture a year 2100 transition
+      Given config spark.sql.session.timeZone = America/Vancouver
+      When query
+        """
+        SELECT timestampdiff(SECOND, a, b) AS forward,
+               timestampdiff(SECOND, b, a) AS backward,
+               CAST(b - a AS STRING) AS duration
+        FROM (SELECT TIMESTAMP '2099-12-31 23:59:59+00:00' AS a,
+                     TIMESTAMP '2100-01-01 00:00:00+00:00' AS b)
+        """
+      Then query result
+        | forward | backward | duration                         |
+        | 1       | -1       | INTERVAL '0 00:00:01' DAY TO SECOND |
+
+    Scenario Outline: Future local timestamps agree through <constructor>
+      When query
+        """
+        SELECT id, unix_micros(a) AS start_micros, unix_micros(b) AS end_micros,
+               timestampdiff(SECOND, a, b) AS seconds,
+               timestampdiff(DAY, a, b) AS days,
+               CAST(b - a AS STRING) AS duration
+        FROM (
+          SELECT id, CASE WHEN id = 0 THEN <start> END AS a,
+                     CASE WHEN id = 0 THEN <end> END AS b
+          FROM range(2)
+        )
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | start_micros     | end_micros       | seconds  | days | duration                           |
+        | 0  | 4102473600000000 | 4118108400000000 | 15638400 | 181  | INTERVAL '181 00:00:00' DAY TO SECOND |
+        | 1  | NULL             | NULL             | NULL     | NULL | NULL                               |
+
+      Examples:
+        | constructor      | start                                                                   | end                                                                     |
+        | literal          | TIMESTAMP '2100-01-01 00:00:00'                                         | TIMESTAMP '2100-07-01 00:00:00'                                         |
+        | string cast      | CAST('2100-01-01 00:00:00' AS TIMESTAMP)                                 | CAST('2100-07-01 00:00:00' AS TIMESTAMP)                                 |
+        | formatted parser | to_timestamp('2100-01-01 00:00:00', 'yyyy-MM-dd HH:mm:ss')               | to_timestamp('2100-07-01 00:00:00', 'yyyy-MM-dd HH:mm:ss')               |
+        | constructor      | make_timestamp(2100, 1, 1, 0, 0, 0)                                    | make_timestamp(2100, 7, 1, 0, 0, 0)                                    |
+        | explicit zone    | make_timestamp(2100, 1, 1, 0, 0, 0, 'America/Los_Angeles')             | make_timestamp(2100, 7, 1, 0, 0, 0, 'America/Los_Angeles')             |
+        | date cast        | CAST(DATE '2100-01-01' AS TIMESTAMP)                                    | CAST(DATE '2100-07-01' AS TIMESTAMP)                                    |
+        | naive cast       | CAST(TIMESTAMP_NTZ '2100-01-01 00:00:00' AS TIMESTAMP)                   | CAST(TIMESTAMP_NTZ '2100-07-01 00:00:00' AS TIMESTAMP)                   |
+
+    Scenario: Future local columns retain their calendar fields and formatting
+      When query
+        """
+        SELECT id, CAST(ts AS STRING) AS text, CAST(ts AS TIMESTAMP_NTZ) AS local,
+               date_format(ts, 'yyyy-MM-dd HH:mm:ssXXX') AS formatted,
+               year(ts) AS y, month(ts) AS m, day(ts) AS d, hour(ts) AS h,
+               extract(HOUR FROM ts) AS extracted,
+               unix_date(CAST(ts AS DATE)) AS epoch_day,
+               months_between(ts, TIMESTAMP '2100-06-01 00:30:00') AS months
+        FROM (SELECT id, CAST(CASE WHEN id = 0 THEN concat('2100-07-01 00:30:0', id) END
+                              AS TIMESTAMP) AS ts FROM range(2))
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | text                | local               | formatted                 | y    | m | d | h | extracted | epoch_day | months |
+        | 0  | 2100-07-01 00:30:00 | 2100-07-01 00:30:00 | 2100-07-01 00:30:00-07:00 | 2100 | 7 | 1 | 0 | 0         | 47663     | 1.0    |
+        | 1  | NULL                | NULL                | NULL                      | NULL | NULL | NULL | NULL | NULL | NULL | NULL |
+
+    Scenario: Future date consumers use the constructed local day
+      When query
+        """
+        SELECT id, date(ts) AS date_value, trunc(ts, 'MONTH') AS month_start,
+               add_months(ts, 1) AS next_month,
+               datediff(ts, DATE '2100-06-30') AS days
+        FROM (SELECT id, CASE WHEN id = 0 THEN TIMESTAMP '2100-07-01 00:30:00' END AS ts
+              FROM range(2))
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | date_value | month_start | next_month | days |
+        | 0  | 2100-07-01 | 2100-07-01  | 2100-08-01 | 1    |
+        | 1  | NULL       | NULL        | NULL       | NULL |
+
+    Scenario: Future timezone conversions invert local construction
+      When query
+        """
+        SELECT convert_timezone('America/Los_Angeles', 'UTC', wall) AS utc_wall,
+               convert_timezone('UTC', 'America/Los_Angeles',
+                                TIMESTAMP_NTZ '2100-07-01 07:30:00') AS local_wall,
+               unix_micros(to_utc_timestamp(TIMESTAMP '2100-07-01 00:30:00Z',
+                                           'America/Los_Angeles')) AS instant,
+               CAST(from_utc_timestamp(TIMESTAMP '2100-07-01 07:30:00Z',
+                                       'America/Los_Angeles') AS BIGINT) AS local_seconds
+        FROM (SELECT TIMESTAMP_NTZ '2100-07-01 00:30:00' AS wall)
+        """
+      Then query result
+        | utc_wall            | local_wall          | instant          | local_seconds |
+        | 2100-07-01 07:30:00 | 2100-07-01 00:30:00 | 4118110200000000 | 4118085000    |
+
+    Scenario Outline: Future calendar operations preserve <case>
+      When query
+        """
+        SELECT date_format(<expression>, 'yyyy-MM-dd HH:mm:ssXXX') AS value
+        """
+      Then query result
+        | value   |
+        | <value> |
+
+      Examples:
+        | case             | expression                                                                  | value                     |
+        | parsed gap       | TIMESTAMP '2100-03-14 02:30:00'                                             | 2100-03-14 03:30:00-07:00 |
+        | parsed overlap   | TIMESTAMP '2100-11-07 01:30:00'                                             | 2100-11-07 01:30:00-07:00 |
+        | month into gap   | timestampadd(MONTH, 1, TIMESTAMP '2100-02-14 02:30:00')                     | 2100-03-14 03:30:00-07:00 |
+        | day across gap   | timestampadd(DAY, 1, TIMESTAMP '2100-03-13 12:00:00')                       | 2100-03-14 12:00:00-07:00 |
+        | local midnight   | date_trunc('DAY', TIMESTAMP '2100-03-14 03:30:00')                          | 2100-03-14 00:00:00-08:00 |
+        | preferred offset | date_trunc('HOUR', TIMESTAMP '2100-11-07 01:30:00-08:00')                   | 2100-11-07 01:00:00-08:00 |
+        | calendar month   | date_trunc('MONTH', TIMESTAMP '2100-11-07 01:30:00-08:00')                  | 2100-11-01 00:00:00-07:00 |
+
+    Scenario: Future timestamp sequences use local days across a gap
+      When query
+        """
+        SELECT date_format(ts, 'yyyy-MM-dd HH:mm:ssXXX') AS value
+        FROM (SELECT explode(sequence(TIMESTAMP '2100-03-13 12:00:00',
+                                      TIMESTAMP '2100-03-15 12:00:00', INTERVAL 1 DAY)) AS ts)
+        ORDER BY ts
+        """
+      Then query result ordered
+        | value                     |
+        | 2100-03-13 12:00:00-08:00 |
+        | 2100-03-14 12:00:00-07:00 |
+        | 2100-03-15 12:00:00-07:00 |
+
+    Scenario: Future timestamp serializers preserve the constructed local time
+      When query
+        """
+        SELECT to_json(named_struct('ts', ts)) AS json_value,
+               to_csv(named_struct('ts', ts)) AS csv_value
+        FROM (SELECT TIMESTAMP '2100-07-01 00:30:00.123456' AS ts)
+        """
+      Then query result
+        | json_value                                | csv_value                      |
+        | {"ts":"2100-07-01T00:30:00.123-07:00"} | 2100-07-01T00:30:00.123-07:00 |
+
+    Scenario Outline: Named timezone differences remain continuous at the Jiff calendar edge <year>
+      When query
+        """
+        SELECT timestampdiff(MICROSECOND, TIMESTAMP '<year>-01-01 00:00:00Z',
+                             TIMESTAMP '<year>-01-01 00:00:00.000001Z') AS micros,
+               date_format(TIMESTAMP '<year>-01-01 12:00:00', 'HH:mm:ss') AS local_time
+        """
+      Then query result
+        | micros | local_time |
+        | 1      | 12:00:00   |
+
+      Examples:
+        | year   |
+        | -10000 |
+        | -9999  |
+        | 9999   |
+        | +10000 |

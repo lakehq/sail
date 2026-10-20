@@ -591,7 +591,11 @@ fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> St
     if let Some(dt_utc) = Utc.timestamp_micros(value).single() {
         let (datetime, timezone) = if let Some(tz_str) = tz {
             if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>() {
-                let local_dt = dt_utc.with_timezone(&tz);
+                let Ok(local_dt) =
+                    sail_common_datafusion::utils::datetime::to_local_datetime(&tz, &dt_utc)
+                else {
+                    return value.to_string();
+                };
                 let offset = local_dt.offset().fix();
                 (
                     local_dt.naive_local(),

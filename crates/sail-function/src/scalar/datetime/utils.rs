@@ -1,6 +1,4 @@
-use chrono::{
-    DateTime, Datelike, Days, LocalResult, Months, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc,
-};
+use chrono::{DateTime, Datelike, Days, FixedOffset, Months, NaiveDate, NaiveDateTime, Offset};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::types::{
     Decimal128Type, Int32Type, Time64MicrosecondType, TimestampMicrosecondType,
@@ -10,8 +8,11 @@ use datafusion::arrow::temporal_conversions::as_datetime;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::ColumnarValue;
+use jiff::tz::AmbiguousOffset;
 use sail_common::utils::datetime::{MICROS_PER_DAY, civil_from_days};
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{
+    local_timezone_offsets, timezone_offset, to_local_datetime,
+};
 
 pub(crate) fn string_array_iter(
     array: &dyn Array,
@@ -102,12 +103,15 @@ pub(crate) fn make_timestamp_from_date_time(date: i32, time: i64) -> Option<i64>
         .and_then(|v| v.checked_add(time))
 }
 
-fn checked_add_months(datetime: NaiveDateTime, months: i32) -> Option<NaiveDateTime> {
-    if months >= 0 {
+fn checked_add_months(datetime: &DateTime<FixedOffset>, months: i32) -> Option<NaiveDateTime> {
+    // Chrono permits the starting local date to overflow before the month adjustment.
+    let datetime = datetime.fixed_offset();
+    let result = if months >= 0 {
         datetime.checked_add_months(Months::new(months as u32))
     } else {
         datetime.checked_sub_months(Months::new(months.unsigned_abs()))
-    }
+    };
+    result.and_then(|value| value.naive_utc().checked_add_offset(*value.offset()))
 }
 
 pub(crate) fn checked_add_days(datetime: NaiveDateTime, days: i32) -> Option<NaiveDateTime> {
@@ -193,22 +197,17 @@ pub(crate) fn localize_with_preferred_offset(
     timezone: Tz,
     datetime: NaiveDateTime,
     preferred_offset: i32,
-) -> Result<DateTime<Tz>> {
-    match timezone.from_local_datetime(&datetime) {
-        LocalResult::Single(value) => Ok(value),
-        LocalResult::Ambiguous(first, second) => {
-            if first.offset().fix().local_minus_utc() == preferred_offset {
-                Ok(first)
-            } else if second.offset().fix().local_minus_utc() == preferred_offset {
-                Ok(second)
-            } else {
-                Ok(first)
-            }
-        }
-        LocalResult::None => {
-            Ok(localize_with_fallback(&timezone, &datetime)?.with_timezone(&timezone))
-        }
-    }
+) -> Result<DateTime<FixedOffset>> {
+    let offset = match local_timezone_offsets(&timezone, &datetime)? {
+        AmbiguousOffset::Unambiguous { offset } => offset,
+        AmbiguousOffset::Fold { after, .. } if after.seconds() == preferred_offset => after,
+        AmbiguousOffset::Fold { before, .. } | AmbiguousOffset::Gap { before, .. } => before,
+    };
+    let utc = FixedOffset::east_opt(offset.seconds())
+        .and_then(|offset| datetime.and_local_timezone(offset).single())
+        .ok_or_else(|| exec_datafusion_err!("cannot localize datetime: {datetime}"))?
+        .to_utc();
+    to_local_datetime(&timezone, &utc)
 }
 
 pub(crate) fn add_ltz_interval(
@@ -220,36 +219,31 @@ pub(crate) fn add_ltz_interval(
 ) -> Result<i64> {
     if months == 0 {
         let utc = as_datetime::<TimestampMicrosecondType>(start);
-        let boundary = if start < 0 {
-            NaiveDateTime::MIN
-        } else {
-            NaiveDateTime::MAX
-        };
-        let offset = timezone
-            .offset_from_utc_datetime(&utc.unwrap_or(boundary))
-            .fix();
+        let offset = timezone_offset(&timezone, start.div_euclid(1_000_000))?;
         if utc
             .and_then(|value| value.checked_add_offset(offset))
             .and_then(|value| checked_add_days(value, days))
             .is_none()
         {
             // Preserve the existing elapsed-day behavior outside Chrono's calendar range.
-            // FIXME: Recurring far-future DST rules remain outside chrono-tz's supported domain.
+            // FIXME: Calendar arithmetic outside Chrono still uses elapsed days.
             return add_ntz_interval(start, 0, days, micros);
         }
     }
-    let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
-        .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
+    let utc = as_datetime::<TimestampMicrosecondType>(start)
         .ok_or_else(|| exec_datafusion_err!("cannot convert timestamp {start}"))?;
+    let offset = timezone_offset(&timezone, start.div_euclid(1_000_000))?;
+    // Month arithmetic may bring an overflowing starting local date back into range.
+    let mut datetime = utc.and_utc().with_timezone(&offset);
 
-    let calendar_fits = checked_add_months(datetime.naive_local(), months)
+    let calendar_fits = checked_add_months(&datetime, months)
         .and_then(|value| checked_add_days(value, days))
         .is_some();
 
     if calendar_fits {
         if months != 0 {
             let preferred_offset = datetime.offset().fix().local_minus_utc();
-            let local = checked_add_months(datetime.naive_local(), months)
+            let local = checked_add_months(&datetime, months)
                 .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
             datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
         }
@@ -261,8 +255,11 @@ pub(crate) fn add_ltz_interval(
         }
     } else {
         let preferred_offset = datetime.offset().fix().local_minus_utc();
-        let local =
-            add_calendar_interval_wide(datetime.naive_local(), months, days).ok_or_else(|| {
+        let local = datetime
+            .naive_utc()
+            .checked_add_offset(datetime.offset().fix())
+            .and_then(|value| add_calendar_interval_wide(value, months, days))
+            .ok_or_else(|| {
                 exec_datafusion_err!("cannot add {months} months and {days} days to {start}")
             })?;
         datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;

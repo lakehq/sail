@@ -13,6 +13,8 @@ use sail_common::utils::datetime::{
     MICROS_PER_DAY, MICROS_PER_SECOND, civil_from_days, is_fixed_zero_offset_timezone,
 };
 
+use crate::utils::datetime::to_local_datetime;
+
 pub struct BinaryFormatter<'a>(pub &'a [u8]);
 
 impl Display for BinaryFormatter<'_> {
@@ -87,7 +89,9 @@ fn write_timestamp(
     tz: Option<&Tz>,
 ) -> std::fmt::Result {
     let datetime = if let Some(tz) = tz {
-        datetime.with_timezone(tz).naive_local()
+        to_local_datetime(tz, datetime)
+            .map_err(|_| std::fmt::Error)?
+            .naive_local()
     } else {
         datetime.naive_utc()
     };

@@ -1,7 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Date32Array, Int8Array, Int16Array, Int32Array, Int64Array,
@@ -22,7 +21,7 @@ use datafusion_expr::{
 };
 use sail_common::utils::datetime::{MICROS_PER_DAY, is_fixed_zero_offset_timezone};
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, to_local_datetime};
 
 use crate::functions_nested_utils::{
     evaluate_lambda_rows, evaluate_lambdas_until_null, make_scalar_function, scatter_active_rows,
@@ -949,13 +948,9 @@ fn micros_to_date(micros: i64, timezone: Tz, use_wide_utc_arithmetic: bool) -> R
             .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {micros}"));
     }
 
-    let date = as_datetime::<TimestampMicrosecondType>(micros)
-        .map(|value| {
-            Utc.from_utc_datetime(&value)
-                .with_timezone(&timezone)
-                .date_naive()
-        })
+    let utc = as_datetime::<TimestampMicrosecondType>(micros)
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {micros}"))?;
+    let date = to_local_datetime(&timezone, &utc.and_utc())?.date_naive();
     Ok(Date32Type::from_naive_date(date))
 }
 

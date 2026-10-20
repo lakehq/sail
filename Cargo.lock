@@ -7892,6 +7892,7 @@ dependencies = [
  "datafusion-expr",
  "either",
  "futures",
+ "jiff",
  "lexical-core",
  "num-bigint 0.5.1",
  "object_store",

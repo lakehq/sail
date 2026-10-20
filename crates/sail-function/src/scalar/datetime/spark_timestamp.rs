@@ -13,7 +13,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use sail_common::utils::datetime::timezone_alias_to_timezone;
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, to_local_datetime};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::datetime::format::DateTimeFormat;
@@ -94,13 +94,13 @@ impl SparkZone {
             .ok_or_else(|| exec_datafusion_err!("invalid time-zone offset: {seconds}"))
     }
 
-    fn current_date(&self) -> (i64, u32, u32) {
+    fn current_date(&self) -> Result<(i64, u32, u32)> {
         let now = Utc::now();
         let date = match self {
             Self::Fixed(zone) => now.with_timezone(zone).date_naive(),
-            Self::Named(zone) => now.with_timezone(zone).date_naive(),
+            Self::Named(zone) => to_local_datetime(zone, &now)?.date_naive(),
         };
-        (i64::from(date.year()), date.month(), date.day())
+        Ok((i64::from(date.year()), date.month(), date.day()))
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -326,7 +326,7 @@ impl TimestampParser {
             match self {
                 TimestampParser::Ltz { .. } => effective_zone
                     .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
-                    .current_date(),
+                    .current_date()?,
                 TimestampParser::Ntz => {
                     return exec_err!("time-only input is not a TIMESTAMP_NTZ");
                 }

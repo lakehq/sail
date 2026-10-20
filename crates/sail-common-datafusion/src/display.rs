@@ -32,6 +32,7 @@ use crate::formatter::{
     Time64NanosecondFormatter, TimestampMicrosecondFormatter, TimestampMillisecondFormatter,
     TimestampNanosecondFormatter, TimestampSecondFormatter,
 };
+use crate::utils::datetime::to_local_datetime;
 use crate::variant::is_marked_variant_storage_type;
 
 /// Format for displaying datetime values
@@ -573,7 +574,8 @@ macro_rules! timestamp_display {
                 match s {
                     (Some(tz), TimeFormat::Rfc3339) => {
                         let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
-                        let date = Utc.from_utc_datetime(&naive).with_timezone(tz);
+                        let date = to_local_datetime(tz, &Utc.from_utc_datetime(&naive))
+                            .map_err(|error| ArrowError::CastError(error.to_string()))?;
                         write!(f, "{}", date.to_rfc3339_opts(SecondsFormat::AutoSi, true))?
                     }
                     (None, TimeFormat::Rfc3339) => {
@@ -582,7 +584,8 @@ macro_rules! timestamp_display {
                     }
                     (Some(tz), TimeFormat::Custom(s)) => {
                         let naive = try_convert!(value, as_datetime::<$t>, "timestamp")?;
-                        let date = Utc.from_utc_datetime(&naive).with_timezone(tz);
+                        let date = to_local_datetime(tz, &Utc.from_utc_datetime(&naive))
+                            .map_err(|error| ArrowError::CastError(error.to_string()))?;
                         write!(f, "{}", date.format(s))?
                     }
                     (None, TimeFormat::Custom(s)) => {

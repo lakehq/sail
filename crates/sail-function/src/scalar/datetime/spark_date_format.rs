@@ -2,23 +2,22 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use chrono::{Offset, TimeZone};
+use chrono::DateTime;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     Array, Date32Array, Date64Array, StringArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
-use datafusion::arrow::temporal_conversions::{
-    as_datetime, date32_to_datetime, date64_to_datetime,
-};
+use datafusion::arrow::temporal_conversions::{date32_to_datetime, date64_to_datetime};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, timezone_offset};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
 
@@ -561,35 +560,34 @@ fn format_timestamp_value(
     tz: Option<&Arc<str>>,
     format: &DateTimeFormat,
 ) -> Result<String> {
-    let naive_datetime = match time_unit {
-        TimeUnit::Microsecond => {
-            as_datetime::<datafusion::arrow::datatypes::TimestampMicrosecondType>(value)
-        }
-        TimeUnit::Millisecond => {
-            as_datetime::<datafusion::arrow::datatypes::TimestampMillisecondType>(value)
-        }
-        TimeUnit::Second => as_datetime::<datafusion::arrow::datatypes::TimestampSecondType>(value),
-        TimeUnit::Nanosecond => {
-            as_datetime::<datafusion::arrow::datatypes::TimestampNanosecondType>(value)
-        }
-    }
-    .ok_or_else(|| {
+    let units_per_second = time_unit_to_multiplier(time_unit);
+    let seconds = value.div_euclid(units_per_second);
+    let nanoseconds =
+        (value.rem_euclid(units_per_second) * (1_000_000_000 / units_per_second)) as u32;
+    let naive_datetime =
+        DateTime::from_timestamp(seconds, nanoseconds).map(|datetime| datetime.naive_utc());
+    let out_of_range = || {
         exec_datafusion_err!(
             "spark_date_format: cannot convert timestamp value {} to datetime",
             value
         )
-    })?;
+    };
 
     match tz {
         Some(tz_str) => {
             let tz = tz_str
                 .parse::<Tz>()
                 .map_err(|e| exec_datafusion_err!("Invalid timezone '{}': {}", tz_str, e))?;
-            let datetime = tz.from_utc_datetime(&naive_datetime);
+            let offset = timezone_offset(&tz, seconds)?;
+            // Construct the local calendar after shifting, without requiring an in-range UTC one.
+            let datetime = seconds
+                .checked_add(i64::from(offset.local_minus_utc()))
+                .and_then(|seconds| DateTime::from_timestamp(seconds, nanoseconds))
+                .ok_or_else(out_of_range)?;
             format.format(DateTimeFormatInput {
-                datetime: datetime.naive_local(),
+                datetime: datetime.naive_utc(),
                 timezone: Some(TimeZoneDisplay {
-                    offset: datetime.offset().fix(),
+                    offset,
                     name: Some(tz_str),
                 }),
                 zone_id: Some(tz_str),
@@ -598,7 +596,7 @@ fn format_timestamp_value(
             })
         }
         None => format.format(DateTimeFormatInput {
-            datetime: naive_datetime,
+            datetime: naive_datetime.ok_or_else(out_of_range)?,
             timezone: None,
             zone_id: None,
             timestamp_kind: TimestampKind::Normal,

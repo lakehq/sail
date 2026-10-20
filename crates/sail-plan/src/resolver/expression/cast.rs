@@ -14,6 +14,7 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
+use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_timestamp_from_number::{
     SparkTimestampFromNumber, TimestampNumberMode,
@@ -170,6 +171,18 @@ impl PlanResolver<'_> {
                     try_cast(seconds, to)
                 } else {
                     cast(seconds, to)
+                }
+            }
+            (
+                DataType::Timestamp(_, Some(_)),
+                to @ (DataType::Time32(_) | DataType::Time64(_)),
+                is_try,
+            ) => {
+                let local = ScalarUDF::from(SparkTime::new(is_try)).call(vec![expr]);
+                if is_try {
+                    try_cast(local, to)
+                } else {
+                    cast(local, to)
                 }
             }
             (from, to, is_try)

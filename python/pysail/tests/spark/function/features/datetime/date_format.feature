@@ -77,6 +77,75 @@ Feature: date_format with an argument coming from a column
         | 2024-01-02  | 12:34:56                   |
         | NULL        | NULL                       |
 
+  Rule: Formatting retains valid local calendars at the timestamp boundaries
+
+    Scenario Outline: date_format retains extreme local literals in <zone> at <date>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT date_format(DATE '<date>', 'HH:mm:ss') AS date_result,
+               date_format(TIMESTAMP_NTZ '<date> <time>', 'HH:mm:ss.SSSSSS') AS ntz_result
+        """
+      Then query result
+        | date_result | ntz_result |
+        | 00:00:00    | <time>     |
+
+      Examples:
+        | zone       | date          | time            |
+        | Asia/Tokyo | -262143-01-01 | 00:00:00.000000 |
+        | UTC        | -262143-01-01 | 00:00:00.000000 |
+        | +09:00     | -262143-01-01 | 00:00:00.000000 |
+        | Asia/Tokyo | -262143-01-02 | 00:00:00.000000 |
+        | Asia/Tokyo | -262143-01-01 | 12:00:00.000000 |
+        | -01:00     | +262142-12-31 | 23:59:59.999999 |
+
+    Scenario Outline: date_format retains extreme local columns and dynamic formats in <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT id, date_format(d, 'HH:mm:ss') AS date_result,
+               date_format(ts, fmt) AS ntz_result
+        FROM (
+          SELECT id,
+                 CASE WHEN id = 0 OR id = 3 THEN DATE '-262143-01-01'
+                      WHEN id = 1 THEN DATE '-262143-01-02' END AS d,
+                 CAST(CASE WHEN id = 0 OR id = 3 THEN '-262143-01-01 00:00:00.123456'
+                           WHEN id = 1 THEN '-262143-01-02 12:00:00' END AS TIMESTAMP_NTZ) AS ts,
+                 CASE WHEN id = 0 THEN 'HH:mm:ss.SSSSSS'
+                      WHEN id = 1 OR id = 2 THEN 'HH:mm:ss' END AS fmt
+          FROM range(4)
+        )
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | date_result | ntz_result     |
+        | 0  | 00:00:00    | 00:00:00.123456 |
+        | 1  | 00:00:00    | 12:00:00       |
+        | 2  | NULL        | NULL           |
+        | 3  | 00:00:00    | NULL           |
+
+      Examples:
+        | zone       |
+        | Asia/Tokyo |
+        | +09:00     |
+
+    Scenario Outline: date_format preserves gap resolution and zone tokens in <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT date_format(DATE '<date>', 'yyyy-MM-dd HH:mm:ssXXX') AS date_result,
+               date_format(TIMESTAMP_NTZ '<date> <time>', 'yyyy-MM-dd HH:mm:ssXXX') AS ntz_result
+        """
+      Then query result
+        | date_result   | ntz_result   |
+        | <date_result> | <ntz_result> |
+
+      Examples:
+        | zone                | date       | time     | date_result               | ntz_result                |
+        | America/Los_Angeles | 2024-03-10 | 02:30:00 | 2024-03-10 00:00:00-08:00 | 2024-03-10 03:30:00-07:00 |
+        | Asia/Kathmandu      | 1986-01-01 | 00:00:00 | 1986-01-01 00:15:00+05:45 | 1986-01-01 00:15:00+05:45 |
+        | Pacific/Apia        | 2011-12-30 | 12:34:56 | 2011-12-31 00:00:00+14:00 | 2011-12-31 12:34:56+14:00 |
+
   @function(nullability)
   Rule: Output schema
 

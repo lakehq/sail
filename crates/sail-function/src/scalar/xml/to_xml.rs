@@ -862,7 +862,7 @@ fn format_timestamp_field(
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;
-        let local_dt = utc_dt.with_timezone(&tz);
+        let local_dt = sail_common_datafusion::utils::datetime::to_local_datetime(&tz, &utc_dt)?;
 
         use chrono::Offset;
 

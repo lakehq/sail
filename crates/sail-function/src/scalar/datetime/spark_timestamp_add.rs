@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::{DateTime, Offset, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, AsArray, Int64Array, TimestampMicrosecondArray,
@@ -18,11 +18,12 @@ use datafusion_expr::{
     Signature, Volatility, cast,
 };
 use sail_common::utils::datetime::{
-    MICROS_PER_DAY, civil_from_days, is_fixed_zero_offset_timezone, timezone_alias_to_timezone,
+    MICROS_PER_DAY, is_fixed_zero_offset_timezone, timezone_alias_to_timezone,
 };
+use sail_common_datafusion::utils::datetime::timezone_offset;
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::datetime::utils::{add_ltz_interval, add_ntz_interval, days_from_civil};
+use crate::scalar::datetime::utils::{add_ltz_interval, add_ntz_interval};
 
 // Spark timestamp arithmetic: calendar intervals and session-local differences.
 // Interval addition, TIMESTAMPADD, and SEQUENCE share the calendar kernel.
@@ -231,23 +232,17 @@ fn timestamp_difference(args: &[ArrayRef]) -> Result<ArrayRef> {
                 let timezone_name = timezone_alias_to_timezone(timezone);
                 let timezone = timezone_name.parse::<Tz>()?;
                 let offset = |micros| -> Result<Option<i128>> {
-                    // Keep historical offsets; chrono-tz's generated transitions end before 2100.
-                    if micros >= days_from_civil(2100, 1, 1) * MICROS_PER_DAY
-                        && !timezone_name.starts_with(['+', '-'])
+                    if DateTime::<Utc>::from_timestamp_micros(micros).is_none()
+                        && (micros < 0 || timezone_name.starts_with(['+', '-']))
                     {
-                        let timezone = jiff::tz::TimeZoneDatabase::bundled()
-                            .get(timezone_name)
-                            .map_err(|error| exec_datafusion_err!("{error}"))?;
-                        return future_offset_micros(&timezone, micros).map(Some);
+                        return Ok(None);
                     }
-                    Ok(DateTime::<Utc>::from_timestamp_micros(micros).map(|utc| {
+                    Ok(Some(
                         i128::from(
-                            timezone
-                                .offset_from_utc_datetime(&utc.naive_utc())
-                                .fix()
+                            timezone_offset(&timezone, micros.div_euclid(1_000_000))?
                                 .local_minus_utc(),
-                        ) * 1_000_000
-                    }))
+                        ) * 1_000_000,
+                    ))
                 };
                 // shortcut: keep ancient pairs raw until historical offsets cover the full range.
                 if let (Some(end), Some(start)) = (offset(end)?, offset(start)?) {
@@ -262,20 +257,6 @@ fn timestamp_difference(args: &[ArrayRef]) -> Result<ArrayRef> {
         })
         .collect::<Result<Int64Array>>()?;
     Ok(Arc::new(result))
-}
-
-fn future_offset_micros(timezone: &jiff::tz::TimeZone, micros: i64) -> Result<i128> {
-    let lookup = if micros > jiff::Timestamp::MAX.as_microsecond() {
-        let (year, month, day) = civil_from_days(micros.div_euclid(MICROS_PER_DAY));
-        // Beyond the bundled transition history, Gregorian/POSIX rules repeat every 400 years.
-        days_from_civil(2400 + year.rem_euclid(400), month, day) * MICROS_PER_DAY
-            + micros.rem_euclid(MICROS_PER_DAY)
-    } else {
-        micros
-    };
-    let instant = jiff::Timestamp::from_second(lookup.div_euclid(1_000_000))
-        .map_err(|error| exec_datafusion_err!("{error}"))?;
-    Ok(i128::from(timezone.to_offset(instant).seconds()) * 1_000_000)
 }
 
 fn timestamp_add(args: &[ArrayRef], subtract_ansi: Option<bool>) -> Result<ArrayRef> {

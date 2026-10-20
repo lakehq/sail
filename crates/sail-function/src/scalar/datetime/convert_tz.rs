@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, MappedLocalTime, NaiveDateTime, Offset, TimeZone, Utc};
-use chrono_tz::{GapInfo, Tz};
+use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array, new_null_array};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{Result, exec_err, internal_err, plan_err};
+use datafusion_common::{
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_err,
+};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
@@ -17,13 +19,72 @@ use datafusion_expr::{
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::datetime::to_local_time::ToLocalTimeFunc;
 use datafusion_functions::utils::make_scalar_function;
+use jiff::tz::AmbiguousOffset;
+use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common_datafusion::utils::datetime::{
+    local_timezone_offsets, localize_with_fallback, timezone_offset, to_local_datetime,
+};
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
 
-// Preserve timestamp nullability while using the native timezone conversion kernel.
+// Preserve timestamp nullability and units while sharing the named-zone rules.
 #[derive(Debug, Default, PartialEq, Eq, Hash)]
 pub struct SparkToLocalTime {
     inner: ToLocalTimeFunc,
+}
+
+impl SparkToLocalTime {
+    pub(crate) fn convert(value: &ColumnarValue) -> Result<ColumnarValue> {
+        let (unit, timezone) = match value.data_type() {
+            DataType::Timestamp(unit, Some(timezone)) => (unit, timezone),
+            DataType::Timestamp(_, None) => return Ok(value.clone()),
+            DataType::Null => {
+                return Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                    None, None,
+                )));
+            }
+            data_type => {
+                return internal_err!("to_local_time requires a timestamp, got {data_type}");
+            }
+        };
+        let timezone = timezone.parse::<datafusion::arrow::array::timezone::Tz>()?;
+        let units = time_unit_to_multiplier(&unit);
+        let scalar = matches!(value, ColumnarValue::Scalar(_));
+        let values = value.cast_to(&DataType::Int64, None)?.to_array(1)?;
+        let values = values
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| exec_datafusion_err!("expected timestamp integers"))?;
+        let values = values
+            .iter()
+            .map(|value| {
+                value
+                    .map(|value| {
+                        let seconds = value.div_euclid(units);
+                        let offset = timezone_offset(&timezone, seconds)?;
+                        let shifted = i128::from(value)
+                            + i128::from(offset.local_minus_utc()) * i128::from(units);
+                        let shifted = i64::try_from(shifted)
+                            .map_err(|_| exec_datafusion_err!("local timestamp out of range"))?;
+                        if DateTime::from_timestamp(seconds, 0).is_none()
+                            || DateTime::from_timestamp(shifted.div_euclid(units), 0).is_none()
+                        {
+                            return exec_err!("local timestamp out of range");
+                        }
+                        Ok(shifted)
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Int64Array>>()?;
+        let values = cast::cast(&values, &DataType::Timestamp(unit, None))?;
+        if scalar {
+            Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                &values, 0,
+            )?))
+        } else {
+            Ok(ColumnarValue::Array(values))
+        }
+    }
 }
 
 impl ScalarUDFImpl for SparkToLocalTime {
@@ -52,7 +113,7 @@ impl ScalarUDFImpl for SparkToLocalTime {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        self.inner.invoke_with_args(args)
+        Self::convert(&args.args[0])
     }
 }
 
@@ -367,9 +428,8 @@ fn convert_tz_inner(
                 // shortcut: retain pre-PR wide cast values until full-range regional offsets are supported.
                 return Some(ts_micros);
             };
-            let offset = to_zone
-                .offset_from_utc_datetime(&utc.naive_utc())
-                .fix()
+            let offset = timezone_offset(to_zone, utc.timestamp())
+                .ok()?
                 .local_minus_utc();
             // Integer shifting avoids overflowing Chrono's local calendar at its bounds.
             ts_micros.checked_add(i64::from(offset) * 1_000_000)
@@ -542,25 +602,6 @@ fn convert_tz_inner(
     microseconds_to_timestamp(results, time_unit)
 }
 
-// TODO: Support Spark's full i64 microsecond range for conversions between
-// different zones. Chrono cannot represent every Spark timestamp, so this needs
-// wide-range zone-offset and DST arithmetic outside Chrono.
-fn disambiguate_local_datetime(local: NaiveDateTime, tz: &Tz) -> Option<DateTime<Tz>> {
-    // Handle ambiguous or non-existent local date time
-    // in the same way as `java.time.ZonedDateTime#atZone`.
-    match local.and_local_timezone(*tz) {
-        MappedLocalTime::Single(x) => Some(x),
-        MappedLocalTime::Ambiguous(earliest, _latest) => Some(earliest),
-        MappedLocalTime::None => GapInfo::new(&local, tz).and_then(|gap| {
-            if let (Some((start, _)), Some(end)) = (gap.begin, gap.end) {
-                end.checked_add_signed(local - start)
-            } else {
-                None
-            }
-        }),
-    }
-}
-
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.DateTimeUtils#convertTimestampNtzToAnotherTz`
 fn convert_tz_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i64> {
@@ -569,9 +610,10 @@ fn convert_tz_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i6
         None if from_zone == to_zone => return Some(ts_micros),
         None => return None,
     };
-    let dt = disambiguate_local_datetime(local, from_zone)?;
+    let dt = localize_with_fallback(from_zone, &local).ok()?;
     Some(
-        dt.with_timezone(to_zone)
+        to_local_datetime(to_zone, &dt)
+            .ok()?
             .naive_local()
             .and_utc()
             .timestamp_micros(),
@@ -581,13 +623,20 @@ fn convert_tz_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i6
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.SparkDateTimeUtils#convertTz`
 fn convert_tz_non_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i64> {
-    let local = match to_zone.timestamp_micros(ts_micros).single() {
-        Some(datetime) => datetime.naive_local(),
+    let local = match DateTime::from_timestamp_micros(ts_micros) {
+        Some(datetime) => to_local_datetime(to_zone, &datetime).ok()?.naive_local(),
         None if from_zone == to_zone => return Some(ts_micros),
         None => return None,
     };
-    let dt = disambiguate_local_datetime(local, from_zone)?;
-    Some(dt.timestamp_micros())
+    let offset = match local_timezone_offsets(from_zone, &local).ok()? {
+        AmbiguousOffset::Unambiguous { offset } => offset,
+        AmbiguousOffset::Fold { before, .. } | AmbiguousOffset::Gap { before, .. } => before,
+    };
+    // A valid local calendar can map to an instant outside Chrono's UTC range.
+    local
+        .and_utc()
+        .timestamp_micros()
+        .checked_sub(i64::from(offset.seconds()) * 1_000_000)
 }
 
 fn timestamp_to_microseconds(array: &dyn Array) -> Result<Int64Array> {

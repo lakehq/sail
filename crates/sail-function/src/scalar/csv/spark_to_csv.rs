@@ -11,6 +11,7 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::Volatility;
 use lazy_static::lazy_static;
+use sail_common_datafusion::utils::datetime::to_local_datetime;
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::csv::options::{
@@ -425,7 +426,7 @@ fn format_timestamp_field(
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;
-        let local_dt = utc_dt.with_timezone(&tz);
+        let local_dt = to_local_datetime(&tz, &utc_dt)?;
         let input = DateTimeFormatInput {
             datetime: local_dt.naive_local(),
             timezone: Some(TimeZoneDisplay {

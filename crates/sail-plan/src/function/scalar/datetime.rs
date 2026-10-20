@@ -71,18 +71,27 @@ fn wrong_datetime_arity(name: &str, expected: &str, actual: usize) -> PlanError 
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
-        expr_fn::date_part(lit(part.to_uppercase()), expr),
+        ScalarUDF::from(SparkDatePart::new()).call(vec![lit(part.to_uppercase()), expr]),
         DataType::Int32,
     )
 }
 
-fn datetime_date(expr: Expr, context: &FunctionContextInput<'_>) -> PlanResult<Expr> {
+pub(super) fn datetime_date(expr: Expr, context: &FunctionContextInput<'_>) -> PlanResult<Expr> {
     let data_type = expr.get_type(context.schema)?;
     if data_type.is_string() {
         return Ok(
             ScalarUDF::from(SparkDate::new(!context.plan_config.ansi_mode)).call(vec![expr]),
         );
     }
+    let expr = if let DataType::Timestamp(TimeUnit::Nanosecond, timezone) = &data_type {
+        // Keep the day before the epoch when reducing a negative fractional timestamp.
+        cast(
+            timestamp_epoch_units(expr, 1_000)?,
+            DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()),
+        )
+    } else {
+        expr
+    };
     let date = cast_temporal(
         expr,
         &data_type,
@@ -235,8 +244,16 @@ fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> 
             )));
         }
     };
+    let date = if matches!(
+        date.get_type(input.function_context.schema)?,
+        DataType::Timestamp(_, Some(_))
+    ) {
+        datetime_date(date, &input.function_context)?
+    } else {
+        cast(date, DataType::Date32)
+    };
     Ok(Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(cast(date, DataType::Date32)),
+        left: Box::new(date),
         op,
         right: Box::new(interval),
     }))
@@ -456,8 +473,18 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 || end.get_type(input.function_context.schema)?.is_numeric();
             // Preserve Sail's numeric day inputs to the three-argument datediff aliases.
             if unit_str == "DAY" && numeric {
-                let days = |value| cast(cast(value, DataType::Date32), DataType::Int64);
-                return Ok(days(end) - days(start));
+                let days = |value: Expr| -> PlanResult<Expr> {
+                    let date = if matches!(
+                        value.get_type(input.function_context.schema)?,
+                        DataType::Timestamp(_, Some(_))
+                    ) {
+                        datetime_date(value, &input.function_context)?
+                    } else {
+                        cast(value, DataType::Date32)
+                    };
+                    Ok(cast(date, DataType::Int64))
+                };
+                return Ok(days(end)? - days(start)?);
             }
             if matches!(
                 unit_str.as_str(),
@@ -754,17 +781,20 @@ fn try_to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
 /// (`is_try`) returns NULL.
 fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
     let udf = ScalarUDF::from(SparkTime::new(is_try));
-    if input.arguments.len() == 1 {
-        Ok(udf.call(input.arguments))
-    } else if input.arguments.len() == 2 {
-        let (expr, format) = input.arguments.two()?;
-        Ok(udf.call(vec![expr, format]))
-    } else {
+    if !matches!(input.arguments.len(), 1 | 2) {
         let name = if is_try { "try_to_time" } else { "to_time" };
-        Err(PlanError::invalid(format!(
+        return Err(PlanError::invalid(format!(
             "{name} requires 1 or 2 arguments"
-        )))
+        )));
     }
+    declare_nullable_result(
+        cast(
+            udf.call(input.arguments),
+            DataType::Time64(TimeUnit::Microsecond),
+        ),
+        true,
+        input.function_context.schema,
+    )
 }
 
 fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
@@ -945,7 +975,10 @@ fn current_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let timezone = input.function_context.plan_config.session_timezone.clone();
     let timestamp =
         ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Microsecond)).call(vec![]);
-    Ok(cast(timestamp, DataType::Date32))
+    Ok(cast(
+        ScalarUDF::from(SparkToLocalTime::default()).call(vec![timestamp]),
+        DataType::Date32,
+    ))
 }
 
 fn convert_tz(
@@ -1417,13 +1450,8 @@ fn date_part(input: ScalarFunctionInput) -> PlanResult<Expr> {
             ),
         );
     }
-    let result = if part == "second"
-        || matches!(source_type, DataType::Interval(_) | DataType::Duration(_))
-    {
-        ScalarUDF::from(SparkDatePart::new()).call(vec![lit(part), source])
-    } else {
-        expr_fn::date_part(lit(part), source)
-    };
+    // Native YEAR preimages can introduce NULL bounds when January 1 midnight is nonexistent.
+    let result = ScalarUDF::from(SparkDatePart::new()).call(vec![lit(part), source]);
     let result = if sunday_one {
         result + lit(1i32)
     } else {
@@ -1461,6 +1489,7 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
         |dt: Expr| integer_part(dt.clone(), "YEAR") * lit(12) + integer_part(dt, "MONTH");
 
     let is_last_day = |dt: Expr| {
+        let dt = ScalarUDF::from(SparkToLocalTime::default()).call(vec![dt]);
         ScalarUDF::from(SparkLastDay::new())
             .call(vec![cast(dt.clone(), DataType::Date32)])
             .eq(cast(dt, DataType::Date32))
@@ -1938,7 +1967,21 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "to_utc_timestamp",
             F::custom(|input| utc_timestamp(input, false)),
         ),
-        ("trunc", F::binary(trunc)),
+        (
+            "trunc",
+            F::custom(|input| {
+                let (date, part) = input.arguments.two()?;
+                let date = if matches!(
+                    date.get_type(input.function_context.schema)?,
+                    DataType::Timestamp(_, Some(_))
+                ) {
+                    datetime_date(date, &input.function_context)?
+                } else {
+                    date
+                };
+                Ok(trunc(date, part))
+            }),
+        ),
         ("try_make_interval", F::udf(SparkMakeInterval::new())),
         (
             "try_make_timestamp",
@@ -1966,7 +2009,18 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("time_trunc", F::udf(SparkTimeTrunc::new())),
         (
             "unix_date",
-            F::unary(|arg| cast(cast(arg, DataType::Date32), DataType::Int32)),
+            F::custom(|input| {
+                let arg = input.arguments.one()?;
+                let arg = if matches!(
+                    arg.get_type(input.function_context.schema)?,
+                    DataType::Timestamp(_, Some(_))
+                ) {
+                    datetime_date(arg, &input.function_context)?
+                } else {
+                    arg
+                };
+                Ok(cast(cast(arg, DataType::Date32), DataType::Int32))
+            }),
         ),
         (
             "unix_micros",

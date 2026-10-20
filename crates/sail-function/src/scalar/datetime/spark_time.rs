@@ -2,15 +2,17 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use chrono::{NaiveTime, Timelike};
-use datafusion::arrow::array::{Array, ArrayRef, Time64MicrosecondArray};
-use datafusion::arrow::compute::{CastOptions, cast_with_options};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use chrono::{DateTime, NaiveTime, Timelike};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, Time64MicrosecondArray};
+use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int64Type, TimeUnit};
 use datafusion_common::{Result, exec_datafusion_err, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
+use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common_datafusion::utils::datetime::timezone_offset;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::datetime::format::DateTimeFormat;
@@ -150,9 +152,45 @@ impl SparkTime {
     }
 
     fn cast_nonstring_to_time(array: &ArrayRef, is_try: bool) -> Result<ArrayRef> {
+        let unit = if matches!(
+            array.data_type(),
+            DataType::Timestamp(TimeUnit::Nanosecond, _)
+        ) {
+            TimeUnit::Nanosecond
+        } else {
+            TimeUnit::Microsecond
+        };
+        let localized;
+        let array = if let DataType::Timestamp(unit, Some(timezone)) = array.data_type() {
+            let timezone = timezone.parse::<datafusion::arrow::array::timezone::Tz>()?;
+            let units = time_unit_to_multiplier(unit);
+            let day = 86_400 * units;
+            let values = cast(array, &DataType::Int64)?;
+            let values = values
+                .as_primitive::<Int64Type>()
+                .iter()
+                .map(|value| {
+                    value
+                        .map(|value| {
+                            let seconds = value.div_euclid(units);
+                            if DateTime::from_timestamp(seconds, 0).is_none() {
+                                return exec_err!("timestamp out of range for TIME");
+                            }
+                            let offset = timezone_offset(&timezone, seconds)?.local_minus_utc();
+                            // Only the local day is needed; shifting a whole nanos timestamp may overflow.
+                            Ok((value.rem_euclid(day) + i64::from(offset) * units).rem_euclid(day))
+                        })
+                        .transpose()
+                })
+                .collect::<Result<Int64Array>>()?;
+            localized = cast(&values, &DataType::Timestamp(*unit, None))?;
+            &localized
+        } else {
+            array
+        };
         Ok(cast_with_options(
             array,
-            &DataType::Time64(TimeUnit::Microsecond),
+            &DataType::Time64(unit),
             &CastOptions {
                 safe: is_try,
                 ..Default::default()
@@ -206,11 +244,22 @@ impl ScalarUDFImpl for SparkTime {
         )
     }
 
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let field = &args.arg_fields[0];
+        let unit = if matches!(
+            field.data_type(),
+            DataType::Timestamp(TimeUnit::Nanosecond, _)
+        ) {
+            TimeUnit::Nanosecond
+        } else {
+            TimeUnit::Microsecond
+        };
+        let nullable =
+            !matches!(field.data_type(), DataType::Timestamp(_, _)) || field.is_nullable();
         Ok(Arc::new(Field::new(
             self.name(),
-            DataType::Time64(TimeUnit::Microsecond),
-            true,
+            DataType::Time64(unit),
+            nullable,
         )))
     }
 

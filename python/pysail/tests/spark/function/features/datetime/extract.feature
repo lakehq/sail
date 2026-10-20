@@ -47,3 +47,54 @@ Feature: extract output schema
       Then query result
         | result |
         | 20     |
+
+  Rule: Year comparisons retain rows across a missing January midnight
+
+    Scenario Outline: extract year equality retains <year> rows in <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT id
+        FROM range(2)
+        WHERE extract(YEAR FROM CAST(concat('<year>-06-15 12:00:0', id) AS TIMESTAMP)) = <year>
+        ORDER BY id
+        """
+      Then query result ordered
+        | id |
+        | 0  |
+        | 1  |
+
+      Examples:
+        | zone           | year |
+        | Asia/Kathmandu | 1985 |
+        | Asia/Kathmandu | 1986 |
+        | Asia/Kathmandu | 1987 |
+        | UTC            | 1986 |
+
+    Scenario: extract year comparison projections preserve all operators and NULLs
+      Given config spark.sql.session.timeZone = Asia/Kathmandu
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      When query
+        """
+        SELECT id, extract(YEAR FROM ts) AS extracted, year(ts) AS direct_year,
+               extract(YEAR FROM ts) = 1986 AS eq,
+               extract(YEAR FROM ts) <> 1986 AS ne,
+               extract(YEAR FROM ts) < 1986 AS lt,
+               extract(YEAR FROM ts) <= 1986 AS le,
+               extract(YEAR FROM ts) > 1986 AS gt,
+               extract(YEAR FROM ts) >= 1986 AS ge
+        FROM (
+          SELECT id, CAST(CASE WHEN id = 0 THEN '1985-12-31 23:59:59'
+                              WHEN id = 1 THEN '1986-01-01 00:15:00'
+                              WHEN id = 2 THEN '1987-01-01 00:00:00' END AS TIMESTAMP) AS ts
+          FROM range(4)
+        )
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | extracted | direct_year | eq    | ne    | lt    | le    | gt    | ge    |
+        | 0  | 1985      | 1985        | false | true  | true  | true  | false | false |
+        | 1  | 1986      | 1986        | true  | false | false | true  | false | true  |
+        | 2  | 1987      | 1987        | false | true  | false | false | true  | true  |
+        | 3  | NULL      | NULL        | NULL  | NULL  | NULL  | NULL  | NULL  | NULL  |

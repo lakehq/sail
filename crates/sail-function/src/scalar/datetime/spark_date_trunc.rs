@@ -2,12 +2,10 @@
 
 use std::collections::BTreeMap;
 use std::num::NonZeroI64;
-use std::ops::{Add, Sub};
+use std::ops::Sub;
 use std::sync::Arc;
 
-use arrow::array::temporal_conversions::{
-    MICROSECONDS, MILLISECONDS, NANOSECONDS, as_datetime_with_timezone,
-};
+use arrow::array::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS, as_datetime};
 use arrow::array::timezone::Tz;
 use arrow::array::types::{
     ArrowTimestampType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
@@ -19,10 +17,7 @@ use arrow::compute::{DatePart, interleave, take};
 use arrow::datatypes::DataType::{self, Time32, Time64, Timestamp};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{Field, FieldRef};
-use chrono::{
-    DateTime, Datelike, Duration, LocalResult, NaiveDateTime, Offset, TimeDelta, TimeZone, Timelike,
-};
-use chrono_tz::GapInfo;
+use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDateTime, TimeDelta, Timelike};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::{
@@ -35,8 +30,11 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common::utils::datetime::{is_fixed_zero_offset_timezone, time_unit_to_multiplier};
+use sail_common_datafusion::utils::datetime::{
+    localize_calendar_boundary, timezone_offset, to_local_datetime,
+};
 
-use crate::scalar::datetime::utils::string_array_iter;
+use crate::scalar::datetime::utils::{localize_with_preferred_offset, string_array_iter};
 
 pub fn parse_granularity(value: &str) -> Result<DatePart> {
     // Extraction aliases are not truncation units; the planner normalizes Spark's aliases.
@@ -601,7 +599,8 @@ where
 
 fn _date_trunc_coarse_with_tz(
     granularity: DatePart,
-    value: DateTime<Tz>,
+    value: DateTime<FixedOffset>,
+    timezone: Tz,
     unit: TimeUnit,
     start_of_day: bool,
 ) -> Result<Option<i64>> {
@@ -612,49 +611,20 @@ fn _date_trunc_coarse_with_tz(
         );
     let local = value.naive_local();
     let truncated = _date_trunc_coarse::<NaiveDateTime>(granularity, Some(local))?;
-    let truncated = truncated.and_then(|truncated| {
-        match truncated.and_local_timezone(value.timezone()) {
-            LocalResult::None => {
-                if calendar {
-                    // Calendar boundaries use the first valid time of the date.
-                    let named = value.timezone().to_string().parse::<chrono_tz::Tz>().ok()?;
-                    return GapInfo::new(&truncated, &named)?
-                        .end
-                        .map(|end| end.with_timezone(&value.timezone()));
-                }
-                if granularity == DatePart::Minute {
-                    // Spark shifts a boundary in a gap forward by the gap's exact duration.
-                    let named = value.timezone().to_string().parse::<chrono_tz::Tz>().ok()?;
-                    let before = GapInfo::new(&truncated, &named)?.begin?.1.fix();
-                    return truncated
-                        .and_local_timezone(before)
-                        .single()
-                        .map(|datetime| datetime.with_timezone(&value.timezone()));
-                }
-                // This can happen if the date_trunc operation moves the time into
-                // an hour that doesn't exist due to daylight savings. On known example where
-                // this can happen is with historic dates in the America/Sao_Paulo time zone.
-                // To account for this adjust the time by a few hours, convert to local time,
-                // and then adjust the time back.
-                let delta = TimeDelta::try_hours(3)?;
-                truncated
-                    .sub(delta)
-                    .and_local_timezone(value.timezone())
-                    .single()
-                    .map(|v| v.add(delta))
+    let truncated = truncated
+        .map(|truncated| {
+            if calendar {
+                localize_calendar_boundary(&timezone, &truncated)
+            } else {
+                localize_with_preferred_offset(
+                    timezone,
+                    truncated,
+                    value.offset().local_minus_utc(),
+                )
+                .map(|datetime| datetime.to_utc())
             }
-            LocalResult::Single(datetime) => Some(datetime),
-            LocalResult::Ambiguous(datetime1, datetime2) => {
-                // Calendar boundaries choose the earliest instant; MINUTE, HOUR and DAY
-                // retain the original offset when the local time repeats.
-                if calendar || datetime1.offset().fix() == value.offset().fix() {
-                    Some(datetime1)
-                } else {
-                    Some(datetime2)
-                }
-            }
-        }
-    });
+        })
+        .transpose()?;
     Ok(truncated.and_then(|value| match unit {
         Second => Some(value.timestamp()),
         Millisecond => Some(value.timestamp_millis()),
@@ -780,16 +750,34 @@ fn date_trunc_coarse(
     let input = value;
     let value = match tz {
         Some(tz) => {
-            // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
-            // and NaiveDateTime (ISO 8601) has no concept of timezones
             let datetime = match unit {
-                Second => as_datetime_with_timezone::<TimestampSecondType>(value, tz),
-                Millisecond => as_datetime_with_timezone::<TimestampMillisecondType>(value, tz),
-                Microsecond => as_datetime_with_timezone::<TimestampMicrosecondType>(value, tz),
-                Nanosecond => as_datetime_with_timezone::<TimestampNanosecondType>(value, tz),
+                Second => as_datetime::<TimestampSecondType>(value),
+                Millisecond => as_datetime::<TimestampMillisecondType>(value),
+                Microsecond => as_datetime::<TimestampMicrosecondType>(value),
+                Nanosecond => as_datetime::<TimestampNanosecondType>(value),
+            };
+            match datetime {
+                Some(datetime) => {
+                    let datetime = to_local_datetime(&tz, &datetime.and_utc())?;
+                    _date_trunc_coarse_with_tz(granularity, datetime, tz, unit, start_of_day)?
+                }
+                None if start_of_day => {
+                    // Local midnight can be representable even when its UTC instant is not.
+                    let units_per_second = time_unit_to_multiplier(&unit);
+                    let offset = i64::from(
+                        timezone_offset(&tz, value.div_euclid(units_per_second))?.local_minus_utc(),
+                    ) * units_per_second;
+                    value
+                        .checked_add(offset)
+                        .filter(|local| {
+                            DateTime::from_timestamp(local.div_euclid(units_per_second), 0)
+                                .is_some()
+                        })
+                        .and_then(|local| _date_trunc_coarse_without_tz(granularity, local, unit))
+                        .and_then(|local| local.checked_sub(offset))
+                }
+                None => return exec_err!("Timestamp {value} out of range"),
             }
-            .ok_or(exec_datafusion_err!("Timestamp {value} out of range"))?;
-            _date_trunc_coarse_with_tz(granularity, datetime, unit, start_of_day)?
         }
         None => _date_trunc_coarse_without_tz(granularity, value, unit),
     };
@@ -907,24 +895,17 @@ fn general_date_trunc(
         // Match Spark's truncToUnitFast: round in local time, then verify the offset.
         let units_per_second = time_unit_to_multiplier(&tu);
         let unit = 60 * units_per_second;
-        let offset_at = |value: i64| {
-            let seconds = value.div_euclid(units_per_second);
-            // Chrono-tz's first and last offset periods extend beyond Chrono's range.
-            let utc = DateTime::from_timestamp(seconds, 0)
-                .map(|datetime| datetime.naive_utc())
-                .unwrap_or(if seconds < 0 {
-                    NaiveDateTime::MIN
-                } else {
-                    NaiveDateTime::MAX
-                });
-            i64::from(tz.offset_from_utc_datetime(&utc).fix().local_minus_utc())
+        let offset_at = |value: i64| -> Result<i64> {
+            Ok(i64::from(
+                timezone_offset(&tz, value.div_euclid(units_per_second))?.local_minus_utc(),
+            ))
         };
-        let offset = offset_at(value);
+        let offset = offset_at(value)?;
         // Reduce before adding so a valid timestamp near i64's bounds cannot overflow.
         let remainder =
             (value.rem_euclid(unit) + offset.rem_euclid(60) * units_per_second).rem_euclid(unit);
         if let Some(candidate) = value.checked_sub(remainder)
-            && offset_at(candidate) == offset
+            && offset_at(candidate)? == offset
         {
             return Ok(candidate);
         }
