@@ -160,7 +160,7 @@ impl PlanResolver<'_> {
                     TimestampNumberMode::CastLegacy
                 };
                 cast(
-                    SparkTimestampFromNumber::new(mode).expression(expr, schema)?,
+                    ScalarUDF::from(SparkTimestampFromNumber::new(mode)).call(vec![expr]),
                     cast_to_type,
                 )
             }

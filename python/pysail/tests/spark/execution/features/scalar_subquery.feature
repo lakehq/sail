@@ -104,9 +104,6 @@ Feature: Scalar subqueries in distributed execution
       | 1 | 2 |
       | 2 | 0 |
 
-  # TODO: Match Spark's nullable scalar-subquery schema even for COUNT. The same
-  # mismatch exists without the unaliased derived table before this PR.
-  @sail-bug
   Scenario: Correlated scalar counts retain nullable schemas through unaliased derived tables
     When query
       """
@@ -692,6 +689,26 @@ Feature: Scalar subqueries in distributed execution
       ORDER BY v
       """
     Then query plan matches snapshot
+
+  Scenario Outline: COUNT preserves scalar-subquery missing-row nullability: <case>
+    # A non-null projection does not make its scalar result non-null: no row yields NULL.
+    # COUNT(x) must keep that distinction from COUNT(*) before subquery rewriting.
+    When query
+      """
+      SELECT count(x) AS nonnull, count(DISTINCT x) AS distinct_nonnull, count(*) AS rows
+      FROM (SELECT (<subquery>) AS x FROM range(2) o) t
+      """
+    Then query result
+      | nonnull   | distinct_nonnull | rows |
+      | <nonnull> | <distinct>       | 2    |
+
+    Examples:
+      | case                    | subquery                                             | nonnull | distinct |
+      | empty correlated        | SELECT o.id FROM range(0)                            | 0       | 0        |
+      | present correlated      | SELECT o.id FROM range(1)                            | 2       | 2        |
+      | empty limited           | SELECT coalesce(o.id, 7) FROM range(0) LIMIT 1        | 0       | 0        |
+      | present limited         | SELECT coalesce(o.id, 7) FROM range(1) LIMIT 1        | 2       | 2        |
+      | empty uncorrelated      | SELECT id FROM range(0)                              | 0       | 0        |
 
   Scenario: Null scalar subquery result
     When query

@@ -24,7 +24,7 @@ Feature: Numeric timestamp conversions preserve their input
     When query
       """
       SELECT CAST(monotonically_increasing_id() AS TIMESTAMP) AS value
-      FROM range(1)
+      FROM range(0, 1, 1, 1)
       """
     Then query schema
       """
@@ -77,3 +77,34 @@ Feature: Numeric timestamp conversions preserve their input
       | 38        | 10    | false |
       | 18        | 7     | true  |
       | 8         | 7     | true  |
+
+  Scenario: Numeric TRY_CAST evaluates a volatile scalar subquery once
+    Given config spark.sql.session.timeZone = UTC
+    And config spark.sql.ansi.enabled = true
+    And config spark.sql.timestampType = TIMESTAMP_LTZ
+    # Overflow checking and conversion must use the same value: zero converts to zero,
+    # and 1e20 overflows to NULL. A saturated timestamp is impossible for this TRY_CAST.
+    When query
+      """
+      SELECT DISTINCT unix_micros(TRY_CAST(
+        (SELECT IF(rand(1) < 0.5, 0D + t.id * 0D, 1e20D)) AS TIMESTAMP
+      )) AS result FROM range(1000) t ORDER BY result
+      """
+    Then query result collected ordered
+      | result |
+      | NULL   |
+      | 0      |
+
+  Scenario: timestamp_seconds evaluates a volatile scalar subquery once
+    Given config spark.sql.session.timeZone = UTC
+    # The finite-value check and conversion must share the subquery's value.
+    When query
+      """
+      SELECT DISTINCT unix_micros(timestamp_seconds(
+        (SELECT IF(rand(1) < 0.5, 1D + t.id * 0D, CAST('Infinity' AS DOUBLE)))
+      )) AS result FROM range(1000) t ORDER BY result
+      """
+    Then query result collected ordered
+      | result  |
+      | NULL    |
+      | 1000000 |

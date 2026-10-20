@@ -1,21 +1,20 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Int64Array, RecordBatch};
-use datafusion::arrow::compute::cast as cast_array;
 use datafusion::arrow::compute::kernels::numeric;
+use datafusion::arrow::compute::{can_cast_types, cast as cast_array};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, i256};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext, SimplifyContextBuilder};
+use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, cast, col, lit, try_cast, when,
 };
 use datafusion_functions::math::expr_fn::trunc;
 use datafusion_physical_expr::create_physical_expr;
-use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::functions_nested_utils::make_scalar_function;
 use crate::scalar::misc::raise_error::RaiseError;
@@ -30,7 +29,7 @@ pub enum TimestampNumberMode {
     TryCast,
 }
 
-// Native expressions handle casts and narrow inputs; wide constructors retain checked scaling.
+// Bind the input once before native range and precision checks reuse its value.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestampFromNumber {
     signature: Signature,
@@ -45,27 +44,12 @@ impl SparkTimestampFromNumber {
         }
     }
 
-    /// Build the native expression before it can acquire a UDF column name.
-    pub fn expression(&self, value: Expr, schema: &DFSchemaRef) -> Result<Expr> {
+    /// Build the conversion for an already-evaluated input column.
+    fn expression(&self, value: Expr, schema: &DFSchemaRef) -> Result<Expr> {
         let info = SimplifyContextBuilder::default()
             .with_schema(Arc::clone(schema))
             .build();
         let data_type = info.get_data_type(&value)?;
-        let repeats_value = match (&data_type, self.mode) {
-            (_, TimestampNumberMode::Micros | TimestampNumberMode::Millis) => false,
-            (DataType::Float32 | DataType::Float64, _) => true,
-            (DataType::Decimal128(_, scale), TimestampNumberMode::Seconds) => *scale > 6,
-            (DataType::Decimal128(precision, scale), _) => {
-                i16::from(*precision) - i16::from(*scale) + 6 > 18
-            }
-            (_, TimestampNumberMode::Seconds) => false,
-            (DataType::Int64 | DataType::UInt64, _) => true,
-            _ => false,
-        };
-        if repeats_value && value.is_volatile() {
-            // A UDF binds the input once before range and precision checks reuse it.
-            return Ok(ScalarUDF::from(Self::new(self.mode)).call(vec![value]));
-        }
         let return_field = self.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[value.to_field(schema)?.1],
             scalar_arguments: &[value.as_literal()],
@@ -241,11 +225,13 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|field| {
-            field.is_nullable()
-                || (matches!(field.data_type(), DataType::Float32 | DataType::Float64)
-                    && self.mode != TimestampNumberMode::CastAnsi)
-        });
+        let [field] = args.arg_fields else {
+            return exec_err!("numeric timestamp conversion requires one argument");
+        };
+        self.coerce_types(&[field.data_type().clone()])?;
+        let nullable = field.is_nullable()
+            || (matches!(field.data_type(), DataType::Float32 | DataType::Float64)
+                && self.mode != TimestampNumberMode::CastAnsi);
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
@@ -297,26 +283,18 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
         })(&args.args)
     }
 
-    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        if args.iter().any(Expr::is_volatile) {
-            return Ok(ExprSimplifyResult::Original(args));
-        }
-        if matches!(
-            self.mode,
-            TimestampNumberMode::Seconds | TimestampNumberMode::Millis
-        ) && let [value] = args.as_slice()
-            && info.get_data_type(value)? == DataType::Int64
-        {
-            return Ok(ExprSimplifyResult::Original(args));
-        }
-        Ok(ExprSimplifyResult::Simplified(
-            self.expression(args.one()?, info.schema())?,
-        ))
-    }
-
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        if types.len() != 1 {
+        let [data_type] = types else {
             return exec_err!("numeric timestamp conversion requires one argument");
+        };
+        let target = if self.mode == TimestampNumberMode::Micros {
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        } else {
+            DataType::Int64
+        };
+        // Validate the input cast here because the native conversion stays inside this UDF.
+        if !can_cast_types(data_type, &target) {
+            return exec_err!("numeric timestamp conversion cannot cast {data_type} to {target}");
         }
         // Preserve Sail's castable constructor inputs and wide decimal extension.
         Ok(types.to_vec())
