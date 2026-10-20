@@ -43,6 +43,27 @@ pub fn strip_column_mapping_metadata(schema: &SchemaRef) -> SchemaRef {
     }
 }
 
+/// Logical schema used when changing a catalog table's Delta location.
+pub(crate) fn strip_internal_delta_metadata(schema: &Schema) -> SchemaRef {
+    fn strip(field: &Field) -> Field {
+        let mut field = field
+            .clone()
+            .with_data_type(transform_nested_fields(field.data_type(), strip));
+        field
+            .metadata_mut()
+            .remove(ColumnMetadataKey::TypeChanges.as_ref());
+        field
+    }
+    let schema = strip_column_mapping_metadata(&Arc::new(schema.clone()));
+    Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .map(|field| strip(field))
+            .collect::<Vec<_>>(),
+    ))
+}
+
 fn fields_differ(schema: &Schema, fields: &[Field]) -> bool {
     !schema
         .fields()

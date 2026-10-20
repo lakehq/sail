@@ -161,6 +161,11 @@ impl FileSource for TextSource {
         "text"
     }
 
+    fn supports_repartitioning(&self) -> bool {
+        // A whole-text row must cover the entire file, so the file cannot be split.
+        !self.whole_text
+    }
+
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
