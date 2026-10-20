@@ -77,6 +77,30 @@ fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Ex
     }
 }
 
+/// Spark's `regexp_instr(str, regexp[, idx])` returns the 1-based position of the
+/// start of the first match, or 0 if there is no match.
+///
+/// Spark accepts an `idx` ("matched group id") argument but, unlike DataFusion's
+/// `regexp_instr` (whose 3rd argument is the search start position), Spark ignores
+/// `idx` for the returned position: it always reports the start of the whole match.
+/// This is confirmed by the PySpark doctest where both `idx = 1` and `idx = 2`
+/// yield `1` even though capture group 1 starts at position 2 and group 2 does not
+/// exist (verified against the Spark JVM, including out-of-range `idx`).
+///
+/// We therefore reuse DataFusion's `regexp_instr` kernel in its 2-argument form and
+/// drop the `idx` argument. Credit: Apache DataFusion (`datafusion::functions::regex`).
+fn regexp_instr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let mut arguments = input.arguments;
+    // Drop the optional Spark `idx` argument, which does not affect the returned position.
+    let _idx = (arguments.len() == 3).then(|| arguments.pop()).flatten();
+    let (string, pattern) = arguments
+        .two()
+        .map_err(|_| PlanError::invalid("regexp_instr requires 2 or 3 arguments"))?;
+    Ok(regex_fn::regexp_instr(
+        string, pattern, None, None, None, None, None,
+    ))
+}
+
 fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (string, pattern) = input
         .arguments
