@@ -237,3 +237,40 @@ Feature: CREATE TABLE AS SELECT
     Then query result ordered
       | id | name |
       | 2  | Bob  |
+
+  # TODO: Spark creates every CTAS column nullable (`DataSource.scala:546-550`, `asNullable`).
+  # Sail keeps the plan nullability, so a non-null expression makes a `required` Parquet column
+  # and the read after `INSERT NULL` fails. `IF` and `SELECT 1` fail the same way on `main`;
+  # CASE now follows them because its schema is non-null when every branch is, so a CASE-based
+  # CTAS into Parquet that read back fine on `main` after `INSERT NULL` now fails to read.
+  # REVIEW: setting `nullable: true` for the CTAS columns in `write.rs` (`CreateTableColumnOptions`)
+  # makes this pass, but it changes 7 Delta plan snapshots (merge, deletion_vectors, read_path:
+  # the tables become nullable, `Int32` turns into `Int32;N`), with data results unchanged.
+  # Decide whether those plans are right and the fix goes in its own PR, or whether this stays
+  # `@sail-only`.
+  @sail-bug
+  Scenario: CREATE TABLE AS SELECT with a non-null expression creates a nullable column
+    Given variable location for temporary directory ctas_case_nullable
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_case_nullable
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_case_nullable
+      USING PARQUET
+      LOCATION {{ location.sql }}
+      AS SELECT IF(x > 1, 1, 2) AS c FROM VALUES (1) AS v(x)
+      """
+    Given statement
+      """
+      INSERT INTO ctas_case_nullable VALUES (NULL)
+      """
+    When query
+      """
+      SELECT c FROM ctas_case_nullable ORDER BY c
+      """
+    Then query result ordered
+      | c    |
+      | NULL |
+      | 2    |

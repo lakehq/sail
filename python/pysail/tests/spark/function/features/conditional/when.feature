@@ -70,7 +70,6 @@ Feature: when output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to when yields the schema Spark declares
       When query
         """
@@ -81,3 +80,14 @@ Feature: when output schema
         root
          |-- result: decimal(11,1) (nullable = false)
         """
+
+  Rule: A call with no WHEN pair
+
+    Scenario: when with only an ELSE value returns that value
+      When query
+        """
+        SELECT when(1) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
