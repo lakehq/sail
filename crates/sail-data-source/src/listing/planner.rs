@@ -35,6 +35,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partition_bounds::{PartitionBoundsNode, plan_partition_bounds};
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -77,6 +78,9 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             return plan_file_write(session, logical_input, physical_input.clone(), node)
                 .await
                 .map(Some);
+        }
+        if let Some(node) = node.as_any().downcast_ref::<PartitionBoundsNode>() {
+            return plan_partition_bounds(session, node).await.map(Some);
         }
         Ok(None)
     }
