@@ -583,7 +583,7 @@ fn format_timestamp_value(
     match tz {
         Some(tz_str) => {
             let tz = tz_str
-                .parse::<chrono_tz::Tz>()
+                .parse::<Tz>()
                 .map_err(|e| exec_datafusion_err!("Invalid timezone '{}': {}", tz_str, e))?;
             let datetime = tz.from_utc_datetime(&naive_datetime);
             format.format(DateTimeFormatInput {

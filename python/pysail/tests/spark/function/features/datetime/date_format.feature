@@ -37,6 +37,46 @@ Feature: date_format with an argument coming from a column
         | 2026   |
         | 02     |
 
+  Rule: date_format converts dates and timestamp_ntz values in the session timezone
+
+    # Fixed offsets must remain usable after conversion to a session timestamp.
+    # The IANA control retains the conversion that resolves a nonexistent local time.
+    Scenario Outline: date_format converts DATE and TIMESTAMP_NTZ literals in <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT date_format(DATE '2024-03-10', 'yyyy-MM-dd') AS date_result,
+               date_format(TIMESTAMP_NTZ '2024-03-10 02:30:00.123456', 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS ntz_result
+        """
+      Then query result
+        | date_result | ntz_result   |
+        | 2024-03-10  | <ntz_result> |
+
+      Examples:
+        | zone                | ntz_result                 |
+        | +05:30              | 2024-03-10 02:30:00.123456 |
+        | -08:00              | 2024-03-10 02:30:00.123456 |
+        | America/Los_Angeles | 2024-03-10 03:30:00.123456 |
+
+    Scenario: date_format converts DATE and TIMESTAMP_NTZ columns in a fixed-offset session
+      Given config spark.sql.session.timeZone = +05:30
+      When query
+        """
+        SELECT date_format(d, 'yyyy-MM-dd') AS date_result,
+               date_format(ts, fmt) AS ntz_result
+        FROM VALUES
+          (1, DATE '2024-01-01', TIMESTAMP_NTZ '2024-01-01 00:30:00.123456', 'yyyy-MM-dd HH:mm:ss.SSSSSS'),
+          (2, DATE '2024-01-02', TIMESTAMP_NTZ '2024-01-02 12:34:56', 'HH:mm:ss'),
+          (3, CAST(NULL AS DATE), CAST(NULL AS TIMESTAMP_NTZ), 'yyyy-MM-dd')
+          AS t(i, d, ts, fmt)
+        ORDER BY i
+        """
+      Then query result ordered
+        | date_result | ntz_result                 |
+        | 2024-01-01  | 2024-01-01 00:30:00.123456 |
+        | 2024-01-02  | 12:34:56                   |
+        | NULL        | NULL                       |
+
   @function(nullability)
   Rule: Output schema
 
