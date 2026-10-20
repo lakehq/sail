@@ -608,6 +608,19 @@ SKIPPED_SPARK_TESTS = [
         spark_major_version_less_than=4,
     ),
     TestMarker(
+        keywords=["test_parity_pandas_udf_scalar.py", "PandasUDFScalarParityTests", "test_scalar_iter_udf_init"],
+        reason=(
+            "Seeds the global NumPy random number generator per partition, which partitions share since they run "
+            "concurrently in the same Python process, so the generated values are not deterministic"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_observe"],
+        reason="DataFrame.observe is not implemented yet, since collecting the metrics needs a separate design",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
         keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_stat_sample_by"],
         reason=_PARTITIONING_DIFFERENCE,
         spark_major_version_less_than=4,
