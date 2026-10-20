@@ -104,13 +104,7 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         };
 
         let element = list_element_field(self.name(), list.data_type())?;
-        let acc = Arc::new(
-            super::list_view_to_list_field(zero)
-                .as_ref()
-                .clone()
-                .with_name("")
-                .with_nullable(true),
-        );
+        let acc = Arc::new(zero.as_ref().clone().with_name("").with_nullable(true));
         let merge_params = if self.element_first {
             vec![element, Arc::clone(&acc)]
         } else {
@@ -127,10 +121,7 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         let (list, zero, merge, finish) = aggregate_args(self.name(), args.arg_fields)?;
         list_element_field(self.name(), list.data_type())?;
 
-        if !equals_structurally_ignore_nullability(
-            &super::list_view_to_list_type(zero.data_type()),
-            &super::list_view_to_list_type(merge.data_type()),
-        ) {
+        if !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type()) {
             return plan_err!(
                 "{} merge lambda result type must match zero value type, got {} and {}",
                 self.name(),
@@ -140,7 +131,7 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         }
 
         Ok(Arc::new(
-            super::list_view_to_list_field(finish)
+            finish
                 .as_ref()
                 .clone()
                 .with_name("")
@@ -197,10 +188,7 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [list, zero] = take_function_args(self.name(), arg_types)?;
-        Ok(vec![
-            coerce_list_type(self.name(), list)?,
-            super::list_view_to_list_type(zero),
-        ])
+        Ok(vec![coerce_list_type(self.name(), list)?, zero.clone()])
     }
 }
 
@@ -326,10 +314,6 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
                 Ok(take_arrays(arrays, &row_indices, None)?)
             })?
             .into_array(rows.len())?;
-        let next_acc = datafusion::arrow::compute::cast(
-            &next_acc,
-            &super::list_view_to_list_type(next_acc.data_type()),
-        )?;
 
         acc = scatter_updates(name, &acc, &next_acc, &rows)?;
     }
@@ -343,10 +327,7 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
     }
 
     if non_null_rows.len() == number_rows {
-        return Ok(datafusion::arrow::compute::cast(
-            &evaluate_finish(finish, acc, number_rows, |arrays| Ok(arrays.to_vec()))?,
-            return_type,
-        )?);
+        return evaluate_finish(finish, acc, number_rows, |arrays| Ok(arrays.to_vec()));
     }
 
     let row_indices = UInt64Array::from_iter_values(non_null_rows.iter().copied());
@@ -354,7 +335,6 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
     let finished = evaluate_finish(finish, acc_param, non_null_rows.len(), |arrays| {
         Ok(take_arrays(arrays, &row_indices, None)?)
     })?;
-    let finished = datafusion::arrow::compute::cast(&finished, return_type)?;
     let nulls = new_null_array(return_type, number_rows);
     scatter_updates(name, &nulls, &finished, &non_null_rows)
 }

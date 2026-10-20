@@ -18,8 +18,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 
-/// Array functions accept views internally, but return ordinary lists for Spark clients.
-pub fn list_view_to_list_type(data_type: &DataType) -> DataType {
+/// Convert list views, including nested views, to ordinary list types.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Reserved for future list-view support")
+)]
+pub(crate) fn list_view_to_list_type(data_type: &DataType) -> DataType {
     match data_type {
         DataType::List(field) | DataType::ListView(field) => {
             DataType::List(list_view_to_list_field(field))
@@ -51,6 +55,10 @@ pub fn list_view_to_list_type(data_type: &DataType) -> DataType {
     }
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Reserved for future list-view support")
+)]
 pub(crate) fn list_view_to_list_field(field: &FieldRef) -> FieldRef {
     let data_type = list_view_to_list_type(field.data_type());
     if &data_type == field.data_type() {

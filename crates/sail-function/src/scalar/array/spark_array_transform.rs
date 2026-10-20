@@ -96,10 +96,7 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
         let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
 
         let element = match list.data_type() {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::ListView(field)
-            | DataType::LargeListView(field) => Arc::clone(field),
+            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
 
@@ -121,16 +118,15 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
         // the input element type — this is what distinguishes `transform` (map)
         // from `filter` (which keeps the input element type).
         let field = Arc::new(
-            super::list_view_to_list_field(lambda)
+            lambda
                 .as_ref()
                 .clone()
                 .with_name(Field::LIST_FIELD_DEFAULT_NAME),
         );
 
-        // Field inference can precede the list-view normalization in coerce_value_types.
         let return_type = match list.data_type() {
-            DataType::List(_) | DataType::ListView(_) => DataType::List(field),
-            DataType::LargeList(_) | DataType::LargeListView(_) => DataType::LargeList(field),
+            DataType::List(_) => DataType::List(field),
+            DataType::LargeList(_) => DataType::LargeList(field),
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
 
@@ -176,8 +172,6 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
                 Ok(take_arrays(arrays, &indices, None)?)
             })?
             .into_array(list_values.len())?;
-        let transformed_values =
-            datafusion::arrow::compute::cast(&transformed_values, field.data_type())?;
 
         let transformed_list = match list_array.data_type() {
             DataType::List(_) => {
@@ -238,8 +232,6 @@ mod tests {
         for data_type in [
             DataType::List(Arc::clone(&input)),
             DataType::LargeList(Arc::clone(&input)),
-            DataType::ListView(Arc::clone(&input)),
-            DataType::LargeListView(input),
         ] {
             let result =
                 SparkArrayTransform::new().return_field_from_args(HigherOrderReturnFieldArgs {

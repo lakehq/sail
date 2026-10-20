@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
-    MutableArrayData, OffsetSizeTrait, StructArray, make_array,
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, OffsetSizeTrait, StructArray, make_array,
 };
-use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::cast;
+use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{
@@ -14,8 +12,6 @@ use datafusion_common::{
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-
-use crate::scalar::array::{list_view_to_list_field, list_view_to_list_type};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayStructField {
@@ -48,8 +44,6 @@ impl ArrayStructField {
         match data_type {
             DataType::List(field)
             | DataType::LargeList(field)
-            | DataType::ListView(field)
-            | DataType::LargeListView(field)
             | DataType::FixedSizeList(field, _) => Ok(field),
             _ => exec_err!("array_struct_field requires a list, got {data_type}"),
         }
@@ -57,7 +51,7 @@ impl ArrayStructField {
 
     fn list_item_field(field: &FieldRef, nullable: bool) -> FieldRef {
         Arc::new(
-            list_view_to_list_field(field)
+            field
                 .as_ref()
                 .clone()
                 .with_name(Field::LIST_FIELD_DEFAULT_NAME)
@@ -81,8 +75,6 @@ impl ArrayStructField {
         match data_type {
             DataType::List(_) => Ok(DataType::List(field)),
             DataType::LargeList(_) => Ok(DataType::LargeList(field)),
-            DataType::ListView(_) => Ok(DataType::ListView(field)),
-            DataType::LargeListView(_) => Ok(DataType::LargeListView(field)),
             DataType::FixedSizeList(_, size) => Ok(DataType::FixedSizeList(field, *size)),
             _ => unreachable!("list_field accepted only list data types"),
         }
@@ -111,42 +103,9 @@ impl ArrayStructField {
     {
         let list_field = Self::list_field(array.data_type())?;
         let (values, child) = Self::struct_values(array.values(), field_name)?;
-        let field = Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable());
-        let values = cast(&values, field.data_type())?;
         Ok(Arc::new(GenericListArray::<O>::try_new(
-            field,
+            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
             array.offsets().clone(),
-            values,
-            array.nulls().cloned(),
-        )?))
-    }
-
-    fn project_list_view<O: OffsetSizeTrait>(
-        array: &GenericListViewArray<O>,
-        field_name: &str,
-    ) -> Result<ArrayRef> {
-        let list_field = Self::list_field(array.data_type())?;
-        let (values, child) = Self::struct_values(array.values(), field_name)?;
-        let field = Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable());
-        let source = values.to_data();
-        let mut values = MutableArrayData::new(vec![&source], false, 0);
-        let mut offsets = Vec::with_capacity(array.len() + 1);
-        offsets.push(O::usize_as(0));
-        for row in 0..array.len() {
-            if array.is_valid(row) {
-                let start = array.value_offsets()[row].as_usize();
-                let size = array.value_sizes()[row].as_usize();
-                if size > O::MAX_OFFSET - values.len() {
-                    return exec_err!("array_struct_field output offset overflow");
-                }
-                values.try_extend(0, start, start + size)?;
-            }
-            offsets.push(O::usize_as(values.len()));
-        }
-        let values = cast(&make_array(values.freeze()), field.data_type())?;
-        Ok(Arc::new(GenericListArray::<O>::try_new(
-            field,
-            OffsetBuffer::new(offsets.into()),
             values,
             array.nulls().cloned(),
         )?))
@@ -159,10 +118,8 @@ impl ArrayStructField {
     ) -> Result<ArrayRef> {
         let list_field = Self::list_field(array.data_type())?;
         let (values, child) = Self::struct_values(array.values(), field_name)?;
-        let field = Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable());
-        let values = cast(&values, field.data_type())?;
         Ok(Arc::new(FixedSizeListArray::try_new(
-            field,
+            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
             size,
             values,
             array.nulls().cloned(),
@@ -195,11 +152,7 @@ impl ScalarUDFImpl for ArrayStructField {
         };
         let field_name = self.field_name(args.scalar_arguments.get(1).copied().flatten())?;
         let data_type = self.return_type_for_list(array_field.data_type(), field_name)?;
-        Ok(Arc::new(Field::new(
-            self.name(),
-            list_view_to_list_type(&data_type),
-            true,
-        )))
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -224,12 +177,6 @@ impl ScalarUDFImpl for ArrayStructField {
         let out = match array.data_type() {
             DataType::List(_) => Self::project_list(as_list_array(array)?, field_name)?,
             DataType::LargeList(_) => Self::project_list(as_large_list_array(array)?, field_name)?,
-            DataType::ListView(_) => {
-                Self::project_list_view(array.as_list_view::<i32>(), field_name)?
-            }
-            DataType::LargeListView(_) => {
-                Self::project_list_view(array.as_list_view::<i64>(), field_name)?
-            }
             DataType::FixedSizeList(_, size) => {
                 let Some(array) = array.as_any().downcast_ref::<FixedSizeListArray>() else {
                     return exec_err!(

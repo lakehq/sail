@@ -66,10 +66,7 @@ impl HigherOrderUDFImpl for SparkArrayExists {
     ) -> Result<LambdaParametersProgress> {
         let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
         let element = match list.data_type() {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::ListView(field)
-            | DataType::LargeListView(field) => Arc::clone(field),
+            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
         Ok(LambdaParametersProgress::Complete(vec![vec![element]]))

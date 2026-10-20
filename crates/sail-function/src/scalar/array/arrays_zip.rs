@@ -15,7 +15,6 @@ use datafusion_expr::{
 };
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
-use crate::scalar::array::{list_view_to_list_field, list_view_to_list_type};
 use crate::scalar::struct_function::to_struct_array;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -105,7 +104,7 @@ impl ScalarUDFImpl for ArraysZip {
         };
         Ok(Arc::new(Field::new(
             self.name(),
-            list_view_to_list_type(&data_type),
+            data_type,
             args.arg_fields.iter().any(|field| field.is_nullable()),
         )))
     }
@@ -230,11 +229,7 @@ fn num_rows_inner_fields_and_names(
     }
     let inner_fields = args
         .iter()
-        .map(|arg| {
-            Ok(list_view_to_list_field(
-                &get_list_params(arg.data_type())?.inner_field,
-            ))
-        })
+        .map(|arg| Ok(get_list_params(arg.data_type())?.inner_field))
         .collect::<Result<Vec<_>>>()?;
     let names = if field_names.len() == args.len() {
         field_names.to_vec()
@@ -293,9 +288,8 @@ fn arrays_zip_fixed_size(
     let values = to_struct_array(
         lists
             .into_iter()
-            .zip(&inner_fields)
-            .map(|(list, field)| cast(list.values(), field.data_type()))
-            .collect::<std::result::Result<Vec<_>, _>>()?
+            .map(|fla| fla.values().clone())
+            .collect::<Vec<_>>()
             .as_slice(),
         &field_names,
         &arg_fields,
@@ -400,11 +394,9 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
     let columns = lists
         .iter()
         .zip(take_indices)
-        .zip(&inner_fields)
-        .map(|((list, indices), field)| {
+        .map(|(list, indices)| {
             let indices = UInt64Array::from(indices);
-            let values = take(list.values().as_ref(), &indices, None)?;
-            Ok(cast(&values, field.data_type())?)
+            take(list.values().as_ref(), &indices, None).map_or_else(|err| arrow_err!(err), Ok)
         })
         .collect::<Result<Vec<_>>>()?;
 

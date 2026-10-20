@@ -6,8 +6,6 @@ use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatili
 use datafusion_common::{internal_err, plan_err};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 
-use crate::scalar::array::list_view_to_list_field;
-
 pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
     match name {
         "explode" => Ok(ExplodeKind::Explode),
@@ -78,11 +76,9 @@ impl ScalarUDFImpl for Explode {
             [field] => match field.data_type() {
                 DataType::List(element)
                 | DataType::LargeList(element)
-                | DataType::ListView(element)
-                | DataType::LargeListView(element)
                 | DataType::FixedSizeList(element, _)
                 | DataType::Map(element, _) => Ok(Arc::new(
-                    list_view_to_list_field(element)
+                    element
                         .as_ref()
                         .clone()
                         .with_name(self.name())
@@ -129,8 +125,6 @@ mod tests {
         for data_type in [
             DataType::List(Arc::clone(&element)),
             DataType::LargeList(Arc::clone(&element)),
-            DataType::ListView(Arc::clone(&element)),
-            DataType::LargeListView(Arc::clone(&element)),
             DataType::FixedSizeList(Arc::clone(&element), 2),
             DataType::Map(Arc::clone(&element), false),
         ] {

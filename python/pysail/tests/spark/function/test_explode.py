@@ -1,5 +1,7 @@
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 
 @pytest.mark.skip(reason="Temporarily skipped until we have a fix for the issue")
 def test_explode_in_aggregate_with_group_by_id(spark):
@@ -43,6 +45,7 @@ def test_explode_in_grouping_expression_projection(spark):
 @pytest.mark.parametrize(
     "function", ["explode", "explode_outer", "posexplode", "posexplode_outer", "inline", "inline_outer"]
 )
+@pytest.mark.xfail(not is_jvm_spark(), reason="Sail generators do not accept list-view inputs", strict=True)
 def test_generators_on_arrow_list_views(spark, remote, tmp_path, large, sliced, function):
     import pyarrow as pa
 
@@ -105,6 +108,7 @@ def test_generators_on_arrow_list_views(spark, remote, tmp_path, large, sliced, 
 
 
 @pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+@pytest.mark.xfail(not is_jvm_spark(), reason="Sail posexplode does not accept list-view inputs", strict=True)
 def test_posexplode_shared_view_values_have_positions_per_row(spark, remote, tmp_path, large):
     import pyarrow as pa
 
@@ -129,6 +133,9 @@ def test_posexplode_shared_view_values_have_positions_per_row(spark, remote, tmp
 @pytest.mark.parametrize("outer_view", [False, True], ids=["list", "view"])
 @pytest.mark.parametrize(
     "function", ["explode", "explode_outer", "posexplode", "posexplode_outer", "inline", "inline_outer"]
+)
+@pytest.mark.xfail(
+    not is_jvm_spark(), reason="Sail generators do not accept or normalize nested list views", strict=True
 )
 def test_generators_return_ordinary_nested_lists(spark, remote, tmp_path, large, outer_view, function):
     import pyarrow as pa
@@ -182,6 +189,9 @@ def test_generators_return_ordinary_nested_lists(spark, remote, tmp_path, large,
 
 @pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
 @pytest.mark.parametrize("function", ["explode", "explode_outer", "posexplode", "posexplode_outer"])
+@pytest.mark.xfail(
+    not is_jvm_spark(), reason="Sail returns map values as list views that PySpark cannot convert", strict=True
+)
 def test_map_generators_return_ordinary_list_values(spark, remote, tmp_path, large, function):
     import pyarrow as pa
 

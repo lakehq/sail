@@ -101,6 +101,18 @@ def test_to_arrow_struct_field_nullability(arrow_spark):
     assert str(table.schema.field(0).type) == "struct<a: int32 not null, b: int32>"
 
 
+# Keep deferred view coverage active on Spark; only confirmed Sail failures are marked.
+LIST_VIEW_LAMBDA_BUG = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Sail cannot bind these lambdas to list-view inputs", strict=True
+)
+LIST_VIEW_RESULT_BUG = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Sail returns nested list views that PySpark cannot convert", strict=True
+)
+NESTED_LIST_VIEW_BUG = pytest.mark.xfail(
+    not is_jvm_spark(), reason="Sail cannot evaluate or return these nested list-view results", strict=True
+)
+
+
 @pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
 @pytest.mark.parametrize("sliced", [False, True], ids=["full", "sliced"])
 @pytest.mark.parametrize(
@@ -108,7 +120,11 @@ def test_to_arrow_struct_field_nullability(arrow_spark):
     [
         ("array_min(items)", [30, 10, None, None, None, 10]),
         ("array_max(items)", [40, 30, None, None, None, 10]),
-        ("transform(items, (x, i) -> x + i + id)", [[30, 41], [11, None, 33], None, [], [None], [15, None]]),
+        pytest.param(
+            "transform(items, (x, i) -> x + i + id)",
+            [[30, 41], [11, None, 33], None, [], [None], [15, None]],
+            marks=LIST_VIEW_LAMBDA_BUG,
+        ),
     ],
     ids=["min", "max", "transform"],
 )
@@ -151,21 +167,30 @@ def test_array_functions_on_arrow_list_views(spark, remote, tmp_path, large, sli
     ("expression", "expected"),
     [
         ("array_compact(items)", [[30, 40], [10, 30], None, [], [], [10]]),
-        ("filter(items, (x, i) -> x > 20 OR i = 1)", [[30, 40], [None, 30], None, [], [], [None]]),
-        ("exists(items, x -> x > 25)", [True, True, None, False, None, None]),
-        ("forall(items, x -> x > 0)", [True, None, None, True, None, None]),
+        pytest.param(
+            "filter(items, (x, i) -> x > 20 OR i = 1)",
+            [[30, 40], [None, 30], None, [], [], [None]],
+            marks=LIST_VIEW_LAMBDA_BUG,
+        ),
+        pytest.param("exists(items, x -> x > 25)", [True, True, None, False, None, None], marks=LIST_VIEW_LAMBDA_BUG),
+        pytest.param("forall(items, x -> x > 0)", [True, None, None, True, None, None], marks=LIST_VIEW_LAMBDA_BUG),
         (
             "aggregate(items, CAST(id AS INT), (acc, x) -> acc + coalesce(x, 0), acc -> acc + 100)",
             [170, 141, None, 103, 104, 115],
         ),
-        (
+        pytest.param(
             "array_sort(items, (l, r) -> CASE WHEN l IS NULL THEN IF(r IS NULL, 0, 1) "
             "WHEN r IS NULL THEN -1 ELSE r - l END)",
             [[40, 30], [30, 10, None], None, [], [None], [10, None]],
+            marks=LIST_VIEW_LAMBDA_BUG,
         ),
         ("array_position(items, 30)", [1, 3, None, 0, 0, 0]),
         ("array_intersect(items, array(30, 10))", [[30], [10, 30], None, [], [], [10]]),
-        ("array(items)", [[[30, 40]], [[10, None, 30]], [None], [[]], [[None]], [[10, None]]]),
+        pytest.param(
+            "array(items)",
+            [[[30, 40]], [[10, None, 30]], [None], [[]], [[None]], [[10, None]]],
+            marks=LIST_VIEW_RESULT_BUG,
+        ),
         (
             "arrays_zip(items, array(30, 10))",
             [
@@ -249,39 +274,61 @@ def test_array_compact_on_sliced_arrow_lists(spark, remote, tmp_path, large):
 @pytest.mark.parametrize(
     ("expression", "expected"),
     [
-        ("array_min(items)", [[10, None, 30], [10, None, 30], None, None, [], [50]]),
-        ("array_max(items)", [[10, None, 30], [30, 40], None, None, [50], [50]]),
-        ("array_compact(items)", [[[10, None, 30]], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]]),
-        (
+        pytest.param(
+            "array_min(items)", [[10, None, 30], [10, None, 30], None, None, [], [50]], marks=NESTED_LIST_VIEW_BUG
+        ),
+        pytest.param(
+            "array_max(items)", [[10, None, 30], [30, 40], None, None, [50], [50]], marks=NESTED_LIST_VIEW_BUG
+        ),
+        pytest.param(
+            "array_compact(items)",
+            [[[10, None, 30]], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+            marks=NESTED_LIST_VIEW_BUG,
+        ),
+        pytest.param(
             "filter(items, x -> x IS NOT NULL)",
             [[[10, None, 30]], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+            marks=NESTED_LIST_VIEW_BUG,
         ),
-        (
+        pytest.param(
             "filter(items, x -> true)",
             [[[10, None, 30], None], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+            marks=NESTED_LIST_VIEW_BUG,
         ),
-        ("filter(items, x -> false)", [[], [], [], None, [], []]),
-        (
+        pytest.param("filter(items, x -> false)", [[], [], [], None, [], []], marks=NESTED_LIST_VIEW_BUG),
+        pytest.param(
             "transform(items, x -> x)",
             [[[10, None, 30], None], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+            marks=NESTED_LIST_VIEW_BUG,
         ),
-        (
+        pytest.param(
             "array_intersect(items, items)",
             [[[10, None, 30], None], [[30, 40], [10, None, 30]], [], None, [[], [50]], [[50]]],
+            marks=NESTED_LIST_VIEW_BUG,
         ),
         ("array_position(items, seed)", [0, 2, None, None, 2, 0]),
-        ("aggregate(items, seed, (acc, x) -> x)", [None, [10, None, 30], None, None, [50], [50]]),
-        ("aggregate(items, seed, (acc, x) -> acc)", [[30, 40], [10, None, 30], None, None, [50], [30, 40]]),
-        (
+        pytest.param(
+            "aggregate(items, seed, (acc, x) -> x)",
+            [None, [10, None, 30], None, None, [50], [50]],
+            marks=NESTED_LIST_VIEW_BUG,
+        ),
+        pytest.param(
+            "aggregate(items, seed, (acc, x) -> acc)",
+            [[30, 40], [10, None, 30], None, None, [50], [30, 40]],
+            marks=NESTED_LIST_VIEW_BUG,
+        ),
+        pytest.param(
             "aggregate(items, 0, (acc, x) -> acc + 1, acc -> seed)",
             [[30, 40], [10, None, 30], None, None, [50], [30, 40]],
+            marks=NESTED_LIST_VIEW_BUG,
         ),
-        (
+        pytest.param(
             "array_sort(items, (l, r) -> CASE WHEN l IS NULL THEN IF(r IS NULL, 0, 1) "
             "WHEN r IS NULL THEN -1 ELSE size(r) - size(l) END)",
             [[[10, None, 30], None], [[10, None, 30], [30, 40]], [], None, [[50], []], [[50]]],
+            marks=NESTED_LIST_VIEW_BUG,
         ),
-        (
+        pytest.param(
             "arrays_zip(items)",
             [
                 [{"items": [10, None, 30]}, {"items": None}],
@@ -291,10 +338,12 @@ def test_array_compact_on_sliced_arrow_lists(spark, remote, tmp_path, large):
                 [{"items": []}, {"items": [50]}],
                 [{"items": [50]}],
             ],
+            marks=NESTED_LIST_VIEW_BUG,
         ),
-        (
+        pytest.param(
             "array(items)",
             [[[[10, None, 30], None]], [[[30, 40], [10, None, 30]]], [[]], [None], [[[], [50]]], [[[50]]]],
+            marks=NESTED_LIST_VIEW_BUG,
         ),
     ],
     ids=[
@@ -365,6 +414,7 @@ def test_array_functions_return_ordinary_nested_lists(
 
 
 @pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+@LIST_VIEW_RESULT_BUG
 def test_array_results_normalize_views_inside_structs_and_maps(spark, remote, tmp_path, large):
     import pyarrow as pa
 

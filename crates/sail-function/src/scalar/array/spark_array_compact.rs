@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, GenericListArray, GenericListViewArray,
-    MutableArrayData, OffsetSizeTrait, as_large_list_array, as_list_array, make_array,
+    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, as_large_list_array,
+    as_list_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
@@ -13,7 +13,6 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::array::{list_view_to_list_field, list_view_to_list_type};
 
 /// `array_compact` removes all null values from the array.
 /// This is the Spark-compatible implementation.
@@ -34,7 +33,7 @@ impl Default for SparkArrayCompact {
 impl SparkArrayCompact {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::array(Volatility::Immutable),
         }
     }
 }
@@ -66,12 +65,6 @@ impl ScalarUDFImpl for SparkArrayCompact {
             DataType::LargeList(field) => {
                 DataType::LargeList(Arc::new(field.as_ref().clone().with_nullable(false)))
             }
-            DataType::ListView(field) => {
-                DataType::ListView(Arc::new(field.as_ref().clone().with_nullable(false)))
-            }
-            DataType::LargeListView(field) => {
-                DataType::LargeListView(Arc::new(field.as_ref().clone().with_nullable(false)))
-            }
             DataType::Null => DataType::Null,
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
@@ -80,22 +73,8 @@ impl ScalarUDFImpl for SparkArrayCompact {
                 .as_ref()
                 .clone()
                 .with_name(self.name())
-                .with_data_type(list_view_to_list_type(&data_type)),
+                .with_data_type(data_type),
         ))
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        match arg_types {
-            [
-                DataType::Null
-                | DataType::List(_)
-                | DataType::LargeList(_)
-                | DataType::ListView(_)
-                | DataType::LargeListView(_),
-            ] => Ok(arg_types.to_vec()),
-            [DataType::FixedSizeList(field, _)] => Ok(vec![DataType::List(Arc::clone(field))]),
-            _ => plan_err!("{} requires one list argument", self.name()),
-        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -120,8 +99,6 @@ fn array_compact_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list = as_large_list_array(&args[0]);
             array_compact_generic::<i64>(list)
         }
-        DataType::ListView(_) => array_compact_view::<i32>(args[0].as_list_view::<i32>()),
-        DataType::LargeListView(_) => array_compact_view::<i64>(args[0].as_list_view::<i64>()),
         other => exec_err!("spark_array_compact does not support type: {:?}", other),
     }
 }
@@ -168,60 +145,16 @@ fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Resu
     let new_values = compute::filter(values.as_ref(), &keep_mask)?;
 
     let field = match list.data_type() {
-        DataType::List(f) | DataType::LargeList(f) => Arc::new(
-            list_view_to_list_field(f)
-                .as_ref()
-                .clone()
-                .with_nullable(false),
-        ),
+        DataType::List(f) | DataType::LargeList(f) => {
+            Arc::new(f.as_ref().clone().with_nullable(false))
+        }
         _ => unreachable!(),
     };
 
-    let new_values = compute::cast(&new_values, field.data_type())?;
     Ok(Arc::new(GenericListArray::<O>::try_new(
         field,
         OffsetBuffer::new(new_offsets.into()),
         new_values,
-        list.nulls().cloned(),
-    )?))
-}
-
-fn array_compact_view<O: OffsetSizeTrait>(list: &GenericListViewArray<O>) -> Result<ArrayRef> {
-    let values = list.values();
-    let values_nulls = values.logical_nulls();
-    let source = values.to_data();
-    let mut output = MutableArrayData::new(vec![&source], false, 0);
-    let mut offsets = Vec::with_capacity(list.len() + 1);
-    offsets.push(O::usize_as(0));
-    for i in 0..list.len() {
-        if !list.is_null(i) {
-            let start = list.value_offsets()[i].as_usize();
-            let end = start + list.value_sizes()[i].as_usize();
-            for j in start..end {
-                if values_nulls.as_ref().is_none_or(|nulls| nulls.is_valid(j)) {
-                    if output.len() == O::MAX_OFFSET {
-                        return exec_err!("array_compact result exceeds the list offset range");
-                    }
-                    output.try_extend(0, j, j + 1)?;
-                }
-            }
-        }
-        offsets.push(O::usize_as(output.len()));
-    }
-    let field = match list.data_type() {
-        DataType::ListView(field) | DataType::LargeListView(field) => Arc::new(
-            list_view_to_list_field(field)
-                .as_ref()
-                .clone()
-                .with_nullable(false),
-        ),
-        _ => unreachable!(),
-    };
-    let values = compute::cast(&make_array(output.freeze()), field.data_type())?;
-    Ok(Arc::new(GenericListArray::<O>::try_new(
-        field,
-        OffsetBuffer::new(offsets.into()),
-        values,
         list.nulls().cloned(),
     )?))
 }
@@ -244,8 +177,6 @@ mod tests {
                 DataType::List as fn(FieldRef) -> DataType,
             ),
             (DataType::LargeList, DataType::LargeList),
-            (DataType::ListView, DataType::List),
-            (DataType::LargeListView, DataType::LargeList),
         ] {
             for nullable in [false, true] {
                 let input = Field::new("array", list_type(Arc::new(element.clone())), nullable)

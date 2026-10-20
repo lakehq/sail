@@ -8,7 +8,7 @@ use datafusion::arrow::array::{
     new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
-use datafusion::arrow::compute::{cast, take};
+use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
@@ -21,7 +21,6 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::array::{list_view_to_list_field, list_view_to_list_type};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayIntersect {
@@ -103,7 +102,7 @@ impl ScalarUDFImpl for ArrayIntersect {
 
         Ok(Arc::new(Field::new(
             self.name(),
-            list_view_to_list_type(&return_type),
+            return_type,
             args.arg_fields.iter().any(|field| field.is_nullable()),
         )))
     }
@@ -167,14 +166,12 @@ fn general_set_op(array1: &ArrayRef, array2: &ArrayRef) -> Result<ArrayRef> {
         (DataType::Null, dt @ DataType::List(_))
         | (DataType::Null, dt @ DataType::LargeList(_))
         | (dt @ DataType::List(_), DataType::Null)
-        | (dt @ DataType::LargeList(_), DataType::Null) => {
-            Ok(new_null_array(&list_view_to_list_type(dt), len))
-        }
+        | (dt @ DataType::LargeList(_), DataType::Null) => Ok(new_null_array(dt, len)),
         (DataType::List(field1), DataType::List(field2)) => {
             let field = if field1.data_type().is_null() {
-                list_view_to_list_field(field2)
+                Arc::clone(field2)
             } else {
-                list_view_to_list_field(field1)
+                Arc::clone(field1)
             };
             let array1 = as_list_array(array1)?;
             let array2 = as_list_array(array2)?;
@@ -182,9 +179,9 @@ fn general_set_op(array1: &ArrayRef, array2: &ArrayRef) -> Result<ArrayRef> {
         }
         (DataType::LargeList(field1), DataType::LargeList(field2)) => {
             let field = if field1.data_type().is_null() {
-                list_view_to_list_field(field2)
+                Arc::clone(field2)
             } else {
-                list_view_to_list_field(field1)
+                Arc::clone(field1)
             };
             let array1 = as_large_list_array(array1)?;
             let array2 = as_large_list_array(array2)?;
@@ -299,7 +296,6 @@ fn generic_set_loop<OffsetSize: OffsetSizeTrait>(
         take(l_values.as_ref(), &indices, None)?
     };
 
-    let final_values = cast(&final_values, field.data_type())?;
     let arr = GenericListArray::<OffsetSize>::try_new(
         field,
         OffsetBuffer::new(result_offsets.into()),

@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, GenericListArray, GenericListViewArray,
-    MutableArrayData, OffsetSizeTrait, PrimitiveArray, StructArray, make_array,
+    Array, ArrayRef, ArrowPrimitiveType, GenericListArray, OffsetSizeTrait, PrimitiveArray,
+    StructArray,
 };
-use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{
     ArrowNativeType, DataType, Field, FieldRef, Fields, Int32Type, Int64Type,
 };
@@ -36,12 +34,7 @@ impl ArrayItemWithPosition {
     fn item_fields<P: ArrowPrimitiveType>(field: &FieldRef) -> Fields {
         Fields::from(vec![
             Arc::new(Field::new("pos", P::DATA_TYPE, field.is_nullable())),
-            Arc::new(
-                super::list_view_to_list_field(field)
-                    .as_ref()
-                    .clone()
-                    .with_name("col"),
-            ),
+            Arc::new(field.as_ref().clone().with_name("col")),
         ])
     }
 
@@ -68,55 +61,9 @@ impl ArrayItemWithPosition {
             }
         }
         let positions = PrimitiveArray::<P>::from(positions);
-        let fields = Self::item_fields::<P>(field);
-        let values = cast(array.values(), fields[1].data_type())?;
-        let values =
-            StructArray::try_new(fields, vec![Arc::new(positions) as ArrayRef, values], None)?;
-        Ok(Arc::new(GenericListArray::<P::Native>::try_new(
-            Arc::new(Field::new_list_field(
-                Self::item_type::<P>(field),
-                field.is_nullable(),
-            )),
-            array.offsets().clone(),
-            Arc::new(values),
-            array.nulls().cloned(),
-        )?))
-    }
-
-    fn list_view_item_with_position<P: ArrowPrimitiveType>(
-        array: &GenericListViewArray<P::Native>,
-        field: &FieldRef,
-    ) -> Result<ArrayRef>
-    where
-        P::Native: OffsetSizeTrait,
-        PrimitiveArray<P>: From<Vec<P::Native>>,
-    {
-        let mut offsets = Vec::with_capacity(array.len() + 1);
-        offsets.push(P::Native::usize_as(0));
-        let source = array.values().to_data();
-        let mut values = MutableArrayData::new(vec![&source], false, 0);
-        let mut positions = Vec::new();
-        // Shared view elements can have different positions in different rows.
-        for row in 0..array.len() {
-            if array.is_valid(row) {
-                let start = array.value_offsets()[row].as_usize();
-                let size = array.value_sizes()[row].as_usize();
-                if size > P::Native::MAX_OFFSET - positions.len() {
-                    return exec_err!("array_item_with_position output offset overflow");
-                }
-                values.try_extend(0, start, start + size)?;
-                positions.extend((0..size).map(P::Native::usize_as));
-            }
-            offsets.push(P::Native::usize_as(positions.len()));
-        }
-        let fields = Self::item_fields::<P>(field);
-        let values = cast(&make_array(values.freeze()), fields[1].data_type())?;
         let values = StructArray::try_new(
-            fields,
-            vec![
-                Arc::new(PrimitiveArray::<P>::from(positions)) as ArrayRef,
-                values,
-            ],
+            Self::item_fields::<P>(field),
+            vec![Arc::new(positions) as ArrayRef, array.values().clone()],
             None,
         )?;
         Ok(Arc::new(GenericListArray::<P::Native>::try_new(
@@ -124,7 +71,7 @@ impl ArrayItemWithPosition {
                 Self::item_type::<P>(field),
                 field.is_nullable(),
             )),
-            OffsetBuffer::new(offsets.into()),
+            array.offsets().clone(),
             Arc::new(values),
             array.nulls().cloned(),
         )?))
@@ -151,12 +98,14 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
             return internal_err!("{} should only be called with a list", self.name());
         };
         let out = match field.data_type() {
-            DataType::List(f) | DataType::ListView(f) => DataType::List(Arc::new(
-                Field::new_list_field(Self::item_type::<Int32Type>(f), f.is_nullable()),
-            )),
-            DataType::LargeList(f) | DataType::LargeListView(f) => DataType::LargeList(Arc::new(
-                Field::new_list_field(Self::item_type::<Int64Type>(f), f.is_nullable()),
-            )),
+            DataType::List(f) => DataType::List(Arc::new(Field::new_list_field(
+                Self::item_type::<Int32Type>(f),
+                f.is_nullable(),
+            ))),
+            DataType::LargeList(f) => DataType::LargeList(Arc::new(Field::new_list_field(
+                Self::item_type::<Int64Type>(f),
+                f.is_nullable(),
+            ))),
             DataType::FixedSizeList(f, n) => DataType::FixedSizeList(
                 Arc::new(Field::new_list_field(
                     Self::item_type::<Int32Type>(f),
@@ -171,11 +120,7 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
                 )));
             }
         };
-        Ok(Arc::new(Field::new(
-            self.name(),
-            super::list_view_to_list_type(&out),
-            true,
-        )))
+        Ok(Arc::new(Field::new(self.name(), out, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -195,12 +140,6 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
             DataType::LargeList(f) => {
                 let array = as_large_list_array(arg)?;
                 Self::general_array_item_with_position::<Int64Type>(array, f)?
-            }
-            DataType::ListView(f) => {
-                Self::list_view_item_with_position::<Int32Type>(arg.as_list_view::<i32>(), f)?
-            }
-            DataType::LargeListView(f) => {
-                Self::list_view_item_with_position::<Int64Type>(arg.as_list_view::<i64>(), f)?
             }
             DataType::FixedSizeList(_, _) => {
                 return Err(DataFusionError::NotImplemented(
@@ -233,8 +172,6 @@ mod tests {
         for data_type in [
             DataType::List(Arc::clone(&element)),
             DataType::LargeList(Arc::clone(&element)),
-            DataType::ListView(Arc::clone(&element)),
-            DataType::LargeListView(Arc::clone(&element)),
             DataType::FixedSizeList(Arc::clone(&element), 2),
         ] {
             let result = ArrayItemWithPosition::new().return_field_from_args(ReturnFieldArgs {

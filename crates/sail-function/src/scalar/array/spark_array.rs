@@ -7,7 +7,6 @@ use datafusion::arrow::array::{
     OffsetSizeTrait, make_array, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, internal_err, plan_datafusion_err, plan_err};
@@ -18,7 +17,6 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::array::list_view_to_list_type;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
@@ -75,11 +73,7 @@ impl ScalarUDFImpl for SparkArray {
         let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
         let return_type =
             DataType::List(Arc::new(Field::new_list_field(element_type, contains_null)));
-        Ok(Arc::new(Field::new(
-            self.name(),
-            list_view_to_list_type(&return_type),
-            false,
-        )))
+        Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -263,8 +257,7 @@ fn array_array<O: OffsetSizeTrait>(
         let arg_data = if arg.as_any().is::<NullArray>() {
             ArrayData::new_empty(&data_type)
         } else {
-            // Materialize nested views before assembling the declared list element type.
-            cast(arg, &data_type)?.to_data()
+            arg.to_data()
         };
         total_len += arg_data.len();
         data.push(arg_data);

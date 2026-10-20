@@ -21,7 +21,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Int32Array, LargeListArray, ListArray, UInt32Array,
 };
-use datafusion::arrow::compute::{cast, take, take_arrays};
+use datafusion::arrow::compute::{take, take_arrays};
 use datafusion::arrow::datatypes::{ArrowNativeType, DataType, FieldRef};
 use datafusion_common::utils::adjust_offsets_for_slice;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err, plan_err};
@@ -100,10 +100,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
         let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
 
         let element = match list.data_type() {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::ListView(field)
-            | DataType::LargeListView(field) => Arc::clone(field),
+            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
 
@@ -129,19 +126,12 @@ impl HigherOrderUDFImpl for SparkArraySort {
 
         // `array_sort` preserves the input array type (element type and
         // nullability are unchanged by sorting).
-        let data_type = match list.data_type() {
-            DataType::List(field) | DataType::ListView(field) => DataType::List(Arc::clone(field)),
-            DataType::LargeList(field) | DataType::LargeListView(field) => {
-                DataType::LargeList(Arc::clone(field))
+        match list.data_type() {
+            DataType::List(_) | DataType::LargeList(_) => {
+                Ok(Arc::new(list.as_ref().clone().with_name("")))
             }
-            other => return plan_err!("{} expected a list, got {other}", self.name()),
-        };
-        Ok(Arc::new(
-            list.as_ref()
-                .clone()
-                .with_name("")
-                .with_data_type(super::list_view_to_list_type(&data_type)),
-        ))
+            other => plan_err!("{} expected a list, got {other}", self.name()),
+        }
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
@@ -153,13 +143,13 @@ impl HigherOrderUDFImpl for SparkArraySort {
             ListValuesResult::Values(v) => v,
         };
 
-        let field = match args.return_type() {
+        let field = match args.return_field.data_type() {
             DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             _ => {
                 return exec_err!(
-                    "{} expected a list, got {}",
+                    "{} expected return_field to be a list, got {}",
                     self.name(),
-                    list_array.data_type()
+                    args.return_field
                 );
             }
         };
@@ -256,7 +246,6 @@ impl HigherOrderUDFImpl for SparkArraySort {
 
         let perm_array = UInt32Array::from(perm);
         let sorted_values = take(list_values.as_ref(), &perm_array, None)?;
-        let sorted_values = cast(&sorted_values, field.data_type())?;
 
         let sorted_list = match list_array.data_type() {
             DataType::List(_) => {
