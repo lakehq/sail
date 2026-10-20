@@ -85,6 +85,7 @@ use datafusion_spark::function::json::json_tuple::JsonTuple;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
+use datafusion_spark::function::math::factorial::SparkFactorial;
 use datafusion_spark::function::math::hex::SparkHex;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
@@ -3755,6 +3756,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )))))
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
+            "spark_factorial" | "factorial" => Ok(Arc::new(ScalarUDF::from(SparkFactorial::new()))),
             "spark_sqrt" | "sqrt" => Ok(Arc::new(ScalarUDF::from(SparkSqrt::new()))),
             "with_metadata" => Ok(Arc::new(ScalarUDF::from(WithMetadataFunc::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
@@ -3860,6 +3862,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkElt>()
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
+            || node_inner.is::<SparkFactorial>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
