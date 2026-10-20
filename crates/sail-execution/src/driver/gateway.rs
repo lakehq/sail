@@ -94,6 +94,7 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
 }
 
 pub struct DriverGateway {
+    riffle_managers: Arc<riffle_client::ManagerRpcService>,
     port: u16,
     flight_compression: ShuffleCompression,
     state: DriverGatewayState,
@@ -104,6 +105,7 @@ impl DriverGateway {
         let listener = TcpListener::bind((options.listen_host, options.listen_port)).await?;
         let port = listener.local_addr()?.port();
         Ok(Self {
+            riffle_managers: Arc::new(riffle_client::ManagerRpcService::new()),
             port,
             flight_compression: options.flight_compression,
             state: DriverGatewayState::Pending { listener },
@@ -117,6 +119,10 @@ impl DriverGateway {
             return;
         };
         let (tx, rx) = oneshot::channel();
+        let riffle_service =
+            riffle_client::ShuffleManagerServiceServer::from_arc(self.riffle_managers.clone())
+                .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+                .max_encoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT);
 
         let service = DriverServiceServer::new(DriverServer::new(registry.clone()))
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
@@ -149,6 +155,8 @@ impl DriverGateway {
                 .await
                 .add_service(celeborn_service, None)
                 .await
+                .add_service(riffle_service, None)
+                .await
                 .add_service(flight_service, None)
                 .await
                 .serve(listener, async {
@@ -164,6 +172,10 @@ impl DriverGateway {
     /// This may be different from the port accessible from other nodes.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    pub fn riffle_managers(&self) -> Arc<riffle_client::ManagerRpcService> {
+        self.riffle_managers.clone()
     }
 
     pub async fn stop(&mut self) {

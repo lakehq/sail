@@ -64,6 +64,17 @@ impl Actor for WorkerActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let worker = ctx.handle().clone();
+        let riffle_streams = matches!(
+            self.options.shuffle_backend,
+            ShuffleBackendKind::Riffle { .. }
+        )
+        .then(|| crate::stream::riffle::RiffleStreams {
+            app_id: crate::stream::riffle::application_id(&self.options.session_id),
+            manager: riffle_client::Endpoint {
+                host: self.options.driver_host.clone(),
+                grpc_port: self.options.driver_port,
+            },
+        });
         let local_streams = LocalStreamManager::new((&self.options).into());
         let storage_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Storage {
@@ -76,7 +87,9 @@ impl Actor for WorkerActor {
                 *max_file_size,
                 *compression,
             )),
-            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => None,
+            ShuffleBackendKind::Flight { .. }
+            | ShuffleBackendKind::Celeborn { .. }
+            | ShuffleBackendKind::Riffle { .. } => None,
         };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn { compression, .. } => {
@@ -94,7 +107,9 @@ impl Actor for WorkerActor {
                 ));
                 Some(CelebornStreamManager::new(client))
             }
-            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
+            ShuffleBackendKind::Flight { .. }
+            | ShuffleBackendKind::Storage { .. }
+            | ShuffleBackendKind::Riffle { .. } => None,
         };
         let task_runner = ctx
             .children_mut()
@@ -104,6 +119,7 @@ impl Actor for WorkerActor {
                     local_streams,
                     storage_streams,
                     celeborn_streams,
+                    riffle_streams,
                 },
                 placement: TaskRunnerPlacement::Worker {
                     worker_id: self.options.worker_id,

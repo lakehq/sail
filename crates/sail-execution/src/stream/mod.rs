@@ -4,6 +4,7 @@ pub mod error;
 pub(crate) mod local;
 pub mod merge;
 pub mod reader;
+pub(crate) mod riffle;
 pub(crate) mod service;
 pub(crate) mod storage;
 pub mod writer;

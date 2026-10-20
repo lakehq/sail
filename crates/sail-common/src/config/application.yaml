@@ -314,7 +314,7 @@
   type: string
   default: "flight"
   description: |
-    The shuffle backend type. Valid values are `flight`, `storage`, and `celeborn`.
+    The shuffle backend type. Valid values are `flight`, `storage`, `celeborn`, and `riffle`.
     The `flight` shuffle backend streams shuffle data directly among tasks via Arrow Flight.
     The `storage` shuffle backend materializes merged shuffle partitions in object storage
     before running dependent stages.
@@ -377,6 +377,13 @@
   description: |
     Arrow IPC compression for storage-backed shuffle files. Valid values are `none`,
     `lz4`, and `zstd`.
+  experimental: true
+
+- key: cluster.shuffle_backend.riffle.coordinator_quorum
+  type: array
+  default: "[]"
+  description: |
+    Riffle coordinator gRPC endpoints, in host:port form.
   experimental: true
 
 - key: cluster.shuffle_backend.celeborn.master_endpoints

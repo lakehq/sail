@@ -6,6 +6,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
+use riffle_client::ShuffleKey;
 use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
@@ -46,7 +47,9 @@ impl DriverActor {
         ctx: &mut ActorContext<Self>,
         result: oneshot::Sender<ExecutionResult<()>>,
     ) -> ActorAction {
-        let output = if self.activated {
+        let output = if let Some(error) = &self.extensions.startup_error {
+            Err(ExecutionError::InvalidArgument(error.clone()))
+        } else if self.activated {
             Ok(())
         } else {
             info!("activating driver {}", self.options.driver_id);
@@ -520,6 +523,22 @@ impl DriverActor {
                 stage,
                 context,
             } => {
+                if let Some(manager) = self.extensions.riffle_manager.clone() {
+                    ctx.spawn(async move {
+                        let result = match stage {
+                            Some(stage) => match manager.find_shuffle_id(
+                                ShuffleKey::JobIdAndStageId(job_id.into(), stage as u64),
+                            ) {
+                                Some(id) => manager.unregister_shuffle(id).await,
+                                None => Ok(()),
+                            },
+                            None => manager.unregister_job(job_id.into()).await,
+                        };
+                        if let Err(error) = result {
+                            warn!("failed to clean up Riffle shuffle for job {job_id}: {error:#}");
+                        }
+                    });
+                }
                 // Job closure is a lifecycle operation, independent of shuffle ownership.
                 // Keep a closed-job record even on workers whose streams were cleaned earlier.
                 if stage.is_none() {

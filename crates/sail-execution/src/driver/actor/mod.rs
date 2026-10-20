@@ -20,6 +20,9 @@ use crate::task_runner::TaskRunnerActor;
 
 #[derive(Default)]
 pub struct DriverExtensions {
+    pub(crate) riffle_managers: Option<std::sync::Arc<riffle_client::ManagerRpcService>>,
+    pub(crate) riffle_manager: Option<riffle_client::ShuffleManagerRef>,
+    pub(crate) startup_error: Option<String>,
     pub(crate) lifecycle_manager: Option<LocalLifecycleManager>,
 }
 

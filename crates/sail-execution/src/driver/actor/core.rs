@@ -34,6 +34,7 @@ impl Actor for DriverActor {
     fn new(options: Self::Options) -> Self {
         let (options, components) = options;
         let DriverComponents {
+            riffle_managers,
             worker_manager,
             event_reporter,
         } = components;
@@ -52,7 +53,10 @@ impl Actor for DriverActor {
             task_assigner,
             worker_scaler,
             task_runner: None,
-            extensions: Default::default(),
+            extensions: super::DriverExtensions {
+                riffle_managers,
+                ..Default::default()
+            },
             activated: false,
             task_sequences: HashMap::new(),
             shutdown_notifier: None,
@@ -61,6 +65,38 @@ impl Actor for DriverActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let driver = ctx.handle().clone();
+        let riffle_streams = if let ShuffleBackendKind::Riffle { coordinator_quorum } =
+            &self.options.shuffle_backend
+        {
+            let app_id = crate::stream::riffle::application_id(&self.options.session_id);
+            let manager = match &self.extensions.riffle_managers {
+                Some(service) => service
+                    .create_shuffle_manager(
+                        &app_id,
+                        "",
+                        HashMap::from([(
+                            "riffle.client.coordinator.quorum".to_string(),
+                            coordinator_quorum.join(","),
+                        )]),
+                    )
+                    .await
+                    .map_err(|error| error.to_string()),
+                None => Err("Riffle Manager service is unavailable".to_string()),
+            };
+            match manager {
+                Ok(manager) => self.extensions.riffle_manager = Some(manager),
+                Err(error) => self.extensions.startup_error = Some(error),
+            }
+            Some(crate::stream::riffle::RiffleStreams {
+                app_id,
+                manager: riffle_client::Endpoint {
+                    host: self.options.driver_external_host.clone(),
+                    grpc_port: self.options.driver_server_port,
+                },
+            })
+        } else {
+            None
+        };
         let local_streams = LocalStreamManager::new((&self.options).into());
         let storage_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Storage {
@@ -73,7 +109,9 @@ impl Actor for DriverActor {
                 *max_file_size,
                 *compression,
             )),
-            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => None,
+            ShuffleBackendKind::Flight { .. }
+            | ShuffleBackendKind::Celeborn { .. }
+            | ShuffleBackendKind::Riffle { .. } => None,
         };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn {
@@ -112,7 +150,9 @@ impl Actor for DriverActor {
                 let streams = CelebornStreamManager::new(client);
                 Some(streams)
             }
-            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
+            ShuffleBackendKind::Flight { .. }
+            | ShuffleBackendKind::Storage { .. }
+            | ShuffleBackendKind::Riffle { .. } => None,
         };
         self.task_runner = Some(ctx.children_mut().spawn::<TaskRunnerActor>(
             TaskRunnerComponents {
@@ -121,6 +161,7 @@ impl Actor for DriverActor {
                     local_streams,
                     storage_streams,
                     celeborn_streams,
+                    riffle_streams,
                 },
                 placement: TaskRunnerPlacement::Driver { driver },
             },
@@ -206,6 +247,16 @@ impl Actor for DriverActor {
             let _ = lifecycle_manager.stop().await;
         }
         ctx.children_mut().join().await;
+        if let Some(service) = self.extensions.riffle_managers.take()
+            && self.extensions.riffle_manager.take().is_some()
+            && let Err(error) = service
+                .remove_shuffle_manager(&crate::stream::riffle::application_id(
+                    &self.options.session_id,
+                ))
+                .await
+        {
+            error!("failed to close Riffle application: {error:#}");
+        }
         if let Some(result) = self.shutdown_notifier.take() {
             let _ = result.send(());
         }

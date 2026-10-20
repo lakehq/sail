@@ -466,7 +466,9 @@ impl JobScheduler {
                     OutputMode::Pipelined => TaskOutputKind::Local,
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
-                        ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
+                        ShuffleBackendKind::Celeborn { .. } | ShuffleBackendKind::Riffle { .. } => {
+                            TaskOutputKind::External
+                        }
                         ShuffleBackendKind::Flight { .. } => unreachable!(),
                     },
                 };
@@ -791,7 +793,9 @@ impl<'a> TaskInputBuilder<'a> {
             },
             OutputMode::Blocking => match self.job.graph.shuffle_backend() {
                 ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
-                ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
+                ShuffleBackendKind::Celeborn { .. } | ShuffleBackendKind::Riffle { .. } => {
+                    self.build_shuffle_service_locator()?
+                }
                 ShuffleBackendKind::Flight { .. } => self.build_storage_locator()?,
             },
         };
@@ -860,7 +864,7 @@ impl<'a> TaskInputBuilder<'a> {
             }
             mode => {
                 return Err(ExecutionError::InvalidArgument(format!(
-                    "Celeborn shuffle service does not support {mode} input"
+                    "shuffle service does not support {mode} input"
                 )));
             }
         };

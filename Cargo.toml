@@ -23,6 +23,7 @@ dbg_macro = "deny"
 todo = "deny"
 
 [workspace.dependencies]
+riffle-client = { git = "https://github.com/zuston/riffle.git", rev = "e0b84323b8b5f4a190e83a61e6878b64e5378dd4" }
 thiserror = { version = "2.0.21" }
 tokio = { version = "1.53.2", features = ["full"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }
