@@ -414,7 +414,9 @@ For `test_schema`, Sail returns the same schema as a Spark Connect 3.5.9 server 
 - `` `(Col1)?+.+` `` uses a possessive quantifier from Java regular expressions. In Java, `(Col1)?+` does not give back `Col1`, so the pattern does not match the column `Col1`. Sail treats it as a greedy quantifier, which can backtrack, so it matches.
   Fixed in this pull request: `colRegex` uses a backtracking regular expression engine that supports possessive quantifiers and atomic groups,
   matches the entire column name for every alternative, and is case-insensitive unless `spark.sql.caseSensitive` is enabled, as in Spark.
-- The Python worker does not set up a `TaskContext`, so `partitionId()` is not available.
+- The Python worker did not set up a `TaskContext`, so `partitionId()` was not available.
+  Fixed in this pull request for iterator UDFs (scalar iterator UDFs, `mapInPandas`, `mapInArrow`, and UDTFs): each partition runs its Python function in its own thread, and `TaskContext.get()` returns a context for that partition.
+  `test_scalar_iter_udf_init` still fails intermittently. It seeds the global NumPy random number generator with the partition ID, and the partitions run concurrently in the same process, so they share that generator, while Spark runs each partition in its own Python worker process.
 - In `test_udf` and `test_udtf`, the `AssertionError` is raised by `pyspark.sql.functions.udf` in the classic session, before the Sail session is used. These failures come from the test setup rather than from Sail, so both tests are skipped.
 
-**Proposed fix.** Implement `observe` and `distributed_sequence_id`, and pass a `TaskContext` with the partition ID to the Python worker.
+**Proposed fix.** Implement `observe` and `distributed_sequence_id`.

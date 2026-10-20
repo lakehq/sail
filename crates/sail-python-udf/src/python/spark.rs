@@ -34,6 +34,14 @@ impl PySpark {
             .into_bound(py))
     }
 
+    /// Sets the PySpark `TaskContext` of the current thread to the given partition.
+    pub fn set_task_context(py: Python, partition: usize) -> PyResult<()> {
+        Self::module(py)?
+            .getattr(intern!(py, "_set_task_context"))?
+            .call1((partition,))?;
+        Ok(())
+    }
+
     pub fn batch_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,

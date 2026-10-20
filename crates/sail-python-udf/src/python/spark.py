@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import decimal
 import itertools
+import threading
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -11,6 +12,7 @@ if TYPE_CHECKING:
 import pandas as pd
 import pyarrow as pa
 import pyspark
+from pyspark import TaskContext
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import DataType, Row, StructField, StructType
@@ -68,6 +70,34 @@ except ImportError:
 
 
 PYSPARK_VERSION: tuple[int, ...] = tuple(int(part) for part in pyspark.__version__.split("."))
+
+# Python functions of different partitions run in different threads of the same process,
+# while PySpark keeps a single `TaskContext` for the Python worker process.
+# So `TaskContext.get()` is changed to return the context of the current thread when it is set.
+_thread_task_context = threading.local()
+_get_task_context = TaskContext.get.__func__
+
+
+def _get_thread_task_context(cls):
+    context = getattr(_thread_task_context, "context", None)
+    if context is not None and isinstance(context, cls):
+        return context
+    return _get_task_context(cls)
+
+
+TaskContext.get = classmethod(_get_thread_task_context)
+
+
+def _set_task_context(partition_id: int) -> None:
+    context = object.__new__(TaskContext)
+    context._stageId = 0  # noqa: SLF001
+    context._partitionId = partition_id  # noqa: SLF001
+    context._attemptNumber = 0  # noqa: SLF001
+    context._taskAttemptId = 0  # noqa: SLF001
+    context._localProperties = {}  # noqa: SLF001
+    context._cpus = 1  # noqa: SLF001
+    context._resources = {}  # noqa: SLF001
+    _thread_task_context.context = context
 
 
 def _pandas_serializer_kwargs(config) -> dict[str, bool]:

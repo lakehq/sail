@@ -95,6 +95,7 @@ impl StreamUDF for PySparkScalarPandasIterUDF {
     fn invoke(
         &self,
         input: SendableRecordBatchStream,
+        partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let passthrough_columns = self.output_schema.fields().len() - 1;
@@ -114,6 +115,7 @@ impl StreamUDF for PySparkScalarPandasIterUDF {
         Ok(Box::pin(PyMapStream::new(
             input,
             function,
+            partition,
             Arc::clone(&self.output_schema),
             self.config.arrow_use_large_var_types,
         )))

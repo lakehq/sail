@@ -19,6 +19,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::conversion::TryToPy;
 use crate::error::PyUdfResult;
+use crate::python::spark::PySpark;
 
 struct PyInputStreamState {
     input: SendableRecordBatchStream,
@@ -105,6 +106,7 @@ impl PyMapStream {
     pub fn new(
         input: SendableRecordBatchStream,
         function: Py<PyAny>,
+        partition: usize,
         output_schema: SchemaRef,
         large_var_types: bool,
     ) -> Self {
@@ -116,6 +118,9 @@ impl PyMapStream {
         // due to the blocking operation inside the input iterator.
         let python_task = std::thread::spawn(move || {
             match Python::attach(|py| {
+                // The function runs in this thread for the whole partition, so `TaskContext.get()`
+                // returns the context of this partition while the function runs.
+                PySpark::set_task_context(py, partition)?;
                 Self::run_python_task(
                     py,
                     function,
