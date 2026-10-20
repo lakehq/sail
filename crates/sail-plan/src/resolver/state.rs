@@ -185,10 +185,6 @@ impl PlanResolverState {
         }
     }
 
-    pub fn is_multipart_relation(&self, reference: &TableReference) -> bool {
-        self.relation_names.contains_key(reference)
-    }
-
     pub fn next_field_id(&mut self) -> String {
         let id = self.next_id;
         self.next_id += 1;

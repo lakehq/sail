@@ -1,3 +1,5 @@
+import os
+
 import pyarrow as pa
 import pytest
 from pyspark.sql import Row
@@ -161,3 +163,13 @@ def test_shuffle_reader_coalesces_batches_across_producers(spark):
     # therefore requires combining producers after the reader merges them.
     assert sorted([len(batch) for batch in row.batches] for row in result) == [[256, 4], [256, 4]]
     assert sorted(value for row in result for batch in row.batches for value in batch) == list(range(520))
+
+
+@pytest.mark.timeout(30)
+def test_shuffle_preserves_values_larger_than_the_grpc_default_limit(spark):
+    # Random bytes do not compress, and a single value cannot be split across Flight
+    # messages, so each message exceeds tonic's 4 MiB default decoding limit.
+    value = os.urandom(5 * 1024 * 1024)
+    result = spark.createDataFrame([(value,), (value,)], "v binary").repartition(2).collect()
+
+    assert [bytes(row.v) for row in result] == [value, value]
