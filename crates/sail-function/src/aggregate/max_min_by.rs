@@ -1,10 +1,11 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Deref;
+use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/max_min_by.rs>
 use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::common::ScalarValue;
 use datafusion::error::DataFusionError;
 use datafusion::functions_aggregate::first_last::last_value_udaf;
@@ -14,6 +15,8 @@ use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::format_state_name;
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility, function};
 use datafusion::prelude::Expr;
+use datafusion_common::internal_err;
+use sail_common::spec::SPARK_METADATA_JSON_KEY;
 
 #[derive(Debug)]
 struct MaxMinByAccumulator {
@@ -127,10 +130,19 @@ impl AggregateUDFImpl for MaxByFunction {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        // FIXME: Retain logical value metadata in result and state fields while
-        // clearing Spark user metadata; cloning the input field wholesale is incorrect.
-        Ok(arg_types[0].to_owned())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
+        internal_err!("`return_type` should not be called; `return_field` is used instead")
+    }
+
+    fn return_field(&self, args: &[FieldRef]) -> Result<FieldRef, DataFusionError> {
+        let mut field = args[0]
+            .as_ref()
+            .clone()
+            .with_name(self.name())
+            .with_nullable(true);
+        // Spark retains the value type, but aggregates do not inherit column metadata.
+        field.metadata_mut().remove(SPARK_METADATA_JSON_KEY);
+        Ok(Arc::new(field))
     }
 
     fn accumulator(
@@ -147,16 +159,19 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>, DataFusionError> {
-        let value_type = args.return_field.data_type().clone();
-        let ordering_type = args.input_fields[1].data_type().clone();
         Ok(vec![
-            Field::new(format_state_name(args.name, "value"), value_type, true).into(),
-            Field::new(
-                format_state_name(args.name, "ordering"),
-                ordering_type,
-                true,
-            )
-            .into(),
+            args.return_field
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(args.name, "value"))
+                .with_nullable(true)
+                .into(),
+            args.input_fields[1]
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(args.name, "ordering"))
+                .with_nullable(true)
+                .into(),
         ])
     }
 
@@ -231,10 +246,19 @@ impl AggregateUDFImpl for MinByFunction {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        // FIXME: Retain logical value metadata in result and state fields while
-        // clearing Spark user metadata, as for MaxByFunction.
-        Ok(arg_types[0].to_owned())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
+        internal_err!("`return_type` should not be called; `return_field` is used instead")
+    }
+
+    fn return_field(&self, args: &[FieldRef]) -> Result<FieldRef, DataFusionError> {
+        let mut field = args[0]
+            .as_ref()
+            .clone()
+            .with_name(self.name())
+            .with_nullable(true);
+        // Spark retains the value type, but aggregates do not inherit column metadata.
+        field.metadata_mut().remove(SPARK_METADATA_JSON_KEY);
+        Ok(Arc::new(field))
     }
 
     fn accumulator(
@@ -251,16 +275,19 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>, DataFusionError> {
-        let value_type = args.return_field.data_type().clone();
-        let ordering_type = args.input_fields[1].data_type().clone();
         Ok(vec![
-            Field::new(format_state_name(args.name, "value"), value_type, true).into(),
-            Field::new(
-                format_state_name(args.name, "ordering"),
-                ordering_type,
-                true,
-            )
-            .into(),
+            args.return_field
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(args.name, "value"))
+                .with_nullable(true)
+                .into(),
+            args.input_fields[1]
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(args.name, "ordering"))
+                .with_nullable(true)
+                .into(),
         ])
     }
 

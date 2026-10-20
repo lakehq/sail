@@ -393,3 +393,41 @@ def test_array_results_normalize_views_inside_structs_and_maps(spark, remote, tm
     table = result.toArrow()
     table.validate(full=True)
     assert table.to_pylist() == [dict(row, maps=list(row["maps"].items())) for row in expected]
+
+
+@pytest.mark.parametrize("large", [False, True], ids=["list_view", "large_list_view"])
+def test_array_view_conversion_preserves_duplicate_struct_fields(spark, remote, tmp_path, large):
+    import pyarrow as pa
+
+    rows = [(0, [1, 2], [10]), (1, [], [20, 30])]
+    if remote.startswith("local"):
+        frame = spark.createDataFrame(rows, "id long, a array<int>, b array<int>")
+    else:
+        view_type = pa.large_list_view(pa.int32()) if large else pa.list_view(pa.int32())
+        table = pa.table(
+            {
+                "id": [row[0] for row in rows],
+                "a": pa.array([row[1] for row in rows], type=view_type),
+                "b": pa.array([row[2] for row in rows], type=view_type),
+            }
+        )
+        path = tmp_path / "duplicate_fields.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+
+    result = frame.selectExpr("id", "array(named_struct('x', a, 'x', b)) AS result").orderBy("id")
+    if remote.startswith("local"):
+        # Spark's toArrow() rejects duplicate names; its Row output preserves them.
+        assert [tuple(row.result[0]) for row in result.collect()] == [(row[1], row[2]) for row in rows]
+        return
+
+    # toArrow() rejects duplicate names, and collect() cannot convert Sail's raw
+    # duplicate names through dictionaries. Inspect the transport table by position.
+    table, _ = result._to_table()  # noqa: SLF001
+    table.validate(full=True)
+    structs = table.column("result").combine_chunks().values
+    # A dict would collapse duplicate names and could hide a name-based cast
+    # copying the first 'x' into both fields. Check each position separately.
+    assert structs.field(0).to_pylist() == [row[1] for row in rows]
+    assert structs.field(1).to_pylist() == [row[2] for row in rows]

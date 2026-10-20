@@ -7,6 +7,7 @@ use datafusion::arrow::array::{
     OffsetSizeTrait, make_array, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, internal_err, plan_datafusion_err, plan_err};
@@ -17,7 +18,7 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::array::{cast_list_result, list_view_to_list_type};
+use crate::scalar::array::list_view_to_list_type;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
@@ -85,14 +86,16 @@ impl ScalarUDFImpl for SparkArray {
         let ScalarFunctionArgs {
             args, return_field, ..
         } = args;
-        let value_nullable = match return_field.data_type() {
-            DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
-            _ => true,
+        let DataType::List(field) = return_field.data_type() else {
+            return internal_err!("{} expected a List return field", self.name());
         };
-        let func = make_scalar_function(move |arrays| {
-            make_array_inner_with_nullable(arrays, value_nullable)
+        let func = make_scalar_function(|arrays| {
+            if arrays.is_empty() || field.data_type().is_null() {
+                return make_array_inner_with_nullable(arrays, field.is_nullable());
+            }
+            array_array::<i32>(arrays, field.data_type().clone(), field.is_nullable())
         });
-        cast_list_result(func(args.as_slice())?, return_field.data_type())
+        func(args.as_slice())
     }
 
     fn aliases(&self) -> &[String] {
@@ -260,7 +263,8 @@ fn array_array<O: OffsetSizeTrait>(
         let arg_data = if arg.as_any().is::<NullArray>() {
             ArrayData::new_empty(&data_type)
         } else {
-            arg.to_data()
+            // Materialize nested views before assembling the declared list element type.
+            cast(arg, &data_type)?.to_data()
         };
         total_len += arg_data.len();
         data.push(arg_data);

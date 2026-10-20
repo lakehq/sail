@@ -15,7 +15,7 @@ use datafusion_expr::{
 };
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
-use crate::scalar::array::{cast_list_result, list_view_to_list_type};
+use crate::scalar::array::{list_view_to_list_field, list_view_to_list_type};
 use crate::scalar::struct_function::to_struct_array;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -148,7 +148,7 @@ impl ScalarUDFImpl for ArraysZip {
             DataType::FixedSizeList(_, size) => arrays_zip_fixed_size(&arrays, size, &field_names),
             _ => arrays_zip_generic::<i32>(&arrays, &field_names),
         }?;
-        cast_list_result(ColumnarValue::Array(result), args.return_type())
+        Ok(ColumnarValue::Array(result))
     }
 }
 
@@ -230,7 +230,11 @@ fn num_rows_inner_fields_and_names(
     }
     let inner_fields = args
         .iter()
-        .map(|arg| Ok(get_list_params(arg.data_type())?.inner_field))
+        .map(|arg| {
+            Ok(list_view_to_list_field(
+                &get_list_params(arg.data_type())?.inner_field,
+            ))
+        })
         .collect::<Result<Vec<_>>>()?;
     let names = if field_names.len() == args.len() {
         field_names.to_vec()
@@ -289,8 +293,9 @@ fn arrays_zip_fixed_size(
     let values = to_struct_array(
         lists
             .into_iter()
-            .map(|fla| fla.values().clone())
-            .collect::<Vec<_>>()
+            .zip(&inner_fields)
+            .map(|(list, field)| cast(list.values(), field.data_type()))
+            .collect::<std::result::Result<Vec<_>, _>>()?
             .as_slice(),
         &field_names,
         &arg_fields,
@@ -395,9 +400,11 @@ fn arrays_zip_generic<O: OffsetSizeTrait>(
     let columns = lists
         .iter()
         .zip(take_indices)
-        .map(|(list, indices)| {
+        .zip(&inner_fields)
+        .map(|((list, indices), field)| {
             let indices = UInt64Array::from(indices);
-            take(list.values().as_ref(), &indices, None).map_or_else(|err| arrow_err!(err), Ok)
+            let values = take(list.values().as_ref(), &indices, None)?;
+            Ok(cast(&values, field.data_type())?)
         })
         .collect::<Result<Vec<_>>>()?;
 

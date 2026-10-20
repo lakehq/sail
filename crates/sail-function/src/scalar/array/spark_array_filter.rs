@@ -21,7 +21,7 @@ use datafusion::arrow::array::{
     OffsetSizeTrait, new_empty_array,
 };
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use datafusion::arrow::compute::{filter as arrow_filter, take_arrays};
+use datafusion::arrow::compute::{cast, filter as arrow_filter, take_arrays};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values_row_number};
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
@@ -33,7 +33,7 @@ use datafusion_expr::{
 use crate::scalar::array::lambda_utils::{
     ListValuesResult, coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair,
 };
-use crate::scalar::array::{cast_list_result, list_view_to_list_type};
+use crate::scalar::array::list_view_to_list_type;
 
 /// The physical lambda evaluation batch is laid out as `[captures..., params...]`
 /// with the body projected to the columns it actually uses, which only lines up
@@ -144,7 +144,7 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
             ListValuesResult::Values(v) => v,
         };
 
-        let field = match list_array.data_type() {
+        let field = match args.return_type() {
             DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             _ => {
                 return exec_err!(
@@ -171,10 +171,34 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
         // element nor the index, e.g. x -> true or x -> false/null.
         if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) = &predicate_output {
             let output = match b {
-                Some(true) => list_array,
+                Some(true) if list_array.data_type() == args.return_type() => list_array,
+                Some(true) => {
+                    let values = cast(&list_values, field.data_type())?;
+                    match list_array.data_type() {
+                        DataType::List(_) => {
+                            let list = list_array.as_list::<i32>();
+                            Arc::new(ListArray::new(
+                                field,
+                                adjust_offsets_for_slice(list),
+                                values,
+                                list.nulls().cloned(),
+                            )) as ArrayRef
+                        }
+                        DataType::LargeList(_) => {
+                            let list = list_array.as_list::<i64>();
+                            Arc::new(LargeListArray::new(
+                                field,
+                                adjust_offsets_for_slice(list),
+                                values,
+                                list.nulls().cloned(),
+                            ))
+                        }
+                        other => return exec_err!("expected list, got {other}"),
+                    }
+                }
                 _ => empty_filtered_list(&list_array, field)?,
             };
-            return cast_list_result(ColumnarValue::Array(output), args.return_type());
+            return Ok(ColumnarValue::Array(output));
         }
 
         let predicate = predicate_output.into_array(list_values.len())?;
@@ -192,6 +216,7 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
                 let adjusted_offsets = adjust_offsets_for_slice(list);
                 let (filtered_values, new_offsets) =
                     filter_list_values(&list_values, predicate, &adjusted_offsets)?;
+                let filtered_values = cast(&filtered_values, field.data_type())?;
                 Arc::new(ListArray::new(
                     field,
                     new_offsets,
@@ -204,6 +229,7 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
                 let adjusted_offsets = adjust_offsets_for_slice(large_list);
                 let (filtered_values, new_offsets) =
                     filter_list_values(&list_values, predicate, &adjusted_offsets)?;
+                let filtered_values = cast(&filtered_values, field.data_type())?;
                 Arc::new(LargeListArray::new(
                     field,
                     new_offsets,
@@ -214,7 +240,7 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
             other => exec_err!("expected list, got {other}")?,
         };
 
-        cast_list_result(ColumnarValue::Array(filtered_list), args.return_type())
+        Ok(ColumnarValue::Array(filtered_list))
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
-    OffsetSizeTrait, StructArray, make_array,
+    MutableArrayData, OffsetSizeTrait, StructArray, make_array,
 };
-use datafusion::arrow::buffer::NullBuffer;
+use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{
@@ -14,7 +15,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-use crate::scalar::array::{cast_list_result, list_view_to_list_type};
+use crate::scalar::array::{list_view_to_list_field, list_view_to_list_type};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayStructField {
@@ -56,7 +57,7 @@ impl ArrayStructField {
 
     fn list_item_field(field: &FieldRef, nullable: bool) -> FieldRef {
         Arc::new(
-            field
+            list_view_to_list_field(field)
                 .as_ref()
                 .clone()
                 .with_name(Field::LIST_FIELD_DEFAULT_NAME)
@@ -110,8 +111,10 @@ impl ArrayStructField {
     {
         let list_field = Self::list_field(array.data_type())?;
         let (values, child) = Self::struct_values(array.values(), field_name)?;
+        let field = Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable());
+        let values = cast(&values, field.data_type())?;
         Ok(Arc::new(GenericListArray::<O>::try_new(
-            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
+            field,
             array.offsets().clone(),
             values,
             array.nulls().cloned(),
@@ -124,10 +127,26 @@ impl ArrayStructField {
     ) -> Result<ArrayRef> {
         let list_field = Self::list_field(array.data_type())?;
         let (values, child) = Self::struct_values(array.values(), field_name)?;
-        Ok(Arc::new(GenericListViewArray::<O>::try_new(
-            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
-            array.offsets().clone(),
-            array.sizes().clone(),
+        let field = Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable());
+        let source = values.to_data();
+        let mut values = MutableArrayData::new(vec![&source], false, 0);
+        let mut offsets = Vec::with_capacity(array.len() + 1);
+        offsets.push(O::usize_as(0));
+        for row in 0..array.len() {
+            if array.is_valid(row) {
+                let start = array.value_offsets()[row].as_usize();
+                let size = array.value_sizes()[row].as_usize();
+                if size > O::MAX_OFFSET - values.len() {
+                    return exec_err!("array_struct_field output offset overflow");
+                }
+                values.try_extend(0, start, start + size)?;
+            }
+            offsets.push(O::usize_as(values.len()));
+        }
+        let values = cast(&make_array(values.freeze()), field.data_type())?;
+        Ok(Arc::new(GenericListArray::<O>::try_new(
+            field,
+            OffsetBuffer::new(offsets.into()),
             values,
             array.nulls().cloned(),
         )?))
@@ -140,8 +159,10 @@ impl ArrayStructField {
     ) -> Result<ArrayRef> {
         let list_field = Self::list_field(array.data_type())?;
         let (values, child) = Self::struct_values(array.values(), field_name)?;
+        let field = Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable());
+        let values = cast(&values, field.data_type())?;
         Ok(Arc::new(FixedSizeListArray::try_new(
-            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
+            field,
             size,
             values,
             array.nulls().cloned(),
@@ -183,10 +204,7 @@ impl ScalarUDFImpl for ArrayStructField {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
-            args,
-            arg_fields,
-            return_field,
-            ..
+            args, arg_fields, ..
         } = args;
         let field_name = arg_fields
             .get(1)
@@ -228,6 +246,6 @@ impl ScalarUDFImpl for ArrayStructField {
                 );
             }
         };
-        cast_list_result(ColumnarValue::Array(out), return_field.data_type())
+        Ok(ColumnarValue::Array(out))
     }
 }

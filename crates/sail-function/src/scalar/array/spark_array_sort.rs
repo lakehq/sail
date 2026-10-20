@@ -21,7 +21,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Int32Array, LargeListArray, ListArray, UInt32Array,
 };
-use datafusion::arrow::compute::{take, take_arrays};
+use datafusion::arrow::compute::{cast, take, take_arrays};
 use datafusion::arrow::datatypes::{ArrowNativeType, DataType, FieldRef};
 use datafusion_common::utils::adjust_offsets_for_slice;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err, plan_err};
@@ -153,7 +153,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
             ListValuesResult::Values(v) => v,
         };
 
-        let field = match list_array.data_type() {
+        let field = match args.return_type() {
             DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             _ => {
                 return exec_err!(
@@ -256,6 +256,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
 
         let perm_array = UInt32Array::from(perm);
         let sorted_values = take(list_values.as_ref(), &perm_array, None)?;
+        let sorted_values = cast(&sorted_values, field.data_type())?;
 
         let sorted_list = match list_array.data_type() {
             DataType::List(_) => {
@@ -279,7 +280,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
             other => return exec_err!("{} expected list, got {other}", self.name()),
         };
 
-        super::cast_list_result(ColumnarValue::Array(sorted_list), args.return_type())
+        Ok(ColumnarValue::Array(sorted_list))
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

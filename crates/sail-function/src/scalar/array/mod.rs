@@ -16,10 +16,7 @@ pub mod spark_sequence;
 
 use std::sync::Arc;
 
-use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::ColumnarValue;
 
 /// Array functions accept views internally, but return ordinary lists for Spark clients.
 pub fn list_view_to_list_type(data_type: &DataType) -> DataType {
@@ -60,23 +57,6 @@ pub(crate) fn list_view_to_list_field(field: &FieldRef) -> FieldRef {
         Arc::clone(field)
     } else {
         Arc::new(field.as_ref().clone().with_data_type(data_type))
-    }
-}
-
-pub(crate) fn cast_list_result(
-    value: ColumnarValue,
-    data_type: &DataType,
-) -> Result<ColumnarValue> {
-    if value.data_type() == *data_type {
-        return Ok(value);
-    }
-    // Positional casts preserve distinct struct fields even when their names are duplicated.
-    match value {
-        ColumnarValue::Array(array) => Ok(ColumnarValue::Array(cast(&array, data_type)?)),
-        ColumnarValue::Scalar(value) => Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
-            &cast(&value.to_array()?, data_type)?,
-            0,
-        )?)),
     }
 }
 

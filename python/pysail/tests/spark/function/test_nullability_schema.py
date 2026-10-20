@@ -81,6 +81,30 @@ def test_nullable_array_conversion_preserves_interval_type(spark, expression, ex
     assert len(result.collect()) == 1
 
 
+@pytest.mark.parametrize("function", ["min_by", "max_by"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_min_max_by_preserves_logical_type_without_column_metadata(spark, function, empty):
+    from datetime import timedelta
+
+    interval_type = T.DayTimeIntervalType(T.DayTimeIntervalType.DAY, T.DayTimeIntervalType.DAY)
+    frame = (
+        spark.range(0 if empty else 2)
+        .select(
+            F.expr("INTERVAL '1' DAY").alias("value", metadata={"comment": "input only", "source": "test"}),
+            F.col("id").alias("ordering"),
+        )
+        .repartition(2)
+    )
+    assert frame.schema["value"].dataType == interval_type
+    result = frame.agg(F.expr(f"{function}(value, ordering)").alias("result"))
+
+    # Spark preserves the value's interval qualifier, but aggregate expressions
+    # do not inherit the input column's user metadata (Alias.metadata).
+    assert result.schema == T.StructType([T.StructField("result", interval_type, True)])
+    expected = None if empty else timedelta(days=1)
+    assert [row.result for row in result.collect()] == [expected]
+
+
 @pytest.mark.parametrize("nullable", [False, True])
 def test_nullifzero_preserves_null_type_with_nullable_output(spark, nullable):
     # Arrange

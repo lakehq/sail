@@ -13,7 +13,7 @@ use datafusion_expr::{
 };
 
 use crate::functions_nested_utils::make_scalar_function;
-use crate::scalar::array::{cast_list_result, list_view_to_list_type};
+use crate::scalar::array::{list_view_to_list_field, list_view_to_list_type};
 
 /// `array_compact` removes all null values from the array.
 /// This is the Spark-compatible implementation.
@@ -99,16 +99,11 @@ impl ScalarUDFImpl for SparkArrayCompact {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args, return_field, ..
-        } = args;
+        let ScalarFunctionArgs { args, .. } = args;
         if args[0].data_type() == DataType::Null {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
-        cast_list_result(
-            make_scalar_function(array_compact_inner)(&args)?,
-            return_field.data_type(),
-        )
+        make_scalar_function(array_compact_inner)(&args)
     }
 }
 
@@ -173,12 +168,16 @@ fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Resu
     let new_values = compute::filter(values.as_ref(), &keep_mask)?;
 
     let field = match list.data_type() {
-        DataType::List(f) | DataType::LargeList(f) => {
-            Arc::new(f.as_ref().clone().with_nullable(false))
-        }
+        DataType::List(f) | DataType::LargeList(f) => Arc::new(
+            list_view_to_list_field(f)
+                .as_ref()
+                .clone()
+                .with_nullable(false),
+        ),
         _ => unreachable!(),
     };
 
+    let new_values = compute::cast(&new_values, field.data_type())?;
     Ok(Arc::new(GenericListArray::<O>::try_new(
         field,
         OffsetBuffer::new(new_offsets.into()),
@@ -210,15 +209,19 @@ fn array_compact_view<O: OffsetSizeTrait>(list: &GenericListViewArray<O>) -> Res
         offsets.push(O::usize_as(output.len()));
     }
     let field = match list.data_type() {
-        DataType::ListView(field) | DataType::LargeListView(field) => {
-            Arc::new(field.as_ref().clone().with_nullable(false))
-        }
+        DataType::ListView(field) | DataType::LargeListView(field) => Arc::new(
+            list_view_to_list_field(field)
+                .as_ref()
+                .clone()
+                .with_nullable(false),
+        ),
         _ => unreachable!(),
     };
+    let values = compute::cast(&make_array(output.freeze()), field.data_type())?;
     Ok(Arc::new(GenericListArray::<O>::try_new(
         field,
         OffsetBuffer::new(offsets.into()),
-        make_array(output.freeze()),
+        values,
         list.nulls().cloned(),
     )?))
 }

@@ -5,6 +5,7 @@ use datafusion::arrow::array::{
     MutableArrayData, OffsetSizeTrait, PrimitiveArray, StructArray, make_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{
     ArrowNativeType, DataType, Field, FieldRef, Fields, Int32Type, Int64Type,
 };
@@ -35,7 +36,12 @@ impl ArrayItemWithPosition {
     fn item_fields<P: ArrowPrimitiveType>(field: &FieldRef) -> Fields {
         Fields::from(vec![
             Arc::new(Field::new("pos", P::DATA_TYPE, field.is_nullable())),
-            Arc::new(field.as_ref().clone().with_name("col")),
+            Arc::new(
+                super::list_view_to_list_field(field)
+                    .as_ref()
+                    .clone()
+                    .with_name("col"),
+            ),
         ])
     }
 
@@ -62,11 +68,10 @@ impl ArrayItemWithPosition {
             }
         }
         let positions = PrimitiveArray::<P>::from(positions);
-        let values = StructArray::try_new(
-            Self::item_fields::<P>(field),
-            vec![Arc::new(positions) as ArrayRef, array.values().clone()],
-            None,
-        )?;
+        let fields = Self::item_fields::<P>(field);
+        let values = cast(array.values(), fields[1].data_type())?;
+        let values =
+            StructArray::try_new(fields, vec![Arc::new(positions) as ArrayRef, values], None)?;
         Ok(Arc::new(GenericListArray::<P::Native>::try_new(
             Arc::new(Field::new_list_field(
                 Self::item_type::<P>(field),
@@ -104,11 +109,13 @@ impl ArrayItemWithPosition {
             }
             offsets.push(P::Native::usize_as(positions.len()));
         }
+        let fields = Self::item_fields::<P>(field);
+        let values = cast(&make_array(values.freeze()), fields[1].data_type())?;
         let values = StructArray::try_new(
-            Self::item_fields::<P>(field),
+            fields,
             vec![
                 Arc::new(PrimitiveArray::<P>::from(positions)) as ArrayRef,
-                make_array(values.freeze()),
+                values,
             ],
             None,
         )?;
@@ -172,9 +179,7 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args, return_field, ..
-        } = args;
+        let ScalarFunctionArgs { args, .. } = args;
         let args = ColumnarValue::values_to_arrays(&args)?;
         let [arg] = args.as_slice() else {
             return exec_err!(
@@ -209,10 +214,7 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
                 )));
             }
         };
-        super::cast_list_result(
-            ColumnarValue::Array(Arc::new(out)),
-            return_field.data_type(),
-        )
+        Ok(ColumnarValue::Array(out))
     }
 }
 
