@@ -354,6 +354,8 @@ The JDBC tests depend on a JVM JDBC driver, so they cannot pass with Sail's Pyth
 
 `test_write_operations` failed because the CSV writer ignored `lineSep` (the reader supported it already). Fixed in this pull request: the CSV writer uses `lineSep` as the line terminator.
 `test_checking_csv_header` failed because `enforceSchema=False` was not supported. Fixed in this pull request: with `header` enabled, the CSV header is checked against the schema by position, case-insensitively, with Spark's error messages.
+`test_json` (`primitivesAsString`), `test_multiline_json`, `test_linesep_json` (with `_corrupt_record`), and `test_encoding_json` needed control over parsing that the JSON source of DataFusion does not provide.
+Fixed in this pull request: a Sail JSON source finds and parses the records as Spark does for `lineSep`, `multiLine`, `encoding`, `primitivesAsString`, `mode`, and `columnNameOfCorruptRecord`, and the JSON writer supports `lineSep`. Reads without these options still use the newline-delimited source of DataFusion.
 
 ## Types and Schemas
 
