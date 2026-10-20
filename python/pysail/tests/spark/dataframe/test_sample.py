@@ -39,12 +39,11 @@ def test_dataframe_sample_with_replacement_matches_spark_seed(spark):
     assert [row.id for row in sampled.collect()] == [0, 2, 3, 4, 7, 9]
 
 
-@jvm_spark_only
 @pytest.mark.parametrize(
     ("with_replacement", "expected"),
     [
         (False, [[2, 3], [6, 7, 8]]),
-        (True, [[0, 2, 3, 4], []]),
+        pytest.param(True, [[0, 2, 3, 4], []], marks=jvm_spark_only),
     ],
 )
 def test_seeded_sample_matches_spark_partition_seeds(
@@ -134,8 +133,7 @@ def test_dataframe_sample_rejects_individual_bounds(spark):
         _sample_with_bounds(spark, 1.000002, 1.000002, with_replacement=False).collect()
 
 
-@jvm_spark_only
-@pytest.mark.parametrize("with_replacement", [False, True])
+@pytest.mark.parametrize("with_replacement", [False, pytest.param(True, marks=jvm_spark_only)])
 def test_seeded_sample_pattern_differs_across_batches(
     single_partition_spark,
     with_replacement,
@@ -149,3 +147,20 @@ def test_seeded_sample_pattern_differs_across_batches(
     first_batch = Counter(i for i in picked if i < 1024)  # noqa: PLR2004
     second_batch = Counter(i - 1024 for i in picked if i >= 1024)  # noqa: PLR2004
     assert first_batch != second_batch
+
+
+# The expected values are from Spark 3.5.9.
+def test_random_split_matches_spark_partition_seeds(spark):
+    df = spark.range(0, 20, 1, 2)
+    splits = [sorted(row.id for row in split.collect()) for split in df.randomSplit([1.0, 2.0, 3.0], 2)]
+    assert splits == [
+        [9, 14],
+        [1, 2, 3, 5, 6, 7, 10, 15, 18],
+        [0, 4, 8, 11, 12, 13, 16, 17, 19],
+    ]
+
+
+def test_sample_by_matches_spark_partition_seeds(spark):
+    df = spark.range(0, 100, 1, 4).selectExpr("id", "id % 3 AS key")
+    sampled = df.sampleBy("key", fractions={0: 0.1, 1: 0.2}, seed=0)
+    assert sorted(row.id for row in sampled.collect()) == [9, 16, 22, 28, 43, 45, 49, 72, 79]

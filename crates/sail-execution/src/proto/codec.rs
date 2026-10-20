@@ -297,6 +297,7 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::partition_random::PartitionRandomExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
@@ -1476,6 +1477,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(SparkPartitionIdExec::try_new(
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
                     column_name,
+                    Arc::new(schema),
+                )?))
+            }
+            NodeKind::PartitionRandom(r#gen::PartitionRandomExecNode {
+                input,
+                column_name,
+                seed,
+                schema,
+            }) => {
+                let schema = try_decode_schema(&schema)?;
+                Ok(Arc::new(PartitionRandomExec::try_new(
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                    column_name,
+                    seed,
                     Arc::new(schema),
                 )?))
             }
@@ -2895,6 +2910,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::SparkPartitionId(r#gen::SparkPartitionIdExecNode {
                 input,
                 column_name: spark_partition_id.column_name().to_string(),
+                schema,
+            })
+        } else if let Some(partition_random) = node.downcast_ref::<PartitionRandomExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                partition_random.input().clone(),
+            )?;
+            let schema = try_encode_schema(partition_random.schema().as_ref())?;
+            NodeKind::PartitionRandom(r#gen::PartitionRandomExecNode {
+                input,
+                column_name: partition_random.column_name().to_string(),
+                seed: partition_random.seed(),
                 schema,
             })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {

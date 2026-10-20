@@ -6,6 +6,7 @@ pub mod lake_procedure;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;
+pub mod partition_random;
 pub mod range;
 pub mod remote_checkpoint;
 pub mod repartition;

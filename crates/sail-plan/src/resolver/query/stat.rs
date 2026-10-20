@@ -11,17 +11,18 @@ use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
+use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, cast, col, expr, lit,
+    Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, and, cast, col, expr, lit,
     not, or, try_cast,
 };
 use datafusion_functions::expr_fn::{coalesce, isnan};
 use datafusion_functions_nested::expr_fn as nested_fn;
+use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
-use sail_function::scalar::math::random::Random;
+use sail_logical_plan::partition_random::PartitionRandomNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -672,25 +673,23 @@ impl PlanResolver<'_> {
             .map(Expr::Column)
             .collect();
         // Like Spark's `rand(seed)` in the filter, the random column is not referenceable.
+        // It is drawn per partition, from `XORShiftRandom` seeded with `seed + partition index`.
         let rand_column_name: String = state.next_field_id();
-
-        let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
-            func: Arc::new(ScalarUDF::from(Random::new())),
-            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
-        })
-        .alias(&rand_column_name);
-        let mut all_exprs: Vec<Expr> = init_exprs.clone();
-        all_exprs.push(rand_expr);
-        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
-            .project(all_exprs)?
-            .build()?;
+        let seed = seed.unwrap_or_else(|| rng().random::<i64>());
+        let plan_with_rand = LogicalPlan::Extension(Extension {
+            node: Arc::new(PartitionRandomNode::try_new(
+                Arc::new(input),
+                rand_column_name.clone(),
+                seed,
+            )?),
+        });
 
         let mut acc_exprs: Vec<Expr> = vec![];
         for frac in &fractions {
             let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
             let f = and(
                 Expr::Column(column_expr.clone()).eq(lit(key_val)),
-                col(&rand_column_name).lt_eq(lit(frac.fraction)),
+                col(&rand_column_name).lt(lit(frac.fraction)),
             );
             acc_exprs.push(f);
         }

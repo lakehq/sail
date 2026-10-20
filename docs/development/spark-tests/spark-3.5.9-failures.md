@@ -175,8 +175,20 @@ That test is skipped as a known difference.
 | `SparkConnectBasicTests.test_stat_sample_by`                     | sampled rows differ |
 | doctests `DataFrame.sampleBy`, `DataFrameStatFunctions.sampleBy` | sampled rows differ |
 
-**Root cause.** `sampleBy` is implemented, but the rows depend on the random number generator, which differs from Spark's `XORShiftRandom` and its per-partition seeding.
-These tests compare the sampled rows with Spark, so they can only pass if Sail reproduces Spark's generator and partitioning.
+**Root cause.** The sampled rows depend on both the random number generator and the partitioning.
+Spark draws from `XORShiftRandom` seeded with `seed + partition index`, and advances one generator across the whole partition.
+Sail already used `XORShiftRandom`, but it restarted the generator from the same seed for every Arrow batch and every partition.
+A Python model of Spark's sampler reproduces the Spark 3.5.9 results for `sampleBy` and `randomSplit` exactly, given Spark's partitioning.
+
+The partitioning is the remaining difference.
+`spark.range(0, 100)` has 4 partitions in Spark (the default parallelism), while Sail uses a single partition when `numPartitions` is not given.
+With `numPartitions=4`, Sail returns the same rows as Spark.
+
+**Fix (in this pull request).** Bernoulli sampling (`sample`, `randomSplit`, `sampleBy`, and `TABLESAMPLE`) draws from a generator per partition, seeded with `seed + partition index`, that advances across batches.
+`sampleBy` also keeps a row only when the random number is below the fraction, as Spark does.
+
+**Open question.** Defaulting `range` to the default parallelism (the `TODO` in `resolve_query_range`) makes these tests pass,
+but it changes the order of rows returned after a Python UDF on a `range`, and some plan snapshots in the PySail tests.
 
 ## Artifacts
 
@@ -393,7 +405,9 @@ For `test_schema`, Sail returns the same schema as a Spark Connect 3.5.9 server 
 
 **Root causes.**
 
-- `randomSplit` uses a different random number generator from Spark, as with `sampleBy`.
+- `randomSplit` has the same root cause as `sampleBy` (see [Sampling by Stratum](#sampling-by-stratum)). The generator now matches Spark, but the partitions differ.
+  Spark splits a local relation into `min(rows, default parallelism)` contiguous partitions (`LocalTableScanExec`), so each of the 4 rows in the doctest is its own partition, while Sail keeps a local relation in a single partition.
+  `test_random_split` reads a table written by each engine, so the files written and the way they are grouped into partitions also have to match.
 - `` `(Col1)?+.+` `` uses a possessive quantifier from Java regular expressions. In Java, `(Col1)?+` does not give back `Col1`, so the pattern does not match the column `Col1`. Sail treats it as a greedy quantifier, which can backtrack, so it matches.
 - The Python worker does not set up a `TaskContext`, so `partitionId()` is not available.
 - In `test_udf` and `test_udtf`, the `AssertionError` is raised by `pyspark.sql.functions.udf` in the classic session, before the Sail session is used. These failures come from the test setup rather than from Sail, so both tests are skipped.
