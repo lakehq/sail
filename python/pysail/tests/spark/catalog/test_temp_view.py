@@ -1,12 +1,19 @@
 import uuid
 
 import pytest
-from pyspark.errors import AnalysisException
+from pyspark.errors import AnalysisException, PySparkException
 from pyspark.sql import Row
 from pyspark.sql.connect.session import SparkSession
 
 from pysail.testing.spark.session import patch_spark_connect_session, spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark
+
+TEMP_VIEW_METHODS = [
+    ("createTempView", ""),
+    ("createOrReplaceTempView", ""),
+    ("createGlobalTempView", "global_temp."),
+    ("createOrReplaceGlobalTempView", "global_temp."),
+]
 
 
 @pytest.fixture(scope="module")
@@ -60,6 +67,43 @@ def test_local_temp_view_is_private_to_session(spark, observer):
         assert not observer.catalog.tableExists(name)
     finally:
         spark.catalog.dropTempView(name)
+
+
+@pytest.mark.parametrize(("method", "namespace"), TEMP_VIEW_METHODS)
+@pytest.mark.parametrize(
+    ("name", "resolved_name"),
+    [
+        ("dataframe_view", "dataframe_view"),
+        ("`quoted_dataframe_view`", "quoted_dataframe_view"),
+        ("`dataframe.view`", "dataframe.view"),
+        ("`dataframe``view`", "dataframe`view"),
+        ("`dataframe view`", "dataframe view"),
+    ],
+)
+def test_dataframe_temp_view_name_is_parsed(spark, method, namespace, name, resolved_name):
+    quoted_name = "`" + resolved_name.replace("`", "``") + "`"
+    qualified = namespace + quoted_name
+    try:
+        getattr(spark.sql("SELECT 1 AS x"), method)(name)
+        assert spark.table(qualified).collect() == [Row(x=1)]
+        if "OrReplace" in method:
+            getattr(spark.sql("SELECT 2 AS x"), method)(quoted_name)
+            assert spark.table(qualified).collect() == [Row(x=2)]
+        else:
+            with pytest.raises(AnalysisException):
+                getattr(spark.sql("SELECT 2 AS x"), method)(quoted_name)
+    finally:
+        spark.sql(f"DROP VIEW IF EXISTS {qualified}")
+
+
+@pytest.mark.parametrize("method", [method for method, _ in TEMP_VIEW_METHODS])
+@pytest.mark.parametrize(
+    "name",
+    ["schema.view", "global_temp.view", "catalog.schema.view", "", "`unterminated", "unquoted name"],
+)
+def test_dataframe_temp_view_rejects_invalid_names(spark, method, name):
+    with pytest.raises(PySparkException):
+        getattr(spark.sql("SELECT 1 AS x"), method)(name)
 
 
 # Regression extending Spark 3 (3.5.9): pyspark/sql/tests/connect/test_connect_basic.py,
