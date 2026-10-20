@@ -263,7 +263,7 @@ Its `VALUES` clause has a column whose first row is `NULL` and whose other rows 
 Sail takes the column type from the first row (`Null`) and then cannot cast the maps to it, while Spark uses the common type of all the rows (`map<int,int>`).
 The same `VALUES` clause works in Sail when a map comes first.
 
-**Proposed fix.** Implement `zip_with` and `map_zip_with` with the existing higher-order function support, which already covers `transform`, `filter`, and `map_filter`.
+**Fix (in this pull request).** `zip_with` and `map_zip_with` are implemented as higher-order functions. `zip_with` pads the shorter array with nulls, and `map_zip_with` keeps the keys of the first map followed by the keys only in the second map, passing null for a missing value, as in Spark. The `zip_with` and `map_zip_with` doctests pass.
 For `VALUES`, find the common type of each column over all the rows before casting, so that a `NULL` in the first row does not decide the type.
 
 ### Other Expression Differences

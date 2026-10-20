@@ -170,6 +170,8 @@ message HigherOrderUdf {
     SparkRegexpInstrUdf regexp_instr = 10;
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
+    SparkArrayZipWithUdf zip_with = 13;
+    SparkMapZipWithUdf map_zip_with = 14;
   }
 }
 
@@ -186,6 +188,10 @@ message SparkRegexpInstrUdf {
 message SparkArrayForallUdf {}
 
 message SparkMapFilterUdf {}
+
+message SparkArrayZipWithUdf {}
+
+message SparkMapZipWithUdf {}
 
 message SparkTransformValuesUdf {}
 
