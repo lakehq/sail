@@ -335,8 +335,13 @@ impl PlanResolver<'_> {
                 )
                 .await?
             }
-            QueryNode::StatFreqItems { .. } => {
-                return Err(PlanError::todo("freq items"));
+            QueryNode::StatFreqItems {
+                input,
+                columns,
+                support,
+            } => {
+                self.resolve_query_stat_freq_items(*input, columns, support, state)
+                    .await?
             }
             QueryNode::StatSampleBy {
                 input,

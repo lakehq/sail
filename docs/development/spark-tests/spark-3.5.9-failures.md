@@ -158,13 +158,16 @@ Both tests pass with the fix.
 | `SparkConnectBasicTests.test_stat_freq_items` | `freq items` |
 | `DataFrameParityTests.test_freqItems`         | `freq items` |
 
-**Root cause.** `QueryNode::StatFreqItems` is not implemented in the plan resolver.
+**Root cause.** `QueryNode::StatFreqItems` was not implemented in the plan resolver.
 
-**Proposed fix.** Spark uses the Misra-Gries counting algorithm with `1 / support` counters (`CollectFrequentItems`).
+**Fix (in this pull request).** `freqItems` is resolved into one `collect_frequent_items` aggregate per column, a port of Spark's `CollectFrequentItems`, with a default support of 1% as in Spark Connect.
+`test_freqItems` and the `freqItems` doctests pass.
+
+Spark uses the Misra-Gries counting algorithm with `1 / support` counters (`CollectFrequentItems`).
 The result contains every item with a frequency above `support`, but it can also contain other items, and both the items and their order depend on the partitioning.
 For example, Spark 3.5.9 returns `[99]` for `freqItems(["col1"], 0.4)` on a DataFrame of `0` to `99`, and `[24]` when the same data is read from a table with 4 partitions.
 
-An aggregate function that implements the same algorithm (including null keys, which Spark counts) would make `test_freqItems` pass, since that test only checks that the frequent items are present.
+`test_freqItems` only checks that the frequent items are present.
 `test_stat_freq_items` compares the arrays with the output of the JVM Spark session element by element, so it can only pass if the partitioning and the hash map iteration order also match.
 That test is skipped as a known difference.
 

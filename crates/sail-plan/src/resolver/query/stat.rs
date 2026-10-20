@@ -13,14 +13,15 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
-    Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, and, cast, col, expr, lit,
-    not, or, try_cast,
+    AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, and, cast, col,
+    expr, lit, not, or, try_cast,
 };
 use datafusion_functions::expr_fn::{coalesce, isnan};
 use datafusion_functions_nested::expr_fn as nested_fn;
 use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::collect_frequent_items::CollectFrequentItems;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_logical_plan::partition_random::PartitionRandomNode;
 
@@ -618,6 +619,44 @@ impl PlanResolver<'_> {
                 nested_fn::make_array(quantiles)
                     .alias(state.register_field_name("approx_quantile")),
             ])?
+            .build()?)
+    }
+
+    pub(super) async fn resolve_query_stat_freq_items(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        support: Option<f64>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        // Spark Connect uses a support of 1% when it is not given.
+        let support = support.unwrap_or(0.01);
+        if !(1e-4..=1.0).contains(&support) {
+            return Err(PlanError::invalid(format!(
+                "requirement failed: Support must be in [1e-4, 1], but got {support}."
+            )));
+        }
+        // The number of items to keep counts for, truncated as in Spark.
+        let size = (1.0 / support) as i64;
+        let input = self.resolve_query_plan(input, state).await?;
+        let mut aggregates = vec![];
+        for name in &columns {
+            let column = self.resolve_one_column(input.schema(), name.as_ref(), state)?;
+            let items = Expr::AggregateFunction(expr::AggregateFunction {
+                func: Arc::new(AggregateUDF::from(CollectFrequentItems::new())),
+                params: AggregateFunctionParams {
+                    args: vec![Expr::Column(column), lit(size)],
+                    distinct: false,
+                    filter: None,
+                    order_by: vec![],
+                    null_treatment: None,
+                },
+            })
+            .alias(state.register_field_name(format!("{}_freqItems", name.as_ref())));
+            aggregates.push(items);
+        }
+        Ok(LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), aggregates)?
             .build()?)
     }
 

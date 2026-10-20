@@ -8122,6 +8122,7 @@ dependencies = [
  "ecb",
  "futures",
  "half",
+ "indexmap 2.14.2",
  "jiter",
  "lazy_static",
  "log",

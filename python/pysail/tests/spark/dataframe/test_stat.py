@@ -41,3 +41,34 @@ def test_approx_quantile_without_values(spark):
 def test_approx_quantile_rejects_non_numeric_column(numbers):
     with pytest.raises((AnalysisException, IllegalArgumentException)):
         numbers.stat.approxQuantile(["col2"], [0.5], 0.0)
+
+
+def test_freq_items_contains_frequent_items(spark):
+    rows = [(1, -2.0) if i % 2 == 0 else (i, i * 1.0) for i in range(100)]
+    df = spark.createDataFrame(rows, ["a", "b"])
+    result = df.stat.freqItems(["a", "b"], 0.4)
+    assert result.columns == ["a_freqItems", "b_freqItems"]
+    items = result.collect()[0]
+    assert 1 in items[0]
+    assert -2.0 in items[1]  # noqa: PLR2004
+
+
+def test_freq_items_keeps_counts_for_one_over_support_items(spark):
+    df = spark.createDataFrame([(1,), (2,), (1,), (3,), (1,), (3,)], "a long")
+    assert sorted(df.stat.freqItems(["a"], 0.4).collect()[0][0]) == [1, 3]
+
+
+def test_freq_items_counts_null_values(spark):
+    df = spark.createDataFrame([(None,), (None,), (1,)], "a int")
+    assert None in df.stat.freqItems(["a"], 0.5).collect()[0][0]
+
+
+def test_freq_items_without_rows(spark):
+    df = spark.createDataFrame([], "a int")
+    assert df.stat.freqItems(["a"]).collect()[0][0] == []
+
+
+def test_freq_items_rejects_invalid_support(spark):
+    df = spark.createDataFrame([(1,)], "a int")
+    with pytest.raises(Exception, match=r"Support must be in \[1e-4, 1\]"):
+        df.stat.freqItems(["a"], 2.0).collect()

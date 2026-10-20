@@ -138,6 +138,7 @@ use sail_delta_lake::spec::{
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
+use sail_function::aggregate::collect_frequent_items::CollectFrequentItems;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
 use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
@@ -4180,6 +4181,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     BitmapConstructAggFunction::new(),
                 ))),
                 "bitmap_or_agg" => Ok(Arc::new(AggregateUDF::from(BitmapOrAggFunction::new()))),
+                "collect_frequent_items" => {
+                    Ok(Arc::new(AggregateUDF::from(CollectFrequentItems::new())))
+                }
                 "count_min_sketch" => {
                     Ok(Arc::new(AggregateUDF::from(CountMinSketchFunction::new())))
                 }
@@ -4349,6 +4353,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<BitmapAndAggFunction>()
             || node.inner().is::<BitmapConstructAggFunction>()
             || node.inner().is::<BitmapOrAggFunction>()
+            || node.inner().is::<CollectFrequentItems>()
             || node.inner().is::<CountMinSketchFunction>()
             || node.inner().is::<GroupingIdFunction>()
             || node.inner().is::<HistogramNumericFunction>()
