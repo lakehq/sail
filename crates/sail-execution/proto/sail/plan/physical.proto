@@ -265,6 +265,8 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    SparkIntegerDivUdf spark_integer_div = 40;
+    SparkIntervalDivUdf spark_interval_div = 41;
   }
 }
 
@@ -434,6 +436,15 @@ message SparkPmodUdf {
 }
 
 message SparkNegativeUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkIntegerDivUdf {
+  bool ansi_mode = 1;
+  bool check_overflow = 2;
+}
+
+message SparkIntervalDivUdf {
   bool ansi_mode = 1;
 }
 

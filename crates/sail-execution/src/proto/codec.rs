@@ -210,7 +210,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::{SparkIntegerDiv, SparkIntervalDiv};
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -3570,6 +3570,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     target_type,
                 ))));
             }
+            UdfKind::SparkIntegerDiv(r#gen::SparkIntegerDivUdf {
+                ansi_mode,
+                check_overflow,
+            }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkIntegerDiv::new(
+                    ansi_mode,
+                    check_overflow,
+                ))));
+            }
+            UdfKind::SparkIntervalDiv(r#gen::SparkIntervalDivUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new(ansi_mode))));
+            }
         };
         match name {
             "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
@@ -3678,7 +3690,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "xpath" => Ok(Arc::new(ScalarUDF::from(Xpath::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
-            "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
@@ -3861,7 +3872,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
             || node_inner.is::<SparkHex>()
-            || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkVariantExplodeUdf>()
@@ -4113,6 +4123,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
             UdfKind::SparkStructRename(r#gen::SparkStructRenameUdf { target_type })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkIntegerDiv>() {
+            UdfKind::SparkIntegerDiv(r#gen::SparkIntegerDivUdf {
+                ansi_mode: func.ansi_mode(),
+                check_overflow: func.check_overflow(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkIntervalDiv>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkIntervalDiv(r#gen::SparkIntervalDivUdf { ansi_mode })
         } else {
             return Ok(());
         };
@@ -6008,6 +6026,35 @@ mod tests {
             assert_eq!(decoded.name(), kind.name());
             assert!(decoded.as_async().is_some());
             assert_eq!(decoded.signature(), kind.udf().signature());
+        }
+        Ok(())
+    }
+
+    /// `div` carries two independent booleans, and swapping them in the encode arm is invisible
+    /// to every `.feature` test: those run in one process and never serialize a physical plan.
+    /// The pair `(true, false)` is the one the planner builds for an interval dividend, where
+    /// Spark checks no overflow (arithmetic.scala:885-888), so a silent flip would make a
+    /// distributed `div` wrap where the single-node one raises.
+    #[test]
+    fn test_spark_integer_div_udf_codec_preserves_both_flags() -> Result<()> {
+        for ansi_mode in [true, false] {
+            for check_overflow in [true, false] {
+                let udf = SparkIntegerDiv::new(ansi_mode, check_overflow);
+                let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+                let decoded = downcast_udf::<SparkIntegerDiv>(&decoded, "spark_integer_div")?;
+                assert_eq!(decoded.ansi_mode(), ansi_mode);
+                assert_eq!(decoded.check_overflow(), check_overflow);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_interval_div_udf_codec_preserves_ansi_mode() -> Result<()> {
+        for ansi_mode in [true, false] {
+            let decoded = round_trip_udf(ScalarUDF::from(SparkIntervalDiv::new(ansi_mode)))?;
+            let decoded = downcast_udf::<SparkIntervalDiv>(&decoded, "spark_interval_div")?;
+            assert_eq!(decoded.ansi_mode(), ansi_mode);
         }
         Ok(())
     }
