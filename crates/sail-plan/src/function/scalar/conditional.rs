@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, FieldRef, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -69,7 +70,76 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
-    Ok(expr_fn::coalesce(arguments))
+    let fields = arguments
+        .iter()
+        .map(|arg| {
+            arg.to_field(function_context.schema)
+                .map(|(_, field)| field)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    with_interval_qualifier(expr_fn::coalesce(arguments), &fields, &function_context)
+}
+
+fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let field = left.to_field(input.function_context.schema)?.1;
+    with_interval_qualifier(
+        expr_fn::nullif(left, right),
+        &[field],
+        &input.function_context,
+    )
+}
+
+// NULLIF keeps its first argument's type; COALESCE widens its result arguments.
+// Restore only known qualifiers, leaving native evaluation and nullability intact.
+fn with_interval_qualifier(
+    result: expr::Expr,
+    fields: &[FieldRef],
+    context: &FunctionContextInput<'_>,
+) -> PlanResult<expr::Expr> {
+    let mut interval = None::<spec::SparkIntervalMetadata>;
+    for field in fields {
+        if field.data_type().is_null() {
+            continue;
+        }
+        if !matches!(
+            field.data_type(),
+            DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
+        ) {
+            return Ok(result);
+        }
+        let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) else {
+            return Ok(result);
+        };
+        let candidate = spec::SparkIntervalMetadata::from_json(metadata)?;
+        interval = match interval {
+            Some(current) => current.wider(candidate),
+            None => Some(candidate),
+        };
+        if interval.is_none() {
+            return Ok(result);
+        }
+    }
+    let Some(interval) = interval else {
+        return Ok(result);
+    };
+    let field = result.to_field(context.schema)?.1;
+    if fields
+        .iter()
+        .any(|source| !source.data_type().is_null() && source.data_type() != field.data_type())
+    {
+        return Ok(result);
+    }
+    let mut field = field.as_ref().clone();
+    field.metadata_mut().insert(
+        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+        interval.to_json()?,
+    );
+    // A field-aware cast retains the qualifier through folding and projection.
+    Ok(expr::Expr::Cast(expr::Cast::new_from_field(
+        Box::new(result),
+        Arc::new(field),
+    )))
 }
 
 fn coerce_string_temporal_values(
@@ -199,7 +269,7 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("if", F::custom(if_expr)),
         ("ifnull", F::binary(expr_fn::nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
-        ("nullif", F::binary(expr_fn::nullif)),
+        ("nullif", F::custom(nullif)),
         ("nullifzero", F::custom(nullifzero)),
         ("nvl", F::binary(expr_fn::nvl)),
         ("nvl2", F::ternary(expr_fn::nvl2)),

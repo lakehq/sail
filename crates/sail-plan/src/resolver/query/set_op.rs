@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
@@ -11,10 +13,11 @@ use sail_common::spec;
 use crate::error::{PlanError, PlanResult};
 use crate::function::datetime_utils::{cast_temporal, common_temporal_type};
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::spark_interval_metadata_for_expression;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
-    fn coerce_set_timestamp_columns(
+    fn coerce_set_columns(
         &self,
         left: LogicalPlan,
         right: LogicalPlan,
@@ -31,16 +34,10 @@ impl PlanResolver<'_> {
             .into_iter()
             .zip(right.schema().columns())
         {
-            let left_type = left
-                .schema()
-                .qualified_field_from_column(&left_column)?
-                .1
-                .data_type();
-            let right_type = right
-                .schema()
-                .qualified_field_from_column(&right_column)?
-                .1
-                .data_type();
+            let left_field = left.schema().qualified_field_from_column(&left_column)?.1;
+            let right_field = right.schema().qualified_field_from_column(&right_column)?.1;
+            let left_type = left_field.data_type();
+            let right_type = right_field.data_type();
             let mut left_expr = Expr::Column(left_column.clone());
             let mut right_expr = Expr::Column(right_column.clone());
             if let Some(target) = common_temporal_type(
@@ -64,6 +61,58 @@ impl PlanResolver<'_> {
                     false,
                 )?
                 .alias_qualified(right_column.relation, right_column.name);
+            } else {
+                let left_interval =
+                    spark_interval_metadata_for_expression(&left_expr, left.schema())?;
+                let right_interval =
+                    spark_interval_metadata_for_expression(&right_expr, right.schema())?;
+                let interval = match (left_interval, right_interval) {
+                    (Some(left), Some(right)) => left.wider(right),
+                    (Some(interval), None) if right_type.is_null() => Some(interval),
+                    (None, Some(interval)) if left_type.is_null() => Some(interval),
+                    _ => None,
+                };
+                if let Some(interval) = interval {
+                    changed |= left_interval != Some(interval) || right_interval != Some(interval);
+                    let metadata = interval.to_json()?;
+                    let mut left_metadata = left_field.metadata().clone();
+                    let mut right_metadata = right_field.metadata().clone();
+                    left_metadata.insert(
+                        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                        metadata.clone(),
+                    );
+                    right_metadata
+                        .insert(spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(), metadata);
+                    let left_target = left_field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(if left_type.is_null() {
+                            right_type.clone()
+                        } else {
+                            left_type.clone()
+                        })
+                        .with_metadata(left_metadata);
+                    let right_target = right_field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(if right_type.is_null() {
+                            left_type.clone()
+                        } else {
+                            right_type.clone()
+                        })
+                        .with_metadata(right_metadata);
+                    // Cast fields retain widened qualifiers through physical expression rewrites.
+                    left_expr = Expr::Cast(expr::Cast::new_from_field(
+                        Box::new(left_expr),
+                        Arc::new(left_target),
+                    ))
+                    .alias_qualified(left_column.relation, left_column.name);
+                    right_expr = Expr::Cast(expr::Cast::new_from_field(
+                        Box::new(right_expr),
+                        Arc::new(right_target),
+                    ))
+                    .alias_qualified(right_column.relation, right_column.name);
+                }
             }
             left_expressions.push(left_expr);
             right_expressions.push(right_expr);
@@ -97,7 +146,7 @@ impl PlanResolver<'_> {
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
             SetOpType::Intersect => {
-                let (left, right) = self.coerce_set_timestamp_columns(left, right)?;
+                let (left, right) = self.coerce_set_columns(left, right)?;
                 Ok(LogicalPlanBuilder::intersect(left, right, is_all)?)
             }
             SetOpType::Union => {
@@ -172,7 +221,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
-                let (left, right) = self.coerce_set_timestamp_columns(left, right)?;
+                let (left, right) = self.coerce_set_columns(left, right)?;
                 // Spark Connect treats Union as a leaf for DataFrame plan IDs.
                 // WithCTE restores separately reachable definition bindings.
                 for field in left.schema().fields() {
@@ -187,7 +236,7 @@ impl PlanResolver<'_> {
                 }
             }
             SetOpType::Except => {
-                let (left, right) = self.coerce_set_timestamp_columns(left, right)?;
+                let (left, right) = self.coerce_set_columns(left, right)?;
                 let left_len = left.schema().fields().len();
                 let right_len = right.schema().fields().len();
 

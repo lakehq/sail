@@ -7,8 +7,8 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    DurationSecondType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::math::expr_fn::abs;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
@@ -16,8 +16,9 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -60,19 +61,44 @@ impl ScalarUDFImpl for SparkAbs {
         true
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0].is_numeric()
-            || arg_types[0].is_null()
-            || matches!(arg_types[0], DataType::Interval(_) | DataType::Duration(_))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [input] = args.arg_fields else {
+            return Err(invalid_arg_count_exec_err(
+                "abs",
+                (1, 1),
+                args.arg_fields.len(),
+            ));
+        };
+        let data_type = input.data_type();
+        if !(data_type.is_numeric()
+            || data_type.is_null()
+            || matches!(data_type, DataType::Interval(_) | DataType::Duration(_)))
         {
-            Ok(arg_types[0].clone())
-        } else {
-            Err(unsupported_data_type_exec_err(
+            return Err(unsupported_data_type_exec_err(
                 "abs",
                 "Numeric, Interval, or Duration type",
-                &arg_types[0],
-            ))
+                data_type,
+            ));
         }
+        let mut field = Field::new(self.name(), data_type.clone(), true);
+        // ABS preserves the interval qualifier used to select DATE arithmetic.
+        if matches!(
+            field.data_type(),
+            DataType::Duration(_) | DataType::Interval(_)
+        ) && let Some(qualifier) = input.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY)
+        {
+            field.metadata_mut().insert(
+                SAIL_SPARK_INTERVAL_METADATA_KEY.to_owned(),
+                qualifier.clone(),
+            );
+        }
+        Ok(Arc::new(field))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

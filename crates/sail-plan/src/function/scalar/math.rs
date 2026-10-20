@@ -52,6 +52,8 @@ fn date_plus_day_time(
     subtract: bool,
 ) -> PlanResult<Expr> {
     let field = interval.to_field(context.schema)?.1;
+    // FIXME: Qualifier loss through expressions such as CASE can promote DAY arithmetic to
+    // TIMESTAMP, changing both its type and its value across skipped local dates.
     let metadata = field
         .metadata()
         .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
