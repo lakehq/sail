@@ -353,6 +353,7 @@ The JDBC tests depend on a JVM JDBC driver, so they cannot pass with Sail's Pyth
 **Proposed fix.** Sort inferred JSON fields by name, then add the JSON and CSV options one at a time, since each is small and can be tested on its own. ORC and bucketed writes are larger features.
 
 `test_write_operations` failed because the CSV writer ignored `lineSep` (the reader supported it already). Fixed in this pull request: the CSV writer uses `lineSep` as the line terminator.
+`test_checking_csv_header` failed because `enforceSchema=False` was not supported. Fixed in this pull request: with `header` enabled, the CSV header is checked against the schema by position, case-insensitively, with Spark's error messages.
 
 ## Types and Schemas
 

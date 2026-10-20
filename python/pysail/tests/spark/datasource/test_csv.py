@@ -739,3 +739,22 @@ def test_csv_write_line_sep(spark, tmp_path, line_sep, read_options):
         assert f.read() == f"1,a{line_sep}2,b{line_sep}"
     actual = spark.read.schema("id int, v string").options(**read_options).csv(str(path))
     assert sorted(actual.collect()) == [Row(id=1, v="a"), Row(id=2, v="b")]
+
+
+def test_csv_enforce_schema_false_checks_the_header(spark, tmp_path):
+    path = tmp_path / "csv_header"
+    _write_csv(path, "data", b"f1,f2\n1,1000\n2000,2\n")
+
+    def read(schema, **options):
+        return spark.read.option("header", True).schema(schema).csv(str(path), **options)
+
+    with pytest.raises(Exception, match="CSV header does not conform to the schema"):
+        read("f2 int, f1 int", enforceSchema=False).collect()
+    with pytest.raises(Exception, match="Number of column in CSV header is not equal to number of fields"):
+        read("f1 int", enforceSchema=False).collect()
+    assert sorted(read("f1 int, f2 int", enforceSchema=False).collect()) == [
+        Row(f1=1, f2=1000),
+        Row(f1=2000, f2=2),
+    ]
+    # The header is ignored by default, and the schema is applied to the columns by position.
+    assert sorted(read("f2 int, f1 int").collect()) == [Row(f2=1, f1=1000), Row(f2=2000, f1=2)]
