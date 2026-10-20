@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::common::{Result, not_impl_err, plan_err};
+use datafusion::common::{Result, plan_err};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
@@ -55,9 +55,12 @@ async fn plan_iceberg_merge_on_read(
         metadata_location,
         catalog_managed_table,
     )?;
-    let table =
-        Table::load_with_metadata_location(session, table_url.clone(), metadata_location_for_load)
-            .await?;
+    let table = Table::load_with_metadata_location(
+        session.runtime_env().as_ref(),
+        table_url.clone(),
+        metadata_location_for_load,
+    )
+    .await?;
     ensure_current_row_level_mode(&table, node)?;
     if node.command() == RowLevelCommand::Delete
         && let Some(plan) = plan_metadata_delete(session, node, &table, &table_url).await?
@@ -110,8 +113,12 @@ async fn plan_iceberg_copy_on_write(
         metadata_location_from_options(node.target_options()),
         catalog_managed_iceberg_from_options(node.target_options()),
     )?;
-    let table =
-        Table::load_with_metadata_location(session, table_url.clone(), metadata_location).await?;
+    let table = Table::load_with_metadata_location(
+        session.runtime_env().as_ref(),
+        table_url.clone(),
+        metadata_location,
+    )
+    .await?;
     ensure_current_row_level_mode(&table, node)?;
     let [input] = physical_inputs else {
         return plan_err!("Iceberg copy-on-write requires exactly one write-plan input");
@@ -139,7 +146,11 @@ async fn plan_iceberg_copy_on_write(
     writer_options.copy_on_write_partitioning = match mode.to_ascii_lowercase().as_str() {
         "none" => false,
         "hash" => true,
-        "range" => return not_impl_err!("Iceberg copy-on-write range distribution"),
+        "range" => {
+            // A single ordered range preserves the contract until range exchanges are available.
+            writer_options.copy_on_write_single_partition = true;
+            false
+        }
         _ => return plan_err!("Unknown Iceberg write distribution mode: {mode}"),
     };
     let data_schema = IcebergMergeRowProjection::try_new(input.schema())?.data_schema();

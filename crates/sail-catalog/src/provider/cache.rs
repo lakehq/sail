@@ -208,6 +208,10 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.get_name()
     }
 
+    fn default_namespace(&self) -> Namespace {
+        self.inner.default_namespace()
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -397,6 +401,23 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
 
     fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
         self.inner.validate_alter_table(options)
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        self.inner
+            .rename_table(database, table, destination_database, destination_table)
+            .await?;
+        if let Some(cache) = &self.table_cache {
+            cache.invalidate(database).await;
+            cache.invalidate(destination_database).await;
+        }
+        Ok(())
     }
 
     async fn alter_table(

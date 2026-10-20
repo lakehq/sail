@@ -22,6 +22,8 @@ use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::SparkSequenceLazy;
 use sail_function::scalar::datetime::convert_tz::ConvertTzLazy;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
+use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 use sail_physical_plan::data_source::RemoteDataSourceExec;
 
@@ -163,6 +165,12 @@ pub(super) fn try_encode_higher_order_udf(
         })
     } else if udf_inner.is::<SparkMapFilter>() {
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {})
+    } else if udf_inner.is::<SparkTransformValues>() {
+        HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {})
+    } else if let Some(transform_keys) = udf_inner.downcast_ref::<SparkTransformKeys>() {
+        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf {
+            last_value_wins: transform_keys.is_last_value_wins(),
+        })
     } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
         HigherOrderUdfKind::Transform(r#gen::SparkArrayTransformUdf {
             index_first: transform.is_index_first(),

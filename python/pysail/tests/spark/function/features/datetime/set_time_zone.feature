@@ -2,6 +2,7 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
 
   # Every expected value was measured on Spark 4.2 over Spark Connect (Java 17), starting from a session pinned to UTC.
   # The zone is restored after each scenario by the `config` step.
+  # RESET without a key is covered by the runtime config tests, which use isolated sessions.
   #
   # Only the session time zone is covered. Every other configuration key is outside these statements for now.
   #
@@ -11,7 +12,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
   # - `spark.conf.set` does not validate the zone yet: only these statements reject a zone Spark cannot resolve.
   # - `SET TIME ZONE LOCAL`, and the zone that `RESET` restores, are the zone of the host. Their scenarios check
   #   that the zone set before is gone, not which zone replaces it.
-  # - `RESET` of any other key, and `RESET` without a key, are `@sail-bug` scenarios at the end.
   # - An unquoted offset with a colon (`SET spark.sql.session.timeZone = +08:00`) does not parse yet: `@sail-bug` scenario
   #   in the rule for `SET` on the zone key. With quotes, `SET TIME ZONE '+08:00'` works.
   # - `SET timezone = ...`: Spark stores an unrelated key and leaves the session zone alone.
@@ -739,8 +739,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | SET spark . sql . session . timeZone = UTC             |
         | SET spark.`sql`.session.timeZone = UTC                 |
 
-    # TODO: The unquoted value is cut at the first colon. See `SetPropertyValue` in the SQL parser.
-    @sail-bug
     Scenario Outline: SET spark.sql.session.timeZone accepts the unquoted offset <value>
       Given config spark.sql.session.timeZone = UTC
       Given statement
@@ -785,7 +783,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | UTC-08:00 |
 
     # Spark takes the backquoted value and strips the backquotes.
-    @sail-bug
     Scenario Outline: SET accepts the backquoted value in <statement>
       Given config spark.sql.session.timeZone = UTC
       Given statement
@@ -806,7 +803,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | SET `spark.sql.session.timeZone`=`UTC`              | UTC          |
 
     # Spark takes everything after `=` up to `;` as the value, so the value below is not a time zone.
-    @sail-bug
     @spark-4
     Scenario Outline: SET spark.sql.session.timeZone rejects the value in <statement> as a zone
       Given config spark.sql.session.timeZone = Asia/Kolkata
@@ -877,7 +873,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         root
         """
 
-    @sail-bug
     Scenario Outline: RESET of the key <key> is accepted
       Given config spark.sql.session.timeZone = UTC
       Given statement
@@ -899,8 +894,26 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | timezone                      |
         | spark.sql.session.timezone    |
         | `a b`                         |
-        | a:b                           |
-        | a.                            |
+
+    @sail-bug
+    Scenario Outline: RESET of the key <key> containing punctuation is accepted
+      Given config spark.sql.session.timeZone = UTC
+      Given statement
+        """
+        RESET <key>
+        """
+      When query
+        """
+        SELECT current_timezone() AS zone
+        """
+      Then query result
+        | zone |
+        | UTC  |
+
+      Examples:
+        | key |
+        | a:b |
+        | a.  |
 
     # A static configuration cannot be reset, and neither can a configuration of the core of Spark.
     @sail-bug
@@ -969,26 +982,6 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | RESET spark.sql.session.timeZone spark.sql.ansi.enabled  |
         | RESET spark.sql.session.timeZone =                       |
 
-    # `RESET` without a key is not implemented yet.
-    @sail-bug
-    Scenario: RESET without a key drops the zone that was set
-      Given config spark.sql.session.timeZone = UTC
-      Given statement
-        """
-        SET TIME ZONE 'Pacific/Kiritimati'
-        """
-      Given statement
-        """
-        RESET
-        """
-      When query
-        """
-        SELECT current_timezone() <> 'Pacific/Kiritimati' AS changed
-        """
-      Then query result
-        | changed |
-        | true    |
-
     @spark-4
     Scenario Outline: RESET rejects the key <statement> and keeps the session zone
       Given config spark.sql.session.timeZone = Asia/Kolkata
@@ -1008,4 +1001,3 @@ Feature: SET TIME ZONE and SET spark.sql.session.timeZone change the session tim
         | statement                                   |
         | RESET spark . sql . session . timeZone      |
         | RESET spark.`sql`.session.timeZone          |
-

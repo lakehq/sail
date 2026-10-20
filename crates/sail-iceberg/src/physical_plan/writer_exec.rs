@@ -415,6 +415,9 @@ impl ExecutionPlan for IcebergWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        if self.options.copy_on_write_single_partition {
+            return vec![Distribution::SinglePartition];
+        }
         match &self.distribution_keys {
             Some(expressions) => vec![Distribution::KeyPartitioned(expressions.clone())],
             None => vec![Distribution::UnspecifiedDistribution],

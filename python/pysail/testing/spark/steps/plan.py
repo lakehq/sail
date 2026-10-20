@@ -139,6 +139,14 @@ def normalize_plan_text(plan_text: str) -> str:
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
     # TODO: consider sorting the file groups during planner.
 
+    procedure_invocation_uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    text = re.sub(
+        rf"(invocation_id=){procedure_invocation_uuid}",
+        r"\1<invocation_id>",
+        text,
+        flags=re.IGNORECASE,
+    )
+
     # Normalize IcebergManifestScanExec metadata:
     # - table_url with temp paths
     # - snapshot_id (non-deterministic)
