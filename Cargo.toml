@@ -24,7 +24,7 @@ todo = "deny"
 
 [workspace.dependencies]
 thiserror = { version = "2.0.21" }
-tokio = { version = "1.53.2", features = ["full"] }
+tokio = { version = "1.53.2", features = ["full", "test-util"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }
 tokio-stream = { version = "0.1.18", features = ["time", "io-util"] }
 pbjson = "0.9.0"
@@ -144,10 +144,7 @@ readonly = "0.2.13"
 toml = "0.9.12"
 bitflags = "2.12.1"
 libloading = "0.9.0"
-pilota = "0.13.1"
-volo = "0.12.3"
-volo-build = "0.12.3"
-volo-thrift = "0.12.4"
+thrift = { version = "0.24.0", default-features = false }
 
 ######
 # The versions of the following dependencies are managed manually.

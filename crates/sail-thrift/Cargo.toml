@@ -1,0 +1,14 @@
+[package]
+name = "sail-thrift"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+thrift = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
