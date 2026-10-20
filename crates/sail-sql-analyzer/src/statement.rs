@@ -39,7 +39,7 @@ use crate::expression::{
 };
 use crate::literal::interval::{IntervalValue, from_ast_signed_interval, multi_unit_interval_days};
 use crate::literal::utils::Signed;
-use crate::query::from_ast_query;
+use crate::query::{from_ast_query, from_ast_with_clause};
 use crate::value::from_ast_string;
 
 fn from_ast_show_function_scope(scope: Option<ShowFunctionScope>) -> (bool, bool) {
@@ -675,6 +675,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertOverwriteDirectory {
+            with,
             insert: _,
             overwrite: _,
             local,
@@ -726,7 +727,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 }
             };
             let node = spec::CommandNode::InsertOverwriteDirectory {
-                input: Box::new(from_ast_query(query)?),
+                input: Box::new(from_ast_with_clause(from_ast_query(query)?, with)?),
                 local: local.is_some(),
                 location,
                 file_format,
@@ -736,6 +737,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertIntoAndReplace {
+            with,
             insert: _,
             into: _,
             table: _,
@@ -744,7 +746,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             r#where,
             query,
         } => {
-            let query = from_ast_query(query)?;
+            let query = from_ast_with_clause(from_ast_query(query)?, with)?;
             let WhereClause {
                 r#where: _,
                 condition,
@@ -765,6 +767,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertInto {
+            with,
             insert: _,
             into_or_overwrite,
             table: _,
@@ -788,7 +791,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 },
                 None => spec::InsertMode::InsertByPosition { overwrite },
             };
-            let query = from_ast_query(query)?;
+            let query = from_ast_with_clause(from_ast_query(query)?, with)?;
             let node = spec::CommandNode::InsertInto {
                 input: Box::new(query),
                 table: from_ast_object_name(name)?,
@@ -1278,6 +1281,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     name,
                     partition,
                     column,
+                    end: _,
                 } => {
                     let partition = partition
                         .map(from_ast_partition)
@@ -1287,24 +1291,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     spec::CommandNode::DescribeTable {
                         table: from_ast_object_name(name)?,
                         extended: extended.is_some(),
-                        partition,
-                        column,
-                    }
-                }
-                DescribeItem::TableExtended {
-                    extended: _,
-                    name,
-                    partition,
-                    column,
-                } => {
-                    let partition = partition
-                        .map(from_ast_partition)
-                        .transpose()?
-                        .unwrap_or_default();
-                    let column = column.map(from_ast_object_name).transpose()?;
-                    spec::CommandNode::DescribeTable {
-                        table: from_ast_object_name(name)?,
-                        extended: true,
                         partition,
                         column,
                     }
