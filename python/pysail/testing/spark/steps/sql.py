@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from jinja2 import Template
+from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then, when
 
@@ -148,9 +149,92 @@ def query(template, docstring, variables):
 
 @then("query schema")
 def query_schema(docstring, query, spark):
-    """Analyze the SQL query and compare schema with expected schema tree string."""
+    """Analyze the SQL query and compare schema with expected schema tree string.
+
+    BLIND SPOT: the tree string spells out `nullable`, `containsNull` and `valueContainsNull`, but
+    it SILENTLY DROPS the collation of a string -- at every depth, so `string collate UTF8_LCASE`
+    prints as plain `string` at the top level, inside an array and inside a struct alike. A
+    collation therefore cannot be asserted here, and a scenario that tries goes green with the
+    collation lost. `schema.simpleString()` is the rendering that carries it (and drops the
+    nullability instead), so the two are complementary and neither contains the other. Measured on
+    the Spark 4.2 JVM, 2026-09-23.
+    """
     df = spark.sql(query)
     assert_schema_tree(df, docstring)
+
+
+def _join_dataframes(spark):
+    """Builds the three frames the `DataFrame.join` cases are defined over."""
+    df1 = spark.createDataFrame([Row(name="Alice", age=2), Row(name="Bob", age=5)])
+    df2 = spark.createDataFrame([Row(name="Tom", height=80), Row(name="Bob", height=85)])
+    df3 = spark.createDataFrame(
+        [
+            Row(name="Alice", age=10, height=80),
+            Row(name="Bob", age=5, height=None),
+            Row(name="Tom", age=None, height=None),
+            Row(name=None, age=None, height=None),
+        ]
+    )
+    return df1, df2, df3
+
+
+def _join_cases(spark):
+    """DataFrame cases for `DataFrame.join`, which SQL cannot express.
+
+    A column object such as `df1.name` is resolved through the plan id of the frame it
+    came from, which is a different resolution path from a SQL qualifier, so these cases
+    have to keep using the DataFrame API.
+    """
+    df1, df2, df3 = _join_dataframes(spark)
+    return {
+        "join on name": lambda: df1.join(df2, "name"),
+        "join on name selecting a column of each side": lambda: df1.join(df2, "name").select(df1.name, df2.height),
+        "join on name selecting columns by name": lambda: df1.join(df2, "name").select("name", "height"),
+        "join on a name equality": lambda: df1.join(df2, df1.name == df2.name),
+        "join on a name equality selecting the duplicated name": lambda: df1.join(df2, df1.name == df2.name).select(
+            "name", "height"
+        ),
+        "join on two names": lambda: df1.join(df3, ["name", "age"]),
+        "join on two names selecting the left side": lambda: df1.join(df3, ["name", "age"]).select(df1.name, df1.age),
+        "outer join on a name equality": lambda: df1.join(df2, df1.name == df2.name, "outer").sort(F.desc(df1.name)),
+        "outer join on a name equality selecting a column of each side": lambda: df1.join(
+            df2, df1.name == df2.name, "outer"
+        )
+        .sort(F.desc(df1.name))
+        .select(df1.name, df2.height),
+        "outer join on a name equality sorted after the projection": lambda: df1.join(
+            df2, df1.name == df2.name, "outer"
+        )
+        .select(df1.name, df2.height)
+        .sort(F.desc("name")),
+        "outer join on two equalities": lambda: df1.join(df3, [df1.name == df3.name, df1.age == df3.age], "outer")
+        .select(df1.name, df3.age)
+        .sort(df1.name, df3.age),
+        "outer self join selecting the ambiguous name": lambda: df1.join(df1, df1.name == df1.name, "outer").select(
+            df1.name
+        ),
+        "outer self join of two aliases": lambda: df1.alias("a")
+        .join(df1.alias("b"), F.col("a.name") == F.col("b.name"), "outer")
+        .sort(F.desc("a.name"))
+        .select("a.name", "b.age"),
+        "outer join on name": lambda: df1.join(df2, "name", "outer").sort(F.desc("name")),
+        "outer join on name sorted by the left side": lambda: df1.join(df2, "name", "outer").sort(F.desc(df1.name)),
+        "outer join on name sorted by the right side": lambda: df1.join(df2, "name", "outer").sort(F.desc(df2.name)),
+        "outer join on name selecting columns by name": lambda: df1.join(df2, "name", "outer")
+        .select("name", "height")
+        .sort(F.desc("name")),
+        "outer join on name selecting the left name": lambda: df1.join(df2, "name", "outer")
+        .select(df1.name, "height")
+        .sort(F.desc("name")),
+        "outer join on name selecting the right name": lambda: df1.join(df2, "name", "outer")
+        .select(df2.name, "height")
+        .sort(F.desc("name")),
+        "outer join on two names": lambda: df1.join(df3, ["name", "age"], "outer").sort("name", "age"),
+        "left outer join on name": lambda: df1.join(df2, "name", "left_outer").sort(F.asc("name")),
+        "right outer join on name": lambda: df1.join(df2, "name", "right_outer").sort(F.asc("name")),
+        "left semi join on name": lambda: df1.join(df2, "name", "left_semi"),
+        "left anti join on name": lambda: df1.join(df2, "name", "left_anti"),
+    }
 
 
 @when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
@@ -185,6 +269,7 @@ def dataframe_for(case, spark):
             F.to_timestamp_ntz(F.lit("2024-01-02"), F.lit(None)).alias("result")
         ),
     }
+    cases.update(_join_cases(spark))
     try:
         return cases[case]()
     except KeyError:
@@ -281,6 +366,78 @@ def query_result(datatable, ordered, query, spark):
         assert sorted(rows) == sorted(r)
 
 
+@then(parsers.re("dataframe result(?P<ordered>( ordered)?)"))
+def dataframe_result(datatable, ordered, dataframe):
+    """Collect the DataFrame and compare result with expected data table."""
+    header, *rows = datatable
+    [h, *r] = parse_show_string(dataframe._show_string(n=0x7FFFFFFF, truncate=False))  # noqa: SLF001
+    assert header == h
+    if ordered:
+        assert rows == r
+    else:
+        assert sorted(rows) == sorted(r)
+
+
+def _stored_numbers(array) -> list[str] | None:
+    """The numbers an Arrow array stores, or `None` when it stores no single number per value.
+
+    A date is days in an `int32`, a time and a timestamp are microseconds (or nanoseconds) in an
+    `int64`, an interval is its microseconds or its months. Arrow refuses `date32 -> int64`, so the
+    width is tried in turn rather than assumed. A float or a decimal already IS a number, and an
+    integer cast would silently truncate it, so its value is read as it stands.
+    """
+    if str(array.type).startswith(("float", "double", "halffloat", "decimal")):
+        return [_format_collected_value(value) for value in array.to_pylist()]
+    for width in ("int64", "int32"):
+        try:
+            return [str(value) for value in array.cast(width).to_pylist()]
+        except Exception:  # noqa: BLE001, S112
+            continue
+    return None
+
+
+@then("stored and printed result")
+def stored_and_printed_result(datatable, query, spark):
+    """Assert what a value STORES, what type it publishes and what it PRINTS, apart.
+
+    What makes a value what it is often does not live in the stored number: the field range of an
+    interval rides in the field metadata, the session zone decides what a timestamp prints, the
+    precision what a time prints, the scale what a decimal prints. Several pieces of code read that
+    on their own -- the schema the query publishes, the renderer behind `show` and the renderer
+    behind `CAST(... AS STRING)` -- so asserting only the printed value cannot tell a wrong VALUE
+    from a right value printed wrong, and a fix that reaches one renderer and not the schema looks
+    green from one lens and wrong from the other. The table is `| stored | type | shown | cast |`;
+    a column may be `-` to leave it unasserted.
+    """
+    header, *rows = datatable
+    assert header == ["stored", "type", "shown", "cast"], (
+        "the table of `stored and printed result` is | stored | type | shown | cast |"
+    )
+    assert len(rows) == 1, "`stored and printed result` asserts a single row"
+    [expected_stored, expected_type, expected_shown, expected_cast] = rows[0]
+
+    df = spark.sql(query)
+    column = df.schema[0].name
+    if expected_stored != "-" and hasattr(df, "toArrow"):
+        # The number behind the value, read off Arrow so that no renderer stands between the
+        # assertion and the data. The PySpark client only offers `toArrow` from 4.0 on; on an older
+        # one this lens is dropped and the other three still apply.
+        array = df.toArrow().column(0)
+        stored = _stored_numbers(array)
+        if stored is None:
+            message = f"the value stores no number: {array.type} {array.to_pylist()}"
+            raise AssertionError(message)
+        assert stored == [expected_stored], f"stored: {stored} != [{expected_stored}]"
+    if expected_type != "-":
+        assert df.schema[0].dataType.simpleString() == expected_type
+    if expected_shown != "-":
+        [_, *shown] = parse_show_string(df._show_string(n=0x7FFFFFFF, truncate=False))  # noqa: SLF001
+        assert shown == [[expected_shown]]
+    if expected_cast != "-":
+        rendered = df.selectExpr(f"CAST(`{column}` AS STRING)").collect()[0][0]
+        assert _format_collected_value(rendered) == expected_cast
+
+
 def _format_collected_value(value) -> str:
     if value is None:
         return "NULL"
@@ -307,6 +464,43 @@ def query_error(error, query, spark):
     """Executes the SQL query and expects it to fail with an error (regex match)."""
     with pytest.raises(Exception, match=error):
         _ = spark.sql(query).collect()
+
+
+# Fragments of Rust `Debug` output that must never reach the user. An error message quoting
+# any of these is dumping an internal value (an Arrow array, a `ColumnarValue`, a logical
+# plan, a parser AST node, a DataFusion signature) instead of describing the problem.
+RUST_DEBUG_MARKERS = (
+    "ColumnarValue",
+    "Scalar(",
+    "Array(",
+    "Literal(",
+    "Field {",
+    "Signature {",
+    "AggregateFunction {",
+    "ScalarFunction {",
+    "Identifier(",
+    "ObjectName(",
+    "RecordBatch {",
+    "Projection {",
+    "TableScan {",
+    "PrimitiveArray",
+    "StringArray",
+    "BinaryArray",
+    "data_type:",
+)
+
+
+@then(parsers.parse("query fails without internal details {error}"))
+def query_fails_without_internal_details(error, query, spark):
+    """Execute the SQL query, expect the error to match, and expect no Rust `Debug` output in it."""
+    with pytest.raises(Exception, match=error) as info:
+        _ = spark.sql(query).collect()
+    message = str(info.value)
+    # PySpark appends the JVM stacktrace to the message on a JVM Spark run; only the
+    # user-facing part is what must stay free of internal values.
+    message = message.split("JVM stacktrace:")[0]
+    leaked = [marker for marker in RUST_DEBUG_MARKERS if marker in message]
+    assert not leaked, f"error message leaks Rust debug output {leaked}: {message}"
 
 
 @then(parsers.parse('query result has row where "{match_column}" is "{match_value}"'))

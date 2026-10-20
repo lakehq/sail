@@ -122,3 +122,112 @@ Feature: make_ym_interval builds a year-month interval from years and months
         root
          |-- result: interval year to month (nullable = true)
         """
+
+    Scenario: non-null string arguments are nullable, because Spark casts them to INT
+      When query
+        """
+        SELECT make_ym_interval('1', '2') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval year to month (nullable = true)
+        """
+
+  @function(nullability) @spark-4
+  Rule: Nullability through Spark's implicit casts
+  # String -> * is force-nullable (Cast.scala:458)
+  # Spark 4+: PySpark 3.5 renders the type as a bare `interval` in `treeString`.
+
+    @sail-bug
+    Scenario Outline: make_ym_interval without an implicit cast keeps its non-nullable schema
+      When query
+        """
+        SELECT make_ym_interval(<input>, 2) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval year to month (nullable = false)
+        """
+
+      Examples:
+        | case    | input |
+        | no cast | 1     |
+
+    Scenario Outline: make_ym_interval through a force-nullable implicit cast: <case>
+      When query
+        """
+        SELECT make_ym_interval(<input>, 2) AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: interval year to month (nullable = true)
+        """
+
+      Examples:
+        | case          | input |
+        | STRING -> INT | '1'   |
+
+  # Spark 4.2.0 IntervalUtils.scala `makeYearMonthInterval`: Math.toIntExact(addExact(month,
+  # multiplyExact(year, 12))), so the Int month range is fully usable up to its bounds.
+  Rule: The Int month range is usable up to its bounds
+    Scenario Outline: Bound: <case>
+      When query
+        """
+        SELECT make_ym_interval(<args>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                               | args            | result                                |
+        | the maximum from years and months  | 178956970, 7    | INTERVAL '178956970-7' YEAR TO MONTH  |
+        | the minimum from years and months  | -178956970, -8  | INTERVAL '-178956970-8' YEAR TO MONTH |
+        | the maximum from months alone      | 0, 2147483647   | INTERVAL '178956970-7' YEAR TO MONTH  |
+
+    Scenario: one month past the maximum overflows
+      When query
+        """
+        SELECT make_ym_interval(178956970, 8) AS result
+        """
+      Then query error \[INTERVAL_ARITHMETIC_OVERFLOW\.WITHOUT_SUGGESTION\]
+
+  # Spark 4.2.0 intervalExpressions.scala `MakeYMInterval` is ImplicitCastInputTypes over
+  # (INT, INT): DECIMAL / STRING / BIGINT arguments are cast to INT first.
+  Rule: Arguments are implicitly cast to INT
+
+    @sail-bug
+    Scenario Outline: make_ym_interval casts a non-integer years argument to INT: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT make_ym_interval(<years>, 0) AS result FROM VALUES (<v1>), (<v2>) AS t(y)
+        """
+      Then query result
+        | result |
+        | <r1>   |
+        | <r2>   |
+
+      Examples:
+        | case                                  | ansi  | years | v1  | v2   | r1                           | r2                            |
+        | decimal column truncates toward zero  | true  | y     | 1.9 | -2.5 | INTERVAL '1-0' YEAR TO MONTH | INTERVAL '-2-0' YEAR TO MONTH |
+        | decimal literal truncates toward zero | true  | 1.9   | 1.9 | -2.5 | INTERVAL '1-0' YEAR TO MONTH | INTERVAL '1-0' YEAR TO MONTH  |
+        | malformed string is NULL              | false | y     | 'x' | '3'  | NULL                         | INTERVAL '3-0' YEAR TO MONTH  |
+
+    @sail-bug
+    Scenario Outline: make_ym_interval arguments that do not cast to INT: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT make_ym_interval(<years>, 0) AS result
+        """
+      Then query error <error>
+
+      Examples:
+        | case                                    | ansi  | years                     | error                                                |
+        | malformed string under ANSI             | true  | 'x'                       | CAST_INVALID_INPUT                               |
+        | BIGINT that does not fit INT under ANSI | true  | CAST(3000000000 AS BIGINT) | CAST_OVERFLOW                                    |
+        | legacy cast wraps, then months overflow | false | CAST(3000000000 AS BIGINT) | INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION |

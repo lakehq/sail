@@ -108,3 +108,13 @@ Feature: product returns the multiplicative product of all non-null input values
         | a | 10.0 |
         | b | NULL |
         | c | 12.0 |
+
+  Rule: Edge cases validated against Spark JVM
+
+  Rule: Infinity propagation and sign
+
+  Rule: NaN propagation
+
+  Rule: Signed zero, underflow and identity
+
+  Rule: Input type validation

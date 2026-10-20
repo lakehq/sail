@@ -4,6 +4,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from pysail.testing.spark.utils.common import is_jvm_spark
+
 
 def test_vector_l2_distance(spark):
     actual = spark.sql("SELECT vector_l2_distance(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F))").first()[0]
@@ -38,8 +40,12 @@ def test_vector_l2_distance_extreme_values(spark):
     assert spark.sql("SELECT vector_l2_distance(array(1.0e-23F, 0.0F), array(0.0F, 0.0F))").first()[0] == 0.0
 
 
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_vector_l2_distance_rejects_dimension_mismatch(spark):
-    with pytest.raises(Exception, match="matching dimensions"):
+    # Spark: [VECTOR_DIMENSION_MISMATCH] ... must have the same dimension, but got 2 and 1.
+    # Sail says "requires vectors with matching dimensions", which is what this test used to
+    # assert -- so it was green on Sail for ever and had never been run against the JVM.
+    with pytest.raises(Exception, match=r"\[VECTOR_DIMENSION_MISMATCH\]"):
         spark.sql("SELECT vector_l2_distance(array(1.0F, 2.0F), array(1.0F))").collect()
 
 
