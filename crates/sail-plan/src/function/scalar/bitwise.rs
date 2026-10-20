@@ -51,6 +51,6 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("shiftrightunsigned", F::custom(shiftrightunsigned)),
         (">>>", F::custom(shiftrightunsigned)),
         ("|", F::binary_op(Operator::BitwiseOr)),
-        ("~", F::unary(|arg| (-arg) - lit(1))),
+        ("~", F::unary(bitwise_fn::bitwise_not)),
     ]
 }

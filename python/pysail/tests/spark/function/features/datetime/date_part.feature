@@ -408,6 +408,31 @@ Feature: date_part / extract output schema
 
   Rule: Fractional seconds retain valid timestamp values
 
+    Scenario Outline: Fractional seconds accept session timezone <zone>
+      Given config spark.sql.session.timeZone = <zone>
+      When query
+        """
+        SELECT id, date_part('SECOND', timestamp_micros(1234567L)) AS literal_seconds,
+               date_part('SECOND', timestamp_micros(micros)) AS seconds,
+               datepart('SECOND', timestamp_micros(micros)) AS alias_seconds,
+               EXTRACT(SECOND FROM timestamp_micros(micros)) AS extracted_seconds
+        FROM VALUES (0, 1234567L), (1, -1L), (2, CAST(NULL AS BIGINT)) AS t(id, micros)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | literal_seconds | seconds   | alias_seconds | extracted_seconds |
+        | 0  | 1.234567        | 1.234567  | 1.234567      | 1.234567          |
+        | 1  | 1.234567        | 59.999999 | 59.999999     | 59.999999         |
+        | 2  | 1.234567        | NULL      | NULL          | NULL              |
+
+      Examples:
+        | zone   |
+        | Z      |
+        | PST    |
+        | UT     |
+        | UTC    |
+        | +05:30 |
+
     Scenario: Fractional seconds at timestamp boundaries preserve the non-null schema
       Given config spark.sql.session.timeZone = UTC
       When query

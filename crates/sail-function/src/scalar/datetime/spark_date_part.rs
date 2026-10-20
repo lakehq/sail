@@ -18,7 +18,8 @@ use datafusion_expr::{
 };
 use datafusion_functions::datetime::date_part::DatePartFunc;
 use sail_common::utils::datetime::{
-    MICROS_PER_DAY, MICROS_PER_HOUR, MICROS_PER_MINUTE, time_unit_to_multiplier,
+    MICROS_PER_DAY, MICROS_PER_HOUR, MICROS_PER_MINUTE, is_fixed_zero_offset_timezone,
+    time_unit_to_multiplier, timezone_alias_to_timezone,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -58,7 +59,11 @@ impl SparkDatePart {
             |second_arg| {
                 match second_arg.data_type() {
                     DataType::Timestamp(unit, timezone) => {
-                        let timezone = timezone.as_ref().map(|tz| tz.parse::<Tz>()).transpose()?;
+                        let timezone = timezone
+                            .as_deref()
+                            .filter(|tz| !is_fixed_zero_offset_timezone(tz))
+                            .map(|tz| timezone_alias_to_timezone(tz).parse::<Tz>())
+                            .transpose()?;
                         let units_per_second = time_unit_to_multiplier(&unit);
                         let minute = 60 * units_per_second;
                         let scalar = matches!(second_arg, ColumnarValue::Scalar(_));

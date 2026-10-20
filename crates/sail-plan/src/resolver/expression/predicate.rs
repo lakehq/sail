@@ -4,12 +4,15 @@ use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::type_coercion::other::get_coerce_type_for_list;
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
 use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_struct_cast::SparkStructCast;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::config::PlanConfig;
@@ -407,12 +410,39 @@ pub(super) fn coerce_timestamp_string_predicate(
                 )
             };
 
-            let expr = coerce(*expr, &expr_type)?;
-            let list = list
+            let mut expr = coerce(*expr, &expr_type)?;
+            let mut list = list
                 .into_iter()
                 .zip(list_types)
                 .map(|(value, data_type)| coerce(value, &data_type))
                 .collect::<DataFusionResult<Vec<_>>>()?;
+            let expr_type = expr.get_type(schema.as_ref())?;
+            let list_types = list
+                .iter()
+                .map(|value| value.get_type(schema.as_ref()))
+                .collect::<DataFusionResult<Vec<_>>>()?;
+            if let Some(target) =
+                get_coerce_type_for_list(&expr_type, &list_types).filter(DataType::is_nested)
+            {
+                expr = cast_comparison_operand(
+                    expr,
+                    &expr_type,
+                    target.clone(),
+                    &config.session_timezone,
+                )?;
+                list = list
+                    .into_iter()
+                    .zip(list_types)
+                    .map(|(value, data_type)| {
+                        cast_comparison_operand(
+                            value,
+                            &data_type,
+                            target.clone(),
+                            &config.session_timezone,
+                        )
+                    })
+                    .collect::<DataFusionResult<Vec<_>>>()?;
+            }
             if recursive_list_coercion && has_null_list_value && !expr.is_volatile() {
                 // A static nested IN set can miss an equal value when the set also contains NULL.
                 // Spark defines IN as a Kleene equality disjunction for non-volatile operands.
@@ -466,6 +496,21 @@ fn recursive_list_in_as_comparisons(
     }
 }
 
+fn cast_comparison_operand(
+    expression: expr::Expr,
+    from: &DataType,
+    to: DataType,
+    session_timezone: &Arc<str>,
+) -> DataFusionResult<expr::Expr> {
+    if from == &to && to.is_nested() {
+        // Folding a sibling can narrow nested nullability after comparison coercion.
+        // Keep the common type even when this operand needs no value conversion.
+        Ok(ScalarUDF::from(SparkStructRename::new(to)).call(vec![expression]))
+    } else {
+        cast_temporal(expression, from, to, session_timezone, false)
+    }
+}
+
 pub(in crate::resolver) fn coerce_timestamp_pair(
     left: expr::Expr,
     right: expr::Expr,
@@ -481,14 +526,13 @@ pub(in crate::resolver) fn coerce_timestamp_pair(
         &config.session_timezone,
     ) {
         return Ok((
-            cast_temporal(
+            cast_comparison_operand(
                 left,
                 &left_type,
                 target.clone(),
                 &config.session_timezone,
-                false,
             )?,
-            cast_temporal(right, &right_type, target, &config.session_timezone, false)?,
+            cast_comparison_operand(right, &right_type, target, &config.session_timezone)?,
         ));
     }
 
@@ -657,6 +701,28 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
         config.ansi_mode,
         0,
     )?;
+    let coerced_left_type = left.get_type(left_schema.as_ref())?;
+    let coerced_right_type = right.get_type(right_schema.as_ref())?;
+    if let Some(target) =
+        comparison_coercion(&coerced_left_type, &coerced_right_type).filter(DataType::is_nested)
+    {
+        return Ok((
+            cast_comparison_operand(
+                left,
+                &coerced_left_type,
+                target.clone(),
+                &config.session_timezone,
+            )?,
+            cast_comparison_operand(
+                right,
+                &coerced_right_type,
+                target,
+                &config.session_timezone,
+            )?,
+            true,
+            true,
+        ));
+    }
     Ok((left, right, left_changed, right_changed))
 }
 

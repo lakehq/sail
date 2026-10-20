@@ -2,6 +2,110 @@ Feature: Timestamp and string predicate coercion
 
   Rule: Timestamp comparisons use Spark coercion semantics
 
+    Scenario Outline: Nested temporal predicates retain their common type with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          array(named_struct('t', DATE '2024-01-01')) =
+            array(named_struct('t', TIMESTAMP '2024-01-01')) AS equal,
+          array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1)) IN (
+            array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1L)),
+            NULL
+          ) AS member
+        """
+      Then query result
+        | equal | member |
+        | true  | true   |
+      And query schema
+        """
+        root
+         |-- equal: boolean (nullable = false)
+         |-- member: boolean (nullable = true)
+        """
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Dynamic nested temporal predicates preserve nullable fields with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT id,
+          array(named_struct('t', TRY_CAST(text AS DATE), 'n', n)) =
+            array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1L)) AS equal,
+          array(named_struct('t', TRY_CAST(text AS DATE), 'n', n)) IN (
+            array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1L)),
+            NULL
+          ) AS member
+        FROM VALUES (0, '2024-01-01', 1), (1, NULL, NULL), (2, 'invalid', 2)
+          AS input(id, text, n)
+        ORDER BY id
+        """
+      Then query result
+        | id | equal | member |
+        | 0  | true  | true   |
+        | 1  | false | NULL   |
+        | 2  | false | NULL   |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Nested temporal predicates preserve null arrays and elements with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          (CAST(NULL AS ARRAY<STRUCT<t: DATE>>) =
+            array(named_struct('t', TIMESTAMP '2024-01-01'))) IS NULL AS null_array,
+          CAST(NULL AS ARRAY<STRUCT<t: DATE>>) <=>
+            CAST(NULL AS ARRAY<STRUCT<t: TIMESTAMP>>) AS null_safe,
+          array(CAST(NULL AS STRUCT<t: DATE>), named_struct('t', DATE '2024-01-01')) =
+            array(CAST(NULL AS STRUCT<t: TIMESTAMP>),
+                  named_struct('t', TIMESTAMP '2024-01-01')) AS null_element,
+          array(CAST(NULL AS STRUCT<t: DATE>)) =
+            array(named_struct('t', TIMESTAMP '2024-01-01')) AS different_element
+        """
+      Then query result
+        | null_array | null_safe | null_element | different_element |
+        | true       | true      | true         | false             |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Nested temporal IN subqueries widen numeric siblings with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT count(*) AS matched
+        FROM range(2)
+        WHERE array(named_struct('t', DATE '2024-01-01', 'n', CAST(id AS INT))) IN (
+          SELECT array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1L))
+        )
+        """
+      Then query result
+        | matched |
+        | 1       |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
     Scenario: String-to-timestamp comparison uses the session time zone and microsecond precision
       Given config spark.sql.session.timeZone = Asia/Shanghai
       When query

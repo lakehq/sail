@@ -514,6 +514,15 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if !ansi_mode && is_zero_literal(&divisor) {
         return Ok(Expr::Literal(ScalarValue::Null, None));
     }
+    // Spark widens narrow integers before DIV, so INT_MIN / -1 fits in BIGINT.
+    let promote_integer = |argument: Expr| match argument.get_type(function_context.schema) {
+        Ok(DataType::Int8 | DataType::Int16 | DataType::Int32) => {
+            cast(argument, DataType::Int64)
+        }
+        _ => argument,
+    };
+    let dividend = promote_integer(dividend);
+    let divisor = promote_integer(divisor);
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 

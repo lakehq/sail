@@ -343,17 +343,26 @@ impl PlanResolver<'_> {
                 "named argument expression can only be used in UDF arguments",
             )),
         }?;
+        resolved.expr = self.rebind_expression_timezone(resolved.expr, schema);
+        Ok(resolved)
+    }
+
+    fn rebind_expression_timezone(
+        &self,
+        mut expression: expr::Expr,
+        schema: &DFSchemaRef,
+    ) -> expr::Expr {
         // Spark TimestampType stores an instant, not a per-column display timezone.
         // Rebind stored timestamps to this query's zone before their callers use them.
-        if let Ok(data_type) = resolved.expr.get_type(schema) {
+        if let Ok(data_type) = expression.get_type(schema) {
             let target = with_session_timezone(&data_type, &self.config.session_timezone);
             if target != data_type {
                 // DataFusion's nested cast matches fields by name and collapses duplicates.
-                resolved.expr =
-                    ScalarUDF::from(SparkStructRename::new(target)).call(vec![resolved.expr]);
+                expression =
+                    ScalarUDF::from(SparkStructRename::new(target)).call(vec![expression]);
             }
         }
-        Ok(resolved)
+        expression
     }
 
     pub(super) async fn resolve_named_expressions(
