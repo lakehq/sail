@@ -65,8 +65,8 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    // FIXME: DataFusion coalesce drops logical type metadata from its argument fields;
-    // retain the resolved common type annotation in upstream field inference.
+    // FIXME: DataFusion coalesce drops logical type metadata from its argument fields.
+    //  Need to retain the resolved common type annotation.
     let ScalarFunctionInput {
         arguments,
         function_context,

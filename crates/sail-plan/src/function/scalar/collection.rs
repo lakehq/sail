@@ -37,8 +37,7 @@ fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
-    // FIXME: DataFusion array_element/map_extract and CASE inference lose selected
-    // field metadata. Preserve it upstream before relying on these expanded expressions.
+    // FIXME: DataFusion array_element/map_extract and CASE inference lose selected field metadata.
     let (collection, element) = input.arguments.two()?;
     let (name, null_or_out_of_bounds) = if is_try {
         ("try_element_at", lit(ScalarValue::Null))

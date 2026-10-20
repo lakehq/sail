@@ -164,8 +164,8 @@ fn map_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let map = input.arguments.one()?;
     let value_contains_null = map_value_contains_null(&map.get_type(schema.as_ref())?);
     let map = cast_map_value_nullability(map, schema, true)?;
-    // FIXME: DataFusion's ScalarValue list conversion drops child metadata for constant
-    // maps, causing a return-type mismatch for interval values. Fix that upstream.
+    // FIXME: DataFusion's ScalarValue list conversion drops child metadata for constant maps,
+    //  causing a return-type mismatch for interval values.
     let expr = expr_fn::map_values(map);
     cast_list_value_nullability(expr, schema, value_contains_null)
 }

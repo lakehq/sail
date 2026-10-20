@@ -86,8 +86,7 @@ impl ScalarUDFImpl for StructFunction {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // FIXME: DataFusion's physical planner drops nonliteral alias metadata before
-        // it reaches these argument fields; preserve those alias fields upstream.
+        // FIXME: DataFusion's physical planner drops nonliteral alias metadata before it reaches these arg fields
         let fields: Vec<Field> = args
             .arg_fields
             .iter()

@@ -123,7 +123,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
             data_type: Some(data_type),
             nullable: field.is_nullable(),
             // FIXME: Export public metadata such as raw DDL comments through the
-            // Spark JSON envelope too, without exposing internal Arrow/table keys.
+            //  Spark JSON envelope too, without exposing internal Arrow/table keys.
             metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
         })
     }

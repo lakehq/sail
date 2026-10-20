@@ -399,8 +399,7 @@ Feature: arrays_zip comprehensive tests
 
   Rule: Output schema (migrated from test_arrays_zip.txt printSchema doctests)
 
-    # All three inline-table arrays are non-nullable, so Spark keeps the zipped array
-    # non-nullable.
+    # All three inline-table arrays are non-nullable, so Spark keeps the zipped array non-nullable.
     @function(nullability)
     Scenario: arrays_zip doctest #2 (schema)
       When query

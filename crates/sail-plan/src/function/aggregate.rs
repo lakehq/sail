@@ -616,8 +616,8 @@ fn duplicate_agnostic_extreme(
     input: AggFunctionInput,
     function: fn() -> Arc<AggregateUDF>,
 ) -> PlanResult<expr::Expr> {
-    // FIXME: DataFusion min/max return inference loses logical input metadata such
-    // as interval qualifiers; preserve it upstream without forwarding user metadata.
+    // FIXME: DataFusion min/max return inference loses logical input metadata (e.g., interval qualifiers).
+    //  Preserve it upstream without forwarding user metadata.
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: function(),
         params: AggregateFunctionParams {
