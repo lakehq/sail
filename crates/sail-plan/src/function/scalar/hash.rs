@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ScalarUDF, expr};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr};
 use datafusion_spark::function::hash::expr_fn as hash_fn;
 use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
 use datafusion_spark::function::math::hex::SparkHex;
@@ -34,6 +35,29 @@ fn sha2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::lower(hex))
 }
 
+/// `xxhash64` of a DAY-TIME interval hashes its microseconds as a long (`hash.scala:556-557`), which
+/// is what casting the interval to a `BIGINT` hands the upstream kernel: the kernel itself has no
+/// arm for `Duration`, and a `date - date` difference reaches it as one.
+fn xxhash64(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = arguments
+        .into_iter()
+        .map(
+            |argument| match argument.get_type(function_context.schema.as_ref())? {
+                DataType::Duration(_) => Ok(cast(argument, DataType::Int64)),
+                _ => Ok(argument),
+            },
+        )
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(SparkXxhash64::new())),
+        args: arguments,
+    }))
+}
+
 pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -44,6 +68,6 @@ pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, ScalarFunctio
         ("sha", F::unary(hash_fn::sha1)),
         ("sha1", F::unary(hash_fn::sha1)),
         ("sha2", F::custom(sha2)),
-        ("xxhash64", F::udf(SparkXxhash64::new())),
+        ("xxhash64", F::custom(xxhash64)),
     ]
 }

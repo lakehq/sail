@@ -106,3 +106,43 @@ Feature: xxhash64() returns 64-bit xxHash
         root
          |-- result: long (nullable = false)
         """
+
+  Rule: Interval values
+
+    # Same rule as `hash` (`hash.scala:556-557`): a day-time interval hashes its microseconds as a
+    # long. Values measured on the Spark 4.2 JVM.
+    Scenario Outline: xxhash64 of an interval: <case>
+      When query
+        """
+        SELECT xxhash64(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case            | input                               | result              |
+        | DAY             | INTERVAL '2' DAY                    | 4929742394593830899 |
+        | DAY TO SECOND   | INTERVAL '1 02:03:04' DAY TO SECOND | 4873107316074688783 |
+        | date difference | DATE'2024-01-15' - DATE'2024-01-01' | 2791293123331190712 |
+
+    Scenario: xxhash64 of a NULL interval is the seed
+      When query
+        """
+        SELECT xxhash64(CAST(NULL AS INTERVAL DAY)) AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    # A year-month interval has to be hashed as its months, and Sail cannot read them out yet: the
+    # cast `CAST(INTERVAL '2' YEAR AS INT)` is unimplemented, which `main` fails on too.
+    @sail-bug
+    Scenario: xxhash64 of a year-month interval
+      When query
+        """
+        SELECT xxhash64(INTERVAL '2' YEAR) AS result
+        """
+      Then query result
+        | result              |
+        | 7788558767429488329 |

@@ -34,7 +34,9 @@ use crate::expression::{
     expr_with_default_column_values, from_ast_expression, from_ast_function_arguments,
     from_ast_identifier_list, from_ast_object_name,
 };
-use crate::literal::interval::{IntervalValue, from_ast_signed_interval, multi_unit_interval_days};
+use crate::literal::interval::{
+    IntervalValue, MixedIntervalUnits, from_ast_signed_interval, multi_unit_interval_days,
+};
 use crate::literal::utils::Signed;
 use crate::query::{from_ast_query, from_ast_with_clause};
 use crate::value::from_ast_string;
@@ -2097,7 +2099,11 @@ fn from_ast_time_zone(timezone: TimeZoneValue) -> SqlResult<String> {
                     ));
                 }
             };
-            let (months, micros) = match from_ast_signed_interval(Signed::Positive(interval))? {
+            // A time zone displacement is not an ANSI interval literal: it may span both families.
+            let (months, micros) = match from_ast_signed_interval(
+                Signed::Positive(interval),
+                MixedIntervalUnits::Allow,
+            )? {
                 IntervalValue::YearMonth { months, .. } => (i64::from(months), 0),
                 IntervalValue::Microsecond { microseconds, .. } => (0, microseconds),
                 IntervalValue::MonthDayNanosecond {

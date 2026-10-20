@@ -38,7 +38,20 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::scalar::interval_arithmetic::{self, Operator as IntervalOperator};
+
+/// Refuses the operand pairs Spark refuses around an interval, and rewrites the pairs that
+/// produce an interval with its field range. Every other pair is handed back to the caller.
+fn resolve_interval_operands(
+    op: IntervalOperator,
+    left: Expr,
+    right: Expr,
+    function_context: &FunctionContextInput,
+) -> PlanResult<Result<Expr, (Expr, Expr)>> {
+    interval_arithmetic::check_operands(op, &left, &right, function_context)?;
+    interval_arithmetic::rewrite(op, left, right, function_context)
+}
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -47,12 +60,29 @@ fn add_day_time_interval_to_string(
     session_timezone: Arc<str>,
     ansi_mode: bool,
 ) -> PlanResult<Expr> {
+    // The string is read leniently, and a malformed one is refused with Spark's error class
+    // under ANSI: the timestamp parser's own error names neither the value nor the class.
     let timestamp = ScalarUDF::from(SparkTimestamp::try_new(
         Some(session_timezone),
-        ansi_mode,
+        false,
         false,
     )?)
-    .call(vec![string]);
+    .call(vec![string.clone()]);
+    let timestamp = if ansi_mode {
+        let message = expr_fn::concat(vec![
+            lit("[CAST_INVALID_INPUT] The value '"),
+            cast(string.clone(), DataType::Utf8),
+            lit(
+                "' of the type \"STRING\" cannot be cast to \"TIMESTAMP\" because it is \
+                 malformed. Correct the value as per the syntax, or change its target type. Use \
+                 `try_cast` to tolerate malformed input and return NULL instead.",
+            ),
+        ]);
+        let raise = ScalarUDF::from(RaiseError::new()).call(vec![message]);
+        when(timestamp.clone().is_null().and(string.is_not_null()), raise).otherwise(timestamp)?
+    } else {
+        timestamp
+    };
     let calendar_interval =
         ScalarUDF::from(SparkDayTimeIntervalToCalendarInterval::new()).call(vec![interval]);
     let shifted = timestamp + calendar_interval;
@@ -89,6 +119,15 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Ok(arguments.one()?)
     } else {
         let (left, right) = arguments.two()?;
+        let (left, right) = match resolve_interval_operands(
+            IntervalOperator::Plus,
+            left,
+            right,
+            &function_context,
+        )? {
+            Ok(expr) => return Ok(expr),
+            Err(operands) => operands,
+        };
         let (left_type, right_type) = (
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
@@ -159,18 +198,37 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
     if arguments.len() < 2 {
         let arg = arguments.one()?;
-        Ok(spark_unary_negate(
+        spark_unary_negate(
             arg,
             function_context.plan_config.ansi_mode,
             function_context.schema,
-        ))
+        )
     } else {
         let (left, right) = arguments.two()?;
+        let (left, right) = match resolve_interval_operands(
+            IntervalOperator::Minus,
+            left,
+            right,
+            &function_context,
+        )? {
+            Ok(expr) => return Ok(expr),
+            Err(operands) => operands,
+        };
         let (left_type, right_type) = (
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
         Ok(match (left_type, right_type) {
+            (
+                Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
+                Ok(DataType::Duration(TimeUnit::Microsecond)),
+            ) => add_day_time_interval_to_string(
+                left,
+                ScalarUDF::from(NegateDuration::new()).call(vec![right]),
+                string_type,
+                Arc::clone(&function_context.plan_config.session_timezone),
+                function_context.plan_config.ansi_mode,
+            )?,
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
                 left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
             }
@@ -206,27 +264,21 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (left, right) = arguments.two()?;
+    // A day-time interval scaled by a number is handled there, with Spark's rounding.
+    let (left, right) = match resolve_interval_operands(
+        IntervalOperator::Multiply,
+        left,
+        right,
+        &function_context,
+    )? {
+        Ok(expr) => return Ok(expr),
+        Err(operands) => operands,
+    };
     let (left_type, right_type) = (
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
     );
     Ok(match (left_type, right_type) {
-        // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
-        //  Seems to be a bug in DataFusion.
-        (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
-            cast(
-                cast(left, DataType::Int64) * right,
-                DataType::Duration(TimeUnit::Microsecond),
-            )
-        }
-        (Ok(_), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
-            cast(
-                left * cast(right, DataType::Int64),
-                DataType::Duration(TimeUnit::Microsecond),
-            )
-        }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
         (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left * right,
@@ -333,6 +385,17 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
+    // A day-time interval divided by a number raises on a zero divisor in both ANSI modes, so it
+    // is handled before the zero checks below.
+    let (dividend, divisor) = match resolve_interval_operands(
+        IntervalOperator::Divide,
+        dividend,
+        divisor,
+        &function_context,
+    )? {
+        Ok(expr) => return Ok(expr),
+        Err(operands) => operands,
+    };
 
     // Plan-time check for literal zero divisors (fast path, better error UX).
     if is_zero_literal(&divisor) {
@@ -596,6 +659,12 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
+    interval_arithmetic::check_operands(
+        IntervalOperator::Modulo,
+        &dividend,
+        &divisor,
+        &function_context,
+    )?;
 
     // Plan-time check for literal zero divisors.
     if is_zero_literal(&divisor) {
@@ -627,10 +696,38 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }))
 }
 
+/// `Greatest` and `Least` declare the common type of their children
+/// (`conditionalExpressions.scala:290,372`), so an interval keeps the range that covers them all.
+fn spark_greatest(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let result = expr_fn::greatest(arguments.clone());
+    interval_arithmetic::preserve_interval_range(result, &arguments, &function_context)
+}
+
+fn spark_least(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let result = expr_fn::least(arguments.clone());
+    interval_arithmetic::preserve_interval_range(result, &arguments, &function_context)
+}
+
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let ansi_mode = input.function_context.plan_config.ansi_mode;
-    let udf = ScalarUDF::from(SparkAbs::new(ansi_mode));
-    Ok(udf.call(input.arguments))
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let udf = ScalarUDF::from(SparkAbs::new(function_context.plan_config.ansi_mode));
+    let result = udf.call(arguments.clone());
+    // `Abs` declares the child's type (`arithmetic.scala:158`), so an interval keeps its range. The
+    // UDF's own return field declares it too, but that field does not reach the PROJECTION's output
+    // schema -- measured: with only the return field, `typeof` reports `interval day` while the
+    // schema still publishes `interval day to second`. The cast is what carries it all the way out.
+    interval_arithmetic::preserve_interval_range(result, &arguments, &function_context)
 }
 
 fn spark_bin(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -712,8 +809,12 @@ fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
 /// Spark unary minus / `negative(x)`. Duration negation goes through
 /// `NegateDuration`; everything else uses `SparkNegative`, which honors the ANSI
 /// overflow semantics with `ansi_mode` baked at planning time.
-fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr {
-    match arg.get_type(schema) {
+fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> PlanResult<Expr> {
+    // A negated interval keeps its field range.
+    if let Some(negated) = interval_arithmetic::negate_interval(&arg, schema)? {
+        return Ok(negated);
+    }
+    Ok(match arg.get_type(schema) {
         // DataFusion's `Negative` doesn't support Duration types, so route those
         // to the dedicated UDF.
         Ok(DataType::Duration(_)) => ScalarUDF::from(NegateDuration::new()).call(vec![arg]),
@@ -737,7 +838,86 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
             Some(folded) => folded,
             None => ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![arg]),
         },
+    })
+}
+
+/// `try_add` and `try_subtract` of two intervals of one family keep the range that covers both.
+/// The `try_*` functions answer what their operator answers, with NULL instead of an error
+/// (`TryEval`, `arithmetic.scala`), so an interval pair takes the same rewrite as `+ - * /`: the
+/// range is computed the same way and only a zero divisor differs -- it is NULL here, never a raise
+/// (measured: `try_divide(INTERVAL '2' DAY, 0)` is NULL on the JVM).
+fn try_interval_arithmetic(
+    op: IntervalOperator,
+    arguments: &[Expr],
+    function_context: &FunctionContextInput,
+) -> PlanResult<Option<Expr>> {
+    let [left, right] = arguments else {
+        return Ok(None);
+    };
+    match interval_arithmetic::rewrite_with(
+        op,
+        left.clone(),
+        right.clone(),
+        interval_arithmetic::ZeroDivisor::Null,
+        function_context,
+    )? {
+        Ok(expr) => Ok(Some(expr)),
+        Err(_) => Ok(None),
     }
+}
+
+fn spark_try_add(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    if let Some(expr) =
+        try_interval_arithmetic(IntervalOperator::Plus, &arguments, &function_context)?
+    {
+        return Ok(expr);
+    }
+    let result = ScalarUDF::from(SparkTryAdd::new()).call(arguments.clone());
+    interval_arithmetic::widen_interval_result(result, &arguments, &function_context)
+}
+
+fn spark_try_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    if let Some(expr) =
+        try_interval_arithmetic(IntervalOperator::Multiply, &arguments, &function_context)?
+    {
+        return Ok(expr);
+    }
+    Ok(ScalarUDF::from(SparkTryMult::new()).call(arguments))
+}
+
+fn spark_try_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    if let Some(expr) =
+        try_interval_arithmetic(IntervalOperator::Divide, &arguments, &function_context)?
+    {
+        return Ok(expr);
+    }
+    Ok(ScalarUDF::from(SparkTryDiv::new()).call(arguments))
+}
+
+fn spark_try_subtract(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    if let Some(expr) =
+        try_interval_arithmetic(IntervalOperator::Minus, &arguments, &function_context)?
+    {
+        return Ok(expr);
+    }
+    let result = ScalarUDF::from(SparkTrySubtract::new()).call(arguments.clone());
+    interval_arithmetic::widen_interval_result(result, &arguments, &function_context)
 }
 
 fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -746,11 +926,11 @@ fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context,
     } = input;
     let arg = arguments.one()?;
-    Ok(spark_unary_negate(
+    spark_unary_negate(
         arg,
         function_context.plan_config.ansi_mode,
         function_context.schema,
-    ))
+    )
 }
 
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -787,10 +967,10 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::var_arg(expr_fn::greatest)),
+        ("greatest", F::custom(spark_greatest)),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::var_arg(expr_fn::least)),
+        ("least", F::custom(spark_least)),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),
@@ -818,11 +998,11 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("sqrt", F::unary(spark_sqrt)),
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
-        ("try_add", F::udf(SparkTryAdd::new())),
-        ("try_divide", F::udf(SparkTryDiv::new())),
-        ("try_multiply", F::udf(SparkTryMult::new())),
+        ("try_add", F::custom(spark_try_add)),
+        ("try_divide", F::custom(spark_try_divide)),
+        ("try_multiply", F::custom(spark_try_multiply)),
         ("try_mod", F::udf(SparkTryMod::new())),
-        ("try_subtract", F::udf(SparkTrySubtract::new())),
+        ("try_subtract", F::custom(spark_try_subtract)),
         ("unhex", F::udf(SparkUnHex::new())),
         ("uniform", F::udf(SparkUniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),

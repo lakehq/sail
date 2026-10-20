@@ -12,6 +12,7 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::scalar::interval_arithmetic;
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -37,14 +38,15 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
     let when_then_expr = conditions
         .into_iter()
-        .zip(branch_values)
+        .zip(branch_values.clone())
         .map(|(condition, value)| (Box::new(condition), Box::new(value)))
         .collect();
-    Ok(expr::Expr::Case(expr::Case {
+    let result = expr::Expr::Case(expr::Case {
         expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
         else_expr: None,
-    }))
+    });
+    interval_arithmetic::preserve_interval_range(result, &branch_values, &function_context)
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -55,11 +57,38 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (when_expr, then_expr, else_expr) = arguments.three()?;
     let (then_expr, else_expr) =
         coerce_string_temporal_values(vec![then_expr, else_expr], &function_context)?.two()?;
-    Ok(expr::Expr::Case(expr::Case {
+    let branch_values = vec![then_expr.clone(), else_expr.clone()];
+    let result = expr::Expr::Case(expr::Case {
         expr: None,
         when_then_expr: vec![(Box::new(when_expr), Box::new(then_expr))],
         else_expr: Some(Box::new(else_expr)),
-    }))
+    });
+    interval_arithmetic::preserve_interval_range(result, &branch_values, &function_context)
+}
+
+/// `Nvl` is `Coalesce(Seq(left, right))` (`nullExpressions.scala:246`) and `Nvl2` is
+/// `If(IsNotNull(expr), left, right)` (`:284`), so both declare the type of the values they return
+/// and an interval keeps its range through them.
+fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    let values = vec![left.clone(), right.clone()];
+    let result = expr_fn::nvl(left, right);
+    interval_arithmetic::preserve_interval_range(result, &values, &function_context)
+}
+
+fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (condition, left, right) = arguments.three()?;
+    let values = vec![left.clone(), right.clone()];
+    let result = expr_fn::nvl2(condition, left, right);
+    interval_arithmetic::preserve_interval_range(result, &values, &function_context)
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -68,7 +97,8 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
-    Ok(expr_fn::coalesce(arguments))
+    let result = expr_fn::coalesce(arguments.clone());
+    interval_arithmetic::preserve_interval_range(result, &arguments, &function_context)
 }
 
 fn coerce_string_temporal_values(
@@ -182,12 +212,12 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
     vec![
         ("coalesce", F::custom(coalesce)),
         ("if", F::custom(if_expr)),
-        ("ifnull", F::binary(expr_fn::nvl)),
+        ("ifnull", F::custom(nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
         ("nullif", F::binary(expr_fn::nullif)),
         ("nullifzero", F::custom(nullifzero)),
-        ("nvl", F::binary(expr_fn::nvl)),
-        ("nvl2", F::ternary(expr_fn::nvl2)),
+        ("nvl", F::custom(nvl)),
+        ("nvl2", F::custom(nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),

@@ -281,6 +281,73 @@ def query_result(datatable, ordered, query, spark):
         assert sorted(rows) == sorted(r)
 
 
+def _stored_numbers(array) -> list[str] | None:
+    """The numbers an Arrow array stores, or `None` when it stores no single number per value.
+
+    A date is days in an `int32`, a time and a timestamp are microseconds (or nanoseconds) in an
+    `int64`, an interval is its microseconds or its months. Arrow refuses `date32 -> int64`, so the
+    width is tried in turn rather than assumed.
+    """
+    for width in ("int64", "int32"):
+        try:
+            return [str(value) for value in array.cast(width).to_pylist()]
+        except Exception:  # noqa: BLE001, S112
+            continue
+    return None
+
+
+@then("interval result")
+def interval_result(datatable, query, spark):
+    """Assert what an interval STORES, what type it publishes and what it PRINTS, apart.
+
+    The Spark field range of an interval rides in the field metadata, not in the stored number, and
+    three different pieces of code read it: the schema the query publishes, the renderer behind
+    `show`, and the renderer behind `CAST(... AS STRING)`. Asserting only the printed value cannot
+    tell a wrong VALUE from a right value printed with the wrong fields, and a fix that reaches one
+    renderer and not the schema looks green from one lens and wrong from the other. The table is
+    `| stored | type | shown | cast |`; a column may be `-` to leave it unasserted.
+    """
+    header, *rows = datatable
+    assert header == ["stored", "type", "shown", "cast"], (
+        "the table of `interval result` is | stored | type | shown | cast |"
+    )
+    assert len(rows) == 1, "`interval result` asserts a single row"
+    [expected_stored, expected_type, expected_shown, expected_cast] = rows[0]
+
+    df = spark.sql(query)
+    column = df.schema[0].name
+    if expected_stored != "-":
+        # The number behind the interval: microseconds for a day-time one, months for a year-month
+        # one. Read off Arrow, so no renderer stands between the assertion and the data.
+        array = _arrow_table(df).column(0)
+        stored = _stored_numbers(array)
+        if stored is None:
+            message = f"the value stores no number: {array.type} {array.to_pylist()}"
+            raise AssertionError(message)
+        assert stored == [expected_stored], f"stored: {stored} != [{expected_stored}]"
+    if expected_type != "-":
+        assert df.schema[0].dataType.simpleString() == expected_type
+    if expected_shown != "-":
+        [_, *shown] = parse_show_string(df._show_string(n=0x7FFFFFFF, truncate=False))  # noqa: SLF001
+        assert shown == [[expected_shown]]
+    if expected_cast != "-":
+        rendered = df.selectExpr(f"CAST(`{column}` AS STRING)").collect()[0][0]
+        assert _format_collected_value(rendered) == expected_cast
+
+
+def _arrow_table(df):
+    """The Arrow table behind a DataFrame, on every PySpark the suite runs against.
+
+    `DataFrame.toArrow` arrived in PySpark 4.0; on 3.5 the same table is one call deeper, where
+    `collect` reads it.
+    """
+    if hasattr(df, "toArrow"):
+        return df.toArrow()
+    client = df._session.client  # noqa: SLF001
+    table, _ = client.to_table(df._plan.to_proto(client))  # noqa: SLF001
+    return table
+
+
 def _format_collected_value(value) -> str:
     if value is None:
         return "NULL"

@@ -179,6 +179,9 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
     SparkYearMonthInterval, YearMonthIntervalMonths,
 };
+use sail_function::scalar::datetime::spark_interval_scale::{
+    SparkDivideYmInterval, SparkMultiplyYmInterval,
+};
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
@@ -3535,6 +3538,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkAbs(r#gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
+            UdfKind::SparkMakeYmInterval(r#gen::SparkMakeYmIntervalUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new(
+                    ansi_mode,
+                ))));
+            }
             UdfKind::SparkBin(r#gen::SparkBinUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkBin::new(ansi_mode))));
             }
@@ -3714,14 +3722,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
+            "spark_multiply_ym_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkMultiplyYmInterval::new())))
+            }
+            "spark_divide_ym_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDivideYmInterval::new())))
+            }
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
             }
             "spark_make_interval" | "make_interval" | "try_make_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
-            }
-            "spark_make_ym_interval" | "make_ym_interval" => {
-                Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
             "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
@@ -3832,6 +3843,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
+            || node_inner.is::<SparkMultiplyYmInterval>()
+            || node_inner.is::<SparkDivideYmInterval>()
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
@@ -3875,7 +3888,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeTime>()
             || node_inner.is::<SparkTimeDiff>()
             || node_inner.is::<SparkTimeTrunc>()
-            || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
@@ -4085,6 +4097,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(r#gen::SparkAbsUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkMakeYmInterval>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkMakeYmInterval(r#gen::SparkMakeYmIntervalUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkBin>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkBin(r#gen::SparkBinUdf { ansi_mode })

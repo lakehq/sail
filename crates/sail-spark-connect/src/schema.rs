@@ -73,40 +73,34 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
         Kind::Timestamp(_) => write!(f, "timestamp"),
         Kind::TimestampNtz(_) => write!(f, "timestamp_ntz"),
         Kind::CalendarInterval(_) => write!(f, "interval"),
-        Kind::YearMonthInterval(interval) => match (interval.start_field, interval.end_field) {
-            (Some(start), Some(end)) => {
-                write!(f, "interval ")?;
-                format_year_month_interval_field(f, start)?;
+        Kind::YearMonthInterval(interval) => {
+            let (start, end) = resolve_interval_fields(
+                interval.start_field,
+                interval.end_field,
+                YEAR_MONTH_INTERVAL_DEFAULT,
+            );
+            write!(f, "interval ")?;
+            format_year_month_interval_field(f, start)?;
+            if start != end {
                 write!(f, " to ")?;
-                format_year_month_interval_field(f, end)
+                format_year_month_interval_field(f, end)?;
             }
-            (Some(start), None) => {
-                write!(f, "interval ")?;
-                format_year_month_interval_field(f, start)
-            }
-            (None, Some(end)) => {
-                write!(f, "interval ? to ")?;
-                format_year_month_interval_field(f, end)
-            }
-            (None, None) => write!(f, "interval"),
-        },
-        Kind::DayTimeInterval(interval) => match (interval.start_field, interval.end_field) {
-            (Some(start), Some(end)) => {
-                write!(f, "interval ")?;
-                format_day_time_interval_field(f, start)?;
+            Ok(())
+        }
+        Kind::DayTimeInterval(interval) => {
+            let (start, end) = resolve_interval_fields(
+                interval.start_field,
+                interval.end_field,
+                DAY_TIME_INTERVAL_DEFAULT,
+            );
+            write!(f, "interval ")?;
+            format_day_time_interval_field(f, start)?;
+            if start != end {
                 write!(f, " to ")?;
-                format_day_time_interval_field(f, end)
+                format_day_time_interval_field(f, end)?;
             }
-            (Some(start), None) => {
-                write!(f, "interval ")?;
-                format_day_time_interval_field(f, start)
-            }
-            (None, Some(end)) => {
-                write!(f, "interval ? to ")?;
-                format_day_time_interval_field(f, end)
-            }
-            (None, None) => write!(f, "interval"),
-        },
+            Ok(())
+        }
         Kind::Array(_) => write!(f, "array"),
         Kind::Struct(_) => write!(f, "struct"),
         Kind::Map(_) => write!(f, "map"),
@@ -232,6 +226,27 @@ fn quote_field_name(name: &str) -> String {
     }
 }
 
+/// `YearMonthIntervalType.DEFAULT` in Spark, which spans `YEAR TO MONTH`.
+const YEAR_MONTH_INTERVAL_DEFAULT: (i32, i32) = (0, 1);
+/// `DayTimeIntervalType.DEFAULT` in Spark, which spans `DAY TO SECOND`.
+const DAY_TIME_INTERVAL_DEFAULT: (i32, i32) = (0, 3);
+
+/// Resolves the fields of an ANSI interval type, which Spark always reports over a concrete
+/// range. A type declaring a single field spans that field only, and a type declaring none spans
+/// the default range. Only the calendar interval is reported without any field.
+fn resolve_interval_fields(
+    start_field: Option<i32>,
+    end_field: Option<i32>,
+    default: (i32, i32),
+) -> (i32, i32) {
+    match (start_field, end_field) {
+        (Some(start), Some(end)) => (start, end),
+        (Some(start), None) => (start, start),
+        (None, Some(end)) => (default.0, end),
+        (None, None) => default,
+    }
+}
+
 fn format_year_month_interval_field_name(field: i32) -> &'static str {
     match field {
         0 => "YEAR",
@@ -295,48 +310,32 @@ fn format_ddl_type(buf: &mut String, data_type: Option<&sc::DataType>) -> SparkR
         Kind::Timestamp(_) => buf.push_str("TIMESTAMP"),
         Kind::TimestampNtz(_) => buf.push_str("TIMESTAMP_NTZ"),
         Kind::CalendarInterval(_) => buf.push_str("INTERVAL"),
-        Kind::YearMonthInterval(interval) => match (interval.start_field, interval.end_field) {
-            (Some(start), Some(end)) => {
-                buf.push_str("INTERVAL ");
-                buf.push_str(format_year_month_interval_field_name(start));
-                if start != end {
-                    buf.push_str(" TO ");
-                    buf.push_str(format_year_month_interval_field_name(end));
-                }
-            }
-            (Some(start), None) => {
-                buf.push_str("INTERVAL ");
-                buf.push_str(format_year_month_interval_field_name(start));
-            }
-            (None, Some(end)) => {
-                buf.push_str("INTERVAL ? TO ");
+        Kind::YearMonthInterval(interval) => {
+            let (start, end) = resolve_interval_fields(
+                interval.start_field,
+                interval.end_field,
+                YEAR_MONTH_INTERVAL_DEFAULT,
+            );
+            buf.push_str("INTERVAL ");
+            buf.push_str(format_year_month_interval_field_name(start));
+            if start != end {
+                buf.push_str(" TO ");
                 buf.push_str(format_year_month_interval_field_name(end));
             }
-            (None, None) => {
-                buf.push_str("INTERVAL");
-            }
-        },
-        Kind::DayTimeInterval(interval) => match (interval.start_field, interval.end_field) {
-            (Some(start), Some(end)) => {
-                buf.push_str("INTERVAL ");
-                buf.push_str(format_day_time_interval_field_name(start));
-                if start != end {
-                    buf.push_str(" TO ");
-                    buf.push_str(format_day_time_interval_field_name(end));
-                }
-            }
-            (Some(start), None) => {
-                buf.push_str("INTERVAL ");
-                buf.push_str(format_day_time_interval_field_name(start));
-            }
-            (None, Some(end)) => {
-                buf.push_str("INTERVAL ? TO ");
+        }
+        Kind::DayTimeInterval(interval) => {
+            let (start, end) = resolve_interval_fields(
+                interval.start_field,
+                interval.end_field,
+                DAY_TIME_INTERVAL_DEFAULT,
+            );
+            buf.push_str("INTERVAL ");
+            buf.push_str(format_day_time_interval_field_name(start));
+            if start != end {
+                buf.push_str(" TO ");
                 buf.push_str(format_day_time_interval_field_name(end));
             }
-            (None, None) => {
-                buf.push_str("INTERVAL");
-            }
-        },
+        }
         Kind::Array(array) => {
             buf.push_str("ARRAY<");
             format_ddl_type(buf, array.element_type.as_deref())?;

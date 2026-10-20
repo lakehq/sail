@@ -91,9 +91,7 @@ Feature: try_add output schema
         | case                        | args                                            | result              |
         | try_add doctest #6 (result) | TIMESTAMP '2021-01-01 00:00:00', INTERVAL 1 DAY | 2021-01-02 00:00:00 |
 
-    # Adding two YEAR intervals keeps the YEAR-only field range in Spark, which renders as
-    # `INTERVAL '3' YEAR`. Sail widens the result to YEAR TO MONTH and renders `'3-0'`.
-    @sail-bug
+    # Adding two YEAR intervals keeps the YEAR-only field range, which renders as `INTERVAL '3' YEAR`.
     Scenario: try_add doctest #5 (result)
       When query
         """

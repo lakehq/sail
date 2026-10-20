@@ -19,7 +19,7 @@ use arrow::datatypes::{
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
-    SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
+    SPARK_METADATA_JSON_KEY, is_sail_internal_metadata_key,
 };
 
 use crate::r#gen;
@@ -80,7 +80,7 @@ fn spark_field_metadata_json(
     };
 
     for (key, value) in metadata {
-        if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
+        if key == SPARK_METADATA_JSON_KEY || is_sail_internal_metadata_key(key) {
             continue;
         }
         out.entry(key.clone())

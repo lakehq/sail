@@ -34,6 +34,12 @@ pub struct SparkUdtMetadata {
     pub serialized_python_class: Option<String>,
 }
 
+/// Returns whether the Arrow field metadata key is internal to Sail, and must therefore not be
+/// exposed as Spark column metadata.
+pub fn is_sail_internal_metadata_key(key: &str) -> bool {
+    key == SAIL_SPARK_UDT_METADATA_KEY || key == SAIL_SPARK_INTERVAL_METADATA_KEY
+}
+
 /// Field name for list type.
 pub const SAIL_LIST_FIELD_NAME: &str = "item";
 /// Field name for map type's entries.

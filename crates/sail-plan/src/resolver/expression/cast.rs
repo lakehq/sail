@@ -2,20 +2,25 @@ use std::ops::{Div, Mul};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common::spec;
 use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
+use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -101,6 +106,41 @@ impl PlanResolver<'_> {
             } => end_field.or(*start_field),
             _ => None,
         };
+        // Spark truncates the value toward zero to the end field of the target interval type, so
+        // casting to a narrower qualifier drops the finer components rather than keeping them.
+        let day_time_truncation_micros = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::DayTime,
+                start_field,
+                end_field,
+            } => match end_field.or(*start_field) {
+                Some(spec::IntervalFieldType::Day) => Some(24 * 60 * 60 * 1_000_000i64),
+                Some(spec::IntervalFieldType::Hour) => Some(60 * 60 * 1_000_000i64),
+                Some(spec::IntervalFieldType::Minute) => Some(60 * 1_000_000i64),
+                _ => None,
+            },
+            _ => None,
+        };
+        // A year-month interval cast to `INTERVAL YEAR` drops its months, the same way.
+        let year_month_truncation = matches!(
+            &cast_to_type,
+            spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::YearMonth,
+                start_field,
+                end_field,
+            } if end_field.or(*start_field) == Some(spec::IntervalFieldType::Year)
+        );
+        // The range the target type declares, which also names the column.
+        let target_interval_range = match &cast_to_type {
+            spec::DataType::Interval {
+                interval_unit,
+                start_field,
+                end_field,
+            } => IntervalRange::from_declared(*interval_unit, *start_field, *end_field),
+            _ => None,
+        };
+        // The interval fields are part of the Spark type but not of the Arrow type, so they are
+        // declared on the cast expression itself.
         let spark_interval_metadata = match &cast_to_type {
             spec::DataType::Interval {
                 interval_unit,
@@ -117,11 +157,21 @@ impl PlanResolver<'_> {
         let expr_field = expr.to_field(schema)?.1;
         let expr_type = expr_field.data_type().clone();
         let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
+        // The range a day-time interval operand is read by, when it is cast to a number.
+        let day_time_source_range = match expr_type {
+            DataType::Duration(TimeUnit::Microsecond) => IntervalRange::from_field(&expr_field),
+            _ => None,
+        };
         let name = if need_rename_cast(&expr) {
-            let service = self.ctx.extension::<PlanService>()?;
-            let data_type_string = service
-                .plan_formatter()
-                .data_type_to_simple_string(&cast_to_type)?;
+            let data_type_string = match target_interval_range {
+                Some(range) => range.type_name(),
+                None => {
+                    let service = self.ctx.extension::<PlanService>()?;
+                    service
+                        .plan_formatter()
+                        .data_type_to_simple_string(&cast_to_type)?
+                }
+            };
             vec![format!(
                 "{}CAST({} AS {})",
                 if is_try { "TRY_" } else { "" },
@@ -148,6 +198,9 @@ impl PlanResolver<'_> {
                 | DataType::Struct(_)
                 | DataType::Map(_, _)
         );
+        let from_is_day_time_interval = matches!(expr_type, DataType::Duration(_));
+        let from_is_year_month_interval =
+            matches!(expr_type, DataType::Interval(IntervalUnit::YearMonth));
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (
                 DataType::Timestamp(_, None),
@@ -156,9 +209,9 @@ impl PlanResolver<'_> {
             ) => {
                 if is_spark_compatible_arrow_fixed_offset(timezone.as_ref()) {
                     if is_try {
-                        try_cast(expr, cast_to_type)
+                        try_cast(expr, cast_to_type.clone())
                     } else {
-                        cast(expr, cast_to_type)
+                        cast(expr, cast_to_type.clone())
                     }
                 } else {
                     let timestamp_ntz =
@@ -168,7 +221,7 @@ impl PlanResolver<'_> {
                         lit("UTC"),
                         timestamp_ntz,
                     ]);
-                    cast(cast(instant, DataType::Int64), cast_to_type)
+                    cast(cast(instant, DataType::Int64), cast_to_type.clone())
                 }
             }
             (_, DataType::Utf8, _) if expr_is_variant => cast(
@@ -203,7 +256,17 @@ impl PlanResolver<'_> {
                     (Some(field), DataType::Duration(_)) => day_time_field_to_microseconds(field),
                     _ => time_unit_to_multiplier(&time_unit),
                 };
-                cast(expr.mul(lit(multiplier)), cast_to_type)
+                cast(expr.mul(lit(multiplier)), cast_to_type.clone())
+            }
+            (DataType::Duration(TimeUnit::Microsecond), to, is_try)
+                if reads_day_time_interval_by_end_field(&to, day_time_source_range) =>
+            {
+                day_time_interval_to_number(
+                    expr,
+                    day_time_source_range.unwrap_or(IntervalRange::DAY_TIME),
+                    to,
+                    is_try,
+                )?
             }
             (DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), to, _)
                 if to.is_numeric() =>
@@ -314,10 +377,29 @@ impl PlanResolver<'_> {
                 && !self.config.ansi_mode
                 && (is_try || decimal_cast_can_overflow(&from, precision, scale)) =>
             {
-                try_cast(expr, cast_to_type)
+                try_cast(expr, cast_to_type.clone())
             }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
+        };
+        // A cast between two day-time interval types is an identity cast in Arrow, since the
+        // qualifier is not part of the Arrow type. Truncate explicitly so that the value agrees
+        // with the narrower type that is reported to the client.
+        let expr = match day_time_truncation_micros {
+            Some(unit) if from_is_day_time_interval => {
+                let micros = cast(expr, DataType::Int64);
+                cast(micros.clone() - (micros % lit(unit)), cast_to_type)
+            }
+            _ => expr,
+        };
+        // The same holds for a year-month interval cast to `INTERVAL YEAR`: the months are
+        // dropped, which Spark does by rebuilding the value from its years.
+        let expr = if from_is_year_month_interval && year_month_truncation {
+            let years = ScalarUDF::from(SparkDatePart::new()).call(vec![lit("year"), expr]);
+            ScalarUDF::from(SparkMakeYmInterval::new(self.config.ansi_mode))
+                .call(vec![years, lit(0)])
+        } else {
+            expr
         };
         Ok(match spark_interval_metadata {
             Some(metadata) => {
@@ -347,6 +429,61 @@ impl PlanResolver<'_> {
             None => NamedExpr::new(name, expr),
         })
     }
+}
+
+/// Whether a day-time interval cast to `to` is read by the trailing field of its range: always for
+/// an integral target, and for a decimal one unless the range ends in SECOND, whose fractional
+/// seconds the existing cast already keeps (`IntervalUtils.scala:921-937`).
+fn reads_day_time_interval_by_end_field(to: &DataType, range: Option<IntervalRange>) -> bool {
+    match to {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => true,
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+            range.is_some_and(|x| x.end != spec::IntervalFieldType::Second)
+        }
+        _ => false,
+    }
+}
+
+/// A day-time interval as a number of units of its trailing field, truncated toward zero
+/// (`IntervalUtils.dayTimeIntervalToLong`). A value that does not fit the target is an error
+/// whatever the ANSI mode (`dayTimeIntervalToInt`), and NULL for `try_cast`.
+fn day_time_interval_to_number(
+    interval: expr::Expr,
+    range: IntervalRange,
+    to: DataType,
+    is_try: bool,
+) -> PlanResult<expr::Expr> {
+    let value = cast(interval.clone(), DataType::Int64) / lit(range.end_unit_micros());
+    let (min, max, name) = match to {
+        DataType::Int8 => (i64::from(i8::MIN), i64::from(i8::MAX), "TINYINT"),
+        DataType::Int16 => (i64::from(i16::MIN), i64::from(i16::MAX), "SMALLINT"),
+        DataType::Int32 => (i64::from(i32::MIN), i64::from(i32::MAX), "INT"),
+        _ => return Ok(cast(value, to)),
+    };
+    let overflow = if is_try {
+        lit(ScalarValue::try_from(&to)?)
+    } else {
+        let message = expr_fn::concat(vec![
+            lit("[CAST_OVERFLOW] The value "),
+            ScalarUDF::new_from_impl(SparkToUtf8::new()).call(vec![interval]),
+            lit(format!(
+                " of the type \"{}\" cannot be cast to \"{name}\" due to an overflow. \
+                 Use `try_cast` to tolerate overflow and return NULL instead.",
+                range.type_name().to_uppercase()
+            )),
+        ]);
+        ScalarUDF::new_from_impl(RaiseError::new()).call(vec![message])
+    };
+    // The branch is guarded by the range check, but constant folding evaluates it on its own and a
+    // failing `cast` of a literal is raised at planning time, so it must not fail.
+    Ok(when(
+        value
+            .clone()
+            .is_null()
+            .or(value.clone().between(lit(min), lit(max))),
+        try_cast(value, to),
+    )
+    .otherwise(overflow)?)
 }
 
 fn decimal_cast_can_overflow(from: &DataType, precision: u8, scale: i8) -> bool {

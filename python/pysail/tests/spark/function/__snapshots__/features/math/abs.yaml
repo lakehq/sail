@@ -37,7 +37,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#2@0 as abs(v)]
-      ProjectionExec: expr=[spark_abs(column1@0) as #2]
+      ProjectionExec: expr=[CAST(spark_abs(column1@0) AS Duration(µs)) as #2]
         DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_abs_of_ceil_keeps_spark_abs_delegation_chain_consistent"

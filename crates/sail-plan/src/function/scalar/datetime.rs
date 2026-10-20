@@ -374,7 +374,13 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
         2 => {
             let [start, end] = <[Expr; 2]>::try_from(args)
                 .map_err(|_| PlanError::invalid("datediff requires 2 or 3 arguments"))?;
-            Ok(date_days_arithmetic(start, end, Operator::Minus))
+            // `DateDiff` declares `IntegerType` (`datetimeExpressions.scala:3490`), unlike the
+            // three-argument `TimestampDiff` form, which is a BIGINT. The subtraction stays in
+            // `Int64` -- the widest date range is 11.7M days -- and only the result narrows.
+            Ok(cast(
+                date_days_arithmetic(start, end, Operator::Minus),
+                DataType::Int32,
+            ))
         }
         3 => {
             let [unit, start, end] = <[Expr; 3]>::try_from(args)
@@ -982,6 +988,11 @@ fn make_timestamp(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> 
     }
 }
 
+fn make_ym_interval(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    Ok(ScalarUDF::from(SparkMakeYmInterval::new(ansi_mode)).call(input.arguments))
+}
+
 fn date_part(part: Expr, date: Expr) -> Expr {
     ScalarUDF::from(SparkDatePart::new()).call(vec![part, date])
 }
@@ -1332,7 +1343,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "make_timestamp_ntz",
             F::custom(|input| make_timestamp_ntz(input.arguments, false)),
         ),
-        ("make_ym_interval", F::udf(SparkMakeYmInterval::new())),
+        ("make_ym_interval", F::custom(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
         (

@@ -3,7 +3,7 @@ use std::hash::Hash;
 
 use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion_common::{Result, ScalarValue, not_impl_err, plan_err};
 use half::f16;
 use sail_common_datafusion::display::{spark_f32_to_string, spark_f64_to_string};
@@ -15,6 +15,7 @@ use sail_common_datafusion::formatter::{
     TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
     TimestampSecondFormatter,
 };
+use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -22,6 +23,18 @@ use sail_common_datafusion::utils::items::ItemTaker;
 pub struct SparkPlanFormatter;
 
 impl SparkPlanFormatter {
+    /// The simple string of a NESTED field. Unlike its data type, a field can carry the Spark
+    /// interval range in its metadata, which is where `array(INTERVAL '1' DAY)` keeps `interval day`
+    /// instead of the `interval day to second` the Arrow type alone reports. Spark builds the
+    /// container's type from the children's own types (`complexTypeCreator.scala:90-95` for an
+    /// array, `:239-243` for a map, `:465-476` for a struct), so the range must be read per child.
+    fn field_to_simple_string(&self, field: &Field) -> Result<String> {
+        match IntervalRange::from_field(field) {
+            Some(range) => Ok(range.type_name()),
+            None => self.data_type_to_simple_string(field.data_type()),
+        }
+    }
+
     fn time_unit_to_simple_string(unit: &TimeUnit) -> &'static str {
         match unit {
             TimeUnit::Second => "second",
@@ -84,10 +97,9 @@ impl PlanFormatter for SparkPlanFormatter {
             | DataType::FixedSizeList(field, _)
             | DataType::LargeList(field)
             | DataType::ListView(field)
-            | DataType::LargeListView(field) => Ok(format!(
-                "array<{}>",
-                self.data_type_to_simple_string(field.data_type())?
-            )),
+            | DataType::LargeListView(field) => {
+                Ok(format!("array<{}>", self.field_to_simple_string(field)?))
+            }
             DataType::Struct(fields) => {
                 let fields = fields
                     .iter()
@@ -95,7 +107,7 @@ impl PlanFormatter for SparkPlanFormatter {
                         Ok(format!(
                             "{}:{}",
                             field.name(),
-                            self.data_type_to_simple_string(field.data_type())?
+                            self.field_to_simple_string(field)?
                         ))
                     })
                     .collect::<Result<Vec<String>>>()?;
@@ -110,8 +122,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 };
                 Ok(format!(
                     "map<{},{}>",
-                    self.data_type_to_simple_string(key_field.data_type())?,
-                    self.data_type_to_simple_string(value_field.data_type())?
+                    self.field_to_simple_string(key_field)?,
+                    self.field_to_simple_string(value_field)?
                 ))
             }
             DataType::Union(_union_fields, _union_mode) => {

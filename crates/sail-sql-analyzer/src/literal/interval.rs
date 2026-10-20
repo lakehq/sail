@@ -112,7 +112,21 @@ impl From<IntervalValue> for spec::Literal {
     }
 }
 
-pub fn from_ast_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<IntervalValue> {
+/// Whether a multi-unit interval may mix year-month units with day-time units.
+///
+/// Spark rejects the mix for an ANSI interval literal (`AstBuilder.scala`,
+/// `mixedIntervalUnitsError`), but accepts it for the legacy calendar interval string form, which
+/// yields a `CalendarInterval` spanning both families.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MixedIntervalUnits {
+    Allow,
+    Reject,
+}
+
+pub fn from_ast_signed_interval(
+    value: Signed<IntervalExpr>,
+    mixed_units: MixedIntervalUnits,
+) -> SqlResult<IntervalValue> {
     // TODO: support the legacy calendar interval when `spark.sql.legacy.interval.enabled` is `true`
     let negated = value.is_negative();
     let interval = value.into_inner();
@@ -150,11 +164,11 @@ pub fn from_ast_signed_interval(value: Signed<IntervalExpr>) -> SqlResult<Interv
                             negated,
                         )
                     }
-                    _ => from_ast_multi_unit_interval(vec![head], negated),
+                    _ => from_ast_multi_unit_interval(vec![head], negated, mixed_units),
                 }
             } else {
                 let values = once(head).chain(tail).collect();
-                from_ast_multi_unit_interval(values, negated)
+                from_ast_multi_unit_interval(values, negated, mixed_units)
             }
         }
         IntervalExpr::Literal(value) => {
@@ -453,6 +467,7 @@ pub fn multi_unit_interval_days<'a>(
 fn from_ast_multi_unit_interval(
     values: Vec<IntervalValueWithUnit>,
     negated: bool,
+    mixed_units: MixedIntervalUnits,
 ) -> SqlResult<IntervalValue> {
     let error = || SqlError::invalid("multi-unit interval");
     let mut months = 0i32;
@@ -528,6 +543,14 @@ fn from_ast_multi_unit_interval(
     }
     let has_year_month_fields = year_month_fields.0.is_some();
     let has_day_time_fields = day_time_fields.0.is_some();
+    // An ANSI interval literal belongs to the family of the units that are written, and Spark
+    // refuses one that names both (`AstBuilder.scala`, `mixedIntervalUnitsError`). Only the legacy
+    // calendar interval string spans the two.
+    if mixed_units == MixedIntervalUnits::Reject && has_year_month_fields && has_day_time_fields {
+        return Err(SqlError::invalid(
+            "Cannot mix year-month and day-time fields in an interval",
+        ));
+    }
     match (has_year_month_fields, has_day_time_fields) {
         (true, false) => {
             let n = if negated {
@@ -617,7 +640,8 @@ pub(crate) fn parse_unqualified_interval_string(
     } else {
         Signed::Positive(interval)
     };
-    from_ast_signed_interval(value)
+    // The string form is the legacy calendar interval, which may span both families.
+    from_ast_signed_interval(value, MixedIntervalUnits::Allow)
 }
 
 #[cfg(test)]

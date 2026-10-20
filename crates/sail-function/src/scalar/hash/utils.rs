@@ -4,7 +4,7 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, ArrowNativeTypeOp, DataType, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Int32Type, Int64Type, IntervalUnit, TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion::error::{DataFusionError, Result};
 
@@ -313,6 +313,27 @@ macro_rules! create_hashes_internal {
                 }
                 DataType::Date64 => {
                     hash_array_primitive!(Date64Array, col, i64, $hashes_buffer, $hash_method);
+                }
+                // `hash.scala:556-557`: a day-time interval hashes its MICROSECONDS as a long and a
+                // year-month interval its MONTHS as an int, so the Spark field range does not enter
+                // the hash and `date - date` hashes like the interval it is.
+                DataType::Duration(TimeUnit::Microsecond) => {
+                    hash_array_primitive!(
+                        DurationMicrosecondArray,
+                        col,
+                        i64,
+                        $hashes_buffer,
+                        $hash_method
+                    );
+                }
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    hash_array_primitive!(
+                        IntervalYearMonthArray,
+                        col,
+                        i32,
+                        $hashes_buffer,
+                        $hash_method
+                    );
                 }
                 DataType::Utf8 => {
                     hash_array!(StringArray, col, $hashes_buffer, $hash_method);

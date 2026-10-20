@@ -11,6 +11,8 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::Volatility;
 use lazy_static::lazy_static;
+use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
+use sail_common_datafusion::interval::IntervalRange;
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::csv::options::{
@@ -347,6 +349,7 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
                     field.data_type(),
                     &options,
                     session_timezone,
+                    IntervalRange::from_field(field),
                 )?;
                 row.push_str(&write_csv_field(&value_str, &options));
             }
@@ -470,8 +473,17 @@ fn format_field_to_csv(
     data_type: &DataType,
     options: &SparkToCsvOptions,
     session_timezone: &str,
+    interval_range: Option<IntervalRange>,
 ) -> Result<String> {
     match data_type {
+        // Spark writes an interval with the fields of its range, which lives in the FIELD and not in
+        // the Arrow type; without this arm the value falls through to the display of a `ScalarValue`
+        // that has no interval arm, and the column is written EMPTY.
+        DataType::Duration(_) | DataType::Interval(_) => {
+            let format = FormatOptions::new().with_interval_range(interval_range);
+            let formatter = ArrayFormatter::try_new(array.as_ref(), &format)?;
+            Ok(formatter.value(row_idx).try_to_string()?)
+        }
         DataType::Timestamp(time_unit, tz_opt) => {
             format_timestamp_field(array, row_idx, time_unit, tz_opt, options, session_timezone)
         }
@@ -529,12 +541,7 @@ fn format_field_to_csv(
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| DataFusionError::Execution("Expected ListArray".to_string()))?;
-            format_list_to_csv(
-                &arr.value(row_idx),
-                field.data_type(),
-                options,
-                session_timezone,
-            )
+            format_list_to_csv(&arr.value(row_idx), field, options, session_timezone)
         }
 
         DataType::LargeList(field) => {
@@ -542,12 +549,7 @@ fn format_field_to_csv(
                 .as_any()
                 .downcast_ref::<LargeListArray>()
                 .ok_or_else(|| DataFusionError::Execution("Expected LargeListArray".to_string()))?;
-            format_list_to_csv(
-                &arr.value(row_idx),
-                field.data_type(),
-                options,
-                session_timezone,
-            )
+            format_list_to_csv(&arr.value(row_idx), field, options, session_timezone)
         }
 
         DataType::FixedSizeList(field, _) => {
@@ -557,12 +559,7 @@ fn format_field_to_csv(
                 .ok_or_else(|| {
                     DataFusionError::Execution("Expected FixedSizeListArray".to_string())
                 })?;
-            format_list_to_csv(
-                &arr.value(row_idx),
-                field.data_type(),
-                options,
-                session_timezone,
-            )
+            format_list_to_csv(&arr.value(row_idx), field, options, session_timezone)
         }
 
         DataType::Map(_, _) => {
@@ -593,10 +590,12 @@ fn format_field_to_csv(
 
 fn format_list_to_csv(
     values: &ArrayRef,
-    element_type: &DataType,
+    element: &Field,
     options: &SparkToCsvOptions,
     session_timezone: &str,
 ) -> Result<String> {
+    let element_type = element.data_type();
+    let element_range = IntervalRange::from_field(element);
     let mut output = String::from("[");
     for i in 0..values.len() {
         if i > 0 {
@@ -614,6 +613,7 @@ fn format_list_to_csv(
                 element_type,
                 options,
                 session_timezone,
+                element_range,
             )?);
         }
     }
@@ -639,6 +639,8 @@ fn format_map_to_csv(
     let values = struct_array.column(1);
     let key_type = fields[0].data_type();
     let value_type = fields[1].data_type();
+    let key_range = IntervalRange::from_field(&fields[0]);
+    let value_range = IntervalRange::from_field(&fields[1]);
 
     let mut output = String::from("{");
     for i in 0..keys.len() {
@@ -651,6 +653,7 @@ fn format_map_to_csv(
             key_type,
             options,
             session_timezone,
+            key_range,
         )?);
         output.push_str(" ->");
         if values.is_null(i) {
@@ -663,6 +666,7 @@ fn format_map_to_csv(
                 value_type,
                 options,
                 session_timezone,
+                value_range,
             )?);
         }
     }
@@ -696,6 +700,7 @@ fn format_struct_to_csv(
                 field.data_type(),
                 options,
                 session_timezone,
+                IntervalRange::from_field(field),
             )?);
         }
     }
@@ -1205,6 +1210,7 @@ mod tests {
                     f.data_type(),
                     &options,
                     DEFAULT_SESSION_TIMEZONE,
+                    None,
                 )
             })
             .collect::<Result<_>>()?;
@@ -1285,7 +1291,7 @@ mod tests {
         assert_eq!(
             format_list_to_csv(
                 &values,
-                &DataType::Int32,
+                &Field::new("element", DataType::Int32, true),
                 &options,
                 DEFAULT_SESSION_TIMEZONE,
             )?,
@@ -1482,6 +1488,7 @@ mod tests {
             field.data_type(),
             &options,
             DEFAULT_SESSION_TIMEZONE,
+            None,
         )?;
 
         assert_eq!(result, "26/08/2015");

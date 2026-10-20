@@ -7,8 +7,8 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    DurationSecondType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::math::expr_fn::abs;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, internal_err};
@@ -16,8 +16,9 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common_datafusion::interval::IntervalRange;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -73,6 +74,24 @@ impl ScalarUDFImpl for SparkAbs {
                 &arg_types[0],
             ))
         }
+    }
+
+    /// `Abs` is declared with the child's own type (`arithmetic.scala:158`), so the Spark interval
+    /// range of the argument, which lives in its field metadata, is the result's as well. Declaring
+    /// it here is what keeps `abs(INTERVAL '-5' DAY)` an `INTERVAL DAY` without wrapping the call in
+    /// a cast to its own type.
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let Some(argument) = args.arg_fields.first() else {
+            return Err(invalid_arg_count_exec_err("abs", (1, 1), 0));
+        };
+        let data_type = self.return_type(&[argument.data_type().clone()])?;
+        let field = Field::new(self.name(), data_type, argument.is_nullable());
+        // ONLY the range travels. The rest of the argument's metadata is the column's own — a UDT
+        // marker, a Spark metadata blob — and a Spark expression does not carry that to its result.
+        Ok(Arc::new(match IntervalRange::from_field(argument) {
+            Some(range) => field.with_metadata(range.to_metadata()?),
+            None => field,
+        }))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
