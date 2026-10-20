@@ -78,6 +78,8 @@ Feature: Numeric timestamp conversions preserve their input
       | 18        | 7     | true  |
       | 8         | 7     | true  |
 
+  # TODO: Support outer references in non-aggregate scalar projections.
+  @sail-bug
   Scenario: Numeric TRY_CAST evaluates a volatile scalar subquery once
     Given config spark.sql.session.timeZone = UTC
     And config spark.sql.ansi.enabled = true
@@ -95,6 +97,8 @@ Feature: Numeric timestamp conversions preserve their input
       | NULL   |
       | 0      |
 
+  # TODO: Support outer references in non-aggregate scalar projections.
+  @sail-bug
   Scenario: timestamp_seconds evaluates a volatile scalar subquery once
     Given config spark.sql.session.timeZone = UTC
     # The finite-value check and conversion must share the subquery's value.

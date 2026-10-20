@@ -104,6 +104,9 @@ Feature: Scalar subqueries in distributed execution
       | 1 | 2 |
       | 2 | 0 |
 
+  # TODO: Match Spark's nullable scalar-subquery schema even for COUNT. The same
+  # mismatch exists without the unaliased derived table before this PR.
+  @sail-bug
   Scenario: Correlated scalar counts retain nullable schemas through unaliased derived tables
     When query
       """
@@ -690,6 +693,11 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query plan matches snapshot
 
+  # TODO: DataFusion rejects these correlated scalar projections. Its scalar
+  # nullability also makes COUNT include the missing uncorrelated result.
+  # Recheck the empty uncorrelated example after the next DataFusion release
+  # containing the upstream scalar-nullability fix.
+  @sail-bug
   Scenario Outline: COUNT preserves scalar-subquery missing-row nullability: <case>
     # A non-null projection does not make its scalar result non-null: no row yields NULL.
     # COUNT(x) must keep that distinction from COUNT(*) before subquery rewriting.

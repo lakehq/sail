@@ -25,6 +25,16 @@ Feature: Timestamp and string predicate coercion
          |-- equal: boolean (nullable = false)
          |-- member: boolean (nullable = true)
         """
+      When query
+        """
+        SELECT named_struct('t', DATE '2024-01-01',
+                            'same', array(named_struct('x', TIMESTAMP '2024-01-01'))) =
+          named_struct('t', TIMESTAMP '2024-01-01',
+                       'same', array(named_struct('x', TIMESTAMP '2024-01-01'))) AS result
+        """
+      Then query result
+        | result |
+        | true   |
 
       Examples:
         | ansi  |

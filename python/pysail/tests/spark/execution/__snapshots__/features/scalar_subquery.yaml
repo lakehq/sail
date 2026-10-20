@@ -33,9 +33,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -698,9 +695,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -1237,9 +1231,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -1786,9 +1777,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -2601,9 +2589,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -3239,7 +3224,7 @@ data:
     == Plan Steps ==
     initial_logical_plan:
     Sort: #3 ASC NULLS FIRST
-      Projection: o.#0 AS v AS #3, o.#0 + TRY_CAST((<subquery>) AS Int64) AS shifted AS #4
+      Projection: o.#0 AS v AS #3, o.#0 + (<subquery>) AS shifted AS #4
         Subquery:
           Projection: i.#1 AS #2
             SubqueryAlias: i
@@ -3256,9 +3241,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -3344,7 +3326,7 @@ data:
 
     logical_plan after optimize_projections:
     Sort: #3 ASC NULLS FIRST
-      Projection: o.#0 AS v AS #3, o.#0 + TRY_CAST((<subquery>) AS Int64) AS shifted AS #4
+      Projection: o.#0 AS v AS #3, o.#0 + (<subquery>) AS shifted AS #4
         Subquery:
           Projection: i.#1 AS #2
             SubqueryAlias: i
@@ -3443,7 +3425,7 @@ data:
 
     logical_plan:
     Sort: #3 ASC NULLS FIRST
-      Projection: o.#0 AS v AS #3, o.#0 + TRY_CAST((<subquery>) AS Int64) AS shifted AS #4
+      Projection: o.#0 AS v AS #3, o.#0 + (<subquery>) AS shifted AS #4
         Subquery:
           Projection: i.#1 AS #2
             SubqueryAlias: i
@@ -3456,7 +3438,7 @@ data:
     initial_physical_plan:
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
           ProjectionExec: expr=[id@0 as #0]
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[#1@0 as #2]
@@ -3467,7 +3449,7 @@ data:
     initial_physical_plan_with_stats:
     ScalarSubqueryExec: subqueries=1, statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
           ProjectionExec: expr=[id@0 as #0], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], statistics=[Rows=Exact(2), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
       ProjectionExec: expr=[#1@0 as #2], statistics=[Rows=Exact(0), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
@@ -3476,9 +3458,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64;N]
-      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64;N]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4], schema=[#3:Int64, #4:Int64;N]
+    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64]
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64]
           ProjectionExec: expr=[id@0 as #0], schema=[#0:Int64]
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
       ProjectionExec: expr=[#1@0 as #2], schema=[#2:Int64]
@@ -3490,7 +3472,7 @@ data:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#3@0, asc)], dist_by=SinglePartition
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[#0@0 as #3, #0@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4]
+          ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4]
             ProjectionExec: expr=[id@0 as #0]
               RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[#1@0 as #2]
@@ -3538,7 +3520,7 @@ data:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#3@0, asc)], dist_by=SinglePartition
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[id@0 as #3, id@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4]
+          ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[id@0 as #2]
         RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
@@ -3547,7 +3529,7 @@ data:
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[id@0 as #3, id@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4]
+        ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
           RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[id@0 as #2]
         RangeExec: start=0, end=0, step=1, num_partitions=1, projection=[0]
@@ -3577,7 +3559,7 @@ data:
     physical_plan after EnsureCooperative:
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[id@0 as #3, id@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4]
+        ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
           CooperativeExec
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
       ProjectionExec: expr=[id@0 as #2]
@@ -3607,7 +3589,7 @@ data:
     ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[id@0 as #3, id@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4]
+          ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
             CooperativeExec
               RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
         ProjectionExec: expr=[id@0 as #2]
@@ -3619,7 +3601,7 @@ data:
     ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[id@0 as #3, id@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4]
+          ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
             CooperativeExec
               RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
         ProjectionExec: expr=[id@0 as #2]
@@ -3647,7 +3629,7 @@ data:
     ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#3@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[id@0 as #3, id@0 + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #4]
+          ProjectionExec: expr=[id@0 as #3, id@0 + scalar_subquery(<pending>) as #4]
             CooperativeExec
               RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0]
         StageInputExec: input=0, partitioning=UnknownPartitioning(1)
@@ -3661,7 +3643,7 @@ data:
     == Plan Steps ==
     initial_logical_plan:
     Sort: #5 ASC NULLS FIRST
-      Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + TRY_CAST((<subquery>) AS Int64) AS shifted AS #6
+      Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #6
         Subquery:
           Projection: CAST(s.#3 AS Int64) AS #4
             Filter: s.#3 > Int32(100)
@@ -3681,9 +3663,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -3754,7 +3733,7 @@ data:
 
     logical_plan after push_down_filter:
     Sort: #5 ASC NULLS FIRST
-      Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + TRY_CAST((<subquery>) AS Int64) AS shifted AS #6
+      Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #6
         Subquery:
           Projection: CAST(s.#3 AS Int64) AS #4
             SubqueryAlias: s
@@ -3781,7 +3760,7 @@ data:
 
     logical_plan after optimize_projections:
     Sort: #5 ASC NULLS FIRST
-      Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + TRY_CAST((<subquery>) AS Int64) AS shifted AS #6
+      Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #6
         Subquery:
           Projection: CAST(s.#3 AS Int64) AS #4
             SubqueryAlias: s
@@ -3881,7 +3860,7 @@ data:
 
     logical_plan:
     Sort: #5 ASC NULLS FIRST
-      Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + TRY_CAST((<subquery>) AS Int64) AS shifted AS #6
+      Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #6
         Subquery:
           Projection: CAST(s.#3 AS Int64) AS #4
             SubqueryAlias: s
@@ -3895,7 +3874,7 @@ data:
     initial_physical_plan:
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6]
           ProjectionExec: expr=[column1@0 as #1]
             DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
@@ -3907,7 +3886,7 @@ data:
     initial_physical_plan_with_stats:
     ScalarSubqueryExec: subqueries=1, statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
       SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
           ProjectionExec: expr=[column1@0 as #1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(101)) Null=Exact(0))]]
@@ -3917,9 +3896,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64;N]
-      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64;N]
-        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6], schema=[#5:Int32, #6:Int64;N]
+    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64]
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64]
           ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4], schema=[#4:Int64]
@@ -3932,7 +3911,7 @@ data:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6]
+          ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6]
             ProjectionExec: expr=[column1@0 as #1]
               DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
@@ -3969,7 +3948,7 @@ data:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6]
+          ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6]
             ProjectionExec: expr=[column1@0 as #1]
               DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
@@ -3992,7 +3971,7 @@ data:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6]
+          ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + scalar_subquery(<pending>) as #6]
             DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -4004,7 +3983,7 @@ data:
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6]
+        ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + scalar_subquery(<pending>) as #6]
           DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -4059,7 +4038,7 @@ data:
     ProjectionExec: expr=[#5@0 as v, #6@1 as shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6]
+          ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + scalar_subquery(<pending>) as #6]
             DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -4072,7 +4051,7 @@ data:
     ProjectionExec: expr=[#5@0 as v, #6@1 as shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6]
+          ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + scalar_subquery(<pending>) as #6]
             DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4]
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -4110,7 +4089,7 @@ data:
     ProjectionExec: expr=[#5@0 as v, #6@1 as shifted]
       ScalarSubqueryExec: subqueries=1
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + TRY_CAST(scalar_subquery(<pending>) AS Int64) as #6]
+          ProjectionExec: expr=[column1@0 as #5, CAST(column1@0 AS Int64) + scalar_subquery(<pending>) as #6]
             DataSourceExec: partitions=1, partition_sizes=[1]
         StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
@@ -4150,9 +4129,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -4678,9 +4654,6 @@ data:
             Projection: column1 AS #0
               Values: (Int32(1)), (Int32(2))
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -5193,9 +5166,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -5644,9 +5614,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -6129,9 +6096,6 @@ data:
           Projection: #0 AS #2, #1 AS #3
             Projection: column1 AS #0, column2 AS #1
               Values: (Utf8("a"), Int32(2)), (Utf8("b"), Int32(1)), (Utf8("c"), Int32(3))
-
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -6639,9 +6603,6 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(3)), (Int32(2), Int32(10)), (Int32(3), Int32(1))
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -7147,9 +7108,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -7615,9 +7573,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -8103,9 +8058,6 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(1)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(4))
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -8588,9 +8540,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -9145,9 +9094,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -9662,9 +9608,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -10154,9 +10097,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -10607,9 +10547,6 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
@@ -11046,9 +10983,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -11506,9 +11440,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after decorrelate_scalar_projection:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
@@ -11993,9 +11924,6 @@ data:
             Projection: #0 AS #1
               Projection: column1 AS #0
                 Values: (Int32(1)), (Int32(2)), (Int32(3)), (Int32(4))
-
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE

@@ -31,7 +31,12 @@ pub(crate) fn cast_temporal(
     is_try: bool,
 ) -> DataFusionResult<expr::Expr> {
     if from == &to {
-        return Ok(expression);
+        // Folding can narrow nested fields after this common type has been selected.
+        return Ok(if to.is_nested() {
+            ScalarUDF::from(SparkStructRename::new(to)).call(vec![expression])
+        } else {
+            expression
+        });
     }
     match (from, &to) {
         (DataType::Map(source, _), DataType::Map(target, _)) => {

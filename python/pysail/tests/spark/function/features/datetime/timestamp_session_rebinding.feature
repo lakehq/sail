@@ -54,18 +54,18 @@ Feature: Stored timestamps retain their values when the session timezone changes
       ORDER BY value NULLS FIRST
       """
     Then query result ordered
-      | value   | explicit_value | value_type       | is_null | copies |
-      | NULL    | NULL           | struct<ts:<type>> | false   | 1      |
-      | <value> | <value>        | struct<ts:<type>> | false   | 2      |
+      | value   | explicit_value | value_type    | is_null | copies |
+      | NULL    | NULL           | <struct_type> | false   | 1      |
+      | <value> | <value>        | <struct_type> | false   | 2      |
 
     Examples:
-      | timestamp_type | arguments | grouping   | type          | value               |
-      | TIMESTAMP_LTZ  | *         | ts         | timestamp     | 1969-12-31 16:00:00 |
-      | TIMESTAMP_NTZ  | *         | ts         | timestamp_ntz | 1970-01-01 00:00:00 |
-      | TIMESTAMP_LTZ  | v.*       | ts         | timestamp     | 1969-12-31 16:00:00 |
-      | TIMESTAMP_NTZ  | v.*       | ts         | timestamp_ntz | 1970-01-01 00:00:00 |
-      | TIMESTAMP_LTZ  | *         | struct(ts) | timestamp     | 1969-12-31 16:00:00 |
-      | TIMESTAMP_NTZ  | *         | struct(ts) | timestamp_ntz | 1970-01-01 00:00:00 |
+      | timestamp_type | arguments | grouping   | struct_type              | value               |
+      | TIMESTAMP_LTZ  | *         | ts         | struct<ts:timestamp>     | 1969-12-31 16:00:00 |
+      | TIMESTAMP_NTZ  | *         | ts         | struct<ts:timestamp_ntz> | 1970-01-01 00:00:00 |
+      | TIMESTAMP_LTZ  | v.*       | ts         | struct<ts:timestamp>     | 1969-12-31 16:00:00 |
+      | TIMESTAMP_NTZ  | v.*       | ts         | struct<ts:timestamp_ntz> | 1970-01-01 00:00:00 |
+      | TIMESTAMP_LTZ  | *         | struct(ts) | struct<ts:timestamp>     | 1969-12-31 16:00:00 |
+      | TIMESTAMP_NTZ  | *         | struct(ts) | struct<ts:timestamp_ntz> | 1970-01-01 00:00:00 |
 
   Scenario Outline: Grouped nested struct wildcard preserves <timestamp_type> after a timezone change
     Given config spark.sql.session.timeZone = UTC
@@ -95,14 +95,14 @@ Feature: Stored timestamps retain their values when the session timezone changes
       ORDER BY value NULLS FIRST
       """
     Then query result ordered
-      | value   | explicit_value | value_type             | n | copies |
-      | NULL    | NULL           | struct<ts:<type>,n:int> | 7 | 1      |
-      | <value> | <value>        | struct<ts:<type>,n:int> | 7 | 2      |
+      | value   | explicit_value | value_type    | n | copies |
+      | NULL    | NULL           | <struct_type> | 7 | 1      |
+      | <value> | <value>        | <struct_type> | 7 | 2      |
 
     Examples:
-      | timestamp_type | type          | value               |
-      | TIMESTAMP_LTZ  | timestamp     | 1969-12-31 16:00:00 |
-      | TIMESTAMP_NTZ  | timestamp_ntz | 1970-01-01 00:00:00 |
+      | timestamp_type | struct_type                    | value               |
+      | TIMESTAMP_LTZ  | struct<ts:timestamp,n:int>     | 1969-12-31 16:00:00 |
+      | TIMESTAMP_NTZ  | struct<ts:timestamp_ntz,n:int> | 1970-01-01 00:00:00 |
 
   Scenario Outline: Grouped struct wildcard still rejects an ungrouped <timestamp_type> column
     Given config spark.sql.session.timeZone = UTC

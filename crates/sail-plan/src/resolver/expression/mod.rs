@@ -358,8 +358,7 @@ impl PlanResolver<'_> {
             let target = with_session_timezone(&data_type, &self.config.session_timezone);
             if target != data_type {
                 // DataFusion's nested cast matches fields by name and collapses duplicates.
-                expression =
-                    ScalarUDF::from(SparkStructRename::new(target)).call(vec![expression]);
+                expression = ScalarUDF::from(SparkStructRename::new(target)).call(vec![expression]);
             }
         }
         expression

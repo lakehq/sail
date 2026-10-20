@@ -19,23 +19,32 @@ Feature: Bitwise complement preserves integer width
       | true  |
       | false |
 
-  Scenario Outline: Bitwise complement aliases preserve integer columns and NULL with ANSI <ansi>
+  Scenario Outline: Bitwise complement preserves integer columns and NULL with ANSI <ansi>
     Given config spark.sql.ansi.enabled = <ansi>
     When query
       """
-      SELECT id, ~value AS operator_result, bitwise_not(value) AS function_result,
-             typeof(~value) AS result_type
+      SELECT id, ~value AS operator_result, typeof(~value) AS result_type,
+             ~NULL AS null_result, typeof(~NULL) AS null_type
       FROM VALUES (0, -2147483648), (1, -2147483647), (2, 0),
                   (3, 2147483647), (4, CAST(NULL AS INT)) AS t(id, value)
       ORDER BY id
       """
     Then query result ordered
-      | id | operator_result | function_result | result_type |
-      | 0  | 2147483647      | 2147483647      | int         |
-      | 1  | 2147483646      | 2147483646      | int         |
-      | 2  | -1              | -1              | int         |
-      | 3  | -2147483648     | -2147483648     | int         |
-      | 4  | NULL            | NULL            | int         |
+      | id | operator_result | result_type | null_result | null_type |
+      | 0  | 2147483647      | int         | NULL        | int       |
+      | 1  | 2147483646      | int         | NULL        | int       |
+      | 2  | -1              | int         | NULL        | int       |
+      | 3  | -2147483648     | int         | NULL        | int       |
+      | 4  | NULL            | int         | NULL        | int       |
+    Then query schema
+      """
+      root
+       |-- id: integer (nullable = false)
+       |-- operator_result: integer (nullable = true)
+       |-- result_type: string (nullable = false)
+       |-- null_result: integer (nullable = true)
+       |-- null_type: string (nullable = false)
+      """
 
     Examples:
       | ansi  |

@@ -29,9 +29,6 @@ data:
             Projection: column1 AS #0, column2 AS #1
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
-    logical_plan after decorrelate_scalar_projection:
-    SAME TEXT AS ABOVE
-
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 

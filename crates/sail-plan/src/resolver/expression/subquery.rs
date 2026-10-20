@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use datafusion_common::DFSchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_expr::expr::TryCast;
 use datafusion_expr::logical_plan::{Filter, Projection};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, expr_fn};
 use sail_common::spec;
@@ -92,19 +91,7 @@ impl PlanResolver<'_> {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             self.resolve_query_plan(subquery, scope.state()).await?
         };
-        let subquery = Arc::new(subquery);
-        let expression = expr_fn::scalar_subquery(Arc::clone(&subquery));
-        // Scalar results can be NULL for no row, even when the inner field is non-null.
-        // Identity TRY_CAST preserves that before COUNT pruning, retaining child errors and metadata.
-        // Scalar subqueries require one output column; this wraps only that column's result.
-        // TODO: Remove this workaround once DataFusion fixes scalar-subquery result nullability.
-        let expression = match subquery.schema().fields().as_ref() {
-            [field] if !field.is_nullable() => Expr::TryCast(TryCast::new_from_field(
-                Box::new(expression),
-                Arc::clone(field),
-            )),
-            _ => expression,
-        };
+        let expression = expr_fn::scalar_subquery(Arc::new(subquery));
         Ok(NamedExpr::new(vec!["subquery".to_string()], expression))
     }
 

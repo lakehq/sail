@@ -516,9 +516,7 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
     // Spark widens narrow integers before DIV, so INT_MIN / -1 fits in BIGINT.
     let promote_integer = |argument: Expr| match argument.get_type(function_context.schema) {
-        Ok(DataType::Int8 | DataType::Int16 | DataType::Int32) => {
-            cast(argument, DataType::Int64)
-        }
+        Ok(DataType::Int8 | DataType::Int16 | DataType::Int32) => cast(argument, DataType::Int64),
         _ => argument,
     };
     let dividend = promote_integer(dividend);

@@ -12,7 +12,6 @@ use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_struct_cast::SparkStructCast;
-use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::config::PlanConfig;
@@ -424,21 +423,23 @@ pub(super) fn coerce_timestamp_string_predicate(
             if let Some(target) =
                 get_coerce_type_for_list(&expr_type, &list_types).filter(DataType::is_nested)
             {
-                expr = cast_comparison_operand(
+                expr = cast_temporal(
                     expr,
                     &expr_type,
                     target.clone(),
                     &config.session_timezone,
+                    false,
                 )?;
                 list = list
                     .into_iter()
                     .zip(list_types)
                     .map(|(value, data_type)| {
-                        cast_comparison_operand(
+                        cast_temporal(
                             value,
                             &data_type,
                             target.clone(),
                             &config.session_timezone,
+                            false,
                         )
                     })
                     .collect::<DataFusionResult<Vec<_>>>()?;
@@ -496,21 +497,6 @@ fn recursive_list_in_as_comparisons(
     }
 }
 
-fn cast_comparison_operand(
-    expression: expr::Expr,
-    from: &DataType,
-    to: DataType,
-    session_timezone: &Arc<str>,
-) -> DataFusionResult<expr::Expr> {
-    if from == &to && to.is_nested() {
-        // Folding a sibling can narrow nested nullability after comparison coercion.
-        // Keep the common type even when this operand needs no value conversion.
-        Ok(ScalarUDF::from(SparkStructRename::new(to)).call(vec![expression]))
-    } else {
-        cast_temporal(expression, from, to, session_timezone, false)
-    }
-}
-
 pub(in crate::resolver) fn coerce_timestamp_pair(
     left: expr::Expr,
     right: expr::Expr,
@@ -526,13 +512,14 @@ pub(in crate::resolver) fn coerce_timestamp_pair(
         &config.session_timezone,
     ) {
         return Ok((
-            cast_comparison_operand(
+            cast_temporal(
                 left,
                 &left_type,
                 target.clone(),
                 &config.session_timezone,
+                false,
             )?,
-            cast_comparison_operand(right, &right_type, target, &config.session_timezone)?,
+            cast_temporal(right, &right_type, target, &config.session_timezone, false)?,
         ));
     }
 
@@ -707,17 +694,19 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
         comparison_coercion(&coerced_left_type, &coerced_right_type).filter(DataType::is_nested)
     {
         return Ok((
-            cast_comparison_operand(
+            cast_temporal(
                 left,
                 &coerced_left_type,
                 target.clone(),
                 &config.session_timezone,
+                false,
             )?,
-            cast_comparison_operand(
+            cast_temporal(
                 right,
                 &coerced_right_type,
                 target,
                 &config.session_timezone,
+                false,
             )?,
             true,
             true,
