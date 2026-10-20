@@ -8,7 +8,6 @@ use sail_common::spec;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::interval::IntervalShape;
 use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
 
 /// The field information for fields in the logical plan.
@@ -84,8 +83,6 @@ pub(super) struct PlanResolverState {
     relation_names: HashMap<TableReference, Vec<String>>,
     /// A map from the generated opaque field ID to field information.
     fields: HashMap<String, FieldInfo>,
-    /// Spark interval qualifiers, keyed only by registered output IDs.
-    interval_shapes: HashMap<String, IntervalShape>,
     /// An output schema of each DataFrame plan ID, for checking references against it.
     plan_schemas: HashMap<i64, DFSchemaRef>,
     /// The outer query schema for the current subquery.
@@ -115,7 +112,7 @@ pub(super) struct PlanResolverState {
     /// Each frame holds the declared parameter names of one enclosing lambda
     /// function, along with the parameter field when the enclosing
     /// higher-order function provides it.
-    lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>, IntervalShape)>>,
+    lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
     /// The named windows defined in the current query, keyed by window name.
     windows: std::collections::HashMap<String, spec::Window>,
 }
@@ -133,7 +130,6 @@ impl PlanResolverState {
             next_origin: 0,
             relation_names: HashMap::new(),
             fields: HashMap::new(),
-            interval_shapes: HashMap::new(),
             plan_schemas: HashMap::new(),
             outer_query_schema: None,
             missing_input_resolution: None,
@@ -308,20 +304,6 @@ impl PlanResolverState {
             .ok_or_else(|| PlanError::internal(format!("unknown field: {field_id}")))
     }
 
-    pub fn interval_shape(&self, field_id: &str) -> Option<&IntervalShape> {
-        self.interval_shapes.get(field_id)
-    }
-
-    pub fn register_interval_shape(&mut self, field_id: &str, shape: IntervalShape) {
-        if self.fields.contains_key(field_id) && shape.contains_interval() {
-            // A reused input ID must never acquire a different logical type.
-            // Set operations give widened outputs fresh IDs before recording them.
-            self.interval_shapes
-                .entry(field_id.to_owned())
-                .or_insert(shape);
-        }
-    }
-
     pub fn get_outer_query_schema(&self) -> Option<&DFSchemaRef> {
         self.outer_query_schema.as_ref()
     }
@@ -427,14 +409,9 @@ impl PlanResolverState {
 
     /// Registers a field of the same attribute as the source field.
     pub fn register_identity_field(&mut self, name: String, source: &str) -> PlanResult<String> {
-        let interval_shape = self.interval_shape(source).cloned();
         let source = self.get_field_info(source)?;
         let (origin, plan_ids) = (source.origin, source.plan_ids.clone());
-        let id = self.register_field_with_origin(name, false, origin, plan_ids);
-        if let Some(shape) = interval_shape {
-            self.register_interval_shape(&id, shape);
-        }
-        Ok(id)
+        Ok(self.register_field_with_origin(name, false, origin, plan_ids))
     }
 
     /// Returns a subquery reference plan from state by plan_id.
@@ -501,7 +478,7 @@ impl PlanResolverState {
     /// The frame is popped when the scope is dropped.
     pub fn enter_lambda_scope(
         &mut self,
-        params: Vec<(String, Option<FieldRef>, IntervalShape)>,
+        params: Vec<(String, Option<FieldRef>)>,
     ) -> LambdaScope<'_> {
         LambdaScope::new(self, params)
     }
@@ -514,16 +491,8 @@ impl PlanResolverState {
         self.lambda_param_scopes
             .iter()
             .rev()
-            .find_map(|frame| frame.iter().find(|(p, _, _)| p.eq_ignore_ascii_case(name)))
-            .map(|(p, f, _)| (p.as_str(), f.as_ref()))
-    }
-
-    pub fn lambda_interval_shape(&self, name: &str) -> Option<&IntervalShape> {
-        self.lambda_param_scopes
-            .iter()
-            .rev()
-            .find_map(|frame| frame.iter().find(|(p, _, _)| p.eq_ignore_ascii_case(name)))
-            .map(|(_, _, shape)| shape)
+            .find_map(|frame| frame.iter().find(|(p, _)| p.eq_ignore_ascii_case(name)))
+            .map(|(p, f)| (p.as_str(), f.as_ref()))
     }
 
     pub fn in_lambda_scope(&self) -> bool {
@@ -705,10 +674,7 @@ pub(crate) struct LambdaScope<'a> {
 }
 
 impl<'a> LambdaScope<'a> {
-    fn new(
-        state: &'a mut PlanResolverState,
-        params: Vec<(String, Option<FieldRef>, IntervalShape)>,
-    ) -> Self {
+    fn new(state: &'a mut PlanResolverState, params: Vec<(String, Option<FieldRef>)>) -> Self {
         state.lambda_param_scopes.push(params);
         Self { state }
     }

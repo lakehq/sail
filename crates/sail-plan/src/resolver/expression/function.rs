@@ -23,7 +23,6 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::lambda::is_spec_lambda_argument;
 use crate::resolver::expression::predicate::coerce_timestamp_string_predicate;
 use crate::resolver::function::PythonUdf;
-use crate::resolver::interval::qualify_date_interval_arguments;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -98,7 +97,7 @@ impl PlanResolver<'_> {
 
         let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
 
-        let (argument_display_names, mut arguments) = if canonical_function_name == "struct" {
+        let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
         } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
@@ -164,12 +163,6 @@ impl PlanResolver<'_> {
                         if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                             return Err(PlanError::invalid("invalid scalar function clause"));
                         }
-                        qualify_date_interval_arguments(
-                            &canonical_function_name,
-                            &mut arguments,
-                            schema,
-                            state,
-                        )?;
                         let input = ScalarFunctionInput {
                             arguments,
                             function_context: FunctionContextInput {

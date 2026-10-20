@@ -392,10 +392,6 @@ impl PlanResolver<'_> {
             }
         };
         self.verify_query_plan(&plan, state)?;
-        let interval_shapes = crate::resolver::interval::plan_interval_shapes(&plan, state);
-        for (field, shape) in plan.schema().fields().iter().zip(interval_shapes) {
-            state.register_interval_shape(field.name(), shape);
-        }
         self.register_schema_with_plan_id(&plan, plan_id, state)?;
         Ok(plan)
     }
