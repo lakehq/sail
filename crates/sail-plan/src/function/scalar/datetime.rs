@@ -1937,7 +1937,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| utc_timestamp(input, false)),
         ),
         ("trunc", F::binary(trunc)),
-        ("try_make_interval", F::unknown("try_make_interval")),
+        ("try_make_interval", F::udf(SparkMakeInterval::new())),
         (
             "try_make_timestamp",
             F::custom(|input| make_timestamp(input, None, true)),
