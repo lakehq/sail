@@ -413,7 +413,7 @@ pub(crate) fn cast_timestamp_ntz_to_ltz(
     ))
 }
 
-fn shift_timestamp_timezone(
+pub(crate) fn shift_timestamp_timezone(
     expression: expr::Expr,
     timezone: &str,
     is_try: bool,
@@ -466,4 +466,30 @@ fn shift_timestamp_timezone(
         ]);
         cast(converted, DataType::Int64)
     })
+}
+
+pub(crate) fn coerce_temporal_array_element(
+    array: expr::Expr,
+    element: expr::Expr,
+    context: &FunctionContextInput<'_>,
+) -> PlanResult<(expr::Expr, expr::Expr)> {
+    let array_type = array.get_type(context.schema)?;
+    let element_type = element.get_type(context.schema)?;
+    let field = match &array_type {
+        DataType::List(field) | DataType::LargeList(field) => field,
+        _ => return Ok((array, element)),
+    };
+    let timezone = &context.plan_config.session_timezone;
+    let Some(target) =
+        common_temporal_type(&[field.data_type().clone(), element_type.clone()], timezone)
+    else {
+        return Ok((array, element));
+    };
+    let array_target = DataType::List(Arc::new(
+        field.as_ref().clone().with_data_type(target.clone()),
+    ));
+    Ok((
+        cast_temporal(array, &array_type, array_target, timezone, false)?,
+        cast_temporal(element, &element_type, target, timezone, false)?,
+    ))
 }

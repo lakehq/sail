@@ -29,10 +29,8 @@ use sail_python_udf::udf::expr_contains_python_udf;
 use super::datetime::fold_datetime_argument;
 use super::lambda::lambda_with_fresh_parameter;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
-use crate::function::datetime_utils::{
-    cast_temporal, coerce_temporal_arguments, common_temporal_type,
-};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{coerce_temporal_arguments, coerce_temporal_array_element};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -160,32 +158,6 @@ fn array_prepend(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element + lit(1_i64))
-}
-
-pub(super) fn coerce_temporal_array_element(
-    array: expr::Expr,
-    element: expr::Expr,
-    context: &FunctionContextInput<'_>,
-) -> PlanResult<(expr::Expr, expr::Expr)> {
-    let array_type = array.get_type(context.schema)?;
-    let element_type = element.get_type(context.schema)?;
-    let field = match &array_type {
-        DataType::List(field) | DataType::LargeList(field) => field,
-        _ => return Ok((array, element)),
-    };
-    let timezone = &context.plan_config.session_timezone;
-    let Some(target) =
-        common_temporal_type(&[field.data_type().clone(), element_type.clone()], timezone)
-    else {
-        return Ok((array, element));
-    };
-    let array_target = DataType::List(Arc::new(
-        field.as_ref().clone().with_data_type(target.clone()),
-    ));
-    Ok((
-        cast_temporal(array, &array_type, array_target, timezone, false)?,
-        cast_temporal(element, &element_type, target, timezone, false)?,
-    ))
 }
 
 fn array_contains(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

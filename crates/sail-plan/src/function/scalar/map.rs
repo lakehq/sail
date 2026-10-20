@@ -13,8 +13,8 @@ use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput, coerce_temporal_arguments};
-use crate::function::scalar::array::coerce_temporal_array_element;
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{coerce_temporal_arguments, coerce_temporal_array_element};
 
 fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use crate::function::common::ScalarFunctionBuilder as F;

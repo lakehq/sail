@@ -42,7 +42,7 @@ use sail_logical_plan::barrier::BarrierNode;
 
 use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{cast_temporal, common_temporal_type};
+use crate::function::datetime_utils::{cast_temporal, common_temporal_type};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 

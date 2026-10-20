@@ -8,7 +8,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::with_session_timezone;
+use crate::function::datetime_utils::with_session_timezone;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
