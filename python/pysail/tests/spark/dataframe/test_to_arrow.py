@@ -481,3 +481,56 @@ def test_array_view_conversion_preserves_duplicate_struct_fields(spark, remote, 
     # copying the first 'x' into both fields. Check each position separately.
     assert structs.field(0).to_pylist() == [row[1] for row in rows]
     assert structs.field(1).to_pylist() == [row[2] for row in rows]
+
+
+@pytest.mark.parametrize("large", [False, True])
+@pytest.mark.parametrize("referenced_null", [False, True])
+@pytest.mark.parametrize("sliced", [False, True])
+def test_array_compact_dictionary_elements(spark, remote, tmp_path, large, referenced_null, sliced):
+    import pyarrow as pa
+
+    keys = [0, 1 if referenced_null else 0, None, 0]
+    dictionary = pa.DictionaryArray.from_arrays(pa.array(keys, type=pa.int8()), pa.array([1, None], type=pa.int32()))
+    list_type = pa.LargeListArray if large else pa.ListArray
+    items = list_type.from_arrays([0, 2, 4, 4, 4], dictionary, mask=pa.array([False, False, False, True]))
+    table = pa.table({"id": range(4), "items": items})
+    if sliced:
+        table = table.slice(1, 3)
+    logical = table.to_pylist()
+    if remote.startswith("local"):
+        # Spark has no Arrow IPC source; verify the same logical values there.
+        frame = spark.createDataFrame([(row["id"], row["items"]) for row in logical], "id long, items array<int>")
+    else:
+        path = tmp_path / "compact_dictionary.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+    result = frame.selectExpr("id", "array_compact(items) AS result").orderBy("id")
+    expected = [
+        {"id": row["id"], "result": None if row["items"] is None else [x for x in row["items"] if x is not None]}
+        for row in logical
+    ]
+    assert not result.schema["result"].dataType.containsNull
+    assert [row.asDict() for row in result.collect()] == expected
+    assert result.toArrow().to_pylist() == expected
+
+
+@pytest.mark.parametrize("large", [False, True])
+def test_array_repeat_nullable_arrow_lists(spark, remote, tmp_path, large):
+    import pyarrow as pa
+
+    # The NULL row has a nonempty physical span, which must not advance the output's value offsets.
+    list_type = pa.LargeListArray if large else pa.ListArray
+    items = list_type.from_arrays([0, 2, 4], pa.array([1, 2, 3, 4], type=pa.int32()), mask=pa.array([True, False]))
+    table = pa.table({"id": [0, 1], "items": items})
+    if remote.startswith("local"):
+        frame = spark.createDataFrame([(0, None), (1, [3, 4])], "id long, items array<int>")
+    else:
+        path = tmp_path / "repeat_null_span.arrow"
+        with path.open("wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+        frame = spark.read.format("arrow").load(str(path))
+    result = frame.selectExpr("id", "array_repeat(items, 2) AS result").orderBy("id")
+    expected = [{"id": 0, "result": [None, None]}, {"id": 1, "result": [[3, 4], [3, 4]]}]
+    assert [row.asDict() for row in result.collect()] == expected
+    assert result.toArrow().to_pylist() == expected

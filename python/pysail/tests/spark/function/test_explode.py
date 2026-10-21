@@ -226,3 +226,18 @@ def test_map_generators_return_ordinary_list_values(spark, remote, tmp_path, lar
     table = result.toArrow()
     table.validate(full=True)
     assert table.to_pylist() == expected
+
+
+@pytest.mark.parametrize("function", ["explode", "explode_outer", "posexplode", "posexplode_outer"])
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_map_generators_preserve_interval_fields(spark, function, dynamic):
+    from datetime import timedelta
+
+    key = "id" if dynamic else "CAST(1 AS BIGINT)"
+    source = spark.range(2).selectExpr(
+        f"map_from_entries(CAST(array(struct({key}, INTERVAL '1' DAY)) AS ARRAY<STRUCT<k:BIGINT,v:INTERVAL DAY>>)) AS m"
+    )
+    result = source.selectExpr(f"{function}(m)").orderBy("key")
+    expected = [(i if dynamic else 1, timedelta(days=1)) for i in range(2)]
+    assert [(row.key, row.value) for row in result.collect()] == expected
+    assert result.schema["value"].dataType.simpleString() == "interval day"

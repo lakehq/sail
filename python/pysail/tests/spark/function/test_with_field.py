@@ -5,6 +5,8 @@ from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql import types as T  # noqa: N812
 
+from pysail.testing.spark.utils.common import pyspark_version
+
 
 @pytest.mark.parametrize("field_name", ["target", "added"])
 @pytest.mark.parametrize("nested", [False, True])
@@ -63,7 +65,8 @@ def test_with_field_preserves_new_logical_type_and_clears_user_metadata(spark, f
     expected.append({"result": None})
     assert [row.asDict(recursive=True) for row in result.collect()] == expected
     # Spark's toArrow() rejects NULL structs with non-nullable children; collect() covers that row.
-    assert result.where(F.col("result").isNotNull()).toArrow().to_pylist() == expected[:-1]
+    if pyspark_version() >= (4,):
+        assert result.where(F.col("result").isNotNull()).toArrow().to_pylist() == expected[:-1]
 
 
 def test_nested_with_field_propagates_nullable_column(spark):

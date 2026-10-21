@@ -194,3 +194,35 @@ def test_round_of_non_null_decimal_stays_nullable(spark):
     # Spark keeps round(decimal) nullable (overflow); Sail says non-nullable.
     out = _decimal_frame(spark).select(F.round("nn", 1).alias("result"))
     assert _nullable(out, "result") is True
+
+
+@pytest.mark.parametrize("expression", ["array_compact(a)", "filter(a, x -> x > 1)", "array_sort(a, (l,r) -> l-r)"])
+def test_derived_array_does_not_inherit_column_metadata(spark, expression):
+    frame = spark.range(1).select(F.array(F.lit(2), F.lit(1)).alias(
+        "a", metadata={"comment": "input only", "source": "test"},
+    ))
+    result = frame.selectExpr(f"{expression} AS result")
+    assert result.schema["result"].metadata == {}
+    expected = [2] if expression.startswith("filter") else ([1, 2] if expression.startswith("array_sort") else [2, 1])
+    assert result.collect()[0].result == expected
+
+
+@pytest.mark.parametrize("kind", ["array", "map_values", "map_keys"])
+def test_aggregate_lambda_output_with_annotated_capture(spark, kind):
+    from datetime import timedelta
+
+    expressions = {
+        "array": "transform(array(1, 2), x -> i)",
+        "map_values": "transform_values(map(1, 2), (k, v) -> i)",
+        "map_keys": "transform_keys(map(1, 2), (k, v) -> i)",
+    }
+    source = spark.range(3).select(F.expr("CAST(id AS INTERVAL DAY)").alias("i", metadata={"source": "capture"}))
+    result = source.selectExpr(f"{expressions[kind]} AS value").agg(F.collect_list("value").alias("result"))
+    days = [timedelta(days=i) for i in range(3)]
+    if kind == "array":
+        expected = [[day, day] for day in days]
+    elif kind == "map_values":
+        expected = [{1: day} for day in days]
+    else:
+        expected = [{day: 2} for day in days]
+    assert sorted(result.collect()[0].result, key=repr) == sorted(expected, key=repr)

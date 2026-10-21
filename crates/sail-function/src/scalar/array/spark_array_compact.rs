@@ -11,8 +11,10 @@ use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common_datafusion::metadata::without_spark_user_metadata;
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::array::lambda_utils::coerce_single_list_arg;
 
 /// `array_compact` removes all null values from the array.
 /// This is the Spark-compatible implementation.
@@ -33,7 +35,7 @@ impl Default for SparkArrayCompact {
 impl SparkArrayCompact {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -53,6 +55,34 @@ impl ScalarUDFImpl for SparkArrayCompact {
         )
     }
 
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types == [DataType::Null] {
+            return Ok(vec![DataType::new_list(DataType::Null, true)]);
+        }
+        let mut types = coerce_single_list_arg(self.name(), arg_types)?;
+        // An unused NULL dictionary value still makes Arrow's dictionary nullable.
+        // Decode dictionary elements before constructing the nonnullable result list.
+        match &types[0] {
+            DataType::List(field) | DataType::LargeList(field) => {
+                if let DataType::Dictionary(_, values) = field.data_type() {
+                    let field = Arc::new(
+                        field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(values.as_ref().clone()),
+                    );
+                    types[0] = if matches!(types[0], DataType::LargeList(_)) {
+                        DataType::LargeList(field)
+                    } else {
+                        DataType::List(field)
+                    };
+                }
+            }
+            _ => {}
+        }
+        Ok(types)
+    }
+
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [input] = args.arg_fields else {
             return plan_err!("{} requires one list argument", self.name());
@@ -68,13 +98,12 @@ impl ScalarUDFImpl for SparkArrayCompact {
             DataType::Null => DataType::Null,
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
-        Ok(Arc::new(
-            input
-                .as_ref()
-                .clone()
-                .with_name(self.name())
-                .with_data_type(data_type),
-        ))
+        let field = input
+            .as_ref()
+            .clone()
+            .with_name(self.name())
+            .with_data_type(data_type);
+        Ok(Arc::new(without_spark_user_metadata(field)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

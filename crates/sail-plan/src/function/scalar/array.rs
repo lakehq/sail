@@ -15,6 +15,7 @@ use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
+use sail_function::scalar::array::array_repeat::ArrayRepeat;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
@@ -36,7 +37,9 @@ fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (element, count) = input.arguments.two()?;
     let count = cast(count, DataType::Int64);
     let output_type = make_nullable_array_type(
-        &expr_fn::array_repeat(element.clone(), count.clone()).get_type(schema.as_ref())?,
+        &ScalarUDF::from(ArrayRepeat::new())
+            .call(vec![element.clone(), count.clone()])
+            .get_type(schema.as_ref())?,
     );
     array_repeat_with_nullable_element(element, count, output_type, schema)
 }
@@ -51,7 +54,7 @@ fn array_repeat_with_nullable_element(
     // A CASE without ELSE keeps the value but makes DataFusion plan it as nullable.
     let nullable_element = when(lit(true), cast(element, element_type)).end()?;
     Ok(cast(
-        expr_fn::array_repeat(nullable_element, count),
+        ScalarUDF::from(ArrayRepeat::new()).call(vec![nullable_element, count]),
         output_type,
     ))
 }

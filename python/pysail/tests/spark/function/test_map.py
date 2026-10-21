@@ -3,6 +3,8 @@ from pyspark.errors import SparkRuntimeException
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql import types as T  # noqa: N812
 
+from pysail.testing.spark.utils.common import pyspark_version
+
 
 def test_empty_map_preserves_schema_and_value(spark):
     result = spark.range(1).select(F.create_map().alias("m"))
@@ -60,6 +62,7 @@ def test_map_constructors_preserve_interval_fields(spark, function, nullable_val
     assert [row.result for row in result.collect()] == [
         None if keys is None else dict(zip(keys, values, strict=True)) for keys, values in rows
     ]
-    assert result.toArrow().to_pylist() == [
-        {"result": None if keys is None else list(zip(keys, values, strict=True))} for keys, values in rows
-    ]
+    if pyspark_version() >= (4,):
+        assert result.toArrow().to_pylist() == [
+            {"result": None if keys is None else list(zip(keys, values, strict=True))} for keys, values in rows
+        ]

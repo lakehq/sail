@@ -29,6 +29,7 @@ use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
+use sail_common_datafusion::metadata::without_spark_user_metadata;
 
 use crate::scalar::array::lambda_utils::{
     ListValuesResult, coerce_single_list_arg, extract_list_values, index_array, value_lambda_pair,
@@ -116,7 +117,9 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
         let (list, _lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
-        Ok(Arc::new(list.as_ref().clone().with_name("")))
+        Ok(Arc::new(without_spark_user_metadata(
+            list.as_ref().clone().with_name(""),
+        )))
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
