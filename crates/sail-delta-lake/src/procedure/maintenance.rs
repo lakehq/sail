@@ -15,13 +15,16 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::tree_node::TreeNodeRecursion;
 use educe::Educe;
-use sail_common_datafusion::datasource::SourceInfo;
+use futures::TryStreamExt;
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::datasource::{OptionLayer, SourceInfo};
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedureCall, LakeProcedureExecutionTarget, LakeProcedurePredicate,
 };
 use sail_data_source::options::ResolveOptions;
 use sail_physical_plan::lake_procedure::prepare_lake_procedure_execution;
 
+use super::optimize::DeltaOptimizePlan;
 use super::{optimize, vacuum};
 use crate::DeltaLakeSource;
 use crate::options::r#gen::DeltaReadOptions;
@@ -34,6 +37,9 @@ use crate::transaction::PROTOCOL;
 pub(crate) struct DeltaMaintenanceNode {
     pub call: LakeProcedureCall,
     pub options: BTreeMap<String, String>,
+    pub paths: Vec<String>,
+    pub read_options: Vec<OptionLayer>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     #[educe(PartialOrd(ignore))]
     pub predicate: Option<LakeProcedurePredicate>,
     #[educe(PartialOrd(ignore))]
@@ -53,6 +59,7 @@ impl DeltaMaintenanceNode {
         call.validate()?;
         let options = info
             .options
+            .clone()
             .into_iter()
             .flat_map(|layer| layer.into_opaque_options())
             .collect();
@@ -60,6 +67,9 @@ impl DeltaMaintenanceNode {
         Ok(Self {
             call,
             options,
+            paths: info.paths,
+            read_options: info.options,
+            lakehouse_table: info.lakehouse_table,
             predicate,
             schema,
         })
@@ -94,12 +104,14 @@ impl UserDefinedLogicalNodeCore for DeltaMaintenanceNode {
     }
 }
 
-/// Mutations reacquire catalog access and current state on the coordinator at execution time.
+/// Reacquires catalog access on the coordinator before applying maintenance changes.
 #[derive(Debug, Clone)]
 pub struct DeltaMaintenanceExec {
     call: LakeProcedureCall,
     options: BTreeMap<String, String>,
     predicate: Option<DeltaMaintenancePredicate>,
+    input: Option<Arc<dyn ExecutionPlan>>,
+    optimize: Option<DeltaOptimizePlan>,
     properties: Arc<PlanProperties>,
 }
 
@@ -129,8 +141,36 @@ impl DeltaMaintenanceExec {
             call,
             options,
             predicate,
+            input: None,
+            optimize: None,
             properties,
         })
+    }
+
+    pub fn with_optimize(
+        mut self,
+        input: Arc<dyn ExecutionPlan>,
+        plan: DeltaOptimizePlan,
+    ) -> Result<Self> {
+        if self.call.invocation.procedure.name != "optimize"
+            || input.schema() != crate::physical_plan::delta_action_schema()?
+            || plan.version < 0
+            || plan.parallelism == 0
+            || plan.considered < plan.removed.len()
+        {
+            return plan_err!("Invalid Delta OPTIMIZE rewrite plan");
+        }
+        self.input = Some(input);
+        self.optimize = Some(plan);
+        Ok(self)
+    }
+
+    pub fn input(&self) -> Option<&Arc<dyn ExecutionPlan>> {
+        self.input.as_ref()
+    }
+
+    pub fn optimize_plan(&self) -> Option<&DeltaOptimizePlan> {
+        self.optimize.as_ref()
     }
     pub fn call(&self) -> &LakeProcedureCall {
         &self.call
@@ -161,7 +201,16 @@ impl ExecutionPlan for DeltaMaintenanceExec {
         &self.properties
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
+        self.input.iter().collect()
+    }
+    fn required_input_distribution(&self) -> Vec<datafusion::physical_expr::Distribution> {
+        self.input
+            .iter()
+            .map(|_| datafusion::physical_expr::Distribution::SinglePartition)
+            .collect()
+    }
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        self.input.iter().map(|_| false).collect()
     }
     fn apply_expressions(
         &self,
@@ -181,10 +230,18 @@ impl ExecutionPlan for DeltaMaintenanceExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !children.is_empty() {
-            return internal_err!("DeltaMaintenanceExec is a leaf");
+        match (self.optimize.as_ref(), children.as_slice()) {
+            (Some(plan), [input]) => Ok(Arc::new(
+                Self::try_new(
+                    self.call.clone(),
+                    self.options.clone(),
+                    self.predicate.clone(),
+                )?
+                .with_optimize(input.clone(), plan.clone())?,
+            )),
+            (None, []) => Ok(self),
+            _ => internal_err!("Delta maintenance child count does not match its operation"),
         }
-        Ok(self)
     }
     fn execute(
         &self,
@@ -196,10 +253,13 @@ impl ExecutionPlan for DeltaMaintenanceExec {
         }
         let call = self.call.clone();
         let options = self.options.clone();
-        let predicate = self.predicate.clone();
+        let input = self.input.clone();
+        let optimize = self.optimize.clone();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            futures::stream::once(async move { execute(context, call, options, predicate).await }),
+            futures::stream::once(
+                async move { execute(context, call, options, input, optimize).await },
+            ),
         )))
     }
 }
@@ -208,8 +268,10 @@ async fn execute(
     context: Arc<TaskContext>,
     call: LakeProcedureCall,
     options: BTreeMap<String, String>,
-    predicate: Option<DeltaMaintenancePredicate>,
+    input: Option<Arc<dyn ExecutionPlan>>,
+    optimize: Option<DeltaOptimizePlan>,
 ) -> Result<RecordBatch> {
+    let started = chrono::Utc::now().timestamp_millis();
     let LakeProcedureExecutionTarget::Table(info) =
         prepare_lake_procedure_execution(context.as_ref(), &call).await?
     else {
@@ -222,8 +284,15 @@ async fn execute(
         .with_scalar_functions(context.scalar_functions().values().cloned().collect())
         .build();
     let table_url = DeltaLakeSource::parse_table_url(&session, info.paths).await?;
-    let read_options = DeltaReadOptions::resolve(&session, info.options)?;
-    let (snapshot, log_store, scan_config) = load_delta_read_state(
+    let mut read_options = DeltaReadOptions::resolve(&session, info.options)?;
+    if let Some(plan) = &optimize {
+        if table_url.as_str() != plan.table_url {
+            return plan_err!("OPTIMIZE table location changed after planning");
+        }
+        read_options.version_as_of = Some(plan.version);
+        read_options.timestamp_as_of = None;
+    }
+    let (snapshot, log_store, _) = load_delta_read_state(
         &session,
         table_url,
         None,
@@ -232,6 +301,33 @@ async fn execute(
         info.lakehouse_table.clone(),
     )
     .await?;
+    validate_snapshot(&snapshot, &call.invocation)?;
+    match call.invocation.procedure.name.as_str() {
+        "optimize" => {
+            let (Some(input), Some(plan)) = (input, optimize) else {
+                return internal_err!("OPTIMIZE is missing its rewrite plan");
+            };
+            if snapshot.metadata().id() != plan.table_id {
+                return plan_err!("OPTIMIZE table identity changed after planning");
+            }
+            let mut output = input.execute(0, context)?;
+            let mut added = Vec::new();
+            while let Some(batch) = output.try_next().await? {
+                added.extend(crate::physical_plan::decode_adds_from_batch(&batch)?);
+            }
+            optimize::finish(snapshot, log_store, &call.invocation, &plan, added, started).await
+        }
+        "vacuum" => {
+            vacuum::execute(&session, snapshot, log_store, &call.invocation, &options).await
+        }
+        _ => internal_err!("Unknown Delta maintenance operation"),
+    }
+}
+
+pub(super) fn validate_snapshot(
+    snapshot: &crate::snapshot::DeltaSnapshot,
+    invocation: &sail_common_datafusion::lakeprocedure::LakeProcedureInvocation,
+) -> Result<()> {
     PROTOCOL
         .can_write_to_protocol(snapshot.protocol())
         .map_err(crate::spec::DeltaError::from)?;
@@ -241,29 +337,10 @@ async fn execute(
     {
         return not_impl_err!(
             "Delta {} is not supported for catalog-managed tables",
-            call.invocation.procedure.name
+            invocation.procedure.name
         );
     }
-    match call.invocation.procedure.name.as_str() {
-        "optimize" => {
-            optimize::execute(
-                &session,
-                context,
-                snapshot,
-                log_store,
-                scan_config,
-                info.lakehouse_table,
-                &call.invocation,
-                &options,
-                predicate.as_ref(),
-            )
-            .await
-        }
-        "vacuum" => {
-            vacuum::execute(&session, snapshot, log_store, &call.invocation, &options).await
-        }
-        _ => internal_err!("Unknown Delta maintenance operation"),
-    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

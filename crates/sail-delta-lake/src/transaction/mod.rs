@@ -1349,7 +1349,11 @@ impl std::future::IntoFuture for PreparedCommit {
                     _ => None,
                 })
                 .unwrap_or(false);
-            let effective_max_retries = if creation_intent || current_is_blind_append {
+            // OPTIMIZE can reuse completed rewrites after checking intervening commits.
+            let effective_max_retries = if creation_intent
+                || current_is_blind_append
+                || matches!(this.data.operation, DeltaOperation::Optimize { .. })
+            {
                 this.max_retries
             } else {
                 0

@@ -52,7 +52,9 @@ pub use log_replay_exec::{DeltaLogReplayExec, DeltaLogReplayMode};
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub use path_decode::DeltaDecodePath;
 
-pub use crate::procedure::{DeltaMaintenanceExec, DeltaMaintenancePredicate};
+pub use crate::procedure::{
+    DeltaMaintenanceExec, DeltaMaintenancePredicate, DeltaOptimizePlan, DeltaOptimizeRewriteExec,
+};
 pub mod planner;
 pub use planner::{
     DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext, plan_delete, plan_delete_mor,

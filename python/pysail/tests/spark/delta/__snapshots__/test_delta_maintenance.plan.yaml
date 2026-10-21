@@ -1,6 +1,6 @@
 # serializer version: 1
 ---
-name: "test_maintenance_distributed_plan"
+name: "test_maintenance_distributed_plan[1-1]"
 data:
   OPTIMIZE maintenance_plan: |-
     == Distributed Plan ==
@@ -9,13 +9,131 @@ data:
     mode=Pipelined
     partitions=1
     distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    DeltaOptimizeRewriteExec: concurrent_groups=1, groups=1
+      DeltaWriterExec(table_path=file://<tmp>/distributed/)
+        SortExec: expr=[part@1 ASC NULLS LAST], preserve_partitioning=[false]
+          DeltaScanByAddsExec(table_path=file://<tmp>/distributed/, version=2, projection=None, limit=None, pushdown=false)
+            DataSourceExec: partitions=1, partition_sizes=[1]
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
     placement=Driver
     LakeProcedureExec: lake_source=delta, procedure=optimize, invocation_id=<invocation_id>
+      DeltaMaintenanceExec: procedure=optimize
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+  VACUUM maintenance_plan DRY RUN: |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=delta, procedure=vacuum, invocation_id=<invocation_id>
       CooperativeExec
-        DeltaMaintenanceExec: procedure=optimize
+        DeltaMaintenanceExec: procedure=vacuum
 
     === stage 1 ===
     inputs=[StageInput(stage=0, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+---
+name: "test_maintenance_distributed_plan[4-2]"
+data:
+  OPTIMIZE maintenance_plan: |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=2
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    DeltaOptimizeRewriteExec: concurrent_groups=2, groups=4
+      DeltaWriterExec(table_path=file://<tmp>/distributed/)
+        SortExec: expr=[part@1 ASC NULLS LAST], preserve_partitioning=[true]
+          DeltaScanByAddsExec(table_path=file://<tmp>/distributed/, version=2, projection=None, limit=None, pushdown=false)
+            DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=delta, procedure=optimize, invocation_id=<invocation_id>
+      DeltaMaintenanceExec: procedure=optimize
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+  VACUUM maintenance_plan DRY RUN: |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=delta, procedure=vacuum, invocation_id=<invocation_id>
+      CooperativeExec
+        DeltaMaintenanceExec: procedure=vacuum
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Forward)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+---
+name: "test_maintenance_distributed_plan[4-8]"
+data:
+  OPTIMIZE maintenance_plan: |-
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobinBatch(channels=1)
+    placement=Worker
+    DeltaOptimizeRewriteExec: concurrent_groups=4, groups=4
+      DeltaWriterExec(table_path=file://<tmp>/distributed/)
+        SortExec: expr=[part@1 ASC NULLS LAST], preserve_partitioning=[true]
+          DeltaScanByAddsExec(table_path=file://<tmp>/distributed/, version=2, projection=None, limit=None, pushdown=false)
+            DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]
+
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Shuffle)]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobinBatch(channels=1)
+    placement=Driver
+    LakeProcedureExec: lake_source=delta, procedure=optimize, invocation_id=<invocation_id>
+      DeltaMaintenanceExec: procedure=optimize
+        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Forward)]
     mode=Pipelined
     partitions=1
     distribution=RoundRobinBatch(channels=1)

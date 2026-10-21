@@ -3,43 +3,64 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::arrow::array::{Array, RecordBatch};
+use datafusion::catalog::Session;
 use datafusion::common::{Result, not_impl_err, plan_err};
-use datafusion::execution::{SessionState, TaskContext};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use futures::TryStreamExt;
-use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
 use sail_data_source::options::ResolveOptions;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::maintenance::DeltaMaintenancePredicate;
+use super::maintenance::{DeltaMaintenanceExec, DeltaMaintenanceNode, DeltaMaintenancePredicate};
+use super::rewrite_exec::DeltaOptimizeRewriteExec;
 use super::{optional_bool, optional_string};
-use crate::datasource::DeltaScanConfig;
+use crate::DeltaLakeSource;
 use crate::delta_log::LogStoreRef;
-use crate::options::r#gen::DeltaWriteOptions;
-use crate::physical::scan_planner::{DeltaFileSource, plan_delta_scan};
+use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::{
-    DeltaWriterExec, DeltaWriterExecOptions, decode_adds_from_batch, prepare_delta_write_context,
+    DeltaScanByAddsExec, DeltaWriterExec, DeltaWriterExecOptions, delta_action_schema,
+    encode_actions, prepare_delta_write_context,
 };
 use crate::snapshot::DeltaSnapshot;
-use crate::spec::{Add, CommitAction, DeltaError, DeltaOperation, RemoveOptions, TableFeature};
+use crate::spec::{
+    Action, Add, CommitAction, DeltaError, DeltaOperation, RemoveOptions, TableFeature,
+};
+use crate::table::load_delta_read_state;
 use crate::transaction::{CommitBuilder, CommitProperties};
 
-#[expect(clippy::too_many_arguments)]
-pub(super) async fn execute(
-    session: &SessionState,
-    context: Arc<TaskContext>,
-    snapshot: Arc<DeltaSnapshot>,
-    log_store: LogStoreRef,
-    scan_config: DeltaScanConfig,
-    lakehouse_table: Option<LakehouseExecutionContext>,
-    invocation: &LakeProcedureInvocation,
-    options: &BTreeMap<String, String>,
-    filter: Option<&DeltaMaintenancePredicate>,
-) -> Result<RecordBatch> {
-    let started = Utc::now().timestamp_millis();
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeltaOptimizePlan {
+    pub table_url: String,
+    pub table_id: String,
+    pub version: i64,
+    pub removed: Vec<Add>,
+    pub considered: usize,
+    pub optimized_partitions: usize,
+    pub num_bins: usize,
+    pub parallelism: usize,
+}
+
+pub(crate) async fn plan(
+    session: &dyn Session,
+    node: &DeltaMaintenanceNode,
+    filter: Option<DeltaMaintenancePredicate>,
+) -> Result<DeltaMaintenanceExec> {
+    let invocation = &node.call.invocation;
+    let options = &node.options;
+    let table_url = DeltaLakeSource::parse_table_url(session, node.paths.clone()).await?;
+    let read_options = DeltaReadOptions::resolve(session, node.read_options.clone())?;
+    let (snapshot, _, scan_config) = load_delta_read_state(
+        session,
+        table_url,
+        None,
+        read_options,
+        false,
+        node.lakehouse_table.clone(),
+    )
+    .await?;
+    super::maintenance::validate_snapshot(&snapshot, invocation)?;
     if optional_bool(invocation, "full")?.unwrap_or(false)
         || optional_string(invocation, "zorder")?.is_some()
     {
@@ -76,8 +97,7 @@ pub(super) async fn execute(
     if !ratio.is_finite() || !(0.0..=1.0).contains(&ratio) {
         return plan_err!("OPTIMIZE maxDeletedRowsRatio must be between zero and one");
     }
-    let predicate = optional_string(invocation, "predicate")?;
-    let candidates = select_files(&snapshot, filter)?;
+    let candidates = select_files(&snapshot, filter.as_ref())?;
     let considered = candidates.len();
     let mut partitions: BTreeMap<BTreeMap<String, Option<String>>, Vec<Add>> = BTreeMap::new();
     for add in candidates {
@@ -126,13 +146,12 @@ pub(super) async fn execute(
         }
     }
     let removed = bins.iter().flatten().cloned().collect::<Vec<_>>();
-    let mut added = vec![];
     let mut writer_options =
         DeltaWriterExecOptions::from(DeltaWriteOptions::resolve(session, vec![])?);
     writer_options.target_file_size = max_size as u64;
     let schema = snapshot.input_schema()?;
     let operation = DeltaOperation::Optimize {
-        predicate: predicate.map(str::to_string),
+        predicate: optional_string(invocation, "predicate")?.map(str::to_string),
     };
     let write_context = prepare_delta_write_context(
         snapshot.table_url(),
@@ -145,36 +164,106 @@ pub(super) async fn execute(
         &schema,
         Some(operation.clone()),
     )?;
-    for bin in &bins {
-        let scan = plan_delta_scan(
-            session,
-            &snapshot,
-            &log_store,
-            &scan_config,
-            DeltaFileSource::Eager(Arc::new(bin.clone())),
+    let num_bins = bins.len();
+    let parallelism = session
+        .config()
+        .target_partitions()
+        .max(1)
+        .min(num_bins.max(1));
+    let rewrite_plan = DeltaOptimizePlan {
+        table_url: snapshot.table_url().to_string(),
+        table_id: snapshot.metadata().id().to_string(),
+        version: snapshot.version(),
+        removed,
+        considered,
+        optimized_partitions,
+        num_bins,
+        parallelism,
+    };
+    let mut assignments = vec![Vec::new(); parallelism];
+    let mut assigned_bytes = vec![0_i64; parallelism];
+    let mut order = bins
+        .iter()
+        .enumerate()
+        .map(|(index, files)| Ok((index, total_size(files)?)))
+        .collect::<Result<Vec<_>>>()?;
+    order.sort_by_key(|(index, bytes)| (std::cmp::Reverse(*bytes), *index));
+    for (index, bytes) in order {
+        let task = (0..parallelism)
+            .min_by_key(|task| assigned_bytes[*task])
+            .ok_or_else(|| DeltaError::generic("OPTIMIZE requires a rewrite task"))?;
+        assignments[task].push(index);
+        assigned_bytes[task] = assigned_bytes[task].saturating_add(bytes);
+    }
+    let mut partitions = bins
+        .into_iter()
+        .map(|files| {
+            encode_actions(files.into_iter().map(Action::Add).collect(), None)
+                .map(|batch| vec![batch])
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if partitions.is_empty() {
+        partitions.push(vec![]);
+        assignments[0].push(0);
+    }
+    let files = DataSourceExec::from_data_source(MemorySourceConfig::try_new(
+        &partitions,
+        delta_action_schema()?,
+        None,
+    )?);
+    let scan = Arc::new(
+        DeltaScanByAddsExec::new(
+            files,
+            snapshot.table_url().clone(),
+            snapshot.version(),
+            schema.clone(),
+            schema.clone(),
+            scan_config,
             None,
-            &[],
+            None,
+            None,
+            node.lakehouse_table.clone(),
             None,
         )
-        .await?;
-        let input = Arc::new(CoalescePartitionsExec::new(scan));
-        let writer = DeltaWriterExec::new(
-            input,
-            snapshot.table_url().clone(),
-            writer_options.clone(),
-            snapshot.metadata().configuration().clone(),
-            snapshot.metadata().partition_columns().clone(),
-            PhysicalSinkMode::Append,
-            true,
-            schema.clone(),
-            write_context.clone(),
-            lakehouse_table.clone(),
-        )?;
-        let mut stream = writer.execute(0, context.clone())?;
-        while let Some(batch) = stream.try_next().await? {
-            added.extend(decode_adds_from_batch(&batch)?);
-        }
-    }
+        .preserve_file_groups(),
+    );
+    let writer = Arc::new(DeltaWriterExec::new(
+        scan,
+        snapshot.table_url().clone(),
+        writer_options,
+        snapshot.metadata().configuration().clone(),
+        snapshot.metadata().partition_columns().clone(),
+        PhysicalSinkMode::Append,
+        true,
+        schema,
+        write_context,
+        node.lakehouse_table.clone(),
+    )?);
+    let input = Arc::new(DeltaOptimizeRewriteExec::try_new(writer, assignments)?);
+    DeltaMaintenanceExec::try_new(node.call.clone(), node.options.clone(), filter)?
+        .with_optimize(input, rewrite_plan)
+}
+
+pub(super) async fn finish(
+    snapshot: Arc<DeltaSnapshot>,
+    log_store: LogStoreRef,
+    invocation: &LakeProcedureInvocation,
+    plan: &DeltaOptimizePlan,
+    added: Vec<Add>,
+    started: i64,
+) -> Result<RecordBatch> {
+    let DeltaOptimizePlan {
+        removed,
+        considered,
+        optimized_partitions,
+        num_bins,
+        parallelism,
+        ..
+    } = plan;
+    let schema = snapshot.input_schema()?;
+    let operation = DeltaOperation::Optimize {
+        predicate: optional_string(invocation, "predicate")?.map(str::to_string),
+    };
     let finished = Utc::now().timestamp_millis();
     if !removed.is_empty() {
         let mut actions = added
@@ -201,7 +290,7 @@ pub(super) async fn execute(
             ("numAddedFiles", added.len() as i64),
             ("numRemovedFiles", removed.len() as i64),
             ("numAddedBytes", total_size(&added)?),
-            ("numRemovedBytes", total_size(&removed)?),
+            ("numRemovedBytes", total_size(removed)?),
             (
                 "numDeletionVectorsRemoved",
                 removed
@@ -231,12 +320,12 @@ pub(super) async fn execute(
     };
     let row = json!({"path": snapshot.table_url().as_str().trim_end_matches('/'), "metrics": {
         "numFilesAdded": added.len(), "numFilesRemoved": removed.len(),
-        "filesAdded": sizes(&added)?, "filesRemoved": sizes(&removed)?, "partitionsOptimized": optimized_partitions,
-        "zOrderStats": null, "clusteringStats": null, "numBins": bins.len(), "numBatches": 1,
+        "filesAdded": sizes(&added)?, "filesRemoved": sizes(removed)?, "partitionsOptimized": optimized_partitions,
+        "zOrderStats": null, "clusteringStats": null, "numBins": num_bins, "numBatches": 1,
         "totalConsideredFiles": considered, "totalFilesSkipped": considered - removed.len(),
         "preserveInsertionOrder": false, "numFilesSkippedToReduceWriteAmplification": 0,
         "numBytesSkippedToReduceWriteAmplification": 0, "startTimeMs": started, "endTimeMs": finished,
-        "totalClusterParallelism": 1, "totalScheduledTasks": bins.len(), "autoCompactParallelismStats": null,
+        "totalClusterParallelism": parallelism, "totalScheduledTasks": if *num_bins == 0 { 0 } else { *parallelism }, "autoCompactParallelismStats": null,
         "deletionVectorStats": if dvs.is_empty() { Value::Null } else { json!({"numDeletionVectorsRemoved": dvs.len(), "numDeletionVectorRowsRemoved": dvs.iter().map(|dv| dv.cardinality).sum::<i64>()}) },
         "numTableColumns": schema.fields().len(), "numTableColumnsWithStats": indexed
     }});
@@ -365,4 +454,160 @@ fn sizes(files: &[Add]) -> Result<Value> {
         json!({"min": files.iter().map(|file| file.size).min(), "max": files.iter().map(|file| file.size).max(),
         "avg": if files.is_empty() { 0.0 } else { size as f64 / files.len() as f64 }, "totalFiles": files.len(), "totalSize": size}),
     )
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use object_store::ObjectStore;
+    use object_store::memory::InMemory;
+
+    use super::*;
+    use crate::delta_log::{StorageConfig, default_logstore};
+    use crate::snapshot::DeltaSnapshotConfig;
+    use crate::spec::inspection::DeltaProcedureType;
+    use crate::spec::{DataType, Metadata, Protocol, SaveMode, StructField, StructType};
+
+    #[tokio::test]
+    async fn commit_uses_planned_snapshot_for_concurrent_changes() -> Result<()> {
+        for concurrent_change in ["append", "remove", "metadata"] {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let url = url::Url::parse("memory:///").unwrap();
+            let log_store = default_logstore(store.clone(), store, &url, &StorageConfig);
+            let protocol = Protocol::new(1, 2, None, None);
+            let metadata = Metadata::try_new(
+                None,
+                None,
+                StructType::try_new([StructField::not_null("id", DataType::LONG)])?,
+                vec![],
+                0,
+                HashMap::new(),
+            )?;
+            let file = |path: &str| Add {
+                path: path.to_string(),
+                size: 10,
+                data_change: true,
+                stats: Some(r#"{"numRecords":1}"#.to_string()),
+                ..Default::default()
+            };
+            let removed = vec![file("a.parquet"), file("b.parquet")];
+            let mut actions = vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ];
+            actions.extend(removed.iter().cloned().map(CommitAction::Add));
+            CommitBuilder::default()
+                .with_actions(actions)
+                .build(
+                    None,
+                    log_store.clone(),
+                    DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: url.to_string(),
+                        protocol: Box::new(protocol),
+                        metadata: Box::new(metadata.clone()),
+                    },
+                )
+                .await?;
+            let snapshot = Arc::new(
+                DeltaSnapshot::try_new(
+                    log_store.as_ref(),
+                    DeltaSnapshotConfig::default(),
+                    Some(0),
+                    None,
+                )
+                .await?,
+            );
+            let plan = DeltaOptimizePlan {
+                table_url: url.to_string(),
+                table_id: metadata.id().to_string(),
+                version: 0,
+                removed: removed.clone(),
+                considered: 2,
+                optimized_partitions: 1,
+                num_bins: 1,
+                parallelism: 1,
+            };
+            let concurrent_action = match concurrent_change {
+                "append" => CommitAction::Add(file("appended.parquet")),
+                "remove" => CommitAction::Remove(
+                    removed[0]
+                        .clone()
+                        .into_remove_with_options(1, RemoveOptions::default()),
+                ),
+                _ => CommitAction::Metadata(metadata),
+            };
+            CommitBuilder::default()
+                .with_actions(vec![concurrent_action])
+                .build(
+                    Some(snapshot.clone()),
+                    log_store.clone(),
+                    DeltaOperation::Write {
+                        mode: SaveMode::Append,
+                        partition_by: None,
+                        predicate: None,
+                    },
+                )
+                .await?;
+            let procedure = super::super::descriptor(DeltaProcedureType::Optimize).unwrap();
+            let invocation = LakeProcedureInvocation {
+                arguments: vec![
+                    sail_common_datafusion::lakeprocedure::LakeProcedureValue::Null;
+                    procedure.parameters.len()
+                ],
+                procedure,
+            };
+            let result = finish(
+                snapshot,
+                log_store.clone(),
+                &invocation,
+                &plan,
+                vec![file("optimized.parquet")],
+                0,
+            )
+            .await;
+            let latest = DeltaSnapshot::try_new(
+                log_store.as_ref(),
+                DeltaSnapshotConfig::default(),
+                None,
+                None,
+            )
+            .await?;
+            if concurrent_change == "append" {
+                result?;
+                assert_eq!(latest.version(), 2);
+                let mut paths = latest
+                    .adds()
+                    .iter()
+                    .map(|add| add.path.as_str())
+                    .collect::<Vec<_>>();
+                paths.sort();
+                assert_eq!(paths, ["appended.parquet", "optimized.parquet"]);
+                assert!(
+                    !latest
+                        .adds()
+                        .iter()
+                        .find(|add| add.path == "optimized.parquet")
+                        .unwrap()
+                        .data_change
+                );
+            } else {
+                let Err(datafusion::common::DataFusionError::External(error)) = result else {
+                    return plan_err!("{concurrent_change} must invalidate the rewrite");
+                };
+                assert!(matches!(
+                    error.downcast_ref::<crate::spec::TransactionError>(),
+                    Some(crate::spec::TransactionError::CommitConflict(_))
+                ));
+                assert_eq!(latest.version(), 1);
+                assert!(
+                    latest
+                        .adds()
+                        .iter()
+                        .all(|add| add.path != "optimized.parquet")
+                );
+            }
+        }
+        Ok(())
+    }
 }

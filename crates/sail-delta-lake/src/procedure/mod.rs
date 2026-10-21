@@ -18,10 +18,13 @@ use crate::spec::inspection::{
 };
 
 mod maintenance;
-mod optimize;
+pub(crate) mod optimize;
+mod rewrite_exec;
 mod vacuum;
 pub(crate) use maintenance::DeltaMaintenanceNode;
 pub use maintenance::{DeltaMaintenanceExec, DeltaMaintenancePredicate};
+pub use optimize::DeltaOptimizePlan;
+pub use rewrite_exec::DeltaOptimizeRewriteExec;
 
 #[async_trait]
 impl LakeProcedureProvider for DeltaLakeSource {

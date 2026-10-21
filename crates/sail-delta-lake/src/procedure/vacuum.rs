@@ -5,9 +5,9 @@ use chrono::Utc;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, exec_err, not_impl_err, plan_err};
-use futures::TryStreamExt;
-use object_store::ObjectStoreExt;
+use futures::{StreamExt, TryStreamExt, stream};
 use object_store::path::Path;
+use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
 use serde_json::json;
 use url::Url;
@@ -22,7 +22,7 @@ use crate::spec::{DeletionVectorDescriptor, DeltaError, DeltaOperation, TableFea
 use crate::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 
 pub(super) async fn execute(
-    _session: &dyn Session,
+    session: &dyn Session,
     snapshot: Arc<DeltaSnapshot>,
     log_store: LogStoreRef,
     invocation: &LakeProcedureInvocation,
@@ -154,29 +154,13 @@ pub(super) async fn execute(
         return not_impl_err!("VACUUM cannot delete files after the table becomes catalog-managed");
     }
     let protected = protected_files(&latest, cutoff)?;
-    let mut deleted = 0_u64;
-    for candidate in &candidates {
-        if protected.contains(&candidate.location) {
-            continue;
-        }
-        let current = match store.head(&candidate.location).await {
-            Ok(meta) => meta,
-            Err(object_store::Error::NotFound { .. }) => continue,
-            Err(error) => return Err(error.into()),
-        };
-        if current.last_modified != candidate.last_modified
-            || current.size != candidate.size
-            || current.e_tag != candidate.e_tag
-            || current.version != candidate.version
-        {
-            continue;
-        }
-        match store.delete(&candidate.location).await {
-            Ok(()) => deleted += 1,
-            Err(object_store::Error::NotFound { .. }) => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
+    let deleted = delete_candidates(
+        store,
+        &candidates,
+        &protected,
+        session.config().target_partitions(),
+    )
+    .await?;
     let end_metrics = HashMap::from([
         ("numDeletedFiles".to_string(), json!(deleted)),
         ("numVacuumedDirectories".to_string(), json!(0)),
@@ -188,6 +172,52 @@ pub(super) async fn execute(
         invocation,
         vec![root.as_str().trim_end_matches('/').to_string()],
     )
+}
+
+async fn delete_candidates(
+    store: Arc<dyn ObjectStore>,
+    candidates: &[ObjectMeta],
+    protected: &HashSet<Path>,
+    concurrency: usize,
+) -> object_store::Result<u64> {
+    let mut deleted = 0;
+    // Bound the interval between identity checks and deletion while allowing backend batching.
+    for batch in candidates.chunks(1000) {
+        let checks = batch
+            .iter()
+            .filter(|candidate| !protected.contains(&candidate.location))
+            .map(|candidate| {
+                let store = store.clone();
+                let candidate = candidate.clone();
+                async move {
+                    let current = match store.head(&candidate.location).await {
+                        Ok(meta) => meta,
+                        Err(object_store::Error::NotFound { .. }) => return Ok(None),
+                        Err(error) => return Err(error),
+                    };
+                    Ok((current.last_modified == candidate.last_modified
+                        && current.size == candidate.size
+                        && current.e_tag == candidate.e_tag
+                        && current.version == candidate.version)
+                        .then(|| candidate.location.clone()))
+                }
+            })
+            .collect::<Vec<_>>();
+        let locations = stream::iter(checks)
+            .buffer_unordered(concurrency.max(1))
+            .try_filter_map(|path| futures::future::ready(Ok(path)))
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut results = store.delete_stream(stream::iter(locations.into_iter().map(Ok)).boxed());
+        while let Some(result) = results.next().await {
+            match result {
+                Ok(_) => deleted += 1,
+                Err(object_store::Error::NotFound { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(deleted)
 }
 
 fn result(invocation: &LakeProcedureInvocation, paths: Vec<String>) -> Result<RecordBatch> {
@@ -272,4 +302,198 @@ fn hidden(path: &Path, partition_names: &[String]) -> bool {
                     .iter()
                     .any(|name| part.starts_with(&format!("{name}="))))
     })
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::fmt;
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use futures::stream::BoxStream;
+    use object_store::memory::InMemory;
+    use object_store::{
+        CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, PutMultipartOptions,
+        PutOptions, PutPayload, PutResult,
+    };
+
+    use super::*;
+
+    #[derive(Debug, Default)]
+    struct VacuumStore {
+        inner: Arc<InMemory>,
+        batches: Arc<Mutex<Vec<Vec<Path>>>>,
+        fail_head: bool,
+        fail_delete: bool,
+    }
+
+    impl fmt::Display for VacuumStore {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "VacuumStore")
+        }
+    }
+
+    fn denied(path: &Path) -> object_store::Error {
+        object_store::Error::PermissionDenied {
+            path: path.to_string(),
+            source: "access denied".into(),
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for VacuumStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            options: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(location, payload, options).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            options: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, options).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            if self.fail_head && options.head {
+                return Err(denied(location));
+            }
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
+            let batches = self.batches.clone();
+            let inner = self.inner.clone();
+            let fail = self.fail_delete;
+            stream::once(async move {
+                let paths = locations.try_collect::<Vec<_>>().await?;
+                batches.lock().unwrap().push(paths.clone());
+                let results = stream::iter(
+                    paths.into_iter().map(
+                        move |path| {
+                            if fail { Err(denied(&path)) } else { Ok(path) }
+                        },
+                    ),
+                )
+                .boxed();
+                Ok::<_, object_store::Error>(inner.delete_stream(results))
+            })
+            .try_flatten()
+            .boxed()
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    #[tokio::test]
+    async fn vacuum_batches_deletes_and_rechecks_candidates() {
+        let store = Arc::new(VacuumStore::default());
+        for i in 0..1005 {
+            store
+                .put(&Path::from(format!("file-{i:04}")), "old".into())
+                .await
+                .unwrap();
+        }
+        let candidates = store.list(None).try_collect::<Vec<_>>().await.unwrap();
+        let protected = HashSet::from([Path::from("file-0000")]);
+        let changed = Path::from("file-0001");
+        // Keep size and last-modified equal to exercise the object identity check.
+        let mut candidates = candidates;
+        store.put(&changed, "new".into()).await.unwrap();
+        candidates[1].last_modified = store.head(&changed).await.unwrap().last_modified;
+        store.inner.delete(&Path::from("file-0002")).await.unwrap();
+        assert_eq!(
+            delete_candidates(store.clone(), &candidates, &protected, 4)
+                .await
+                .unwrap(),
+            1002
+        );
+        assert_eq!(
+            store
+                .batches
+                .lock()
+                .unwrap()
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>(),
+            vec![997, 5]
+        );
+        assert_eq!(
+            store
+                .list(None)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            store.get(&changed).await.unwrap().bytes().await.unwrap(),
+            "new"
+        );
+    }
+
+    #[tokio::test]
+    async fn vacuum_propagates_head_and_delete_errors() {
+        for fail_head in [true, false] {
+            let store = Arc::new(VacuumStore {
+                fail_head,
+                fail_delete: !fail_head,
+                ..Default::default()
+            });
+            store.put(&Path::from("file"), "old".into()).await.unwrap();
+            let candidates = store.list(None).try_collect::<Vec<_>>().await.unwrap();
+            let error = delete_candidates(store.clone(), &candidates, &HashSet::new(), 4)
+                .await
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                object_store::Error::PermissionDenied { .. }
+            ));
+            assert_eq!(store.batches.lock().unwrap().len(), usize::from(!fail_head));
+            assert_eq!(
+                store
+                    .list(None)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+    }
 }

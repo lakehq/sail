@@ -174,6 +174,37 @@ def test_optimize_matches_jvm_schema_and_artifacts(spark, delta_jvm_spark, tmp_p
         spark.sql("DROP TABLE optimize_interop")
 
 
+def test_optimize_multiple_bins_commit_atomically(spark, maintenance_table):
+    name, path = maintenance_table
+    for i in range(3):
+        spark.sql(f"INSERT INTO {name} VALUES ({i}, 'a'), ({i}, 'b'), ({i}, 'c'), ({i}, 'd')")  # noqa: S608
+    expected = spark.table(name).orderBy("part", "id").collect()
+    before = max(_commits(path))
+    result = spark.sql(f"OPTIMIZE {name}").first().metrics
+    assert result.numBins == 4  # noqa: PLR2004
+    assert result.totalScheduledTasks == result.numBins
+    assert result.totalClusterParallelism > 1
+    assert result.numFilesAdded == result.numBins
+    assert max(_commits(path)) == before + 1
+    assert spark.table(name).orderBy("part", "id").collect() == expected
+    actions = _commits(path)[before + 1]
+    assert all(not action[key]["dataChange"] for action in actions for key in ["add", "remove"] if key in action)
+
+
+def test_optimize_failed_bin_does_not_commit(spark, maintenance_table):
+    name, path = maintenance_table
+    for i in range(2):
+        spark.sql(f"INSERT INTO {name} VALUES ({i}, 'a'), ({i}, 'b')")  # noqa: S608
+    files = spark.table(f"{name}.files").collect()
+    missing = next(row for row in files if "b" in row.partitionValues.values())
+    (path / unquote(missing.path)).unlink()
+    before = _commits(path)
+    with pytest.raises(Exception, match="(?i)(not found|no such file)"):
+        spark.sql(f"OPTIMIZE {name}").collect()
+    assert _commits(path) == before
+    assert {row.path for row in spark.table(f"{name}.files").collect()} == {row.path for row in files}
+
+
 def test_optimize_materializes_dvs_and_vacuum_protects_them(spark, delta_jvm_spark, tmp_path):
     path = tmp_path / "mapped % # dv"
     jvm = delta_jvm_spark
@@ -292,24 +323,39 @@ def test_maintenance_errors_and_explain_do_not_mutate(spark, maintenance_table):
     assert _commits(path) == before
 
 
+@pytest.mark.parametrize(("partitions", "parallelism"), [(1, 1), (4, 2), (4, 8)])
 @pytest.mark.yamlsnapshot(group="plan")
-def test_maintenance_distributed_plan(tmp_path, snapshot):
+def test_maintenance_distributed_plan(tmp_path, snapshot, partitions, parallelism):
     with (
-        spark_connect_server(envs={"SAIL_MODE": "local-cluster"}) as server,
+        spark_connect_server(
+            envs={
+                "SAIL_MODE": "local-cluster",
+                "SAIL_CLUSTER__WORKER_INITIAL_COUNT": "2",
+                "SAIL_EXECUTION__DEFAULT_PARALLELISM": str(parallelism),
+            }
+        ) as server,
         spark_session_factory(server.remote) as sessions,
     ):
         spark = sessions.create()
         path = tmp_path / "distributed"
-        spark.sql(f"CREATE TABLE maintenance_plan (id BIGINT) USING delta LOCATION '{path.as_uri()}'")
+        spark.sql(
+            f"CREATE TABLE maintenance_plan (id BIGINT, part INT) USING delta "
+            f"PARTITIONED BY (part) LOCATION '{path.as_uri()}'"
+        )
         try:
-            spark.sql("INSERT INTO maintenance_plan VALUES (1)")
-            spark.sql("INSERT INTO maintenance_plan VALUES (2)")
+            for value in range(2):
+                spark.sql(f"INSERT INTO maintenance_plan SELECT {value}, CAST(id AS INT) FROM range({partitions})")  # noqa: S608
             plans = {}
             for statement in ["OPTIMIZE maintenance_plan", "VACUUM maintenance_plan DRY RUN"]:
                 plan = spark.sql(f"EXPLAIN CODEGEN {statement}").first().plan
                 plans[statement] = normalize_plan_text(plan[plan.index("== Distributed Plan ==") :])
             snapshot.assert_match(plans)
-            assert spark.sql("OPTIMIZE maintenance_plan").first().metrics.numFilesRemoved == 2  # noqa: PLR2004
+            metrics = spark.sql("OPTIMIZE maintenance_plan").first().metrics
+            assert metrics.numFilesRemoved == 2 * partitions
+            assert metrics.numFilesAdded == partitions
+            assert metrics.totalClusterParallelism == min(partitions, parallelism)
+            assert metrics.totalScheduledTasks == min(partitions, parallelism)
+            assert spark.table("maintenance_plan").count() == 2 * partitions
             assert spark.sql("VACUUM maintenance_plan DRY RUN").collect() == []
         finally:
             spark.sql("DROP TABLE maintenance_plan")
