@@ -89,6 +89,12 @@ def spark_env_var(tmp_path_factory):
         f"spark.executor.extraJavaOptions={shlex.quote(java_options)}",
         "--conf",
         f"spark.sql.warehouse.dir={shlex.quote(warehouse_dir.as_posix())}",
+        # The tests compare `toPandas()` results of the Spark Connect session with those of
+        # the classic session. Spark Connect always uses Arrow, so Arrow is enabled for the
+        # classic session as well. Otherwise, array columns are returned as lists instead of
+        # NumPy arrays, which pandas does not consider equal.
+        "--conf",
+        "spark.sql.execution.arrow.pyspark.enabled=true",
         "pyspark-shell",
     ]
     os.environ["TMPDIR"] = tmp_dir.as_posix()
@@ -246,6 +252,7 @@ def patch_pyspark_connect_test_class():
     ReusedConnectTestCase.assertEqual = assertEqual
 
 
+
 @dataclass
 class TestMarker:
     keywords: list[str]
@@ -258,6 +265,11 @@ def _spark_major_version() -> int:
 
     return int(pyspark.__version__.split(".", maxsplit=1)[0])
 
+
+_CACHE_MATERIALIZATION = (
+    "Expects cached data to remain after the table files are deleted until the table is refreshed, "
+    "while Sail keeps track of cached tables without materializing their data"
+)
 
 _PARTITIONING_DIFFERENCE = (
     "Compares sampled rows with Spark, which samples each partition with its own seed, "
@@ -666,6 +678,21 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_udtf"],
         reason="Fails in the classic Spark session's udf() before the Sail session is used",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_refresh_table"],
+        reason=_CACHE_MATERIALIZATION,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.refreshTable"],
+        reason=_CACHE_MATERIALIZATION,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.refreshByPath"],
+        reason=_CACHE_MATERIALIZATION,
         spark_major_version_less_than=4,
     ),
 ]

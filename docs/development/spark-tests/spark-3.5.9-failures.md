@@ -294,8 +294,12 @@ For `VALUES`, find the common type of each column over all the rows before casti
 - `factorial` only has an `Int64` signature, and decimals are not implicitly cast to it.
 - An explicit `CAST('1997/02/28 10:30:00' AS DATE)` returns `NULL` in Sail as in Spark, but the implicit cast for the `date` argument of `last_day` raises an error instead.
 - Window expressions are named without their window specification.
-- The array columns in the last row print identically, and Sail returns the same Python types as a Spark Connect server (NumPy arrays of objects).
-  The difference must be in the nested values, and these tests need to be split further to find which values differ.
+- The array columns that print identically differ in their Python types, not in their values.
+  The classic session of these tests has Arrow disabled, so its `toPandas()` returns array columns as Python lists,
+  while Spark Connect (and Sail) returns NumPy arrays, and pandas 2.3 does not consider a list equal to an array.
+  The Spark test setup now enables Arrow for the classic session (`scripts/spark-tests/plugins/spark.py`), so that both sides return NumPy arrays.
+  `test_string_functions_multi_args`, `test_generator_functions`, and `test_lambda_functions` pass with this setting.
+  `test_collection_functions` then failed in `array_except` for arrays whose elements differ only in nullability, which is fixed in this pull request.
 
 **Proposed fix.** Use Spark's rules for decimal coercion and for the result type of decimal division, allow implicit numeric casts for `factorial`, use null-on-error casts for implicit string-to-date conversions of function arguments outside ANSI mode, and include the window specification in the generated name of a window expression.
 
