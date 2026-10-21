@@ -80,6 +80,22 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     with_interval_qualifier(expr_fn::coalesce(arguments), &fields, &function_context)
 }
 
+fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (condition, then_value, else_value) = input.arguments.three()?;
+    let context = FunctionContextInput {
+        ..input.function_context
+    };
+    let fields = [&then_value, &else_value]
+        .into_iter()
+        .map(|arg| arg.to_field(context.schema).map(|(_, field)| field))
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = if_expr(ScalarFunctionInput {
+        arguments: vec![condition.is_not_null(), then_value, else_value],
+        function_context: input.function_context,
+    })?;
+    with_interval_qualifier(result, &fields, &context)
+}
+
 fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (left, right) = input.arguments.two()?;
     let field = left.to_field(input.function_context.schema)?.1;
@@ -90,7 +106,7 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )
 }
 
-// NULLIF keeps its first argument's type; COALESCE widens its result arguments.
+// NULLIF keeps its first argument's type; COALESCE and NVL2 widen their result arguments.
 // Restore only known qualifiers, leaving native evaluation and nullability intact.
 fn with_interval_qualifier(
     result: expr::Expr,
@@ -273,7 +289,7 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("nullif", F::custom(nullif)),
         ("nullifzero", F::custom(nullifzero)),
         ("nvl", F::binary(expr_fn::nvl)),
-        ("nvl2", F::ternary(expr_fn::nvl2)),
+        ("nvl2", F::custom(nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),
