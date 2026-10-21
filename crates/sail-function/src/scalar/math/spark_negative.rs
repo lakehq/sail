@@ -82,11 +82,10 @@ impl ScalarUDFImpl for SparkNegative {
                 args.arg_fields.len(),
             ));
         };
-        Ok(Arc::new(Field::new(
-            self.name(),
-            arg.data_type().clone(),
-            arg.is_nullable(),
-        )))
+        // DataFusion can label an empty scalar subquery non-nullable. Keep this
+        // conservative until its scalar-subquery nullability fix is available.
+        // FIXME: After upgrading to DataFusion with that fix, replace true with arg.is_nullable().
+        Ok(Arc::new(Field::new(self.name(), arg.data_type().clone(), true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

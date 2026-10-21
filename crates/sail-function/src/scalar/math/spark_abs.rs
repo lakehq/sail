@@ -86,7 +86,10 @@ impl ScalarUDFImpl for SparkAbs {
                 data_type,
             ));
         }
-        let mut field = Field::new(self.name(), data_type.clone(), input.is_nullable());
+        // DataFusion can label an empty scalar subquery non-nullable. Keep this
+        // conservative until its scalar-subquery nullability fix is available.
+        // FIXME: After upgrading to DataFusion with that fix, replace true with input.is_nullable().
+        let mut field = Field::new(self.name(), data_type.clone(), true);
         // ABS preserves the interval qualifier used to select DATE arithmetic.
         if matches!(
             field.data_type(),
