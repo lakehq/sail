@@ -1,13 +1,16 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use arrow_flight::flight_service_client::FlightServiceClient;
 use futures::future::BoxFuture;
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::client::conn::http2::{Builder, SendRequest};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder, MaybeHttpsStream};
 use hyper_util::client::legacy::connect::{Connection, HttpConnector};
 use hyper_util::rt::{TokioExecutor, TokioTimer};
+use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 use sail_common::telemetry::{TracingClientLayer, TracingClientService};
 use tokio::sync::Mutex;
 use tonic::body::Body;
@@ -34,13 +37,15 @@ impl ClientBuilder for FlightClient {
         let service = ServiceBuilder::new()
             .layer(TracingClientLayer)
             .service(transport);
-        Ok(Self::with_origin(service, origin))
+        // A message holds at least one row, so a large value can exceed tonic's 4 MiB default.
+        Ok(FlightClient::with_origin(service, origin)
+            .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT))
     }
 }
 
 /// Internal Flight connections allow early termination of many shuffle streams (e.g. LIMIT).
 /// Tonic's Channel does not expose Hyper's client reset budget, so we use Hyper directly.
-/// All clones share connection establishment and reconnection, but dispatch requests concurrently.
+/// All clones share a pool of connections and dispatch requests in round-robin order.
 #[derive(Clone)]
 pub(super) struct FlightTransport {
     inner: Arc<TransportInner>,
@@ -49,7 +54,10 @@ pub(super) struct FlightTransport {
 struct TransportInner {
     origin: Uri,
     connector: Connector,
-    sender: Mutex<Option<SendRequest<Body>>>,
+    senders: Vec<Mutex<Option<SendRequest<Body>>>>,
+    next_connection: AtomicUsize,
+    initial_stream_window_size: Option<u32>,
+    initial_connection_window_size: Option<u32>,
 }
 
 enum Connector {
@@ -59,6 +67,18 @@ enum Connector {
 
 impl FlightTransport {
     async fn connect(options: &ClientOptions) -> Result<Self, TransportError> {
+        for (name, size) in [
+            ("stream", options.flight_initial_stream_window_size),
+            ("connection", options.flight_initial_connection_window_size),
+        ] {
+            if size.is_some_and(|size| size > i32::MAX as u32) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Flight initial {name} window size must not exceed 2147483647 bytes"),
+                )
+                .into());
+            }
+        }
         let origin = options.to_url_string().parse()?;
         let mut http = HttpConnector::new();
         http.set_nodelay(true);
@@ -83,17 +103,22 @@ impl FlightTransport {
             inner: Arc::new(TransportInner {
                 origin,
                 connector,
-                sender: Mutex::new(None),
+                senders: (0..options.flight_connection_count.get())
+                    .map(|_| Mutex::new(None))
+                    .collect(),
+                next_connection: AtomicUsize::new(0),
+                initial_stream_window_size: options.flight_initial_stream_window_size,
+                initial_connection_window_size: options.flight_initial_connection_window_size,
             }),
         };
-        transport.sender().await?;
+        transport.sender(0).await?;
         Ok(transport)
     }
 
-    async fn sender(&self) -> Result<SendRequest<Body>, TransportError> {
+    async fn sender(&self, index: usize) -> Result<SendRequest<Body>, TransportError> {
         // Hold the lock through connection establishment to avoid a connection stampede.
         // Never hold it while awaiting response headers or consuming response bodies.
-        let mut sender = self.inner.sender.lock().await;
+        let mut sender = self.inner.senders[index].lock().await;
         if let Some(sender) = sender.as_ref()
             && !sender.is_closed()
         {
@@ -117,11 +142,12 @@ impl FlightTransport {
         };
         let (new_sender, connection) = Builder::new(TokioExecutor::new())
             .timer(TokioTimer::new())
+            .initial_stream_window_size(self.inner.initial_stream_window_size)
+            .initial_connection_window_size(self.inner.initial_connection_window_size)
             .max_header_list_size(CLIENT_MAX_HEADER_LIST_SIZE)
             // Trusted internal shuffle traffic can legitimately cancel many streams. Late frames
             // may count as internal resets; the lifetime budget must not kill unrelated streams.
             .max_local_error_reset_streams(None)
-            .adaptive_window(true)
             .handshake(io)
             .await?;
         // Hyper closes the connection after senders and active responses are released. Let the
@@ -148,8 +174,17 @@ impl Service<Request<Body>> for FlightTransport {
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let transport = self.clone();
+        let index =
+            self.inner.next_connection.fetch_add(1, Ordering::Relaxed) % self.inner.senders.len();
         Box::pin(async move {
-            let mut sender = transport.sender().await?;
+            // This transport only sends unary DoGet tickets. Buffer the small request
+            // so Hyper marks its last DATA frame END_STREAM. Tonic's streaming body
+            // otherwise sends a non-final small frame, and concurrent tickets can
+            // exhaust h2's small-frame budget before the server consumes them.
+            let (parts, body) = request.into_parts();
+            let body = Body::new(Full::new(body.collect().await?.to_bytes()));
+            let request = Request::from_parts(parts, body);
+            let mut sender = transport.sender(index).await?;
             // A close racing with dispatch is returned to the task scheduler. Never replay a
             // DoGet request: subscribing to a shuffle stream can only be done once per replica.
             Ok(sender.send_request(request).await?)

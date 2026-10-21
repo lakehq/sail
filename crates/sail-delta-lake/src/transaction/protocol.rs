@@ -422,7 +422,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     // writer_features.insert(TableFeature::DomainMetadata);
     writer_features.insert(TableFeature::ColumnMapping);
     writer_features.insert(TableFeature::DeletionVectors);
-    // writer_features.insert(TableFeature::ChangeDataFeed);
+    writer_features.insert(TableFeature::ChangeDataFeed);
     // FIXME: implement delta.invariants
     writer_features.insert(TableFeature::Invariants);
     writer_features.insert(TableFeature::CheckConstraints);
@@ -597,8 +597,7 @@ mod tests {
     //
     // These tests verify that the protocol checker does NOT expand implied feature
     // sets for legacy writer versions. A table at writer version 5 implies support
-    // for ChangeDataFeed, but if CDF is not enabled the write should succeed even
-    // though sail does not implement CDF writes. See lakehq/sail#2041.
+    // for ChangeDataFeed; activation is checked against the table metadata.
 
     #[test]
     fn global_checker_accepts_legacy_writer_v5_without_explicit_features() {
@@ -649,9 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn global_checker_rejects_v7_with_unsupported_change_data_feed_feature() {
-        // Writer v7 with explicit changeDataFeed writer feature should still be
-        // rejected, since sail does not implement CDF writes.
+    fn global_checker_accepts_v7_change_data_feed_feature() {
         let protocol = Protocol::new(
             3,
             7,
@@ -661,13 +658,7 @@ mod tests {
                 TableFeature::ChangeDataFeed,
             ]),
         );
-
-        let err = INSTANCE.can_write_to_protocol(&protocol).unwrap_err();
-        assert!(matches!(
-            err,
-            TransactionError::UnsupportedTableFeatures(features)
-                if features.contains(&TableFeature::ChangeDataFeed)
-        ));
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
     }
 
     #[test]

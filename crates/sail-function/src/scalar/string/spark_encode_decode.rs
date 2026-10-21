@@ -634,73 +634,46 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
         }
         "UTF-16BE" => {
             // 'UTF-16BE': Sixteen-bit UCS Transformation Format, big-endian byte order.
-            if !bytes.len().is_multiple_of(2) {
-                exec_err!("Spark `decode` function: Invalid UTF-16BE byte sequence: {bytes:?}")
-            } else {
-                let (chunks, remainder) = bytes.as_chunks::<2>();
-                debug_assert!(remainder.is_empty());
-                let u16_words: Vec<u16> = chunks
-                    .iter()
-                    .map(|chunk| u16::from_be_bytes(*chunk))
-                    .collect();
-                String::from_utf16(&u16_words).map_err(|e| {
-                    exec_datafusion_err!(
-                        "Spark `decode` function: Failed to decode UTF-16BE bytes: {e}"
-                    )
-                })
-            }
+            bytes.len().is_multiple_of(2).ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Invalid UTF-16BE byte sequence: {bytes:?}"
+                )
+            })?;
+            String::from_utf16be(bytes).map_err(|e| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Failed to decode UTF-16BE bytes: {e}"
+                )
+            })
         }
         "UTF-16LE" => {
             // 'UTF-16LE': Sixteen-bit UCS Transformation Format, little-endian byte order.
-            if !bytes.len().is_multiple_of(2) {
-                exec_err!("Spark `decode` function: Invalid UTF-16LE byte sequence: {bytes:?}")
-            } else {
-                let (chunks, remainder) = bytes.as_chunks::<2>();
-                debug_assert!(remainder.is_empty());
-                let u16_words: Vec<u16> = chunks
-                    .iter()
-                    .map(|chunk| u16::from_le_bytes(*chunk))
-                    .collect();
-                String::from_utf16(&u16_words).map_err(|e| {
-                    exec_datafusion_err!(
-                        "Spark `decode` function: Failed to decode UTF-16LE bytes: {e}"
-                    )
-                })
-            }
+            bytes.len().is_multiple_of(2).ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Invalid UTF-16LE byte sequence: {bytes:?}"
+                )
+            })?;
+            String::from_utf16le(bytes).map_err(|e| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Failed to decode UTF-16LE bytes: {e}"
+                )
+            })
         }
         "UTF-16" => {
             // 'UTF-16': Sixteen-bit UCS Transformation Format, byte order identified by an optional byte-order mark.
-            if bytes.len() < 2 {
-                exec_err!("Spark `decode` function: Invalid UTF-16 byte sequence: {bytes:?}")
-            } else {
-                let (bom, content) = match &bytes[0..2] {
-                    [0xFE, 0xFF] => (true, &bytes[2..]),  // BE BOM
-                    [0xFF, 0xFE] => (false, &bytes[2..]), // LE BOM
-                    _ => (true, bytes),                   // Default to BE if no BOM
-                };
+            (bytes.len() >= 2 && bytes.len().is_multiple_of(2)).ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Spark `decode` function: Invalid UTF-16 byte sequence: {bytes:?}"
+                )
+            })?;
+            let decoded = match &bytes[0..2] {
+                [0xFE, 0xFF] => String::from_utf16be(&bytes[2..]),
+                [0xFF, 0xFE] => String::from_utf16le(&bytes[2..]),
+                _ => String::from_utf16be(bytes), // Default to BE if no BOM
+            };
 
-                if !content.len().is_multiple_of(2) {
-                    exec_err!("Spark `decode` function: Invalid UTF-16 byte sequence: {bytes:?}")
-                } else {
-                    let (chunks, remainder) = content.as_chunks::<2>();
-                    debug_assert!(remainder.is_empty());
-                    let u16_words: Vec<u16> = chunks
-                        .iter()
-                        .map(|chunk| {
-                            if bom {
-                                u16::from_be_bytes(*chunk)
-                            } else {
-                                u16::from_le_bytes(*chunk)
-                            }
-                        })
-                        .collect();
-                    String::from_utf16(&u16_words).map_err(|e| {
-                        exec_datafusion_err!(
-                            "Spark `decode` function: Failed to decode UTF-16 bytes: {e}"
-                        )
-                    })
-                }
-            }
+            decoded.map_err(|e| {
+                exec_datafusion_err!("Spark `decode` function: Failed to decode UTF-16 bytes: {e}")
+            })
         }
         _ => exec_err!(
             "Spark `decode` function: Unsupported charset {char_set}. Charset must be one of 'US-ASCII', 'ISO-8859-1', 'UTF-8', 'UTF-16BE', 'UTF-16LE', 'UTF-16'"

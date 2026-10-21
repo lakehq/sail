@@ -2,7 +2,9 @@ use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{
     DataType, Float32Type, Float64Type, Int32Type, Int64Type, UInt32Type, UInt64Type,
 };
-use datafusion_common::{DataFusionError, Result, exec_err};
+use datafusion_common::{
+    DataFusionError, Result, exec_datafusion_err, exec_err, internal_datafusion_err,
+};
 use datasketches::hash::value::{canonical_float, raw_bytes};
 use datasketches::theta::{
     CompactThetaSketch, ThetaANotB, ThetaIntersection, ThetaSketch, ThetaSketchBuilder,
@@ -31,18 +33,19 @@ pub(crate) fn validate_lg_nom_entries(value: i32, function_name: &str) -> Result
     }
 }
 
-pub(crate) fn new_update_sketch(lg_nom_entries: u8) -> ThetaSketch {
+pub(crate) fn new_update_sketch(lg_nom_entries: u8) -> Result<ThetaSketch> {
     ThetaSketchBuilder::default()
         .lg_k(lg_nom_entries.max(5))
         .build()
+        .map_err(|error| exec_datafusion_err!("could not create theta sketch: {error}"))
 }
 
-pub(crate) fn default_seed_hash() -> u16 {
-    ThetaSketchBuilder::default().build().seed_hash()
+pub(crate) fn default_seed_hash() -> Result<u16> {
+    Ok(new_update_sketch(DEFAULT_LG_NOM_ENTRIES as u8)?.seed_hash())
 }
 
 pub(crate) fn empty_compact_sketch_bytes() -> Result<Vec<u8>> {
-    serialize_compact_sketch(vec![], MAX_THETA, default_seed_hash(), true)
+    serialize_compact_sketch(vec![], MAX_THETA, default_seed_hash()?, true)
 }
 
 pub(crate) fn estimate_sketch(bytes: &[u8], function_name: &str) -> Result<i64> {
@@ -172,7 +175,10 @@ where
 {
     let mut union = ThetaUnionBuilder::default()
         .lg_k(lg_nom_entries.max(5))
-        .build();
+        .build()
+        .map_err(|error| {
+            exec_datafusion_err!("{function_name} could not create theta union: {error}")
+        })?;
     for bytes in sketches {
         let sketch = deserialize_sketch(bytes, function_name)?;
         union.update(&sketch).map_err(|error| {
@@ -207,7 +213,10 @@ pub(crate) fn intersect_sketch_bytes(
             "{function_name} could not intersect theta sketches: {error}"
         ))
     })?;
-    Ok(intersection.to_sketch(true).serialize_compressed())
+    let sketch = intersection.to_sketch(true).ok_or_else(|| {
+        internal_datafusion_err!("{function_name} produced no theta intersection after updating")
+    })?;
+    Ok(sketch.serialize_compressed())
 }
 
 pub(crate) fn difference_sketch_bytes(

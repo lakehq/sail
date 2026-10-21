@@ -20,7 +20,7 @@ use crate::ast::keywords::{
     Where, Window, With,
 };
 use crate::ast::literal::IntegerLiteral;
-use crate::ast::operator::{Comma, LeftParenthesis, RightParenthesis};
+use crate::ast::operator::{Comma, HintEnd, HintStart, LeftParenthesis, RightParenthesis};
 use crate::combinator::{boxed, compose, either_or, sequence, unit};
 use crate::common::Sequence;
 use crate::options::ParserOptions;
@@ -207,9 +207,37 @@ pub struct AliasClause {
 #[parser(dependency = "Expr")]
 pub struct SelectClause {
     pub select: Select,
+    #[parser(function = |e, o| compose(e, o))]
+    pub hints: Vec<HintClause>,
     pub quantifier: Option<DuplicateTreatment>,
     #[parser(function = |e, o| sequence(compose((e, column_ident(o)), o), unit(o)))]
     pub projection: Sequence<NamedExpr, Comma>,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub struct HintClause {
+    pub start: HintStart,
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o).or_not()))]
+    pub items: Sequence<HintItem, Option<Comma>>,
+    pub end: HintEnd,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub struct HintItem {
+    pub name: Ident,
+    #[parser(function = |e, o| compose(e, o))]
+    pub parameters: Option<HintParameters>,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub struct HintParameters {
+    pub left: LeftParenthesis,
+    #[parser(function = |e, o| sequence(e, unit(o)))]
+    pub items: Sequence<Expr, Comma>,
+    pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

@@ -10,6 +10,7 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType}
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use sail_common::utils::datetime::timezone_alias_to_timezone;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -71,37 +72,7 @@ impl SparkZone {
             }
         }
 
-        let zone_id = match value {
-            "ACT" => "Australia/Darwin",
-            "AET" => "Australia/Sydney",
-            "AGT" => "America/Argentina/Buenos_Aires",
-            "ART" => "Africa/Cairo",
-            "AST" => "America/Anchorage",
-            "BET" => "America/Sao_Paulo",
-            "BST" => "Asia/Dhaka",
-            "CAT" => "Africa/Harare",
-            "CNT" => "America/St_Johns",
-            "CST" => "America/Chicago",
-            "CTT" => "Asia/Shanghai",
-            "EAT" => "Africa/Addis_Ababa",
-            "ECT" => "Europe/Paris",
-            "IET" => "America/Indiana/Indianapolis",
-            "IST" => "Asia/Kolkata",
-            "JST" => "Asia/Tokyo",
-            "MIT" => "Pacific/Apia",
-            "NET" => "Asia/Yerevan",
-            "NST" => "Pacific/Auckland",
-            "PLT" => "Asia/Karachi",
-            "PNT" => "America/Phoenix",
-            "PRT" => "America/Puerto_Rico",
-            "PST" => "America/Los_Angeles",
-            "SST" => "Pacific/Guadalcanal",
-            "VST" => "Asia/Ho_Chi_Minh",
-            "EST" => "-05:00",
-            "MST" => "-07:00",
-            "HST" => "-10:00",
-            _ => value,
-        };
+        let zone_id = timezone_alias_to_timezone(value);
 
         if zone_id.starts_with(['+', '-']) {
             let offset = parse_zone_offset(zone_id)

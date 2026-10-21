@@ -44,6 +44,17 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
+        self.resolve_repartition_by_expression(input, partition_expressions, num_partitions, state)
+            .await
+    }
+
+    pub(super) async fn resolve_repartition_by_expression(
+        &self,
+        input: LogicalPlan,
+        partition_expressions: Vec<spec::Expr>,
+        num_partitions: Option<usize>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
         let output_schema = Arc::clone(input.schema());
         // Like a filter, Spark recovers partitioning attributes removed by the input.
         let (expr, input) = self

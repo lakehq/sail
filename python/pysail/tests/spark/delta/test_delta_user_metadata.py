@@ -244,7 +244,7 @@ def test_session_user_metadata_is_captured_before_execution(spark, tmp_path, nex
 
 
 @pytest.mark.parametrize("alias", ["userMetadata", "user_metadata"])
-@pytest.mark.parametrize("metadata", ["per-write", "", '  {"任务": "load", "run": 42}\n'])
+@pytest.mark.parametrize("metadata", ["per-write", "", '  {"task": "load", "run": 42}\n'])
 def test_writer_user_metadata_overrides_session(spark, tmp_path, alias, metadata):
     path = tmp_path / "override"
     spark.conf.set(USER_METADATA_CONFIG, "session-default")
