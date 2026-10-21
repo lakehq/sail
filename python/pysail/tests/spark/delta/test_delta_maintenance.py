@@ -11,6 +11,7 @@ from pyspark.sql.connect import proto
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.steps.plan import normalize_plan_text
+from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -54,7 +55,10 @@ def maintenance_table(spark, tmp_path):
 def test_maintenance_config_registry(spark, delta_jvm_spark, tmp_path, suffix, default, value):
     delta_jvm_spark.sql(f"CREATE TABLE delta.`{tmp_path / 'config'}` (id BIGINT) USING delta")
     key = f"spark.databricks.delta.{suffix}"
-    sessions = [spark, delta_jvm_spark]
+    sessions = [spark]
+    # The Delta releases used with Spark 3.5/4.0 do not register this vacuum setting.
+    if suffix != "vacuum.retentionWindowIgnore.enabled" or pyspark_version() >= (4, 1):
+        sessions.append(delta_jvm_spark)
     previous = [session.conf.get(key, None) for session in sessions]
     try:
         for session in sessions:
@@ -199,7 +203,7 @@ def test_optimize_failed_bin_does_not_commit(spark, maintenance_table):
     missing = next(row for row in files if "b" in row.partitionValues.values())
     (path / unquote(missing.path)).unlink()
     before = _commits(path)
-    with pytest.raises(Exception, match="(?i)(not found|no such file)"):
+    with pytest.raises(Exception, match=r"(?i)(not found|no such file)"):
         spark.sql(f"OPTIMIZE {name}").collect()
     assert _commits(path) == before
     assert {row.path for row in spark.table(f"{name}.files").collect()} == {row.path for row in files}
