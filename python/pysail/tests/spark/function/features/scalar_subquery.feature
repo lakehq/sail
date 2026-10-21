@@ -166,6 +166,19 @@ Feature: Scalar subquery nullability
         | (SELECT id FROM range(1)) IS NULL       | false    |
         | (SELECT count(*) FROM range(0)) IS NULL | false    |
 
+    Scenario Outline: <expression> over an invalid cast subquery raises the cast error
+      When query
+        """
+        SELECT <expression> AS result
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|cannot (be )?cast|invalid|NumberFormat|parse)
+
+      Examples:
+        | expression                              |
+        | (SELECT CAST('bad' AS INT)) IS NULL     |
+        | (SELECT CAST('bad' AS INT)) IS NOT NULL |
+        | isnull((SELECT CAST('bad' AS INT)))     |
+
   Rule: Null-handling functions receive the NULL of an empty scalar subquery
 
     Scenario Outline: <function> falls back to its alternative value
@@ -627,6 +640,15 @@ Feature: Scalar subquery nullability
         | n |
         | 2 |
 
+    Scenario: count of an outer reference ordered by its alias with LIMIT counts every outer row
+      When query
+        """
+        SELECT count((SELECT o.id AS v FROM range(1) ORDER BY v LIMIT 1)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
     # DataFusion cannot decorrelate a non-equality correlated predicate under an aggregate.
     @sail-bug
     Scenario: count of a correlated max subquery that matches nothing is zero
@@ -862,6 +884,27 @@ Feature: Scalar subquery nullability
         | n |
         | 2 |
 
+    Scenario: count of a correlated subquery with ORDER BY but no LIMIT counts every match
+      When query
+        """
+        SELECT count((SELECT t.x FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id ORDER BY t.x)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: a correlated subquery with ORDER BY but no LIMIT returns its single match
+      When query
+        """
+        SELECT o.id, (SELECT o.id + t.x FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id ORDER BY t.x) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 0 |
+        | 1  | 2 |
+
     Scenario: an outer reference combined with the top row of an ordered limited subquery
       When query
         """
@@ -873,6 +916,18 @@ Feature: Scalar subquery nullability
         | id | c |
         | 0  | 7 |
         | 1  | 8 |
+
+    Scenario: an outer reference subtracted in the top row of an ordered limited subquery
+      When query
+        """
+        SELECT o.id, (SELECT o.id - x AS v FROM VALUES (5), (7) AS t(x) ORDER BY v DESC LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c  |
+        | 0  | -5 |
+        | 1  | -4 |
 
     Scenario: count of an outer reference projected through a multi-row subquery errors
       When query
@@ -891,6 +946,162 @@ Feature: Scalar subquery nullability
       Then query result collected ordered
         | id | c    |
         | 0  | 5    |
+        | 1  | NULL |
+
+  Rule: Row bounds compose inside scalar subqueries
+
+    Scenario: nested ordered limits inside a correlated subquery compose
+      When query
+        """
+        SELECT (
+          SELECT v FROM (SELECT o.id + x AS v, x FROM VALUES (0), (1), (2) AS t(x) ORDER BY x ASC LIMIT 2)
+          ORDER BY x DESC LIMIT 1
+        ) AS result
+        FROM range(1) o
+        """
+      Then query result collected
+        | result |
+        | 1      |
+
+    Scenario: a volatile sort with LIMIT inside a correlated subquery keeps rows consistent
+      When query
+        """
+        SELECT (
+          SELECT y = x + 1L AND o.id = o.id FROM (SELECT id AS x, id + 1L AS y FROM range(100)) q
+          ORDER BY rand() LIMIT 1
+        ) AS ok
+        FROM range(2) o
+        """
+      Then query result collected
+        | ok   |
+        | true |
+        | true |
+
+    # DataFusion cannot decorrelate a non-equality correlated predicate below the row-bound producer.
+    @sail-bug
+    Scenario: a volatile sort with LIMIT below a correlated filter keeps rows consistent
+      When query
+        """
+        SELECT (
+          SELECT y = x + 1L AND o.id = o.id FROM (SELECT id AS x, id + 1L AS y FROM range(100)) q
+          WHERE x >= o.id - o.id
+          ORDER BY rand() LIMIT 1
+        ) AS ok
+        FROM range(2) o
+        """
+      Then query result collected
+        | ok   |
+        | true |
+        | true |
+
+    Scenario: an outer reference combined with the second row of an ordered subquery via OFFSET
+      When query
+        """
+        SELECT o.id, (SELECT o.id + x FROM VALUES (5), (7) AS t(x) ORDER BY x DESC LIMIT 1 OFFSET 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 5 |
+        | 1  | 6 |
+
+    Scenario: count of an outer reference projected through a subquery with LIMIT 0 is zero
+      When query
+        """
+        SELECT count((SELECT o.id FROM range(1) LIMIT 0)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 0 |
+
+    Scenario: count of an outer reference projected through a subquery with LIMIT and OFFSET counts every outer row
+      When query
+        """
+        SELECT count((SELECT o.id FROM range(2) LIMIT 1 OFFSET 1)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    # DataFusion cannot decorrelate a non-equality correlated predicate below the row-bound producer.
+    @sail-bug
+    Scenario: a correlated filter with ORDER BY, LIMIT and OFFSET yields the second matching row
+      When query
+        """
+        SELECT o.id, (SELECT x FROM VALUES (5), (7), (9) AS t(x) WHERE x > o.id ORDER BY x LIMIT 1 OFFSET 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 7 |
+        | 1  | 7 |
+
+    Scenario: a volatile sort with LIMIT below an equality-correlated filter keeps rows consistent
+      When query
+        """
+        SELECT (SELECT y = x + 1L AND o.id = o.id FROM (SELECT id AS x, id + 1L AS y FROM range(100)) q WHERE x % 2 = o.id ORDER BY rand() LIMIT 1) AS ok
+        FROM range(2) o
+        """
+      Then query result collected
+        | ok   |
+        | true |
+        | true |
+
+    Scenario: an equality-correlated filter with ORDER BY, LIMIT and OFFSET yields the second matching row
+      When query
+        """
+        SELECT o.id, (SELECT x FROM VALUES (5), (7), (9) AS t(x) WHERE x % 2 = o.id ORDER BY x LIMIT 1 OFFSET 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | NULL |
+        | 1  | 7    |
+
+    Scenario: count of an equality-correlated subquery with ORDER BY, LIMIT and OFFSET counts the outer rows with a second match
+      When query
+        """
+        SELECT count((SELECT x FROM VALUES (5), (7), (9) AS t(x) WHERE x % 2 = o.id ORDER BY x LIMIT 1 OFFSET 1)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 1 |
+
+    Scenario: an equality-correlated filter with ORDER BY and OFFSET but no LIMIT yields the remaining match
+      When query
+        """
+        SELECT o.id, (SELECT x FROM VALUES (5), (7) AS t(x) WHERE x % 2 = o.id ORDER BY x OFFSET 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | NULL |
+        | 1  | 7    |
+
+    Scenario: an equality-correlated filter with OFFSET that leaves two rows errors
+      When query
+        """
+        SELECT o.id, (SELECT x FROM VALUES (5), (7), (9) AS t(x) WHERE x % 2 = o.id ORDER BY x OFFSET 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+
+    Scenario: a correlated filter with LIMIT 0 yields NULL for every outer row
+      When query
+        """
+        SELECT o.id, (SELECT x FROM VALUES (5), (7) AS t(x) WHERE x > o.id LIMIT 0) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | NULL |
         | 1  | NULL |
 
   Rule: Inlined subqueries evaluate their input once

@@ -28,13 +28,15 @@ pub(crate) fn single_row_scalar_subquery(expr: &expr::Expr) -> Option<&Subquery>
         .filter(|subquery| row_bounds(&subquery.subquery) == (1, Some(1)))
 }
 
-/// A scalar subquery that provably returns exactly one non-null row can never be NULL, so
-/// the null check folds. Spark declares the subquery nullable all the same, but keeping the
-/// check would also keep the subquery in a plan that may need a decorrelation DataFusion does
-/// not support.
+/// A correlated scalar subquery that provably returns exactly one non-null row can never be
+/// NULL, so the null check folds. Spark declares the subquery nullable all the same, but
+/// keeping the check would also keep the subquery in a plan that may need a decorrelation
+/// DataFusion does not support. Uncorrelated subqueries are left alone: they execute as they
+/// are, and that execution must still raise any error their expressions produce.
 fn is_single_non_null_row(expr: &expr::Expr) -> bool {
-    single_row_scalar_subquery(expr)
-        .is_some_and(|subquery| !subquery.subquery.schema().field(0).is_nullable())
+    single_row_scalar_subquery(expr).is_some_and(|subquery| {
+        !subquery.outer_ref_columns.is_empty() && !subquery.subquery.schema().field(0).is_nullable()
+    })
 }
 
 pub(crate) fn is_null(expr: expr::Expr) -> expr::Expr {

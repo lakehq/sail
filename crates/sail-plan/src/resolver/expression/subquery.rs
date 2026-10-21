@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
 use datafusion::functions::core::expr_fn::{get_field, named_struct};
-use datafusion::functions_aggregate::expr_fn::{count, first_value};
+use datafusion::functions::expr_fn::greatest;
+use datafusion::functions_aggregate::expr_fn::{count, first_value, nth_value};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::logical_plan::{Aggregate, Filter, Limit, Projection, Sort, SubqueryAlias};
 use datafusion_expr::utils::{conjunction, disjunction, split_binary, split_conjunction};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator, ScalarUDF,
-    SortExpr, expr_fn, ident, lit, when,
+    SortExpr, cast, expr_fn, ident, lit, when,
 };
 use sail_common::spec;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -133,63 +134,70 @@ fn selected_columns(projection: &Projection) -> Option<Vec<(String, Column)>> {
         .collect()
 }
 
-fn strip_alias(expr: &Expr) -> &Expr {
-    match expr {
-        Expr::Alias(alias) => alias.expr.as_ref(),
-        expr => expr,
+fn strip_alias(mut expr: &Expr) -> &Expr {
+    while let Expr::Alias(alias) = expr {
+        expr = alias.expr.as_ref();
     }
+    expr
+}
+
+/// A LIMIT or ORDER BY found above the projection of a scalar subquery, in root-to-leaf
+/// order. Sort keys are kept in terms of the projection's outputs until the projection is
+/// peeled.
+enum RowBound {
+    Limit { skip: usize, fetch: Option<usize> },
+    Sort(Vec<SortExpr>, Option<usize>),
 }
 
 /// What a scalar subquery returns once LIMIT, ORDER BY and column selections above its
-/// projection are peeled off: the selected output of that projection, the sort that decides
-/// the row kept by `LIMIT 1` (in terms of the projection's outputs) and whether such a limit
-/// exists. Only `LIMIT 1` changes the result: `LIMIT 0` is always empty and a larger limit
-/// still leaves more than one row to fail on, so sorts matter only below `LIMIT 1`.
+/// projection are peeled off: the selected output of that projection and the bounds above it.
 struct ScalarSubqueryShape<'a> {
     projection: &'a Projection,
     expr: &'a Expr,
-    sorts: Vec<SortExpr>,
-    single: bool,
-    bounded: bool,
+    bounds: Vec<RowBound>,
+}
+
+fn remap_sort_keys(bounds: &mut [RowBound], columns: &[(String, Column)]) -> Option<()> {
+    for bound in bounds.iter_mut() {
+        let RowBound::Sort(sorts, _) = bound else {
+            continue;
+        };
+        for sort in sorts.iter_mut() {
+            let expr = std::mem::replace(&mut sort.expr, lit(0));
+            sort.expr = expr
+                .transform(|expr| match expr {
+                    Expr::Column(column) => {
+                        match columns.iter().find(|(name, _)| name == column.name()) {
+                            Some((_, input)) => Ok(Transformed::yes(Expr::Column(input.clone()))),
+                            None => Ok(Transformed::no(Expr::Column(column))),
+                        }
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })
+                .ok()?
+                .data;
+        }
+    }
+    Some(())
 }
 
 fn peel_scalar_subquery(plan: &LogicalPlan) -> Option<ScalarSubqueryShape<'_>> {
-    let mut single = false;
-    let mut bounded = false;
-    let mut sorts: Option<Vec<SortExpr>> = None;
+    let mut bounds = vec![];
     let mut selected: Option<Column> = None;
     let mut node = plan;
     loop {
         node = match node {
             LogicalPlan::Limit(limit) => {
-                bounded = true;
                 let skip = limit.skip.as_deref().map_or(Some(0), integer_literal)?;
                 let fetch = match limit.fetch.as_deref() {
                     None => None,
                     Some(fetch) => Some(integer_literal(fetch)?),
                 };
-                match (skip, fetch) {
-                    (0, Some(0)) => return None,
-                    (0, Some(1)) => {
-                        single = true;
-                        sorts = None;
-                    }
-                    (0, _) => {}
-                    _ => return None,
-                }
+                bounds.push(RowBound::Limit { skip, fetch });
                 limit.input.as_ref()
             }
             LogicalPlan::Sort(sort) => {
-                bounded = true;
-                match sort.fetch {
-                    Some(0) => return None,
-                    Some(1) => {
-                        single = true;
-                        sorts = Some(sort.expr.clone());
-                    }
-                    _ if single && sorts.is_none() => sorts = Some(sort.expr.clone()),
-                    _ => {}
-                }
+                bounds.push(RowBound::Sort(sort.expr.clone(), sort.fetch));
                 sort.input.as_ref()
             }
             LogicalPlan::Projection(projection)
@@ -208,25 +216,7 @@ fn peel_scalar_subquery(plan: &LogicalPlan) -> Option<ScalarSubqueryShape<'_>> {
                         .find(|(name, _)| name == selected.name())
                         .map(|(_, column)| column.clone())?,
                 };
-                if let Some(sorts) = sorts.as_mut() {
-                    for sort in sorts.iter_mut() {
-                        let expr = std::mem::replace(&mut sort.expr, lit(0));
-                        sort.expr = expr
-                            .transform(|expr| match expr {
-                                Expr::Column(column) => {
-                                    match columns.iter().find(|(name, _)| name == column.name()) {
-                                        Some((_, input)) => {
-                                            Ok(Transformed::yes(Expr::Column(input.clone())))
-                                        }
-                                        None => Ok(Transformed::no(Expr::Column(column))),
-                                    }
-                                }
-                                expr => Ok(Transformed::no(expr)),
-                            })
-                            .ok()?
-                            .data;
-                    }
-                }
+                remap_sort_keys(&mut bounds, &columns)?;
                 selected = Some(column);
                 projection.input.as_ref()
             }
@@ -244,14 +234,253 @@ fn peel_scalar_subquery(plan: &LogicalPlan) -> Option<ScalarSubqueryShape<'_>> {
                 return Some(ScalarSubqueryShape {
                     projection,
                     expr,
-                    sorts: sorts.unwrap_or_default(),
-                    single,
-                    bounded,
+                    bounds,
                 });
             }
             _ => return None,
         };
     }
+}
+
+/// Expresses a sort key of the peeled bounds through the projection's input. A key that only
+/// depends on the outer row is constant for that row and is dropped (`None`); a key of the
+/// form `outer + inner` or `outer - inner` orders like the inner part alone; any other key
+/// that mixes outer and inner columns cannot be evaluated below the projection.
+fn input_sort_key(
+    sort: SortExpr,
+    outputs: &[(String, Expr)],
+) -> PlanResult<Option<Option<SortExpr>>> {
+    let key = sort
+        .expr
+        .transform(|expr| match expr {
+            Expr::Column(column) => match outputs.iter().find(|(name, _)| name == column.name()) {
+                Some((_, output)) => Ok(Transformed::yes(output.clone())),
+                None => Ok(Transformed::no(Expr::Column(column))),
+            },
+            expr => Ok(Transformed::no(expr)),
+        })?
+        .data;
+    if !key.contains_outer() {
+        return Ok(Some(Some(SortExpr { expr: key, ..sort })));
+    }
+    if is_outer_only(&key) {
+        return Ok(Some(None));
+    }
+    let Expr::BinaryExpr(BinaryExpr {
+        left,
+        op: op @ (Operator::Plus | Operator::Minus),
+        right,
+    }) = key
+    else {
+        return Ok(None);
+    };
+    let (inner, asc) = match (is_outer_only(&left), is_outer_only(&right)) {
+        (true, false) if !right.contains_outer() => (*right, sort.asc == (op == Operator::Plus)),
+        (false, true) if !left.contains_outer() => (*left, sort.asc),
+        _ => return Ok(None),
+    };
+    Ok(Some(Some(SortExpr {
+        expr: inner,
+        asc,
+        nulls_first: sort.nulls_first,
+    })))
+}
+
+/// Rewrites a scalar subquery that DataFusion cannot decorrelate: one that is correlated
+/// without being aggregated (Spark allows at most one row and fails at runtime otherwise),
+/// or one that evaluates outer references in its projection. A producer aggregate over the
+/// projection's input returns, in one row, the row count and a struct of the value(s) the
+/// projection needs, so that one coherent row is chosen; the result is computed from that
+/// row, raising Spark's error when more than one row would have been returned. Over an
+/// uncorrelated input the peeled LIMIT and ORDER BY stay as plan nodes, composing exactly;
+/// over a correlated one, which DataFusion cannot decorrelate through them, a single
+/// `LIMIT [n] [OFFSET m]` with its ordering is emulated with `first_value`/`nth_value`.
+/// The producer is a scalar subquery itself, so an uncorrelated input is evaluated exactly
+/// once and a correlated one is decorrelated by DataFusion as an ordinary aggregate.
+fn rewrite_bounded_scalar_subquery(
+    plan: &LogicalPlan,
+    state: &mut PlanResolverState,
+) -> PlanResult<Option<Expr>> {
+    let Some(shape) = peel_scalar_subquery(plan) else {
+        return Ok(None);
+    };
+    let input = shape.projection.input.as_ref();
+    let correlated = !input.all_out_ref_exprs().is_empty();
+    let expr = strip_alias(shape.expr);
+    let outer = expr.contains_outer();
+    // DataFusion handles the other shapes itself: aggregated subqueries are decorrelated and
+    // uncorrelated ones have their row count checked at execution. LIMIT and ORDER BY above a
+    // correlated ungrouped aggregate are dropped, since its single row makes them no-ops and
+    // DataFusion cannot decorrelate through them.
+    if !outer && (!correlated || is_aggregated(input)) {
+        return Ok(
+            if correlated && !shape.bounds.is_empty() && row_bounds(input) == (1, Some(1)) {
+                let plan = LogicalPlanBuilder::from(input.clone())
+                    .project(vec![shape.expr.clone()])?
+                    .build()?;
+                Some(nullable_scalar_subquery(plan))
+            } else {
+                None
+            },
+        );
+    }
+    let data_type = shape
+        .projection
+        .expr
+        .iter()
+        .position(|candidate| candidate == shape.expr)
+        .map(|index| shape.projection.schema.field(index).data_type().clone());
+    let outputs = shape
+        .projection
+        .expr
+        .iter()
+        .map(|expr| (expr.schema_name().to_string(), strip_alias(expr).clone()))
+        .collect::<Vec<_>>();
+    let mut bounds = vec![];
+    let mut shape_bounds = shape.bounds.into_iter().peekable();
+    // An ORDER BY above every LIMIT cannot change which single row a scalar subquery returns.
+    while matches!(shape_bounds.peek(), Some(RowBound::Sort(_, None))) {
+        shape_bounds.next();
+    }
+    for bound in shape_bounds {
+        bounds.push(match bound {
+            RowBound::Sort(sorts, fetch) => {
+                let mut keys = vec![];
+                for sort in sorts {
+                    match input_sort_key(sort, &outputs)? {
+                        Some(Some(key)) => keys.push(key),
+                        Some(None) => {}
+                        None => return Ok(None),
+                    }
+                }
+                RowBound::Sort(keys, fetch)
+            }
+            bound => bound,
+        });
+    }
+    // The values the producer must return: the inner columns an outer-referencing expression
+    // uses, or the projected expression itself.
+    let mut values: Vec<Expr> = vec![];
+    if outer {
+        expr.apply(|expr| {
+            if let Expr::Column(_) = expr
+                && !values.contains(expr)
+            {
+                values.push(expr.clone());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    } else {
+        values.push(expr.clone());
+    }
+    let names = values
+        .iter()
+        .map(|_| state.register_field_name(""))
+        .collect::<Vec<_>>();
+    // One struct per row keeps the chosen row coherent even under a volatile ordering.
+    let row = (!values.is_empty()).then(|| {
+        named_struct(
+            names
+                .iter()
+                .zip(&values)
+                .flat_map(|(name, value)| [lit(name.as_str()), value.clone()])
+                .collect(),
+        )
+    });
+    let (input, selected, skip, single) = if correlated {
+        // Only one LIMIT (with its ORDER BY) can be emulated; DataFusion decorrelates neither.
+        let (skip, fetch, sorts) = match bounds.as_slice() {
+            [] => (0, None, vec![]),
+            [RowBound::Limit { skip, fetch }] => (*skip, *fetch, vec![]),
+            [RowBound::Limit { skip, fetch }, RowBound::Sort(sorts, None)] => {
+                (*skip, *fetch, sorts.clone())
+            }
+            [RowBound::Sort(sorts, Some(fetch))] => (0, Some(*fetch), sorts.clone()),
+            _ => return Ok(None),
+        };
+        if fetch == Some(0) {
+            return Ok(data_type.map(|data_type| cast(lit(ScalarValue::Null), data_type)));
+        }
+        let selected = row.map(|row| {
+            if skip == 0 {
+                first_value(row, sorts)
+            } else {
+                nth_value(row, i64::try_from(skip + 1).unwrap_or(i64::MAX), sorts)
+            }
+        });
+        (input.clone(), selected, skip, fetch == Some(1))
+    } else {
+        let mut plan = input.clone();
+        for bound in bounds.into_iter().rev() {
+            plan = match bound {
+                RowBound::Limit { skip, fetch } => {
+                    LogicalPlanBuilder::from(plan).limit(skip, fetch)?.build()?
+                }
+                RowBound::Sort(keys, fetch) if keys.is_empty() => match fetch {
+                    Some(fetch) => LogicalPlanBuilder::from(plan)
+                        .limit(0, Some(fetch))?
+                        .build()?,
+                    None => plan,
+                },
+                RowBound::Sort(keys, fetch) => LogicalPlan::Sort(Sort {
+                    expr: keys,
+                    input: Arc::new(plan),
+                    fetch,
+                }),
+            };
+        }
+        (plan, row.map(|row| first_value(row, vec![])), 0, false)
+    };
+    let count_name = state.register_field_name("");
+    let value_name = state.register_field_name("");
+    let mut aggregates = vec![count(lit(1_i64)).alias(&count_name)];
+    let mut fields = vec![lit(count_name.as_str()), ident(&count_name)];
+    if let Some(selected) = selected {
+        aggregates.push(selected.alias(&value_name));
+        fields.extend([lit(value_name.as_str()), ident(&value_name)]);
+    }
+    let producer = LogicalPlanBuilder::from(input)
+        .aggregate(Vec::<Expr>::new(), aggregates)?
+        .project(vec![
+            named_struct(fields).alias(state.register_field_name("")),
+        ])?
+        .build()?;
+    let producer = expr_fn::scalar_subquery(Arc::new(producer));
+    let value = |index: usize| {
+        get_field(
+            get_field(producer.clone(), value_name.as_str()),
+            names[index].as_str(),
+        )
+    };
+    let result = if outer {
+        expr.clone()
+            .transform(|expr| match expr {
+                Expr::OuterReferenceColumn(_, column) => Ok(Transformed::yes(Expr::Column(column))),
+                Expr::Column(_) => match values.iter().position(|value| value == &expr) {
+                    Some(index) => Ok(Transformed::yes(value(index))),
+                    None => Ok(Transformed::no(expr)),
+                },
+                expr => Ok(Transformed::no(expr)),
+            })?
+            .data
+    } else {
+        value(0)
+    };
+    let rows = get_field(producer, count_name.as_str());
+    // Rows skipped by OFFSET are not returned.
+    let rows = if skip == 0 {
+        rows
+    } else {
+        greatest(vec![
+            rows - lit(i64::try_from(skip).unwrap_or(i64::MAX)),
+            lit(0_i64),
+        ])
+    };
+    let mut case = when(rows.clone().eq(lit(0_i64)), lit(ScalarValue::Null));
+    if !single {
+        case = case.when(rows.gt(lit(1_i64)), scalar_subquery_error());
+    }
+    Ok(Some(case.otherwise(result)?))
 }
 
 /// An expression that refers to the outer query only, with no inner column.
@@ -397,129 +626,6 @@ fn is_aggregated(plan: &LogicalPlan) -> bool {
         LogicalPlan::Filter(filter) => matches!(filter.input.as_ref(), LogicalPlan::Aggregate(_)),
         _ => false,
     }
-}
-
-/// Rewrites a scalar subquery that DataFusion cannot decorrelate: one that is correlated
-/// without being aggregated (Spark allows at most one row and fails at runtime otherwise),
-/// or one that evaluates outer references in its projection. A producer aggregate over the
-/// projection's input returns, in one row, the row count and the value(s) the projection
-/// needs; the result is computed from that row, raising Spark's error when more than one row
-/// would have been returned and honoring `LIMIT 1` with its ordering through `first_value`.
-/// The producer is a scalar subquery itself, so an uncorrelated input is evaluated exactly
-/// once and a correlated one is decorrelated by DataFusion as an ordinary aggregate.
-fn rewrite_bounded_scalar_subquery(
-    plan: &LogicalPlan,
-    state: &mut PlanResolverState,
-) -> PlanResult<Option<Expr>> {
-    let Some(shape) = peel_scalar_subquery(plan) else {
-        return Ok(None);
-    };
-    let input = shape.projection.input.as_ref();
-    let correlated = !input.all_out_ref_exprs().is_empty();
-    let expr = strip_alias(shape.expr);
-    let outer = expr.contains_outer();
-    // DataFusion handles the other shapes itself: aggregated subqueries are decorrelated and
-    // uncorrelated ones have their row count checked at execution. LIMIT and ORDER BY above a
-    // correlated ungrouped aggregate are dropped, since its single row makes them no-ops and
-    // DataFusion cannot decorrelate through them.
-    if !outer && (!correlated || is_aggregated(input)) {
-        return Ok(
-            if correlated && shape.bounded && row_bounds(input) == (1, Some(1)) {
-                let plan = LogicalPlanBuilder::from(input.clone())
-                    .project(vec![shape.expr.clone()])?
-                    .build()?;
-                Some(nullable_scalar_subquery(plan))
-            } else {
-                None
-            },
-        );
-    }
-    // The sort keys refer to the projection's outputs; express them through its input.
-    let outputs = shape
-        .projection
-        .expr
-        .iter()
-        .map(|expr| (expr.schema_name().to_string(), strip_alias(expr).clone()))
-        .collect::<Vec<_>>();
-    let mut sorts = vec![];
-    for sort in shape.sorts {
-        let key = sort
-            .expr
-            .transform(|expr| match expr {
-                Expr::Column(column) => {
-                    match outputs.iter().find(|(name, _)| name == column.name()) {
-                        Some((_, output)) => Ok(Transformed::yes(output.clone())),
-                        None => Ok(Transformed::no(Expr::Column(column))),
-                    }
-                }
-                expr => Ok(Transformed::no(expr)),
-            })?
-            .data;
-        if key.contains_outer() {
-            return Ok(None);
-        }
-        sorts.push(SortExpr { expr: key, ..sort });
-    }
-    // The values the producer must return: the inner columns an outer-referencing expression
-    // uses, or the projected expression itself.
-    let mut values: Vec<Expr> = vec![];
-    if outer {
-        expr.apply(|expr| {
-            if let Expr::Column(_) = expr
-                && !values.contains(expr)
-            {
-                values.push(expr.clone());
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })?;
-    } else {
-        values.push(expr.clone());
-    }
-    let rows = state.register_field_name("");
-    let names = values
-        .iter()
-        .map(|_| state.register_field_name(""))
-        .collect::<Vec<_>>();
-    let aggregates = std::iter::once(count(lit(1_i64)).alias(&rows))
-        .chain(
-            values
-                .iter()
-                .zip(&names)
-                .map(|(value, name)| first_value(value.clone(), sorts.clone()).alias(name)),
-        )
-        .collect::<Vec<_>>();
-    let fields = std::iter::once(&rows)
-        .chain(&names)
-        .flat_map(|name| [lit(name.as_str()), ident(name)])
-        .collect::<Vec<_>>();
-    let producer = LogicalPlanBuilder::from(input.clone())
-        .aggregate(Vec::<Expr>::new(), aggregates)?
-        .project(vec![
-            named_struct(fields).alias(state.register_field_name("")),
-        ])?
-        .build()?;
-    let producer = expr_fn::scalar_subquery(Arc::new(producer));
-    let value = |index: usize| get_field(producer.clone(), names[index].as_str());
-    let result = if outer {
-        expr.clone()
-            .transform(|expr| match expr {
-                Expr::OuterReferenceColumn(_, column) => Ok(Transformed::yes(Expr::Column(column))),
-                Expr::Column(_) => match values.iter().position(|value| value == &expr) {
-                    Some(index) => Ok(Transformed::yes(value(index))),
-                    None => Ok(Transformed::no(expr)),
-                },
-                expr => Ok(Transformed::no(expr)),
-            })?
-            .data
-    } else {
-        value(0)
-    };
-    let rows = get_field(producer, rows.as_str());
-    let mut case = when(rows.clone().eq(lit(0_i64)), lit(ScalarValue::Null));
-    if !shape.single {
-        case = case.when(rows.gt(lit(1_i64)), scalar_subquery_error());
-    }
-    Ok(Some(case.otherwise(result)?))
 }
 
 impl PlanResolver<'_> {
