@@ -32,11 +32,11 @@ Feature: Division by zero behavior
 
       Examples:
         | case                                                             | expr                                                    | error                |
-        | Integer divided by zero throws error in ANSI mode                | 1 / 0                                                   | (?i)divi.*zero     |
-        | Float divided by zero throws error in ANSI mode                  | 1.0 / 0.0                                               | (?i)divi.*zero     |
-        | Decimal divided by decimal zero throws error in ANSI mode        | CAST(1.0 AS DECIMAL(10,2)) / CAST(0.0 AS DECIMAL(10,2)) | (?i)divi.*zero     |
-        | Decimal divided by integer zero throws error in ANSI mode        | CAST(100.50 AS DECIMAL(10,2)) / 0                       | (?i)divi.*zero     |
-        | DIV by literal zero throws error in ANSI mode                    | 10 DIV 0                                                | (?i)divi.*zero     |
+        | Integer divided by zero throws error in ANSI mode                | 1 / 0                                                   | (?i)divide.*zero     |
+        | Float divided by zero throws error in ANSI mode                  | 1.0 / 0.0                                               | (?i)divide.*zero     |
+        | Decimal divided by decimal zero throws error in ANSI mode        | CAST(1.0 AS DECIMAL(10,2)) / CAST(0.0 AS DECIMAL(10,2)) | (?i)divide.*zero     |
+        | Decimal divided by integer zero throws error in ANSI mode        | CAST(100.50 AS DECIMAL(10,2)) / 0                       | (?i)divide.*zero     |
+        | DIV by literal zero throws error in ANSI mode                    | 10 DIV 0                                                | (?i)divide.*zero     |
         | Modulo by literal zero throws error in ANSI mode                 | 10 % 0                                                  | (?i)remainder.*zero  |
         | Computed expression evaluating to zero throws error in ANSI mode | 1 / (1 - 1)                                             | (?i)division by zero |
 
@@ -184,129 +184,3 @@ Feature: Division by zero behavior
       Then query result
         | result |
         | 5.0    |
-
-  Rule: Signed zero preserves arithmetic types and ordinary branch evaluation
-
-    Scenario Outline: Negative zero preserves the result type of <expr>
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT <expr> AS result, typeof(<expr>) AS result_type
-        """
-      Then query result
-        | result | result_type   |
-        | NULL   | <result_type> |
-
-      Examples:
-        | expr          | result_type |
-        | 1 / -0.0D     | double      |
-        | 1 / -0.0F     | double      |
-        | 1 % -0.0D     | double      |
-        | 1 DIV -0.0BD  | bigint      |
-
-    Scenario: Decimal zero does not erase or widen decimal precision and scale
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT typeof(1 / -0.0BD) = typeof(1 / 1.0BD) AS division_type_matches,
-               typeof(1 % -0.0BD) = typeof(1 % 1.0BD) AS remainder_type_matches,
-               coalesce(1 DIV -0.0BD, 2147483647) + 1 AS result
-        """
-      Then query result
-        | division_type_matches | remainder_type_matches | result     |
-        | true                  | false                  | 2147483648 |
-
-    # Zero-divisor guards belong to expression evaluation, after CASE/COALESCE
-    # can discard unused branches; they must not reject literals during resolution.
-    Scenario Outline: Unused negative-zero arithmetic does not raise for <expr>
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT CASE WHEN false THEN <expr> ELSE 42D END AS case_result,
-               coalesce(42D, <expr>) AS coalesce_result
-        """
-      Then query result
-        | case_result | coalesce_result |
-        | 42.0        | 42.0            |
-
-      Examples:
-        | expr         |
-        | 1 / -0.0D    |
-        | 1 % -0.0D    |
-        | 1 DIV -0.0BD |
-
-    Scenario Outline: Evaluated negative-zero arithmetic raises for <expr>
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT <expr> AS result
-        """
-      Then query error (?i)(divi|remainder).*zero
-
-      Examples:
-        | expr         |
-        | 1 / -0.0D    |
-        | 1 % -0.0D    |
-        | 1 DIV -0.0BD |
-
-
-  Rule: Constant zero divisors preserve result types and skip unused literal casts
-
-    Scenario: High-scale decimal zero division does not overflow during type inference
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT CAST(1 AS DECIMAL(1,0)) / CAST(0 AS DECIMAL(38,38)) AS result,
-               typeof(CAST(1 AS DECIMAL(1,0)) / CAST(0 AS DECIMAL(38,38))) AS result_type
-        """
-      Then query result
-        | result | result_type   |
-        | NULL   | decimal(38,6) |
-
-    Scenario: High-scale decimal zero division retains column and aggregate producers
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT CAST(id AS DECIMAL(1,0)) / CAST(0 AS DECIMAL(38,38)) AS result
-        FROM range(2)
-        """
-      Then query result
-        | result |
-        | NULL   |
-        | NULL   |
-      When query
-        """
-        SELECT sum(CAST(id AS DECIMAL(1,0))) / CAST(0 AS DECIMAL(38,38)) AS result
-        FROM range(0)
-        """
-      Then query result
-        | result |
-        | NULL   |
-
-    Scenario Outline: Zero <operator> suppresses a malformed literal cast
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT CAST('invalid' AS BIGINT) <operator> 0 AS result,
-               typeof(CAST('invalid' AS BIGINT) <operator> 0) AS result_type
-        """
-      Then query result
-        | result | result_type   |
-        | NULL   | <result_type> |
-
-      Examples:
-        | operator | result_type |
-        | /        | double      |
-        | DIV      | bigint      |
-        | %        | bigint      |
-
-    Scenario: Zero arithmetic retains aggregate dependencies on empty input
-      Given config spark.sql.ansi.enabled = false
-      When query
-        """
-        SELECT sum(id) / 0 AS division, sum(id) DIV 0 AS integral, sum(id) % 0 AS remainder
-        FROM range(0)
-        """
-      Then query result
-        | division | integral | remainder |
-        | NULL     | NULL     | NULL      |

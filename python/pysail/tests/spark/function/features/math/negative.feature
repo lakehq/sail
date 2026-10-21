@@ -189,7 +189,6 @@ Feature: unary minus (negative) honors ANSI overflow semantics
          |-- result: integer (nullable = false)
         """
 
-    # TODO: Restore precise nullability after DataFusion fixes scalar-subquery nullability.
     @sail-bug
     Scenario: a non-null integer column yields a non-nullable integer
       When query
@@ -212,83 +211,3 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         root
          |-- result: integer (nullable = true)
         """
-
-  Rule: Empty scalar subqueries remain nullable
-
-    Scenario: negative preserves an empty scalar subquery as NULL
-      When query
-        """
-        SELECT negative((SELECT id FROM range(0))) AS result
-        """
-      Then query result
-        | result |
-        | NULL   |
-      Then query schema
-        """
-        root
-         |-- result: long (nullable = true)
-        """
-
-    Scenario: negative does not let NULL predicates or COUNT discard an empty scalar subquery
-      When query
-        """
-        SELECT negative((SELECT id FROM range(0))) IS NULL AS result
-        """
-      Then query result
-        | result |
-        | true   |
-      When query
-        """
-        SELECT count(negative((SELECT id FROM range(0)))) AS result FROM range(1)
-        """
-      Then query result
-        | result |
-        | 0      |
-      When query
-        """
-        SELECT CASE WHEN negative((SELECT id FROM range(0))) IS NULL THEN 1 ELSE 2 END AS result
-        """
-      Then query result
-        | result |
-        | 1      |
-      When query
-        """
-        SELECT id FROM range(2) WHERE negative((SELECT id FROM range(0))) IS NULL ORDER BY id
-        """
-      Then query result ordered
-        | id |
-        | 0  |
-        | 1  |
-
-    Scenario: negative preserves a nonempty scalar subquery value
-      When query
-        """
-        SELECT negative((SELECT id + 1 FROM range(1))) AS result
-        """
-      Then query result
-        | result |
-        | -1     |
-
-    Scenario: negative preserves scalar subquery cardinality errors
-      When query
-        """
-        SELECT count(negative((SELECT id FROM range(2)))) AS result FROM range(1)
-        """
-      Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
-
-    Scenario: negative retains non-null literal inference without evaluating overflow
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT count(negative(-2147483648)) AS result FROM range(1)
-        """
-      Then query result
-        | result |
-        | 1      |
-      When query
-        """
-        SELECT negative(-2147483648) IS NULL AS result
-        """
-      Then query result
-        | result |
-        | false  |

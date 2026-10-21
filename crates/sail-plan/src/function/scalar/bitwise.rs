@@ -3,7 +3,6 @@ use datafusion::functions::expr_fn::abs;
 use datafusion_expr::{ExprSchemable, Operator, cast, expr, lit, when};
 use datafusion_spark::function::bitwise::expr_fn as bitwise_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::math::spark_bitwise_not::SparkBitwiseNot;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -42,7 +41,7 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("&", F::binary_op(Operator::BitwiseAnd)),
         ("^", F::binary_op(Operator::BitwiseXor)),
         ("bit_count", F::unary(bitwise_fn::bit_count)),
-        ("bitwise_not", F::udf(SparkBitwiseNot::new())),
+        ("bitwise_not", F::unary(bitwise_fn::bitwise_not)),
         ("bit_get", F::binary(bitwise_fn::bit_get)),
         ("getbit", F::binary(bitwise_fn::bit_get)),
         ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
@@ -52,6 +51,6 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("shiftrightunsigned", F::custom(shiftrightunsigned)),
         (">>>", F::custom(shiftrightunsigned)),
         ("|", F::binary_op(Operator::BitwiseOr)),
-        ("~", F::udf(SparkBitwiseNot::new())),
+        ("~", F::unary(|arg| (-arg) - lit(1))),
     ]
 }

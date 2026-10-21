@@ -933,20 +933,7 @@ where
         (expr, query, data_type): (P1, P2, P3),
         options: &'a ParserOptions,
     ) -> impl Parser<'a, I, Self, E> + Clone {
-        let number = NumberLiteral::parser((), options);
-        // A number's sign precedes type inference and postfix casts, as in Spark's grammar.
-        let negative_number = operator::Minus::parser((), options)
-            .then(number.clone())
-            .map(|(minus, mut number)| {
-                number.span = minus.span.union(&number.span);
-                number.value.insert(0, '-');
-                AtomExpr::NumberLiteral(number)
-            });
-        let atom = negative_number
-            .or(AtomExpr::parser(
-                (expr.clone(), query.clone(), data_type.clone()),
-                options,
-            ))
+        let atom = AtomExpr::parser((expr.clone(), query.clone(), data_type.clone()), options)
             .map(|atom| <ExprFragment<Token<'a>, I::Span>>::Singleton(Expr::Atom(atom)));
         let operator = (
             postfix(
@@ -961,9 +948,7 @@ where
                 25,
                 choice((
                     operator::Plus::parser((), options).map(UnaryOperator::Plus),
-                    operator::Minus::parser((), options)
-                        .then_ignore(number.not())
-                        .map(UnaryOperator::Minus),
+                    operator::Minus::parser((), options).map(UnaryOperator::Minus),
                     operator::Tilde::parser((), options).map(UnaryOperator::BitwiseNot),
                 )),
                 |op, e, _| ExprFragment::UnaryOperator {

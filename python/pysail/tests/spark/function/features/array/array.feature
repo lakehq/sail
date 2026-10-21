@@ -75,10 +75,6 @@ Feature: array output schema
 
       Examples:
         | index        | ansi  |
-        | -0.5         | true  |
-        | -0.5         | false |
-        | -0.5D        | true  |
-        | -0.5D        | false |
         | '4294967296' | true  |
         | '4294967296' | false |
 
@@ -88,9 +84,8 @@ Feature: array output schema
         """
         SELECT array(10, 20)[0L] AS first,
                array(10, 20)[4294967296L] AS narrowed,
-               array(10, 20)[NULL] AS missing,
-               array(10, 20)[-1] AS out_of_bounds
+               array(10, 20)[NULL] AS missing
         """
       Then query result
-        | first | narrowed | missing | out_of_bounds |
-        | 10    | 10       | NULL    | NULL          |
+        | first | narrowed | missing |
+        | 10    | 10       | NULL    |
