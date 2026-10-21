@@ -324,6 +324,9 @@ A `NULL` row of a `VALUES` map column is ignored when the type of the column is 
 **Fix (in this pull request, for the date functions).** Outside ANSI mode, a string argument of `year`, `quarter`, `month`, `dayofweek`, `dayofmonth`, `dayofyear`, `weekofyear`, `hour`, `minute`, `second`, `last_day`, `date_add`, `date_sub`, `add_months`, `datediff`, `next_day`, `trunc`, `date_trunc`, and `months_between` is cast with the Spark parser, which gives `NULL` for an invalid value. The strict cast is kept in ANSI mode, where Spark raises an error.
 `test_date_ts_functions` then passes when it runs in UTC like CI. On a node with another time zone it fails in two comparisons that depend on the time zone of the node.
 
+With the window names fixed, `test_window_functions` failed in `lag(c, -1, float("nan"))` on a decimal column, where the cast of the `NaN` default to the decimal type raised an error.
+Fixed in this pull request: outside ANSI mode, a literal default of `lag` or `lead` that cannot be cast to the type of the input is `NULL`, as with a Spark cast. `test_window_functions` then passes.
+
 **Proposed fix (for the rest).** Use Spark's rules for decimal coercion and for the result type of decimal division.
 
 ### Windows and Streaming
