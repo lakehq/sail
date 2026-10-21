@@ -10,6 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
+mod aggregate_window;
 mod attribute;
 mod cast;
 mod function;

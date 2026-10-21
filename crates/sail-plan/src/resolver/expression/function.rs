@@ -13,10 +13,9 @@ use sail_function::scalar::explode::Explode;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
+use super::aggregate_window::preserve_aggregate_window_fields;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{
-    AggFunctionInput, FunctionContextInput, ScalarFunctionInput, preserve_aggregate_window_fields,
-};
+use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
 };
