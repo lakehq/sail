@@ -413,7 +413,12 @@ Sail sends the original duplicate names, which PyArrow cannot convert to a dicti
 Python UDFs get the value in its SQL form because the input type passed to the worker is not the UDT, so the worker does not deserialize it.
 A Python UDF whose return type is a UDT is rejected, because a UDT is only accepted as a field type.
 
-**Proposed fix.** Write and read the Spark schema in the Parquet metadata, pass UDT input types to Python UDF workers, and allow a UDT as the return type of a Python UDF.
+**Fix (in this pull request, for Parquet).** A UDT column written by Sail already keeps its type in the Arrow schema that is embedded in the Parquet file, but the reader discarded it with the other field metadata when it inferred the schema.
+The reader now keeps the UDT of a field, and restores the UDTs from the Spark schema in the `org.apache.spark.sql.parquet.row.metadata` key of the file, which is how files written by Spark describe them (including UDTs in arrays, maps, and structs).
+`test_simple_udt_from_read` and `test_parquet_with_udt` pass. Sail does not write the Spark schema key yet, so Spark reads the UDT column of a file written by Sail as its SQL type.
+
+**Proposed fix (for Python UDFs).** Pass UDT input types to Python UDF workers, and allow a UDT as the return type of a Python UDF.
+The UDT of an argument is only in the Arrow field metadata, so it has to be passed to the UDF when it is created, and the plan codec for distributed execution has to carry it.
 
 ### Other Schema Differences
 

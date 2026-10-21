@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
@@ -16,9 +17,11 @@ use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common::spec::SAIL_SPARK_UDT_METADATA_KEY;
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
+use super::udt::{SPARK_ROW_METADATA_KEY, restore_spark_udts};
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
 use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
 use crate::options::r#gen::ParquetReadOptions;
@@ -135,6 +138,14 @@ impl ReadFormat for ParquetReadFormat {
                 // matching Spark.
                 let physical = parquet_to_arrow_schema(file_metadata.schema_descr(), None)?;
                 let schema = reinterpret_second_timestamps_as_int64(schema, &physical);
+                // Spark writes its own schema, which has the user-defined types.
+                let spark_schema = file_metadata.key_value_metadata().and_then(|entries| {
+                    entries
+                        .iter()
+                        .find(|entry| entry.key == SPARK_ROW_METADATA_KEY)
+                        .and_then(|entry| entry.value.as_deref())
+                });
+                let schema = restore_spark_udts(schema, spark_schema);
                 Ok::<_, DataFusionError>((object.location.clone(), schema))
             })
             .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
@@ -442,13 +453,19 @@ fn normalize_widened_timestamp_timezones(
     }
 }
 
-/// Clears all metadata (Schema level and field level) for a schema.
+/// Clears all metadata (Schema level and field level) for a schema,
+/// except the Spark user-defined type of a field, which is part of its type.
 fn clear_metadata(schema: Schema) -> Schema {
     let fields = schema
         .fields()
         .iter()
         .map(|field| {
-            Arc::new(field.as_ref().clone().with_metadata(Default::default())) // clear meta
+            let metadata = field
+                .metadata()
+                .get(SAIL_SPARK_UDT_METADATA_KEY)
+                .map(|udt| HashMap::from([(SAIL_SPARK_UDT_METADATA_KEY.to_string(), udt.clone())]))
+                .unwrap_or_default();
+            Arc::new(field.as_ref().clone().with_metadata(metadata))
         })
         .collect::<Fields>();
     Schema::new(fields)
