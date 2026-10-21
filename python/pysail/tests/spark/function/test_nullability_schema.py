@@ -261,3 +261,20 @@ def test_array_repeat_preserves_scalar_interval_type(spark, dynamic):
     result = source.selectExpr("array_repeat(value, 2) AS result")
     assert result.schema["result"].dataType.elementType == T.DayTimeIntervalType(0, 0)
     assert [row.result for row in result.collect()] == [[timedelta(days=i if dynamic else 2)] * 2 for i in range(2)]
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "1"])
+@pytest.mark.parametrize("ansi", [True, False])
+def test_array_position_string_float_cast_is_nullable(spark, value, ansi):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        source = spark.range(1).select(F.lit(value).cast("double").alias("x"))
+        result = source.selectExpr("array_position(array(x), x) AS result")
+        assert result.schema["result"].nullable is True
+        assert result.collect()[0].result == 1
+        control = spark.sql("SELECT array_position(array(1D), 1D) AS result")
+        assert control.schema["result"].nullable is False
+        assert control.collect()[0].result == 1
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
