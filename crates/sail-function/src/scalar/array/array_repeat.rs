@@ -243,9 +243,11 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         &UInt64Array::from_iter_values(take_indices),
         None,
     )?;
-    let (field, ..) = list_array.clone().into_parts();
+    let (List(field) | LargeList(field)) = list_array.data_type() else {
+        return internal_err!("array_repeat expected a list input");
+    };
     let inner_list = GenericListArray::<O>::try_new(
-        field,
+        Arc::clone(field),
         OffsetBuffer::new(inner_offsets.into()),
         inner_values,
         Some(NullBuffer::new(inner_nulls.finish())),
