@@ -214,7 +214,7 @@ Feature: Division by zero behavior
         """
       Then query result
         | division_type_matches | remainder_type_matches | result     |
-        | true                  | true                   | 2147483648 |
+        | true                  | false                  | 2147483648 |
 
     # Zero-divisor guards belong to expression evaluation, after CASE/COALESCE
     # can discard unused branches; they must not reject literals during resolution.
@@ -248,3 +248,65 @@ Feature: Division by zero behavior
         | 1 / -0.0D    |
         | 1 % -0.0D    |
         | 1 DIV -0.0BD |
+
+
+  Rule: Constant zero divisors preserve result types and skip unused literal casts
+
+    Scenario: High-scale decimal zero division does not overflow during type inference
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(1 AS DECIMAL(1,0)) / CAST(0 AS DECIMAL(38,38)) AS result,
+               typeof(CAST(1 AS DECIMAL(1,0)) / CAST(0 AS DECIMAL(38,38))) AS result_type
+        """
+      Then query result
+        | result | result_type   |
+        | NULL   | decimal(38,6) |
+
+    Scenario: High-scale decimal zero division retains column and aggregate producers
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(id AS DECIMAL(1,0)) / CAST(0 AS DECIMAL(38,38)) AS result
+        FROM range(2)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | NULL   |
+      When query
+        """
+        SELECT sum(CAST(id AS DECIMAL(1,0))) / CAST(0 AS DECIMAL(38,38)) AS result
+        FROM range(0)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario Outline: Zero <operator> suppresses a malformed literal cast
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST('invalid' AS BIGINT) <operator> 0 AS result,
+               typeof(CAST('invalid' AS BIGINT) <operator> 0) AS result_type
+        """
+      Then query result
+        | result | result_type   |
+        | NULL   | <result_type> |
+
+      Examples:
+        | operator | result_type |
+        | /        | double      |
+        | DIV      | bigint      |
+        | %        | bigint      |
+
+    Scenario: Zero arithmetic retains aggregate dependencies on empty input
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT sum(id) / 0 AS division, sum(id) DIV 0 AS integral, sum(id) % 0 AS remainder
+        FROM range(0)
+        """
+      Then query result
+        | division | integral | remainder |
+        | NULL     | NULL     | NULL      |

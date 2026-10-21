@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
 };
@@ -233,13 +234,73 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     })
 }
 
-/// Returns a guarded divisor expression that handles division by zero at runtime.
-///
-/// In non-ANSI mode: returns `nullif(divisor, 0)` — evaluates to NULL when divisor is zero.
-/// In ANSI mode: returns `CASE WHEN divisor = 0 THEN raise_error(msg) ELSE divisor END`.
-///
-/// This wraps the divisor itself (not the entire division expression) to avoid
-/// duplicating complex divisor expressions (e.g., window functions) in the plan.
+fn is_zero_literal(expression: &Expr) -> bool {
+    match expression {
+        Expr::Literal(ScalarValue::Float16(Some(value)), _) => value.to_f32() == 0.0,
+        Expr::Literal(ScalarValue::Float32(Some(value)), _) => *value == 0.0,
+        Expr::Literal(ScalarValue::Float64(Some(value)), _) => *value == 0.0,
+        Expr::Literal(value, _) if value.data_type().is_numeric() => {
+            ScalarValue::new_zero(&value.data_type()).is_ok_and(|zero| zero == *value)
+        }
+        Expr::Cast(cast) if cast.field.data_type().is_numeric() => is_zero_literal(&cast.expr),
+        Expr::TryCast(cast) if cast.field.data_type().is_numeric() => is_zero_literal(&cast.expr),
+        _ => false,
+    }
+}
+
+// Only discard literal/cast constants here: other expressions can carry query dependencies.
+// Validate cast types without evaluating values, including malformed string-to-number literals.
+fn literal_cast_type(expression: &Expr) -> Option<DataType> {
+    match expression {
+        Expr::Literal(value, _) => Some(value.data_type()),
+        Expr::Cast(cast) => {
+            let from = literal_cast_type(&cast.expr)?;
+            let to = cast.field.data_type();
+            (to.is_numeric() && can_cast_types(&from, to)).then(|| to.clone())
+        }
+        Expr::TryCast(cast) => {
+            let from = literal_cast_type(&cast.expr)?;
+            let to = cast.field.data_type();
+            (to.is_numeric() && can_cast_types(&from, to)).then(|| to.clone())
+        }
+        _ => None,
+    }
+}
+
+fn zero_division_null(expression: Expr, schema: &DFSchema) -> PlanResult<Expr> {
+    let data_type = match expression.get_type(schema) {
+        Ok(data_type) => data_type,
+        Err(error) => {
+            let Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Divide,
+                right,
+            }) = &expression
+            else {
+                return Err(error.into());
+            };
+            let (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) =
+                (left.get_type(schema)?, right.get_type(schema)?)
+            else {
+                return Err(error.into());
+            };
+            // Arrow can overflow its scale multiplier even while inferring a NULL result.
+            // Spark Divide bounds precision to 38 and retains at least six fractional digits.
+            let integral = i32::from(p1) - i32::from(s1) + i32::from(s2);
+            let scale = (i32::from(s1) + i32::from(p2) + 1).max(6);
+            let precision = integral + scale;
+            let scale = if precision > 38 {
+                (38 - integral).max(6)
+            } else {
+                scale
+            };
+            DataType::Decimal128(precision.min(38) as u8, scale as i8)
+        }
+    };
+    Ok(lit(ScalarValue::try_from(&data_type)?))
+}
+
+/// Preserve runtime zero checks so unused ANSI expressions can be eliminated.
 fn make_safe_divisor(
     divisor: Expr,
     divisor_type: &DataType,
@@ -269,6 +330,12 @@ fn make_safe_divisor(
             else_expr: Some(Box::new(divisor)),
         })
     } else {
+        // Scalar NULLIF compares float bits: exclude both signed zeros with one operand evaluation.
+        let divisor = if divisor_type.is_floating() {
+            expr_fn::nullif(divisor, cast(lit(-0.0_f64), divisor_type.clone()))
+        } else {
+            divisor
+        };
         expr_fn::nullif(divisor, zero)
     }
 }
@@ -295,8 +362,19 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (dividend, divisor) = arguments.two()?;
 
     let ansi_mode = function_context.plan_config.ansi_mode;
+    let constant_zero = !ansi_mode
+        && is_zero_literal(&divisor)
+        && literal_cast_type(&dividend)
+            .is_some_and(|data_type| data_type.is_numeric() || data_type.is_null());
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
+    let decimal_zero_dividend = (!ansi_mode
+        && is_zero_literal(&divisor)
+        && matches!(
+            (&dividend_type, &divisor_type),
+            (Ok(DataType::Decimal128(_, _)), Ok(DataType::Decimal128(_, _)))
+        ))
+    .then(|| dividend.clone());
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
     let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
@@ -331,6 +409,18 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         (Err(_), _) | (_, Err(_)) => dividend / divisor,
     };
 
+    if constant_zero {
+        return zero_division_null(div_expr, function_context.schema);
+    }
+    if let Some(dividend) = decimal_zero_dividend
+        && div_expr.get_type(function_context.schema).is_err()
+    {
+        let null = zero_division_null(div_expr, function_context.schema)?;
+        let result_type = null.get_type(function_context.schema)?;
+        // Keep the numerator through dependency/grouping analysis without creating
+        // Arrow's overflowing decimal division kernel for an always-NULL result.
+        return Ok(when(lit(false), cast(dividend, result_type)).otherwise(null)?);
+    }
     Ok(div_expr)
 }
 
@@ -352,6 +442,10 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (dividend, divisor) = arguments.two()?;
 
     let ansi_mode = function_context.plan_config.ansi_mode;
+    let constant_zero = !ansi_mode
+        && is_zero_literal(&divisor)
+        && literal_cast_type(&dividend)
+            .is_some_and(|data_type| data_type.is_numeric() || data_type.is_null());
     // CASE reports its first branch's type before coercion. Resolve all branches
     // before widening integers, or a decimal result can be truncated to BIGINT.
     let widen = |value: Expr| {
@@ -402,7 +496,11 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => dividend / divisor,
     };
 
-    Ok(cast(div_expr, DataType::Int64))
+    if constant_zero {
+        Ok(lit(ScalarValue::Int64(None)))
+    } else {
+        Ok(cast(div_expr, DataType::Int64))
+    }
 }
 
 fn power(base: Expr, exponent: Expr) -> Expr {
@@ -557,6 +655,10 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (dividend, divisor) = arguments.two()?;
 
     let ansi_mode = function_context.plan_config.ansi_mode;
+    let constant_zero = !ansi_mode
+        && is_zero_literal(&divisor)
+        && literal_cast_type(&dividend)
+            .is_some_and(|data_type| data_type.is_numeric() || data_type.is_null());
     let divisor_type = divisor.get_type(function_context.schema);
 
     // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
@@ -568,11 +670,16 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         "Remainder by zero",
     );
 
-    Ok(Expr::BinaryExpr(BinaryExpr {
+    let remainder = Expr::BinaryExpr(BinaryExpr {
         left: Box::new(dividend),
         op: Operator::Modulo,
         right: Box::new(divisor),
-    }))
+    });
+    if constant_zero {
+        zero_division_null(remainder, function_context.schema)
+    } else {
+        Ok(remainder)
+    }
 }
 
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
