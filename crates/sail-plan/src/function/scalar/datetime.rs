@@ -26,6 +26,7 @@ use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_session_window::SparkSessionWindow;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -1318,6 +1319,20 @@ fn window(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Explode)).call(vec![buckets]))
 }
 
+/// The Spark `session_window` function: the `struct<start, end>` session of a row, which is
+/// the time of the row and the time plus the gap duration. In a grouping, the rows of a session
+/// are merged by the aggregate, which recognizes a call to the function.
+fn session_window(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let schema = input.function_context.schema;
+    let session_tz = input.function_context.plan_config.session_timezone.clone();
+    let (time, gap) = input.arguments.two()?;
+    let gap = window_interval_micros(&gap).map_err(|_| {
+        PlanError::unsupported("session_window with a gap duration that is not a literal")
+    })?;
+    let field_type = window_field_type(&time.get_type(schema)?, &session_tz)?;
+    Ok(ScalarUDF::from(SparkSessionWindow::new()).call(vec![cast(time, field_type), lit(gap)]))
+}
+
 /// The Spark `window_time` function: the event-time of a time window, defined as
 /// `window.end - 1 microsecond`. Spark validates the argument via column metadata
 /// markers; we approximate that with a structural check on the window struct type.
@@ -1612,6 +1627,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 ))
             }),
         ),
+        ("session_window", F::custom(session_window)),
         ("window", F::custom(window)),
         ("window_time", F::custom(window_time)),
         ("year", F::custom(year)),

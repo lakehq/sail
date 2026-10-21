@@ -327,10 +327,17 @@ For `VALUES`, find the common type of each column over all the rows before casti
 | `SparkConnectFunctionTests.test_time_window_functions`, doctest `session_window` | `function: session_window`     |
 | `SparkConnectBasicTests.test_deduplicate_within_watermark_in_batch`              | `deduplicate within watermark` |
 
-**Root cause.** `session_window` is registered as an unknown function (`crates/sail-plan/src/function/scalar/datetime.rs`).
+**Root cause.** `session_window` was registered as an unknown function (`crates/sail-plan/src/function/scalar/datetime.rs`).
 `test_deduplicate_within_watermark_in_batch` only expects an `AnalysisException` saying that `dropDuplicatesWithinWatermark` is not supported for batch DataFrames, but Sail reports an unsupported operation for every input.
 
-**Proposed fix.** For batch input, raise an `AnalysisException` with Spark's message. `session_window` needs its own aggregation and is a larger feature.
+**Proposed fix.** For batch input, raise an `AnalysisException` with Spark's message.
+
+**Fix (in this pull request, for `session_window`).** In a grouping, `session_window` is planned as its own aggregation.
+The rows are ordered by time for each value of the other grouping expressions, and a row starts a new session when its time is after the latest end of the sessions of the previous rows, so sessions that overlap or touch are merged as in Spark.
+The session is the earliest start and the latest end of its rows, and the rows with a null time are removed.
+More than one time or session window in a grouping is rejected with Spark's error.
+The `session_window` checks of `test_time_window_functions` then pass.
+The test still fails in its last check, which shows the `window_time` of a grouping by `window` without ordering the rows, so the result depends on the order of Spark's hash aggregation.
 
 ## Input Files and Hints
 
