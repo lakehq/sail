@@ -99,6 +99,27 @@ def test_create_branch_on_empty_table(spark, tmp_path, version):
         spark.sql(f"DROP TABLE IF EXISTS {table}")
 
 
+@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("with_branch", [False, True])
+def test_drop_absent_main_if_exists_is_noop(spark, tmp_path, version, with_branch):
+    table = "absent_main_reference"
+    try:
+        spark.sql(
+            f"CREATE TABLE {table} (id INT) USING iceberg LOCATION '{tmp_path.as_uri()}' "
+            f"TBLPROPERTIES ('format-version'='{version}')"
+        )
+        if with_branch:
+            spark.sql(f"ALTER TABLE {table} CREATE BRANCH audit")
+        before = _find_latest_metadata(tmp_path)
+        assert "main" not in before.get("refs", {})
+        files = set(tmp_path.rglob("*"))
+        spark.sql(f"ALTER TABLE {table} DROP BRANCH IF EXISTS main")
+        assert _find_latest_metadata(tmp_path) == before
+        assert set(tmp_path.rglob("*")) == files
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 @pytest.mark.parametrize(
     ("operation", "error"),
     [
@@ -110,6 +131,7 @@ def test_create_branch_on_empty_table(spark, tmp_path, version):
         ("REPLACE BRANCH missing", "does not exist"),
         ("DROP BRANCH missing", "does not exist"),
         ("DROP BRANCH main", "Cannot remove main"),
+        ("DROP BRANCH IF EXISTS main", "Cannot remove main"),
         ("CREATE BRANCH missing AS OF VERSION 0", "Cannot find"),
         ("CREATE BRANCH invalid RETAIN 0 DAYS", "greater than 0"),
         ("CREATE BRANCH invalid WITH SNAPSHOT RETENTION 0 SNAPSHOTS", "greater than 0"),

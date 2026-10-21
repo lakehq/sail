@@ -40,13 +40,13 @@ pub(super) fn prepare_reference(
     });
     match operation {
         SnapshotReferenceOperation::Drop { if_exists, .. } => {
+            if existing.is_none() && *if_exists {
+                return Ok(prepared);
+            }
             if name == MAIN_BRANCH && kind == Kind::Branch {
                 return plan_err!("Cannot remove main branch");
             }
             let Some(existing) = existing else {
-                if *if_exists {
-                    return Ok(prepared);
-                }
                 return plan_err!("Snapshot reference does not exist: {name}");
             };
             validate_kind(name, kind, existing)?;
