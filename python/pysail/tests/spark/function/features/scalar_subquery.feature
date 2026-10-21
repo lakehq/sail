@@ -1151,3 +1151,85 @@ Feature: Scalar subquery nullability
         | id | c    |
         | 0  | NULL |
         | 1  | NULL |
+
+  Rule: A correlated LIMIT or ORDER BY is evaluated per outer row, an intentional divergence from Spark 4.2
+
+    # Sail deliberately diverges from JVM Spark 4.2 here, and the Sail answers are the correct ones:
+    # do not change these scenarios to match Spark. Spark folds `LIMIT n` over a literal VALUES
+    # relation into its first n rows (`ConvertToLocalRelation`, optimizer/Optimizer.scala) after the
+    # correlated predicate has been pulled out of the subquery, so the limit runs before the per-row
+    # filter and one outer row wrongly gets NULL (and `count` wrongly gives 1). Spark returns the Sail
+    # answers for the same queries over `range(2) t` instead of `VALUES`, and DuckDB agrees with Sail
+    # on every shape. Spark also loses the DESC order of `ORDER BY .. LIMIT 1` under an outer-only
+    # predicate. The scenarios are `@sail-only` because JVM Spark fails them.
+
+    @sail-only
+    Scenario: a correlated LIMIT over literal rows applies after the per-row filter
+      When query
+        """
+        SELECT o.id, (SELECT t.x FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 0 |
+        | 1  | 1 |
+
+    @sail-only
+    Scenario: a correlated ORDER BY with LIMIT over literal rows applies after the per-row filter
+      When query
+        """
+        SELECT o.id, (SELECT t.x FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id ORDER BY t.x DESC LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 0 |
+        | 1  | 1 |
+
+    @sail-only
+    Scenario: an outer reference combined with a correlated LIMIT over literal rows
+      When query
+        """
+        SELECT o.id, (SELECT o.id + t.x FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 0 |
+        | 1  | 2 |
+
+    @sail-only
+    Scenario: count of a correlated LIMIT over literal rows counts every outer row with a match
+      When query
+        """
+        SELECT count((SELECT t.x FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id LIMIT 1)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    @sail-only
+    Scenario: a correlated LIMIT over literal rows is not NULL for an outer row with a match
+      When query
+        """
+        SELECT o.id FROM range(2) o WHERE (SELECT t.x FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id LIMIT 1) IS NULL
+        """
+      Then query result collected
+        | id |
+
+    @sail-only
+    Scenario: an outer-only predicate keeps the descending order of a limited subquery
+      When query
+        """
+        SELECT o.id, (SELECT t.x FROM VALUES (0), (1) AS t(x) WHERE o.id >= 0 ORDER BY t.x DESC LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 1 |
+        | 1  | 1 |

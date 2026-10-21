@@ -297,6 +297,15 @@ fn input_sort_key(
 /// `LIMIT [n] [OFFSET m]` with its ordering is emulated with `first_value`/`nth_value`.
 /// The producer is a scalar subquery itself, so an uncorrelated input is evaluated exactly
 /// once and a correlated one is decorrelated by DataFusion as an ordinary aggregate.
+///
+/// Each outer row sees its own LIMIT and ORDER BY, as in standard SQL. This intentionally differs
+/// from Spark 4.2, which answers wrongly in two cases that must not be mirrored: `LIMIT n` over a
+/// literal VALUES relation is folded into its first n rows before the correlated predicate is
+/// applied (`ConvertToLocalRelation`), so `(SELECT x FROM VALUES (0), (1) AS t(x) WHERE x = o.id
+/// LIMIT 1)` is NULL for `o.id = 1`; and the DESC order of `ORDER BY .. LIMIT 1` is lost under an
+/// outer-only predicate. Spark itself gives the per-row answers once the literal relation is
+/// replaced by `range`, and so does DuckDB. The divergence is pinned by the `@sail-only` rule in
+/// `python/pysail/tests/spark/function/features/scalar_subquery.feature`.
 fn rewrite_bounded_scalar_subquery(
     plan: &LogicalPlan,
     state: &mut PlanResolverState,
