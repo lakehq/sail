@@ -95,6 +95,39 @@ Feature: dateadd function
         | -357913941 | true  |
         | -357913941 | false |
 
+    Scenario Outline: Overflowing years preserve empty scalar subqueries with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT add_years((SELECT DATE '2000-01-01' FROM range(0)), <years>) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | years      | ansi  |
+        | 357913941  | true  |
+        | 357913941  | false |
+        | -357913941 | true  |
+        | -357913941 | false |
+
+    Scenario Outline: A selected non-NULL date still overflows in a nullable batch with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT add_years(d, <years>) AS result
+        FROM VALUES (CAST(NULL AS DATE)), (DATE '2000-01-01') AS t(d)
+        """
+      Then query error (?i)year-month interval overflow
+
+      Examples:
+        | years      | ansi  |
+        | 357913941  | true  |
+        | 357913941  | false |
+        | -357913941 | true  |
+        | -357913941 | false |
+
     Scenario Outline: Evaluated year overflow still errors with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
