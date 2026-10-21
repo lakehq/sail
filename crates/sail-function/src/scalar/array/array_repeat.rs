@@ -13,7 +13,7 @@ use arrow::datatypes::DataType::{LargeList, List};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::types::{NativeType, logical_int64};
-use datafusion_common::{Result, exec_datafusion_err, internal_err};
+use datafusion_common::{Result, exec_datafusion_err, internal_datafusion_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -82,7 +82,11 @@ impl ScalarUDFImpl for ArrayRepeat {
             LargeList(_) => LargeList(element),
             _ => List(element),
         };
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            args.arg_fields[1].is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -267,7 +271,9 @@ fn build_repeat_offsets<O: OffsetSizeTrait>(count_array: &Int64Array) -> Result<
 
     for idx in 0..count_array.len() {
         let Some(count) = repeat_count(count_array, idx) else {
-            offsets.push(*offsets.last().unwrap());
+            offsets.push(*offsets.last().ok_or_else(|| {
+                internal_datafusion_err!("array_repeat offsets unexpectedly empty")
+            })?);
             continue;
         };
         running_offset = checked_repeat_len_add(running_offset, count)?;
@@ -339,7 +345,7 @@ fn repeat_count(count_array: &Int64Array, idx: usize) -> Option<usize> {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use std::sync::Arc;
 

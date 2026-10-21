@@ -33,15 +33,9 @@ use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::function::is_spark_compatible_arrow_fixed_offset;
 
 fn array_repeat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let schema = input.function_context.schema;
     let (element, count) = input.arguments.two()?;
     let count = cast(count, DataType::Int64);
-    let output_type = make_nullable_array_type(
-        &ScalarUDF::from(ArrayRepeat::new())
-            .call(vec![element.clone(), count.clone()])
-            .get_type(schema.as_ref())?,
-    );
-    array_repeat_with_nullable_element(element, count, output_type, schema)
+    Ok(ScalarUDF::from(ArrayRepeat::new()).call(vec![element, count]))
 }
 
 fn array_repeat_with_nullable_element(

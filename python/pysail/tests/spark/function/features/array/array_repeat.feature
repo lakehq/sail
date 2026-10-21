@@ -3,7 +3,6 @@ Feature: array_repeat output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to array_repeat yields the schema Spark declares
       When query
         """
@@ -16,7 +15,6 @@ Feature: array_repeat output schema
          |    |-- element: string (containsNull = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to array_repeat yields the schema Spark declares
       When query
         """
@@ -29,7 +27,6 @@ Feature: array_repeat output schema
          |    |-- element: string (containsNull = false)
         """
 
-    @sail-bug
     Scenario: a nullable column input to array_repeat stays nullable
       When query
         """
@@ -71,3 +68,20 @@ Feature: array_repeat output schema
       Then query result
         | result       |
         | [1, NULL, 1] |
+
+    Scenario Outline: Repeating a qualified scalar interval with <case>
+      When query
+        """
+        SELECT transform(array_repeat(<value>, <count>), x -> extract(<field> FROM x)) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case           | value                       | field | count | result       |
+        | day value      | INTERVAL '2' DAY            | DAY   | 2     | [2, 2]       |
+        | year value     | INTERVAL '2' YEAR           | YEAR  | 2     | [2, 2]       |
+        | null value     | CAST(NULL AS INTERVAL DAY)  | DAY   | 2     | [NULL, NULL] |
+        | negative count | INTERVAL '2' DAY            | DAY   | -1    | []           |
+        | null count     | INTERVAL '2' DAY            | DAY   | NULL  | NULL         |
