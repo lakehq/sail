@@ -508,6 +508,26 @@ Feature: Scalar subquery nullability
          |-- n: long (nullable = false)
         """
 
+    Scenario: a filter on a non-equality correlated count being NULL keeps no rows
+      When query
+        """
+        SELECT o.id FROM range(2) o WHERE (SELECT count(*) FROM VALUES (5), (7) AS t(x) WHERE x < o.id) IS NULL
+        """
+      Then query result collected
+        | id |
+
+    Scenario: a filter on a non-equality correlated count being not NULL keeps every row
+      When query
+        """
+        SELECT o.id FROM range(2) o
+        WHERE (SELECT count(*) FROM VALUES (5), (7) AS t(x) WHERE x < o.id) IS NOT NULL
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id |
+        | 0  |
+        | 1  |
+
   Rule: Correlated scalar subqueries inside aggregate arguments
 
     Scenario: count of a correlated count subquery counts every outer row
@@ -580,6 +600,62 @@ Feature: Scalar subquery nullability
         | n |
         | 2 |
 
+    Scenario: count of a cast correlated count subquery counts every outer row
+      When query
+        """
+        SELECT count(CAST((SELECT count(*) FROM range(2) i WHERE i.id < o.id) AS STRING)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: count of an arithmetic expression over a correlated count subquery counts every outer row
+      When query
+        """
+        SELECT count((SELECT count(*) FROM range(2) i WHERE i.id < o.id) + 1) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: count of an ordered limited correlated subquery counts every outer row
+      When query
+        """
+        SELECT count((SELECT o.id + x AS v FROM VALUES (5), (7) AS t(x) ORDER BY v DESC LIMIT 1)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    # DataFusion cannot decorrelate a non-equality correlated predicate under an aggregate.
+    @sail-bug
+    Scenario: count of a correlated max subquery that matches nothing is zero
+      When query
+        """
+        SELECT count((SELECT max(x) FROM VALUES (5), (7) AS t(x) WHERE x > o.id + 10)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 0 |
+
+  Rule: Uncorrelated scalar subqueries inside aggregate arguments
+
+    Scenario: count of a limited uncorrelated subquery counts every outer row
+      When query
+        """
+        SELECT count((SELECT x FROM VALUES (5), (7) AS t(x) LIMIT 1)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: count of a multi-row uncorrelated subquery errors
+      When query
+        """
+        SELECT count((SELECT x FROM VALUES (5), (7) AS t(x))) AS n FROM range(2) o
+        """
+      Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
   Rule: Correlated scalar subqueries keyed by a computed inner value
 
     Scenario: count of a correlated count subquery keyed by a cast inner value counts every outer row
@@ -636,6 +712,69 @@ Feature: Scalar subquery nullability
         | n |
         | 1 |
 
+  Rule: Correlated aggregate subqueries with limits and non-equality predicates
+
+    Scenario: a correlated max subquery with LIMIT yields NULL without a match
+      When query
+        """
+        SELECT o.id, (SELECT max(x) FROM VALUES (5), (7) AS t(x) WHERE x = o.id + 5 LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | 5    |
+        | 1  | NULL |
+
+    Scenario: a correlated count subquery with ORDER BY and LIMIT counts matches per outer row
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM VALUES (5), (7) AS t(x) WHERE x = o.id + 5 ORDER BY 1 LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 1 |
+        | 1  | 0 |
+
+    Scenario: a correlated max subquery filtered only by the outer row yields NULL when the outer predicate fails
+      When query
+        """
+        SELECT o.id, (SELECT max(x) FROM VALUES (5), (7) AS t(x) WHERE o.id >= 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | NULL |
+        | 1  | 7    |
+
+    Scenario: a correlated count subquery filtered only by the outer row counts all inner rows when the outer predicate holds
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM VALUES (5), (7) AS t(x) WHERE o.id >= 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 0 |
+        | 1  | 2 |
+
+    Scenario: a correlated max subquery with an OR of correlated and outer-only predicates
+      When query
+        """
+        SELECT o.id, (SELECT max(x) FROM VALUES (5), (7) AS t(x) WHERE x = o.id + 5 OR o.id = 2) AS c
+        FROM range(3) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | 5    |
+        | 1  | NULL |
+        | 2  | 7    |
+
   Rule: Correlated scalar subqueries without aggregation
 
     Scenario: count of an outer reference projected through a single-row subquery counts every outer row
@@ -681,8 +820,6 @@ Feature: Scalar subquery nullability
         | id |
         | 2  |
 
-    # DataFusion cannot decorrelate a correlated scalar subquery through LIMIT.
-    @sail-bug
     Scenario: an unaggregated correlated subquery with LIMIT yields the matched row
       When query
         """
@@ -743,6 +880,18 @@ Feature: Scalar subquery nullability
         SELECT count((SELECT o.id FROM range(2) i)) AS n FROM range(1) o
         """
       Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+    Scenario: an unaggregated correlated subquery with ORDER BY DESC and LIMIT yields NULL without a match
+      When query
+        """
+        SELECT o.id, (SELECT x FROM VALUES (5), (7) AS t(x) WHERE x = o.id + 5 ORDER BY x DESC LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | 5    |
+        | 1  | NULL |
 
   Rule: Inlined subqueries evaluate their input once
 

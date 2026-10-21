@@ -17,17 +17,32 @@ pub struct Range {
 }
 
 impl Range {
-    pub fn partition(&self, partition: usize, num_partitions: usize) -> Self {
+    /// The number of elements the range produces.
+    pub fn len(&self) -> usize {
+        usize::try_from(self.num_elements()).unwrap_or(usize::MAX)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.num_elements() == 0
+    }
+
+    fn num_elements(&self) -> i128 {
         let start = self.start as i128;
         let end = self.end as i128;
         let step = self.step as i128;
-        let num_elements = if (end > start) != (step > 0) {
+        if (end > start) != (step > 0) {
             0
         } else {
             let diff = (end - start).abs();
             let step = step.abs();
             diff / step + if diff % step == 0 { 0 } else { 1 }
-        };
+        }
+    }
+
+    pub fn partition(&self, partition: usize, num_partitions: usize) -> Self {
+        let start = self.start as i128;
+        let step = self.step as i128;
+        let num_elements = self.num_elements();
         let num_partitions = num_partitions as i128;
         let partition = partition as i128;
         let partition_start = partition * num_elements / num_partitions * step + start;

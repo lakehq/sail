@@ -21,7 +21,6 @@ use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
-use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -65,9 +64,12 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
 }
 
 fn is_correlated_scalar_subquery(expr: &Expr) -> bool {
-    SparkScalarSubquery::subquery(expr).is_some_and(|subquery| {
-        !subquery.outer_ref_columns.is_empty() || subquery.subquery.contains_outer_reference()
-    })
+    matches!(
+        expr,
+        Expr::ScalarSubquery(subquery)
+            if !subquery.outer_ref_columns.is_empty()
+                || subquery.subquery.contains_outer_reference()
+    )
 }
 
 /// Replaces correlated scalar subqueries inside aggregate function arguments with

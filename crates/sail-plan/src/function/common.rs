@@ -7,15 +7,51 @@ use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
-    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl, WindowFrame,
-    WindowFunctionDefinition, WindowUDF, cast, expr, lit,
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl, Subquery,
+    WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
+use sail_logical_plan::row_bounds::row_bounds;
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
+
+/// Returns the scalar subquery wrapped by `expr` when it provably returns exactly one row
+/// (an ungrouped aggregate, a one-row relation, or `LIMIT 1` over a known non-empty input).
+/// Spark still declares such a subquery nullable, so this only serves places that may rely on
+/// the projected field's own nullability instead.
+pub(crate) fn single_row_scalar_subquery(expr: &expr::Expr) -> Option<&Subquery> {
+    SparkScalarSubquery::subquery(expr)
+        .filter(|subquery| row_bounds(&subquery.subquery) == (1, Some(1)))
+}
+
+/// A scalar subquery that provably returns exactly one non-null row can never be NULL, so
+/// the null check folds. Spark declares the subquery nullable all the same, but keeping the
+/// check would also keep the subquery in a plan that may need a decorrelation DataFusion does
+/// not support.
+fn is_single_non_null_row(expr: &expr::Expr) -> bool {
+    single_row_scalar_subquery(expr)
+        .is_some_and(|subquery| !subquery.subquery.schema().field(0).is_nullable())
+}
+
+pub(crate) fn is_null(expr: expr::Expr) -> expr::Expr {
+    if is_single_non_null_row(&expr) {
+        lit(false)
+    } else {
+        expr::Expr::IsNull(Box::new(expr))
+    }
+}
+
+pub(crate) fn is_not_null(expr: expr::Expr) -> expr::Expr {
+    if is_single_non_null_row(&expr) {
+        lit(true)
+    } else {
+        expr::Expr::IsNotNull(Box::new(expr))
+    }
+}
 
 pub struct FunctionContextInput<'a> {
     /// The names of function arguments.

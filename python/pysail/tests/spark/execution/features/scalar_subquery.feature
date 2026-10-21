@@ -727,6 +727,8 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
 
+  # In cluster mode a worker-side runtime error can surface as the driver's retry conflict
+  # ("a different attempt has already produced job output") instead of the subquery error.
   @spark-4
   Scenario: Unaggregated correlated scalar subquery errors at runtime
     When query
@@ -739,7 +741,7 @@ Feature: Scalar subqueries in distributed execution
       FROM VALUES (1), (2) AS outer_t(k)
       ORDER BY outer_t.k
       """
-    Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+    Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row|already produced job output)
 
   Scenario: Correlated scalar subquery in projection
     When query
