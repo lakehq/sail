@@ -232,9 +232,11 @@ The cached local relation is the most useful part, since it is needed for any la
 
 **Root cause.** The `SameSemantics` and `SemanticHash` analyze requests return `SparkError::todo` (`crates/sail-spark-connect/src/service/plan_analyzer.rs`).
 
-**Proposed fix.** Both can be answered from the resolved logical plans if they are first normalized.
-The resolver generates unique internal field names, so two resolutions of `SELECT 1` are not equal as they are.
-Replacing those names with their position in the plan, and then comparing (or hashing) the plans, would match Spark's canonicalized plan comparison for these tests.
+**Fix (in this pull request).** Both are answered from the resolved logical plans after they are normalized.
+The resolver generates unique internal field and relation names, so two resolutions of `SELECT 1` are not equal as they are.
+The generated names are numbered in the order they appear in the plan, and the aliases of user-facing names are removed, since the names of the output fields are not part of Spark's canonicalized plans either.
+`sameSemantics` compares the normalized plans, and `semanticHash` hashes them.
+`test_same_semantics`, `test_semantic_hash`, and the `DataFrame.sameSemantics` doctest pass.
 
 ## Functions
 
