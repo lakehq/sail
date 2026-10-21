@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
@@ -64,21 +64,9 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_placeholder(
         &self,
         placeholder: String,
-        state: &PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let name = placeholder.clone();
-        let field = placeholder.get(1..).and_then(|key| {
-            state
-                .get_param_value(key)
-                .or_else(|| {
-                    key.parse::<usize>()
-                        .ok()
-                        .and_then(|index| index.checked_sub(1))
-                        .and_then(|index| state.get_positional_param_value(index))
-                })
-                .map(|value| Arc::new(Field::new("", value.data_type(), true)))
-        });
-        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, field));
+        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None));
         Ok(NamedExpr::new(vec![name], expr))
     }
 
@@ -97,7 +85,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let resolved = self.resolve_expression(expr, schema, state).await?;
-        let name = self.evaluate_identifier_expr(resolved, state)?;
+        let name = self.evaluate_identifier_expr(resolved)?;
         let object_name = sail_sql_analyzer::expression::from_ast_object_name(
             sail_sql_analyzer::parser::parse_object_name(&name)?,
         )?;
@@ -105,49 +93,13 @@ impl PlanResolver<'_> {
     }
 
     /// Evaluates a resolved DataFusion expression as an identifier string.
-    ///
-    /// Named parameter placeholders (e.g. `:col`) are substituted from the
-    /// current parameter scope in `state` before constant-folding, which
-    /// allows expressions like `IDENTIFIER(:col)` or
-    /// `IDENTIFIER(:tab || '.' || :col)` to work inside parameterized SQL.
+    /// The parameter markers of a parameterized SQL statement have been substituted
+    /// before analysis, so `IDENTIFIER(:col)` reaches here as a string literal.
     pub(in super::super) fn evaluate_identifier_expr(
         &self,
         expr: expr::Expr,
-        state: &PlanResolverState,
     ) -> PlanResult<String> {
-        use datafusion_common::tree_node::{Transformed, TreeNode};
-        let expr = expr
-            .transform(|e| {
-                if let expr::Expr::Placeholder(expr::Placeholder { id, .. }) = &e {
-                    if id.is_empty() {
-                        return Ok(Transformed::no(e));
-                    }
-                    // Strip the leading prefix character (e.g. ':' or '$') from the
-                    // placeholder id to get the param key, mirroring DataFusion's own
-                    // `get_placeholders_with_values` which does `id[1..]`.
-                    let key = &id[1..];
-                    // Try named parameter.
-                    if let Some(scalar) = state.get_param_value(key) {
-                        return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
-                    }
-                    // Try positional parameter (key is a 1-based integer index).
-                    if let Ok(index) = key.parse::<usize>()
-                        && index > 0
-                        && let Some(scalar) = state.get_positional_param_value(index - 1)
-                    {
-                        return Ok(Transformed::yes(expr::Expr::Literal(scalar.clone(), None)));
-                    }
-                }
-                Ok(Transformed::no(e))
-            })
-            .map_err(|e| {
-                PlanError::invalid(format!("IDENTIFIER placeholder substitution failed: {e}"))
-            })?
-            .data;
         let evaluator = LiteralEvaluator::new();
-        // Any placeholder that was not substituted above (e.g. because it had no
-        // matching parameter) will cause the evaluation to fail here, since the
-        // LiteralEvaluator cannot constant-fold an unresolved placeholder expression.
         let scalar = evaluator.evaluate(&expr).map_err(|e| {
             PlanError::invalid(format!("IDENTIFIER expression must be a constant: {e}"))
         })?;

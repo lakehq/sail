@@ -286,7 +286,6 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
         | spec::QueryNode::StatApproxQuantile { input, .. }
         | spec::QueryNode::StatFreqItems { input, .. }
         | spec::QueryNode::StatSampleBy { input, .. }
-        | spec::QueryNode::WithParameters { input, .. }
         | spec::QueryNode::TableAlias { input, .. }
         | spec::QueryNode::TableSample { input, .. } => is_streaming_query_plan(input),
         // single optional input - None input means no source, which is not streaming

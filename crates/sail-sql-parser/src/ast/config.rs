@@ -9,7 +9,10 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Punctuation, StringStyle, Token, TokenLabel};
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText, TreeVisit,
+    TreeVisitor,
+};
 use crate::utils::skip_whitespace;
 
 /// SET values are raw strings or backtick-quoted strings, not SQL literals.
@@ -144,4 +147,8 @@ impl TreeText for ConfigValue {
     fn text(&self) -> String {
         format!("`{}` ", self.value.replace('`', "``"))
     }
+}
+
+impl TreeVisit for ConfigValue {
+    fn visit<V: TreeVisitor>(&self, _visitor: &mut V) {}
 }

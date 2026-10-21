@@ -7,7 +7,9 @@ use chumsky::prelude::Input;
 use crate::combinator::sequence;
 use crate::common::Sequence;
 use crate::options::ParserOptions;
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText, TreeVisit, TreeVisitor,
+};
 
 impl<'a, T, S, I, E, A> TreeParser<'a, I, E, A> for Sequence<T, S>
 where
@@ -58,5 +60,19 @@ where
             result.push_str(&item.text());
         }
         result
+    }
+}
+
+impl<T, S> TreeVisit for Sequence<T, S>
+where
+    T: TreeVisit,
+    S: TreeVisit,
+{
+    fn visit<V: TreeVisitor>(&self, visitor: &mut V) {
+        self.head.visit(visitor);
+        for (sep, item) in &self.tail {
+            sep.visit(visitor);
+            item.visit(visitor);
+        }
     }
 }

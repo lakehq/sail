@@ -54,6 +54,7 @@ impl StringLiteralList {
             span: _,
             tokens: _,
             value,
+            parameter_marker: _,
         } = value;
         match value {
             StringValue::Valid {
@@ -124,6 +125,7 @@ pub(crate) fn from_ast_string(s: StringLiteral) -> SqlResult<String> {
         span: _,
         tokens: _,
         value,
+        parameter_marker: _,
     } = s;
     match value {
         StringValue::Valid { value, prefix: _ } => Ok(value),

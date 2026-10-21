@@ -5,7 +5,9 @@ use chumsky::prelude::Input;
 use chumsky::{IterParser, Parser};
 
 use crate::options::ParserOptions;
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText, TreeVisit, TreeVisitor,
+};
 
 impl<'a, T, I, E, A> TreeParser<'a, I, E, A> for Vec<T>
 where
@@ -42,5 +44,16 @@ where
             result.push_str(&item.text());
         }
         result
+    }
+}
+
+impl<T> TreeVisit for Vec<T>
+where
+    T: TreeVisit,
+{
+    fn visit<V: TreeVisitor>(&self, visitor: &mut V) {
+        for item in self {
+            item.visit(visitor);
+        }
     }
 }

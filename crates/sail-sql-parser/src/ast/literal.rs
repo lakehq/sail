@@ -5,12 +5,15 @@ use chumsky::inspector::Inspector;
 use chumsky::label::LabelError;
 use chumsky::prelude::{Input, custom};
 
-use crate::ast::identifier::is_identifier_string;
+use crate::ast::identifier::{Variable, is_identifier_string, parse_parameter_marker};
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText, TreeVisit,
+    TreeVisitor,
+};
 use crate::utils::skip_whitespace;
 
 #[derive(Debug, Clone)]
@@ -230,10 +233,18 @@ impl TreeText for NumberLiteral {
     }
 }
 
+impl TreeVisit for NumberLiteral {
+    fn visit<V: TreeVisitor>(&self, _visitor: &mut V) {}
+}
+
 #[derive(Debug, Clone)]
 pub struct IntegerLiteral {
     pub span: TokenSpan,
     pub value: i64,
+    /// The parameter marker that takes the place of the literal, which is only parsed
+    /// when [`ParserOptions::allow_parameter_markers_in_literals`] is enabled.
+    /// The value is meaningless when the marker is present.
+    pub parameter_marker: Option<Box<Variable>>,
 }
 
 impl<'a, I, E> TreeParser<'a, I, E> for IntegerLiteral
@@ -243,8 +254,17 @@ where
     E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
-        custom(|input: &mut InputRef<'a, '_, I, E>| {
+    fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
+        custom(move |input: &mut InputRef<'a, '_, I, E>| {
+            if options.allow_parameter_markers_in_literals
+                && let Some(variable) = parse_parameter_marker(input)
+            {
+                return Ok(IntegerLiteral {
+                    span: variable.span,
+                    value: 0,
+                    parameter_marker: Some(Box::new(variable)),
+                });
+            }
             let marker = input.save();
             let negative = match input.next() {
                 Some(Token::Punctuation(Punctuation::Minus)) => {
@@ -263,6 +283,7 @@ where
                     let literal = IntegerLiteral {
                         span: input.span_since(marker.cursor()).into(),
                         value,
+                        parameter_marker: None,
                     };
                     skip_whitespace(input);
                     return Ok(literal);
@@ -289,7 +310,16 @@ impl TreeSyntax for IntegerLiteral {
 
 impl TreeText for IntegerLiteral {
     fn text(&self) -> String {
-        format!("{} ", self.value)
+        match &self.parameter_marker {
+            Some(variable) => variable.text(),
+            None => format!("{} ", self.value),
+        }
+    }
+}
+
+impl TreeVisit for IntegerLiteral {
+    fn visit<V: TreeVisitor>(&self, visitor: &mut V) {
+        self.parameter_marker.visit(visitor);
     }
 }
 
@@ -298,6 +328,10 @@ pub struct StringLiteral {
     pub span: TokenSpan,
     pub tokens: Vec<StringToken>,
     pub value: StringValue,
+    /// The parameter marker that takes the place of the literal, which is only parsed
+    /// when [`ParserOptions::allow_parameter_markers_in_literals`] is enabled.
+    /// The tokens and the value are meaningless when the marker is present.
+    pub parameter_marker: Option<Box<Variable>>,
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +391,16 @@ where
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         custom(move |input: &mut InputRef<'a, '_, I, E>| {
+            if options.allow_parameter_markers_in_literals
+                && let Some(variable) = parse_parameter_marker(input)
+            {
+                return Ok(StringLiteral {
+                    span: variable.span,
+                    tokens: vec![],
+                    value: StringValue::invalid("parameter marker"),
+                    parameter_marker: Some(Box::new(variable)),
+                });
+            }
             let before = input.save();
             let token = input.next();
             match &token {
@@ -370,6 +414,7 @@ where
                         span: input.span_since(before.cursor()).into(),
                         tokens: collect_string_tokens(input, before.clone()),
                         value,
+                        parameter_marker: None,
                     };
                     skip_whitespace(input);
                     return Ok(literal);
@@ -428,12 +473,21 @@ impl TreeSyntax for StringLiteral {
 
 impl TreeText for StringLiteral {
     fn text(&self) -> String {
+        if let Some(variable) = &self.parameter_marker {
+            return variable.text();
+        }
         self.tokens
             .iter()
             .map(|token| match token {
                 StringToken::Word { raw } | StringToken::String { raw } => format!("{} ", raw),
             })
             .collect()
+    }
+}
+
+impl TreeVisit for StringLiteral {
+    fn visit<V: TreeVisitor>(&self, visitor: &mut V) {
+        self.parameter_marker.visit(visitor);
     }
 }
 

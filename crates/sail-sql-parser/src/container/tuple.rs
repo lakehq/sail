@@ -6,7 +6,9 @@ use chumsky::prelude::Input;
 use paste::paste;
 
 use crate::options::ParserOptions;
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText, TreeVisit, TreeVisitor,
+};
 
 macro_rules! nested {
     (@fold $acc:tt) => { $acc };
@@ -72,6 +74,22 @@ macro_rules! impl_tree_parser_for_tuple {
                     )*
                 }
                 result
+            }
+        }
+
+        impl<$T $(,$Ts)*> TreeVisit for ($T, $($Ts,)*)
+        where
+            $T: TreeVisit
+            $(,$Ts: TreeVisit)*
+        {
+            fn visit<V: TreeVisitor>(&self, visitor: &mut V) {
+                paste! {
+                    let ([<$T:lower>], $([<$Ts:lower>],)*) = self;
+                    [<$T:lower>].visit(visitor);
+                    $(
+                        [<$Ts:lower>].visit(visitor);
+                    )*
+                }
             }
         }
     };

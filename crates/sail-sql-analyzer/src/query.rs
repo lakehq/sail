@@ -624,7 +624,11 @@ fn from_ast_temporal(temporal: TemporalClause) -> SqlResult<spec::TableTemporal>
 }
 
 fn from_ast_bucket_count(bucket: IntegerLiteral) -> SqlResult<usize> {
-    let IntegerLiteral { value, span: _ } = bucket;
+    let IntegerLiteral {
+        value,
+        span: _,
+        parameter_marker: _,
+    } = bucket;
     usize::try_from(value).map_err(|_| SqlError::invalid(format!("bucket count: {value}")))
 }
 
@@ -661,7 +665,12 @@ fn from_ast_table_sample(sample: TableSampleClause) -> SqlResult<spec::TableSamp
         let TableSampleRepeatable {
             repeatable: _,
             left: _,
-            seed: IntegerLiteral { value, span: _ },
+            seed:
+                IntegerLiteral {
+                    value,
+                    span: _,
+                    parameter_marker: _,
+                },
             right: _,
         } = x;
         value

@@ -7,7 +7,9 @@ use either::Either;
 
 use crate::combinator::either_or;
 use crate::options::ParserOptions;
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
+use crate::tree::{
+    SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText, TreeVisit, TreeVisitor,
+};
 
 impl<'a, L, R, I, E, A> TreeParser<'a, I, E, A> for Either<L, R>
 where
@@ -51,6 +53,19 @@ where
         match self {
             Either::Left(l) => l.text(),
             Either::Right(r) => r.text(),
+        }
+    }
+}
+
+impl<L, R> TreeVisit for Either<L, R>
+where
+    L: TreeVisit,
+    R: TreeVisit,
+{
+    fn visit<V: TreeVisitor>(&self, visitor: &mut V) {
+        match self {
+            Either::Left(l) => l.visit(visitor),
+            Either::Right(r) => r.visit(visitor),
         }
     }
 }
