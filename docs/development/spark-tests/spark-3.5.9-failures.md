@@ -259,6 +259,17 @@ DataFusion truncates the decimal average to the result scale, while Spark rounds
 This is done when the result type has room for the extra digit, which is the case for a precision of up to 33.
 The TPC-H and TPC-DS snapshots are updated for the rounded averages.
 
+`test_aggregation_functions` still fails for four reasons that are known differences, so it is skipped:
+
+- `collect_set` returns the elements in the order of the hash set of Spark (`[2.1, 0.5, NaN]`), where Sail returns them in the order of the values.
+- `mode` of values that all occur once returns the value that Spark's hash map yields first (`0.5`), where Sail returns the largest.
+- `percentile_approx` of `(NaN, 2.1, 0.5)` is `NaN` in Spark, because Spark splits the four rows of the `VALUES` clause into several partitions and merges their one-element summaries, and the merge drops the minimum element when it compares it with `NaN`. A single partition gives `2.1`, which is also the exact percentile.
+- `max` and `min` of floating-point values with `NaN` in a group depend on the order of the rows, since the grouped accumulators of DataFusion overwrite the current value when a comparison with `NaN` is unordered. `max` over `(NaN, 0.5)` in a group is `0.5` and over `(0.5, NaN)` is `NaN`, where Spark gives `NaN` for both.
+  The ungrouped accumulator is correct. A workaround in Sail stops the Iceberg metadata aggregate from answering float `MIN` and `MAX` from file statistics, so the fix belongs in DataFusion.
+
+Apart from these, the test passes if floating-point results of the statistical aggregates are compared with a tolerance: `stddev` of a decimal column differs in the last digit (`1.2583057392117916` and `1.2583057392117918`) because the sums are accumulated in a different order.
+`median` and `percentile` sorted `NaN` as equal to every value, and now sort it after all other values as Spark does. `mode` did not support decimal values.
+
 ### Higher-Order Functions
 
 | Test                                              | Error                                          |
@@ -304,7 +315,10 @@ For `VALUES`, find the common type of each column over all the rows before casti
   `test_string_functions_multi_args`, `test_generator_functions`, and `test_lambda_functions` pass with this setting.
   `test_collection_functions` then failed in `array_except` for arrays whose elements differ only in nullability, which is fixed in this pull request.
 
-**Proposed fix.** Use Spark's rules for decimal coercion and for the result type of decimal division, allow implicit numeric casts for `factorial`, use null-on-error casts for implicit string-to-date conversions of function arguments outside ANSI mode, and include the window specification in the generated name of a window expression.
+**Fix (in this pull request, for the date functions).** Outside ANSI mode, a string argument of `year`, `quarter`, `month`, `dayofweek`, `dayofmonth`, `dayofyear`, `weekofyear`, `hour`, `minute`, `second`, `last_day`, `date_add`, `date_sub`, `add_months`, `datediff`, `next_day`, `trunc`, `date_trunc`, and `months_between` is cast with the Spark parser, which gives `NULL` for an invalid value. The strict cast is kept in ANSI mode, where Spark raises an error.
+`test_date_ts_functions` then passes when it runs in UTC like CI. On a node with another time zone it fails in two comparisons that depend on the time zone of the node.
+
+**Proposed fix (for the rest).** Use Spark's rules for decimal coercion and for the result type of decimal division, and include the window specification in the generated name of a window expression.
 
 ### Windows and Streaming
 
@@ -414,7 +428,8 @@ A Python UDF whose return type is a UDT is rejected, because a UDT is only accep
 Microsecond timestamps are intentional in Sail, as noted in `normalize_datetime_dtypes` in the test utilities, so `test_to_pandas` is skipped.
 For `test_schema`, Sail returns the same schema as a Spark Connect 3.5.9 server for the failing query, so the difference is with the classic session that the test compares against, and it needs more investigation.
 
-**Proposed fix.** Fill missing nullable fields with `NULL` in `to()`, and raise `NULLABLE_COLUMN_OR_FIELD` when a nullable column is assigned to a non-nullable field.
+**Fix (in this pull request).** `to()` fills missing nullable fields with `NULL`, raises `NULLABLE_COLUMN_OR_FIELD` when a nullable column is assigned to a non-nullable field, and raises `INVALID_COLUMN_OR_FIELD_DATA_TYPE` when a column cannot be assigned to a field of that type.
+Spark's rule for the last check is `Cast.canANSIStoreAssign`: numeric types are converted to each other (including narrowing, such as `bigint` to `int`), every atomic type to a string, and date and timestamp types to each other, but a string is not converted to any other type.
 
 ## Other Failures
 
