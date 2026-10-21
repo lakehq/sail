@@ -87,10 +87,14 @@ impl ScalarUDFImpl for ArrayRepeat {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let (List(element) | LargeList(element)) = args.return_field.data_type() else {
-            return internal_err!("array_repeat expected a list return type");
-        };
-        make_scalar_function(|arrays| array_repeat_inner(arrays, Arc::clone(element)))(&args.args)
+        let element = Arc::new(without_spark_user_metadata(
+            args.arg_fields[0]
+                .as_ref()
+                .clone()
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME)
+                .with_nullable(true),
+        ));
+        make_scalar_function(|arrays| array_repeat_inner(arrays, Arc::clone(&element)))(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -211,9 +215,17 @@ fn general_list_repeat<O: OffsetSizeTrait>(
             continue;
         };
         let list_is_valid = list_array.is_valid(row_idx);
-        let start = list_offsets[row_idx].as_usize();
-        let end = list_offsets[row_idx + 1].as_usize();
-        let row_len = if list_is_valid { end - start } else { 0 };
+        // A NULL list slot may still have a non-empty offset range; treat the
+        // range as empty to keep the inner offsets and taken values in step.
+        let (start, end) = if list_is_valid {
+            (
+                list_offsets[row_idx].as_usize(),
+                list_offsets[row_idx + 1].as_usize(),
+            )
+        } else {
+            (0, 0)
+        };
+        let row_len = end - start;
 
         for _ in 0..count {
             inner_running = checked_repeat_len_add(inner_running, row_len)?;
@@ -221,9 +233,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
             let offset = checked_repeat_offset::<O>(inner_running)?;
             inner_offsets.push(offset);
             inner_nulls.append(list_is_valid);
-            if list_is_valid {
-                take_indices.extend(start as u64..end as u64);
-            }
+            take_indices.extend(start as u64..end as u64);
         }
     }
 
@@ -233,11 +243,9 @@ fn general_list_repeat<O: OffsetSizeTrait>(
         &UInt64Array::from_iter_values(take_indices),
         None,
     )?;
-    let (List(field) | LargeList(field)) = list_array.data_type() else {
-        return internal_err!("array_repeat expected a list input");
-    };
+    let (field, ..) = list_array.clone().into_parts();
     let inner_list = GenericListArray::<O>::try_new(
-        Arc::clone(field),
+        field,
         OffsetBuffer::new(inner_offsets.into()),
         inner_values,
         Some(NullBuffer::new(inner_nulls.finish())),
@@ -337,7 +345,7 @@ mod tests {
 
     use arrow::array::{Array, ArrayRef, AsArray, Int32Array, Int64Array, ListArray};
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::{Field, Int32Type};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::Result;
 
     use super::{array_repeat_inner, general_list_repeat, general_repeat};
@@ -396,6 +404,45 @@ mod tests {
             OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 2, 3])),
             Arc::new(repeated_values),
             Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        assert_eq!(result.as_list::<i32>(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_repeat_nested_null_list_with_nonempty_range() -> Result<()> {
+        // A NULL list slot might still have a non-empty offset range
+        // https://github.com/apache/datafusion/issues/25223
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let list_array = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6])),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+        let counts = Int64Array::from(vec![2, 2]);
+
+        let result = general_list_repeat::<i32>(
+            &list_array,
+            &counts,
+            Arc::new(Field::new_list_field(list_array.data_type().clone(), true)),
+        )?;
+        let repeated_values = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            None,
+            None,
+            Some(vec![Some(4), Some(5), Some(6)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ]);
+        let expected = ListArray::new(
+            Arc::new(Field::new_list_field(
+                repeated_values.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4])),
+            Arc::new(repeated_values),
+            None,
         );
 
         assert_eq!(result.as_list::<i32>(), &expected);
