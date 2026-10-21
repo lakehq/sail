@@ -29,6 +29,71 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 
+/// The name of the frame that Spark implies for a window function without a frame.
+fn default_window_frame_name(
+    function_name: &str,
+    argument_display_names: &[String],
+    has_order: bool,
+) -> String {
+    const UNBOUNDED_TO_CURRENT: &str = "BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW";
+    match function_name {
+        "row_number" | "rank" | "dense_rank" | "percent_rank" | "ntile" => {
+            format!("ROWS {UNBOUNDED_TO_CURRENT}")
+        }
+        "cume_dist" => format!("RANGE {UNBOUNDED_TO_CURRENT}"),
+        "lag" | "lead" => {
+            let offset = argument_display_names
+                .get(1)
+                .map(String::as_str)
+                .unwrap_or("1");
+            // The frame of `lag` is the row at the negated offset.
+            let offset = match (function_name, offset.strip_prefix('-')) {
+                ("lag", Some(positive)) => positive.to_string(),
+                ("lag", None) => format!("-{offset}"),
+                _ => offset.to_string(),
+            };
+            format!("ROWS BETWEEN {offset} FOLLOWING AND {offset} FOLLOWING")
+        }
+        _ if has_order => format!("RANGE {UNBOUNDED_TO_CURRENT}"),
+        _ => "ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING".to_string(),
+    }
+}
+
+/// Checks a window frame against the frame that Spark requires for the function.
+/// `lag` and `lead` take no frame, and the ranking functions take only their own frame.
+fn check_window_frame(
+    function_name: &str,
+    frame: &spec::WindowFrame,
+    frame_name: &str,
+) -> PlanResult<()> {
+    let required = match function_name {
+        "lag" | "lead" => {
+            return Err(PlanError::analysis(format!(
+                "Cannot specify window frame for {function_name} function."
+            )));
+        }
+        "row_number" | "rank" | "dense_rank" | "percent_rank" | "ntile" => {
+            spec::WindowFrameType::Row
+        }
+        "cume_dist" => spec::WindowFrameType::Range,
+        _ => return Ok(()),
+    };
+    let is_required = frame.frame_type == required
+        && matches!(frame.lower, spec::WindowFrameBoundary::UnboundedPreceding)
+        && matches!(frame.upper, spec::WindowFrameBoundary::CurrentRow);
+    if is_required {
+        Ok(())
+    } else {
+        let units = match required {
+            spec::WindowFrameType::Row => "ROWS",
+            spec::WindowFrameType::Range => "RANGE",
+        };
+        Err(PlanError::analysis(format!(
+            "Window Frame {frame_name} must match the required frame {units} BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW."
+        )))
+    }
+}
+
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_window(
         &self,
@@ -59,13 +124,43 @@ impl PlanResolver<'_> {
                 "CLUSTER BY clause in window expression",
             ));
         }
-        let partition_by = self
-            .resolve_expressions(partition_by, schema, state)
+        let (partition_names, partition_by) = self
+            .resolve_expressions_and_names(partition_by, schema, state)
             .await?;
         // Spark treats literals as constants in ORDER BY window definition
-        let sorts = self
-            .resolve_sort_orders(order_by, false, schema, state)
-            .await?;
+        let mut sorts = Vec::with_capacity(order_by.len());
+        let mut sort_names = Vec::with_capacity(order_by.len());
+        for spec::SortOrder {
+            child,
+            direction,
+            null_ordering,
+        } in order_by
+        {
+            let NamedExpr { name, expr, .. } =
+                self.resolve_named_expression(*child, schema, state).await?;
+            let sort = Self::sort_with_options(expr, direction, null_ordering);
+            sort_names.push(format!(
+                "{} {} NULLS {}",
+                name.one()?,
+                if sort.asc { "ASC" } else { "DESC" },
+                if sort.nulls_first { "FIRST" } else { "LAST" }
+            ));
+            sorts.push(sort);
+        }
+        let frame_name = match &frame {
+            Some(frame) => {
+                let frame_name = self.window_frame_name(frame, schema, state).await?;
+                if let spec::Expr::UnresolvedFunction(function) = &window_function
+                    && let Some(function_name) = <Vec<String>>::from(function.function_name.clone())
+                        .into_iter()
+                        .last()
+                {
+                    check_window_frame(&function_name.to_ascii_lowercase(), frame, &frame_name)?;
+                }
+                Some(frame_name)
+            }
+            None => None,
+        };
         let window_frame = if let Some(frame) = frame {
             self.resolve_window_frame(frame, &sorts, schema, state)
                 .await?
@@ -264,18 +359,128 @@ impl PlanResolver<'_> {
                 (window, function_name, argument_display_names, false)
             }
             _ => {
-                return Err(PlanError::invalid(format!(
-                    "invalid window function expression: {window_function:?}"
-                )));
+                return Err(PlanError::analysis(
+                    "[UNSUPPORTED_EXPR_FOR_WINDOW] The expression is not supported within a window function.",
+                ));
             }
         };
+        // Spark names a window expression with its window specification, including the
+        // frame that is implied by the function when none is given.
+        let canonical_function_name = function_name.to_ascii_lowercase();
+        let mut argument_display_names = argument_display_names;
+        let mut ignore_nulls = false;
+        match canonical_function_name.as_str() {
+            "lag" | "lead" => {
+                if argument_display_names.len() == 1 {
+                    argument_display_names.push("1".to_string());
+                }
+                if argument_display_names.len() == 2 {
+                    argument_display_names.push("NULL".to_string());
+                }
+            }
+            "nth_value" if argument_display_names.len() == 3 => {
+                ignore_nulls = argument_display_names.pop().as_deref() == Some("true");
+            }
+            _ => {}
+        }
         let service = self.ctx.extension::<PlanService>()?;
-        let name = service.plan_formatter().function_to_string(
+        let mut name = service.plan_formatter().function_to_string(
             function_name.as_str(),
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,
         )?;
+        if matches!(
+            canonical_function_name.as_str(),
+            "rank" | "dense_rank" | "percent_rank"
+        ) {
+            name = name.to_ascii_uppercase();
+        }
+        if ignore_nulls {
+            name.push_str(" ignore nulls");
+        }
+        let frame_name = frame_name.unwrap_or_else(|| {
+            default_window_frame_name(
+                &canonical_function_name,
+                &argument_display_names,
+                !sort_names.is_empty(),
+            )
+        });
+        let mut specification = vec![];
+        if !partition_names.is_empty() {
+            specification.push(format!("PARTITION BY {}", partition_names.join(", ")));
+        }
+        if !sort_names.is_empty() {
+            specification.push(format!("ORDER BY {}", sort_names.join(", ")));
+        }
+        specification.push(frame_name);
+        let name = format!("{name} OVER ({})", specification.join(" "));
         Ok(NamedExpr::new(vec![name], window))
+    }
+
+    /// The name of a window frame as Spark shows it, where an offset that is not given as
+    /// `PRECEDING` in SQL is shown as `FOLLOWING`, even when it is negative.
+    async fn window_frame_name(
+        &self,
+        frame: &spec::WindowFrame,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<String> {
+        let is_range = matches!(frame.frame_type, spec::WindowFrameType::Range);
+        let lower = self
+            .window_frame_boundary_name(&frame.lower, is_range, schema, state)
+            .await?;
+        let upper = self
+            .window_frame_boundary_name(&frame.upper, is_range, schema, state)
+            .await?;
+        let units = if is_range { "RANGE" } else { "ROWS" };
+        Ok(format!("{units} BETWEEN {lower} AND {upper}"))
+    }
+
+    async fn window_frame_boundary_name(
+        &self,
+        boundary: &spec::WindowFrameBoundary,
+        is_range: bool,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<String> {
+        let name = match boundary {
+            spec::WindowFrameBoundary::CurrentRow => "CURRENT ROW".to_string(),
+            spec::WindowFrameBoundary::UnboundedPreceding => "UNBOUNDED PRECEDING".to_string(),
+            spec::WindowFrameBoundary::UnboundedFollowing => "UNBOUNDED FOLLOWING".to_string(),
+            spec::WindowFrameBoundary::Preceding(expr) => {
+                let value = self.expression_name(expr, schema, state).await?;
+                if is_range {
+                    format!("(- {value}) FOLLOWING")
+                } else {
+                    format!("{value} PRECEDING")
+                }
+            }
+            spec::WindowFrameBoundary::Following(expr) => {
+                let value = self.expression_name(expr, schema, state).await?;
+                format!("{value} FOLLOWING")
+            }
+            spec::WindowFrameBoundary::Value(expr) => {
+                let value = self.expression_name(expr, schema, state).await?;
+                if value == "0" {
+                    "CURRENT ROW".to_string()
+                } else {
+                    format!("{value} FOLLOWING")
+                }
+            }
+        };
+        Ok(name)
+    }
+
+    async fn expression_name(
+        &self,
+        expr: &spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<String> {
+        let NamedExpr { name, .. } = self
+            .resolve_named_expression(expr.clone(), schema, state)
+            .await?;
+        Ok(name.one()?)
     }
 
     async fn resolve_registered_pyspark_udaf(

@@ -309,7 +309,11 @@ A `NULL` row of a `VALUES` map column is ignored when the type of the column is 
 - `factorial` only had an `Int64` signature, and decimals were not implicitly cast to it. Fixed in this pull request: the argument is cast to `int` as in Spark.
 - An explicit `CAST('1997/02/28 10:30:00' AS DATE)` returns `NULL` in Sail as in Spark, but the implicit cast for the `date` argument of `last_day` raised an error instead.
   The other date functions in the test (`year`, `quarter`, `month`, `dayofweek`, and so on) used the same implicit cast.
-- Window expressions are named without their window specification.
+- Window expressions were named without their window specification.
+  Fixed in this pull request: a window expression is named as in Spark, for example `row_number() OVER (PARTITION BY a ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`.
+  The frame is always shown. Without one, it is the frame that Spark implies for the function: the rows up to the current row for the ranking functions and `ntile`, the range up to the current row for `cume_dist`, the row at the offset for `lag` and `lead`, and for aggregate functions the range up to the current row with an ordering or the whole partition without one.
+  `RANK`, `DENSE_RANK`, and `PERCENT_RANK` are upper case, `lag` and `lead` show their default arguments, and `nth_value` shows `ignore nulls` instead of its third argument, as in Spark.
+  As in Spark, a frame is rejected for `lag` and `lead`, the ranking functions and `ntile` only accept the rows up to the current row, `cume_dist` only accepts the range up to the current row, and an expression that is not a window function is rejected in a window.
 - The array columns that print identically differ in their Python types, not in their values.
   The classic session of these tests has Arrow disabled, so its `toPandas()` returns array columns as Python lists,
   while Spark Connect (and Sail) returns NumPy arrays, and pandas 2.3 does not consider a list equal to an array.
@@ -320,7 +324,7 @@ A `NULL` row of a `VALUES` map column is ignored when the type of the column is 
 **Fix (in this pull request, for the date functions).** Outside ANSI mode, a string argument of `year`, `quarter`, `month`, `dayofweek`, `dayofmonth`, `dayofyear`, `weekofyear`, `hour`, `minute`, `second`, `last_day`, `date_add`, `date_sub`, `add_months`, `datediff`, `next_day`, `trunc`, `date_trunc`, and `months_between` is cast with the Spark parser, which gives `NULL` for an invalid value. The strict cast is kept in ANSI mode, where Spark raises an error.
 `test_date_ts_functions` then passes when it runs in UTC like CI. On a node with another time zone it fails in two comparisons that depend on the time zone of the node.
 
-**Proposed fix (for the rest).** Use Spark's rules for decimal coercion and for the result type of decimal division, and include the window specification in the generated name of a window expression.
+**Proposed fix (for the rest).** Use Spark's rules for decimal coercion and for the result type of decimal division.
 
 ### Windows and Streaming
 
