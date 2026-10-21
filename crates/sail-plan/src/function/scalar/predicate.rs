@@ -7,7 +7,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput, is_not_null, is_null};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 fn extract_escape_char(escape_expr: expr::Expr) -> PlanResult<Option<char>> {
     match escape_expr {
@@ -115,8 +115,11 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
         //  and instead resolve it to spec::Expr::InList in the proto converter.
         ("in", F::custom(is_in_list)), // Spark passes isin as in
         ("isnan", F::unary(expr_fn::isnan)),
-        ("isnotnull", F::unary(is_not_null)),
-        ("isnull", F::unary(is_null)),
+        (
+            "isnotnull",
+            F::unary(|x| expr::Expr::IsNotNull(Box::new(x))),
+        ),
+        ("isnull", F::unary(|x| expr::Expr::IsNull(Box::new(x)))),
         ("like", F::custom(|input| build_like_expr(input, false))),
         ("not", F::unary(not)),
         ("or", F::binary_op(Operator::Or)),

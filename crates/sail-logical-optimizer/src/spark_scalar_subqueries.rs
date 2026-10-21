@@ -40,6 +40,27 @@ impl OptimizerRule for SparkScalarSubqueries {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        let name_preserver = NamePreserver::new(&plan);
+        let plan = plan.map_expressions(|expr| {
+            let saved = name_preserver.save(&expr);
+            let expr = expr.transform_down(|expr| {
+                Ok(match expr {
+                    Expr::IsNull(inner) if never_null_unplannable(&inner) => {
+                        Transformed::yes(lit(false))
+                    }
+                    Expr::IsNotNull(inner) if never_null_unplannable(&inner) => {
+                        Transformed::yes(lit(true))
+                    }
+                    expr => Transformed::no(expr),
+                })
+            })?;
+            Ok(Transformed::new_transformed(
+                saved.restore(expr.data),
+                expr.transformed,
+            ))
+        })?;
+        let folded = plan.transformed;
+        let plan = plan.data;
         let (exprs, input) = match &plan {
             LogicalPlan::Projection(projection) => {
                 (projection.expr.clone(), Arc::clone(&projection.input))
@@ -47,29 +68,8 @@ impl OptimizerRule for SparkScalarSubqueries {
             LogicalPlan::Filter(filter) => {
                 (vec![filter.predicate.clone()], Arc::clone(&filter.input))
             }
-            _ => return Ok(Transformed::no(plan)),
+            _ => return Ok(Transformed::new_transformed(plan, folded)),
         };
-        let name_preserver = NamePreserver::new(&plan);
-        let mut folded = false;
-        let exprs = exprs
-            .into_iter()
-            .map(|expr| {
-                let saved = name_preserver.save(&expr);
-                let expr = expr.transform_down(|expr| {
-                    Ok(match expr {
-                        Expr::IsNull(inner) if never_null_unplannable(&inner) => {
-                            Transformed::yes(lit(false))
-                        }
-                        Expr::IsNotNull(inner) if never_null_unplannable(&inner) => {
-                            Transformed::yes(lit(true))
-                        }
-                        expr => Transformed::no(expr),
-                    })
-                })?;
-                folded |= expr.transformed;
-                Ok(saved.restore(expr.data))
-            })
-            .collect::<Result<Vec<_>>>()?;
         let mut counts: Vec<(&Subquery, usize)> = vec![];
         for expr in &exprs {
             expr.apply(|expr| {
@@ -93,11 +93,7 @@ impl OptimizerRule for SparkScalarSubqueries {
             })
             .collect();
         if shared.is_empty() {
-            return if folded {
-                with_exprs(plan, exprs, input).map(Transformed::yes)
-            } else {
-                Ok(Transformed::no(plan))
-            };
+            return Ok(Transformed::new_transformed(plan, folded));
         }
         let share = |expr: Expr| -> Result<Expr> {
             let saved = name_preserver.save(&expr);

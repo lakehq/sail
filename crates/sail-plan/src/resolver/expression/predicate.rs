@@ -16,7 +16,6 @@ use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
-use crate::function::common::{is_not_null, is_null};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -766,7 +765,10 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let expr = self.resolve_expression(expr, schema, state).await?;
-        Ok(NamedExpr::new(vec!["is_null".to_string()], is_null(expr)))
+        Ok(NamedExpr::new(
+            vec!["is_null".to_string()],
+            expr::Expr::IsNull(Box::new(expr)),
+        ))
     }
 
     pub(super) async fn resolve_expression_is_not_null(
@@ -778,7 +780,7 @@ impl PlanResolver<'_> {
         let expr = self.resolve_expression(expr, schema, state).await?;
         Ok(NamedExpr::new(
             vec!["is_not_null".to_string()],
-            is_not_null(expr),
+            expr::Expr::IsNotNull(Box::new(expr)),
         ))
     }
 

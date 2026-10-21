@@ -4,8 +4,10 @@ use datafusion::functions::core::expr_fn::{get_field, named_struct};
 use datafusion::functions::expr_fn::greatest;
 use datafusion::functions_aggregate::expr_fn::{count, first_value, nth_value};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchemaRef, ScalarValue};
-use datafusion_expr::logical_plan::{Aggregate, Filter, Limit, Projection, Sort, SubqueryAlias};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue, TableReference};
+use datafusion_expr::logical_plan::{
+    Aggregate, EmptyRelation, Filter, Limit, Projection, Sort, SubqueryAlias,
+};
 use datafusion_expr::utils::{conjunction, disjunction, split_binary, split_conjunction};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator, ScalarUDF,
@@ -301,6 +303,7 @@ fn input_sort_key(
 fn rewrite_bounded_scalar_subquery(
     plan: &LogicalPlan,
     state: &mut PlanResolverState,
+    lazy: bool,
 ) -> PlanResult<Option<Expr>> {
     let Some(shape) = peel_scalar_subquery(plan) else {
         return Ok(None);
@@ -315,29 +318,89 @@ fn rewrite_bounded_scalar_subquery(
         .iter()
         .position(|candidate| candidate == shape.expr);
     let data_type = index.map(|index| shape.projection.schema.field(index).data_type().clone());
-    // DataFusion handles the other shapes itself: aggregated subqueries are decorrelated and
-    // uncorrelated ones have their row count checked at execution. LIMIT and ORDER BY above a
+    let single_row = row_bounds(input) == (1, Some(1));
+    let at_most_one_row = row_bounds(input).1 == Some(1);
+    // The single row survives the bounds unless one of them skips or fetches nothing.
+    let kept = shape.bounds.iter().all(|bound| match bound {
+        RowBound::Limit { skip, fetch } => *skip == 0 && *fetch != Some(0),
+        RowBound::Sort(_, fetch) => *fetch != Some(0),
+    });
+    if outer && at_most_one_row && (is_aggregated(input) || !correlated) {
+        // The subquery has at most one row, which DataFusion can produce itself (an aggregate,
+        // possibly under HAVING, or an uncorrelated input), so no producer is needed: the inner
+        // columns the expression uses are read from a struct the subquery returns, and the
+        // expression is evaluated per outer row. DataFusion's count-bug compensation then
+        // yields the aggregate's empty-input values for an outer row without a match, and an
+        // empty subquery yields NULL fields.
+        if !kept {
+            return Ok(data_type.map(|data_type| cast(lit(ScalarValue::Null), data_type)));
+        }
+        let mut columns: Vec<Expr> = vec![];
+        expr.apply(|expr| {
+            if let Expr::Column(_) = expr
+                && !columns.contains(expr)
+            {
+                columns.push(expr.clone());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        let names = (0..columns.len())
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>();
+        let row = if columns.is_empty() {
+            None
+        } else {
+            let plan = LogicalPlanBuilder::from(input.clone())
+                .project(vec![
+                    named_struct(
+                        names
+                            .iter()
+                            .zip(&columns)
+                            .flat_map(|(name, column)| [lit(name.as_str()), column.clone()])
+                            .collect(),
+                    )
+                    .alias(state.register_field_name("")),
+                ])?
+                .build()?;
+            Some(expr_fn::scalar_subquery(Arc::new(plan)))
+        };
+        let result = expr
+            .clone()
+            .transform(|expr| match expr {
+                Expr::OuterReferenceColumn(_, column) => Ok(Transformed::yes(Expr::Column(column))),
+                Expr::Column(_) => match (columns.iter().position(|c| c == &expr), &row) {
+                    (Some(index), Some(row)) => Ok(Transformed::yes(get_field(
+                        row.clone(),
+                        names[index].as_str(),
+                    ))),
+                    _ => Ok(Transformed::no(expr)),
+                },
+                expr => Ok(Transformed::no(expr)),
+            })?
+            .data;
+        return Ok(Some(result));
+    }
+    // DataFusion handles the other shapes itself: a correlated aggregated subquery is
+    // decorrelated, and an uncorrelated one has its row count checked at execution, unless
+    // that check must be lazy (a guard branch is evaluated eagerly as a bare subquery
+    // otherwise) and the subquery may return several rows. LIMIT and ORDER BY above a
     // correlated ungrouped aggregate, which DataFusion cannot decorrelate through, are dropped
     // when they keep its single row (they are no-ops then) and yield NULL otherwise.
-    if !outer && (!correlated || is_aggregated(input)) {
-        return Ok(
-            if correlated && !shape.bounds.is_empty() && row_bounds(input) == (1, Some(1)) {
-                let kept = shape.bounds.iter().all(|bound| match bound {
-                    RowBound::Limit { skip, fetch } => *skip == 0 && *fetch != Some(0),
-                    RowBound::Sort(_, fetch) => *fetch != Some(0),
-                });
-                if kept {
-                    let plan = LogicalPlanBuilder::from(input.clone())
-                        .project(vec![shape.expr.clone()])?
-                        .build()?;
-                    Some(nullable_scalar_subquery(plan))
-                } else {
-                    data_type.map(|data_type| cast(lit(ScalarValue::Null), data_type))
-                }
+    if !outer
+        && ((correlated && is_aggregated(input)) || (!correlated && (!lazy || at_most_one_row)))
+    {
+        return Ok(if correlated && !shape.bounds.is_empty() && single_row {
+            if kept {
+                let plan = LogicalPlanBuilder::from(input.clone())
+                    .project(vec![shape.expr.clone()])?
+                    .build()?;
+                Some(nullable_scalar_subquery(plan))
             } else {
-                None
-            },
-        );
+                data_type.map(|data_type| cast(lit(ScalarValue::Null), data_type))
+            }
+        } else {
+            None
+        });
     }
     // A projected expression that is neither a bare column nor dependent on the outer row is
     // evaluated once below the row selection, so that a volatile value is sorted and returned
@@ -410,10 +473,9 @@ fn rewrite_bounded_scalar_subquery(
     } else if let Some(index) = index {
         values.push(outputs[index].1.clone());
     }
-    let names = values
-        .iter()
-        .map(|_| state.register_field_name(""))
-        .collect::<Vec<_>>();
+    // Struct fields are named by position, so that two producers of the same subquery (which
+    // differ only in generated names) are interchangeable when the aggregate rewrite shares one.
+    let names = (0..values.len()).map(|i| i.to_string()).collect::<Vec<_>>();
     // One struct per row keeps the chosen row coherent even under a volatile ordering.
     let row = (!values.is_empty()).then(|| {
         named_struct(
@@ -468,8 +530,8 @@ fn rewrite_bounded_scalar_subquery(
         }
         (plan, row.map(|row| first_value(row, vec![])), 0, false)
     };
-    let count_name = state.register_field_name("");
-    let value_name = state.register_field_name("");
+    let count_name = "count".to_string();
+    let value_name = "value".to_string();
     let mut aggregates = vec![count(lit(1_i64)).alias(&count_name)];
     let mut fields = vec![lit(count_name.as_str()), ident(&count_name)];
     if let Some(selected) = selected {
@@ -520,161 +582,233 @@ fn rewrite_bounded_scalar_subquery(
     Ok(Some(case.otherwise(result)?))
 }
 
-/// Splits the outer-only guards off a filter predicate, returning the guard, the predicate
-/// when the guard holds and the predicate when it does not. The conjuncts on the outer row
-/// alone are hoisted together (the predicate is `false` without them); failing that, the
-/// first conjunct `r OR p` with outer-only disjuncts `p` is split (`r` remains without it).
-fn split_filter_guard(predicate: &Expr) -> Option<(Expr, Option<Expr>, Expr)> {
-    let conjuncts = split_conjunction(predicate);
-    let mut pure = vec![];
-    let mut or_guards = vec![];
-    for (index, conjunct) in conjuncts.iter().enumerate() {
-        let (outer, rest): (Vec<_>, Vec<_>) = split_binary(conjunct, Operator::Or)
-            .into_iter()
-            .cloned()
-            .partition(is_outer_only);
-        let Some(guard) = disjunction(outer) else {
-            continue;
-        };
-        if rest.is_empty() {
-            pure.push(index);
-        } else {
-            or_guards.push((index, guard, rest));
-        }
-    }
-    // Each `r OR p` conjunct doubles the number of subquery plans, so the rewrite is declined
-    // before any of them is built when there are too many.
-    if or_guards.len() > MAX_OR_GUARDS {
-        return None;
-    }
-    let without = |skip: &dyn Fn(usize) -> bool| -> Vec<Expr> {
-        conjuncts
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !skip(*i))
-            .map(|(_, expr)| (*expr).clone())
-            .collect()
-    };
-    if !pure.is_empty() {
-        let guard = conjunction(pure.iter().map(|&index| conjuncts[index].clone()))?;
-        let when_true = conjunction(without(&|index| pure.contains(&index)));
-        return Some((guard, when_true, lit(false)));
-    }
-    let (index, guard, rest) = or_guards.into_iter().next()?;
-    let when_true = conjunction(without(&|i| i == index));
-    let when_false = conjunction(
-        without(&|i| i == index)
-            .into_iter()
-            .chain([disjunction(rest).unwrap_or(lit(false))]),
-    )
-    .unwrap_or(lit(false));
-    Some((guard, when_true, when_false))
+/// A node on the spine of a subquery plan above its first aggregate, which the guard rewrite
+/// takes apart and puts back together.
+enum SpineNode {
+    Projection(Vec<Expr>),
+    Alias(TableReference),
+    Sort(Vec<SortExpr>, Option<usize>),
+    Limit(Option<Box<Expr>>, Option<Box<Expr>>),
+    /// A filter and the schema of its input.
+    Filter(Expr, DFSchemaRef),
 }
 
-/// The number of `r OR p` guard conjuncts a correlated subquery may have before Sail stops
-/// hoisting them (the rewrite builds `2^n` subquery plans); more are left to DataFusion.
+/// Takes the spine of `plan` apart down to its first aggregate (or any other node), returning
+/// the spine nodes from the top down and the plan below them.
+fn peel_spine(plan: &LogicalPlan) -> (Vec<SpineNode>, &LogicalPlan) {
+    let mut nodes = vec![];
+    let mut plan = plan;
+    loop {
+        plan = match plan {
+            LogicalPlan::Projection(projection) => {
+                nodes.push(SpineNode::Projection(projection.expr.clone()));
+                &projection.input
+            }
+            LogicalPlan::SubqueryAlias(alias) => {
+                nodes.push(SpineNode::Alias(alias.alias.clone()));
+                &alias.input
+            }
+            LogicalPlan::Sort(sort) => {
+                nodes.push(SpineNode::Sort(sort.expr.clone(), sort.fetch));
+                &sort.input
+            }
+            LogicalPlan::Limit(limit) => {
+                nodes.push(SpineNode::Limit(limit.skip.clone(), limit.fetch.clone()));
+                &limit.input
+            }
+            LogicalPlan::Filter(filter) => {
+                nodes.push(SpineNode::Filter(
+                    filter.predicate.clone(),
+                    Arc::clone(filter.input.schema()),
+                ));
+                &filter.input
+            }
+            plan => return (nodes, plan),
+        };
+    }
+}
+
+/// Puts spine nodes back together over `base`.
+fn build_spine(nodes: &[SpineNode], base: LogicalPlan) -> PlanResult<LogicalPlan> {
+    let mut plan = base;
+    for node in nodes.iter().rev() {
+        plan = match node {
+            SpineNode::Projection(exprs) => {
+                LogicalPlan::Projection(Projection::try_new(exprs.clone(), Arc::new(plan))?)
+            }
+            SpineNode::Alias(alias) => {
+                LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(plan), alias.clone())?)
+            }
+            SpineNode::Sort(expr, fetch) => LogicalPlan::Sort(Sort {
+                expr: expr.clone(),
+                input: Arc::new(plan),
+                fetch: *fetch,
+            }),
+            SpineNode::Limit(skip, fetch) => LogicalPlan::Limit(Limit {
+                skip: skip.clone(),
+                fetch: fetch.clone(),
+                input: Arc::new(plan),
+            }),
+            SpineNode::Filter(predicate, _) => {
+                LogicalPlan::Filter(Filter::try_new(predicate.clone(), Arc::new(plan))?)
+            }
+        };
+    }
+    Ok(plan)
+}
+
+/// The spine with every filter conjunct mapped by `conjunct` (`None` drops it); a filter left
+/// without conjuncts is dropped.
+fn map_spine_conjuncts(
+    nodes: &[SpineNode],
+    conjunct: impl Fn(&Expr) -> Option<Expr>,
+) -> Vec<SpineNode> {
+    nodes
+        .iter()
+        .filter_map(|node| match node {
+            SpineNode::Filter(predicate, schema) => conjunction(
+                split_conjunction(predicate)
+                    .into_iter()
+                    .filter_map(&conjunct),
+            )
+            .map(|predicate| SpineNode::Filter(predicate, Arc::clone(schema))),
+            SpineNode::Projection(exprs) => Some(SpineNode::Projection(exprs.clone())),
+            SpineNode::Alias(alias) => Some(SpineNode::Alias(alias.clone())),
+            SpineNode::Sort(expr, fetch) => Some(SpineNode::Sort(expr.clone(), *fetch)),
+            SpineNode::Limit(skip, fetch) => Some(SpineNode::Limit(skip.clone(), fetch.clone())),
+        })
+        .collect()
+}
+
+/// The number of `r OR p` guard conjuncts a correlated subquery may have, over all of its
+/// aggregate levels, before Sail stops hoisting them (the rewrite builds `2^n` subquery plans);
+/// more are left to DataFusion.
 const MAX_OR_GUARDS: usize = 4;
 
-/// DataFusion decorrelates only predicates that compare inner and outer columns. The
-/// predicates on the outer row alone, or an OR with such a disjunct, are hoisted out of the
-/// topmost spine filter of a correlated subquery as a CASE guard: `(SELECT .. WHERE p1 AND
-/// p2)` becomes `CASE WHEN p1 AND p2 THEN (SELECT ..) ELSE (SELECT .. WHERE false) END`, and
-/// `WHERE r OR p` becomes `CASE WHEN p THEN (SELECT ..) ELSE (SELECT .. WHERE r) END`.
-/// Returns the guard and the two subquery plans.
-fn split_outer_guard(plan: &LogicalPlan) -> PlanResult<Option<(Expr, LogicalPlan, LogicalPlan)>> {
-    let split_input = |input: &Arc<LogicalPlan>| split_outer_guard(input);
-    Ok(match plan {
-        LogicalPlan::Filter(filter) => match split_filter_guard(&filter.predicate) {
-            Some((guard, when_true, when_false)) => {
-                let when_true = match when_true {
-                    Some(predicate) => {
-                        LogicalPlan::Filter(Filter::try_new(predicate, Arc::clone(&filter.input))?)
-                    }
-                    None => filter.input.as_ref().clone(),
-                };
-                let when_false =
-                    LogicalPlan::Filter(Filter::try_new(when_false, Arc::clone(&filter.input))?);
-                Some((guard, when_true, when_false))
+/// The number of `r OR p` guard conjuncts on the spine filters of `plan`, at every aggregate
+/// level, each of which doubles the number of subquery plans the guard rewrite builds.
+fn count_or_guards(plan: &LogicalPlan) -> usize {
+    let (nodes, base) = peel_spine(plan);
+    let mut count = 0;
+    for node in &nodes {
+        let SpineNode::Filter(predicate, _) = node else {
+            continue;
+        };
+        for conjunct in split_conjunction(predicate) {
+            let (outer, rest): (Vec<_>, Vec<_>) = split_binary(conjunct, Operator::Or)
+                .into_iter()
+                .partition(|disjunct| is_outer_only(disjunct));
+            if !outer.is_empty() && !rest.is_empty() {
+                count += 1;
             }
-            None => split_input(&filter.input)?
-                .map(|(guard, when_true, when_false)| {
-                    let rebuild = |input: LogicalPlan| {
-                        Filter::try_new(filter.predicate.clone(), Arc::new(input))
-                            .map(LogicalPlan::Filter)
-                    };
-                    (guard, rebuild(when_true), rebuild(when_false))
-                })
-                .map(|(guard, when_true, when_false)| {
-                    Ok::<_, PlanError>((guard, when_true?, when_false?))
-                })
-                .transpose()?,
-        },
-        LogicalPlan::Projection(projection) => split_input(&projection.input)?
-            .map(|(guard, when_true, when_false)| {
-                let rebuild = |input: LogicalPlan| {
-                    Projection::try_new(projection.expr.clone(), Arc::new(input))
-                        .map(LogicalPlan::Projection)
-                };
-                Ok::<_, PlanError>((guard, rebuild(when_true)?, rebuild(when_false)?))
-            })
-            .transpose()?,
-        LogicalPlan::Aggregate(aggregate) => split_input(&aggregate.input)?
-            .map(|(guard, when_true, when_false)| {
-                let rebuild = |input: LogicalPlan| {
-                    Aggregate::try_new(
-                        Arc::new(input),
-                        aggregate.group_expr.clone(),
-                        aggregate.aggr_expr.clone(),
-                    )
-                    .map(LogicalPlan::Aggregate)
-                };
-                Ok::<_, PlanError>((guard, rebuild(when_true)?, rebuild(when_false)?))
-            })
-            .transpose()?,
-        LogicalPlan::SubqueryAlias(alias) => split_input(&alias.input)?
-            .map(|(guard, when_true, when_false)| {
-                let rebuild = |input: LogicalPlan| {
-                    SubqueryAlias::try_new(Arc::new(input), alias.alias.clone())
-                        .map(LogicalPlan::SubqueryAlias)
-                };
-                Ok::<_, PlanError>((guard, rebuild(when_true)?, rebuild(when_false)?))
-            })
-            .transpose()?,
-        LogicalPlan::Sort(sort) => {
-            split_input(&sort.input)?.map(|(guard, when_true, when_false)| {
-                let rebuild = |input: LogicalPlan| {
-                    LogicalPlan::Sort(Sort {
-                        expr: sort.expr.clone(),
-                        input: Arc::new(input),
-                        fetch: sort.fetch,
-                    })
-                };
-                (guard, rebuild(when_true), rebuild(when_false))
-            })
         }
-        LogicalPlan::Limit(limit) => {
-            split_input(&limit.input)?.map(|(guard, when_true, when_false)| {
-                let rebuild = |input: LogicalPlan| {
-                    LogicalPlan::Limit(Limit {
-                        skip: limit.skip.clone(),
-                        fetch: limit.fetch.clone(),
-                        input: Arc::new(input),
-                    })
-                };
-                (guard, rebuild(when_true), rebuild(when_false))
-            })
-        }
-        _ => None,
-    })
+    }
+    match base {
+        LogicalPlan::Aggregate(aggregate) => count + count_or_guards(&aggregate.input),
+        _ => count,
+    }
 }
 
-/// The expression evaluating a resolved scalar subquery plan.
-/// Hoists the outer-only guards of the plan's topmost filter, so that `WHERE p AND (p1 OR r1)
+/// DataFusion decorrelates only predicates that compare inner and outer columns. The
+/// predicates on the outer row alone in the filters on the spine of a correlated subquery, or
+/// an OR with such a disjunct, are hoisted out as a CASE guard: `(SELECT .. WHERE p1 AND p2)`
+/// becomes `CASE WHEN p1 AND p2 THEN (SELECT ..) ELSE (SELECT .. FROM <nothing>) END`, with
+/// all the outer-only conjuncts of every spine filter hoisted together and the empty branch
+/// holding no filter at all, so that the rewrite stays linear in the number of filters. A
+/// conjunct `r OR p` becomes `CASE WHEN p THEN (SELECT ..) ELSE (SELECT .. WHERE r) END`, one
+/// conjunct per CASE, since the two branches keep different predicates. A spine without
+/// guards above its first aggregate is searched below that aggregate. A volatile guard such as
+/// `o.id > rand()` is hoisted too and so evaluated once per outer row, which is also where
+/// Spark evaluates an outer-only predicate it pulls above an aggregate. Returns the guard and
+/// the two subquery plans.
+fn split_outer_guard(plan: &LogicalPlan) -> PlanResult<Option<(Expr, LogicalPlan, LogicalPlan)>> {
+    let (nodes, base) = peel_spine(plan);
+    let mut pure = vec![];
+    let mut or_guards = vec![];
+    for node in &nodes {
+        let SpineNode::Filter(predicate, _) = node else {
+            continue;
+        };
+        for conjunct in split_conjunction(predicate) {
+            let (outer, rest): (Vec<_>, Vec<_>) = split_binary(conjunct, Operator::Or)
+                .into_iter()
+                .cloned()
+                .partition(is_outer_only);
+            let Some(guard) = disjunction(outer) else {
+                continue;
+            };
+            if rest.is_empty() {
+                pure.push(conjunct.clone());
+            } else {
+                or_guards.push((conjunct.clone(), guard, rest));
+            }
+        }
+    }
+    if let Some(guard) = conjunction(pure.clone()) {
+        let when_true = build_spine(
+            &map_spine_conjuncts(&nodes, |conjunct| {
+                (!pure.contains(conjunct)).then(|| conjunct.clone())
+            }),
+            base.clone(),
+        )?;
+        // The plan is empty at the first filter when a guard does not hold.
+        let first = nodes
+            .iter()
+            .position(|node| matches!(node, SpineNode::Filter(..)))
+            .ok_or_else(|| PlanError::internal("guard without a filter"))?;
+        let SpineNode::Filter(_, schema) = &nodes[first] else {
+            return Err(PlanError::internal("guard without a filter"));
+        };
+        let empty = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::clone(schema),
+        });
+        let when_false = build_spine(&nodes[..first], empty)?;
+        return Ok(Some((guard, when_true, when_false)));
+    }
+    if let Some((conjunct, guard, rest)) = or_guards.into_iter().next() {
+        let when_true = build_spine(
+            &map_spine_conjuncts(&nodes, |c| (c != &conjunct).then(|| c.clone())),
+            base.clone(),
+        )?;
+        let rest = disjunction(rest).unwrap_or(lit(false));
+        let when_false = build_spine(
+            &map_spine_conjuncts(&nodes, |c| {
+                Some(if c == &conjunct {
+                    rest.clone()
+                } else {
+                    c.clone()
+                })
+            }),
+            base.clone(),
+        )?;
+        return Ok(Some((guard, when_true, when_false)));
+    }
+    let LogicalPlan::Aggregate(aggregate) = base else {
+        return Ok(None);
+    };
+    let Some((guard, when_true, when_false)) = split_outer_guard(&aggregate.input)? else {
+        return Ok(None);
+    };
+    let rebuild = |input: LogicalPlan| -> PlanResult<LogicalPlan> {
+        let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+            Arc::new(input),
+            aggregate.group_expr.clone(),
+            aggregate.aggr_expr.clone(),
+        )?);
+        build_spine(&nodes, aggregate)
+    };
+    Ok(Some((guard, rebuild(when_true)?, rebuild(when_false)?)))
+}
+
+/// Hoists the outer-only guards of the plan's spine filters, so that `WHERE p AND (p1 OR r1)
 /// AND (p2 OR r2)` becomes nested CASE expressions over subqueries that DataFusion can
-/// decorrelate. Returns whether a guard CASE was built.
+/// decorrelate. Returns whether a guard CASE was built. With `lazy`, a subquery without
+/// guards is evaluated lazily (see `scalar_subquery_expr`).
 fn guarded_scalar_subquery(
     plan: LogicalPlan,
     state: &mut PlanResolverState,
+    lazy: bool,
 ) -> PlanResult<(Expr, bool)> {
     match split_outer_guard(&plan)? {
         Some((guard, when_true, when_false)) => {
@@ -686,16 +820,44 @@ fn guarded_scalar_subquery(
                     expr => Ok(Transformed::no(expr)),
                 })?
                 .data;
-            let case = when(guard, guarded_scalar_subquery(when_true, state)?.0)
-                .otherwise(guarded_scalar_subquery(when_false, state)?.0)?;
+            // A branch is evaluated lazily: it must not raise unless the guard selects it.
+            let case = when(guard, guarded_scalar_subquery(when_true, state, true)?.0)
+                .otherwise(guarded_scalar_subquery(when_false, state, true)?.0)?;
             Ok((case, true))
         }
-        None => Ok((scalar_subquery_expr(plan, state)?, false)),
+        None => Ok((scalar_subquery_expr(plan, state, lazy)?, false)),
     }
 }
 
-fn scalar_subquery_expr(plan: LogicalPlan, state: &mut PlanResolverState) -> PlanResult<Expr> {
-    Ok(match rewrite_bounded_scalar_subquery(&plan, state)? {
+/// Whether the expression, or a subquery plan inside it, evaluates a volatile function.
+fn contains_volatile(expr: &Expr) -> bool {
+    expr.exists(|expr| {
+        Ok(expr.is_volatile_node()
+            || matches!(expr, Expr::ScalarSubquery(subquery) if plan_contains_volatile(&subquery.subquery)))
+    })
+    .unwrap_or(true)
+}
+
+fn plan_contains_volatile(plan: &LogicalPlan) -> bool {
+    let mut volatile = false;
+    let _ = plan.apply_with_subqueries(|node| {
+        if node.expressions().iter().any(|expr| expr.is_volatile()) {
+            volatile = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    volatile
+}
+
+/// With `lazy`, a subquery that may return several rows raises its error only when its value
+/// is used, which a guard CASE requires of its branches.
+fn scalar_subquery_expr(
+    plan: LogicalPlan,
+    state: &mut PlanResolverState,
+    lazy: bool,
+) -> PlanResult<Expr> {
+    Ok(match rewrite_bounded_scalar_subquery(&plan, state, lazy)? {
         Some(rewritten) => rewritten,
         None => nullable_scalar_subquery(plan),
     })
@@ -706,7 +868,7 @@ fn is_aggregated(plan: &LogicalPlan) -> bool {
         LogicalPlan::Projection(projection) => is_aggregated(&projection.input),
         LogicalPlan::SubqueryAlias(alias) => is_aggregated(&alias.input),
         LogicalPlan::Aggregate(_) => true,
-        LogicalPlan::Filter(filter) => matches!(filter.input.as_ref(), LogicalPlan::Aggregate(_)),
+        LogicalPlan::Filter(filter) => is_aggregated(&filter.input),
         _ => false,
     }
 }
@@ -786,6 +948,15 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        // The same subquery resolved in the same context yields the same expression, so that
+        // repeated occurrences (a grouping expression repeated in the select list, two aggregate
+        // arguments) are structurally equal and evaluated once, as Spark's canonicalized
+        // subquery expressions are.
+        let context = state.scalar_subquery_context(Self::local_schema(schema, state));
+        if let Some(expr) = state.resolved_scalar_subquery(&subquery, &context) {
+            return Ok(NamedExpr::new(vec!["subquery".to_string()], expr.clone()));
+        }
+        let spec = subquery.clone();
         let subquery = {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             self.resolve_query_plan(subquery, scope.state()).await?
@@ -797,12 +968,24 @@ impl PlanResolver<'_> {
         } else {
             project_correlated_keys(subquery, state)?
         };
-        let subquery = match guarded_scalar_subquery(subquery, state)? {
+        // Each `r OR p` guard doubles the number of subquery plans, so the rewrite is declined
+        // before any of them is built when there are too many over all aggregate levels.
+        let guarded = if count_or_guards(&subquery) > MAX_OR_GUARDS {
+            (scalar_subquery_expr(subquery, state, false)?, false)
+        } else {
+            guarded_scalar_subquery(subquery, state, false)?
+        };
+        let subquery = match guarded {
             // The wrapper marks the guard CASE as one scalar subquery expression, so that a
             // null check on it may fold (`never_null_unplannable`) and COUNT may probe it.
             (case, true) => wrap_scalar_subquery(case),
             (expr, false) => expr,
         };
+        // A volatile subquery is evaluated once per occurrence, as Spark seeds each occurrence
+        // of a random function separately, so it is never shared.
+        if !contains_volatile(&subquery) {
+            state.remember_scalar_subquery(spec, context, subquery.clone());
+        }
         Ok(NamedExpr::new(vec!["subquery".to_string()], subquery))
     }
 

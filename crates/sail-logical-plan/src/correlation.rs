@@ -6,15 +6,30 @@ use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 
 use crate::row_bounds::row_bounds;
 
-/// An expression that refers to the outer query only, with no inner column.
+/// An expression that refers to the outer query only, with no inner column and no nested
+/// subquery (which may refer to inner columns of its own).
 pub fn is_outer_only(expr: &Expr) -> bool {
-    expr.contains_outer() && !expr.any_column_refs()
+    expr.contains_outer() && !expr.any_column_refs() && !contains_subquery(expr)
+}
+
+fn contains_subquery(expr: &Expr) -> bool {
+    expr.exists(|expr| {
+        Ok(matches!(
+            expr,
+            Expr::ScalarSubquery(_)
+                | Expr::InSubquery(_)
+                | Expr::Exists(_)
+                | Expr::SetComparison(_)
+        ))
+    })
+    .unwrap_or(true)
 }
 
 /// Whether DataFusion can decorrelate the subquery plan: every outer reference sits in a
-/// filter conjunct that compares an inner expression with an outer one for equality. A
-/// non-equality comparison, an OR, or an outer reference in any other node makes
-/// `ScalarSubqueryToJoin` fail to plan the subquery.
+/// filter conjunct that compares an inner expression with an outer one for equality, and no
+/// sort, limit, union or extension node stands above such a filter. A non-equality
+/// comparison, an OR, or an outer reference in any other node makes `ScalarSubqueryToJoin`
+/// fail to plan the subquery.
 pub fn decorrelates(plan: &LogicalPlan) -> bool {
     let mut decorrelates = true;
     let _ = plan.apply(|node| {
@@ -22,6 +37,10 @@ pub fn decorrelates(plan: &LogicalPlan) -> bool {
             LogicalPlan::Filter(filter) => split_conjunction(&filter.predicate)
                 .into_iter()
                 .all(|conjunct| !conjunct.contains_outer() || is_correlated_equality(conjunct)),
+            LogicalPlan::Sort(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Union(_)
+            | LogicalPlan::Extension(_) => node.all_out_ref_exprs().is_empty(),
             node => !node.contains_outer_reference(),
         };
         Ok(if decorrelates {
@@ -40,8 +59,8 @@ fn is_correlated_equality(expr: &Expr) -> bool {
             op: Operator::Eq,
             right,
         }) => {
-            (is_outer_only(left) && !right.contains_outer())
-                || (is_outer_only(right) && !left.contains_outer())
+            (is_outer_only(left) && !right.contains_outer() && !contains_subquery(right))
+                || (is_outer_only(right) && !left.contains_outer() && !contains_subquery(left))
         }
         _ => false,
     }

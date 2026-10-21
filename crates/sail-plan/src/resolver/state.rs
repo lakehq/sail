@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ScalarValue, TableReference};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{Expr, LogicalPlan};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -53,7 +53,7 @@ impl FieldInfo {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct PlanResolverStateConfig {
     pub arrow_allow_large_var_types: bool,
     /// Keep source columns in COUNT arguments while resolving SQL PIVOT aggregates.
@@ -115,11 +115,47 @@ pub(super) struct PlanResolverState {
     lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
     /// The named windows defined in the current query, keyed by window name.
     windows: std::collections::HashMap<String, spec::Window>,
+    /// The expressions the scalar subqueries of the current query resolved to, keyed by the
+    /// subquery and the context it was resolved in.
+    scalar_subqueries: Vec<(spec::QueryPlan, ScalarSubqueryContext, Expr)>,
 }
 
 impl Default for PlanResolverState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// What determines the resolution of a scalar subquery besides the subquery itself: the outer
+/// schema it is resolved against, the CTEs, lambda parameters and parameter values in scope,
+/// and the resolver configuration.
+#[derive(Debug)]
+pub(super) struct ScalarSubqueryContext {
+    schema: DFSchemaRef,
+    /// The CTE bindings by name; the `Arc` is kept so that the binding is compared by
+    /// identity and its address cannot be reused by a later binding while the entry lives.
+    ctes: Vec<(String, Arc<CteInfo>)>,
+    lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
+    param_values: std::collections::HashMap<String, ScalarValue>,
+    positional_param_values: Vec<ScalarValue>,
+    config: PlanResolverStateConfig,
+}
+
+impl PartialEq for ScalarSubqueryContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.schema == other.schema
+            && self.ctes.len() == other.ctes.len()
+            && self
+                .ctes
+                .iter()
+                .zip(&other.ctes)
+                .all(|((name, cte), (other_name, other_cte))| {
+                    name == other_name && Arc::ptr_eq(cte, other_cte)
+                })
+            && self.lambda_param_scopes == other.lambda_param_scopes
+            && self.param_values == other.param_values
+            && self.positional_param_values == other.positional_param_values
+            && self.config == other.config
     }
 }
 
@@ -144,6 +180,7 @@ impl PlanResolverState {
             positional_param_values: Vec::new(),
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
+            scalar_subqueries: vec![],
         }
     }
 
@@ -207,6 +244,47 @@ impl PlanResolverState {
         };
         self.fields.insert(field_id.clone(), info);
         field_id
+    }
+
+    /// The context a scalar subquery is resolved in now, for `schema` as the outer schema.
+    pub(super) fn scalar_subquery_context(&self, schema: DFSchemaRef) -> ScalarSubqueryContext {
+        let mut ctes = self
+            .ctes
+            .iter()
+            .map(|(name, info)| (name.to_string(), Arc::clone(info)))
+            .collect::<Vec<_>>();
+        ctes.sort_by(|(a, _), (b, _)| a.cmp(b));
+        ScalarSubqueryContext {
+            schema,
+            ctes,
+            lambda_param_scopes: self.lambda_param_scopes.clone(),
+            param_values: self.param_values.clone(),
+            positional_param_values: self.positional_param_values.clone(),
+            config: self.config.clone(),
+        }
+    }
+
+    /// The expression an identical scalar subquery resolved to earlier in this query in the
+    /// same context, so that repeated occurrences of a subquery are structurally equal and
+    /// evaluated once, as Spark's canonicalized subquery expressions are.
+    pub(super) fn resolved_scalar_subquery(
+        &self,
+        subquery: &spec::QueryPlan,
+        context: &ScalarSubqueryContext,
+    ) -> Option<&Expr> {
+        self.scalar_subqueries
+            .iter()
+            .find(|(spec, resolved, _)| spec == subquery && resolved == context)
+            .map(|(_, _, expr)| expr)
+    }
+
+    pub(super) fn remember_scalar_subquery(
+        &mut self,
+        subquery: spec::QueryPlan,
+        context: ScalarSubqueryContext,
+        expr: Expr,
+    ) {
+        self.scalar_subqueries.push((subquery, context, expr));
     }
 
     /// Registers a field and returns a generated opaque string ID for the field.

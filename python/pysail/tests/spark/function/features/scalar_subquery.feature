@@ -905,6 +905,35 @@ Feature: Scalar subquery nullability
         | 0  | 0 |
         | 1  | 2 |
 
+    # Spark rejects an outer reference in the select list of a correlated aggregate
+    # (UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE); DuckDB returns (0, 1), (1, 1).
+    @sail-only
+    Scenario: an outer reference added to a correlated count yields the empty-input count for an unmatched row
+      When query
+        """
+        SELECT o.id, (SELECT count(*) + o.id FROM VALUES (0) AS t(x) WHERE t.x = o.id) AS n
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 1 |
+        | 1  | 1 |
+
+    # Spark rejects the outer reference in the select list; DuckDB returns (1, NULL), (2, 2).
+    @sail-only
+    Scenario: an outer reference added to a correlated count under HAVING yields the empty-input count
+      When query
+        """
+        SELECT o.k, (SELECT count(*) + o.k FROM VALUES (1) AS t(k) WHERE t.k = o.k HAVING count(*) = 0) AS n
+        FROM VALUES (1), (2) AS o(k)
+        ORDER BY o.k
+        """
+      Then query result collected ordered
+        | k | n    |
+        | 1 | NULL |
+        | 2 | 2    |
+
     Scenario: an outer reference combined with the top row of an ordered limited subquery
       When query
         """
@@ -1154,6 +1183,21 @@ Feature: Scalar subquery nullability
         | id | c    |
         | 0  | NULL |
         | 1  | NULL |
+
+  Rule: A plannable scalar subquery under a null check is evaluated, an intentional divergence from Spark 4.2
+
+    # Spark evaluates `(SELECT count(*) ...) IS NULL` in a SELECT list (and raises on the failing
+    # cast) but folds the same check in a WHERE clause and prunes the join, returning no rows:
+    # the difference is an artifact of its plan pruning. Sail evaluates every scalar subquery
+    # DataFusion can plan, wherever the check stands, so this query raises like the SELECT form.
+
+    @sail-only
+    Scenario: a failing per-row cast inside a plannable subquery under a null check in WHERE raises
+      When query
+        """
+        SELECT o.id FROM range(2) o WHERE (SELECT count(*) FROM VALUES (0, '0'), (1, 'bad') AS t(x, s) WHERE CAST(t.s AS BIGINT) = o.id) IS NULL
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|cannot (be )?cast|invalid|NumberFormat|parse)
 
   Rule: A correlated LIMIT or ORDER BY is evaluated per outer row, an intentional divergence from Spark 4.2
 
@@ -1498,3 +1542,246 @@ Feature: Scalar subquery nullability
         | id | n |
         | 0  | 1 |
         | 1  | 1 |
+
+  Rule: A null check on a subquery DataFusion cannot plan folds in any position
+
+    Scenario: a null check on a non-equality correlated aggregate inside SUM folds
+      When query
+        """
+        SELECT sum(CAST((SELECT count(*) FROM range(1) i WHERE i.id < o.id) IS NULL AS INT)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 0 |
+
+    Scenario: a null check on a non-equality correlated aggregate as a grouping key folds
+      When query
+        """
+        SELECT (SELECT count(*) FROM range(1) i WHERE i.id < o.id) IS NULL AS n, count(*) AS c
+        FROM range(2) o
+        GROUP BY (SELECT count(*) FROM range(1) i WHERE i.id < o.id) IS NULL
+        """
+      Then query result collected
+        | n     | c |
+        | false | 2 |
+
+    Scenario: a guarded null check inside SUM folds without evaluating the guarded branch
+      When query
+        """
+        SELECT sum(CAST((SELECT count(*) FROM VALUES ('bad') t(k) WHERE o.id = 0 OR CAST(k AS BIGINT) = o.id) IS NULL AS INT)) AS n FROM range(1) o
+        """
+      Then query result collected
+        | n |
+        | 0 |
+
+    Scenario Outline: a null check on a distinct non-equality correlated aggregate folds
+      When query
+        """
+        SELECT <expression> AS n FROM range(2) o
+        """
+      Then query result collected
+        | n     |
+        | false |
+        | false |
+
+      Examples:
+        | expression                                                               |
+        | (SELECT DISTINCT count(*) FROM range(1) i WHERE i.id < o.id) IS NULL     |
+        | (SELECT count(DISTINCT i.id) FROM range(2) i WHERE i.id < o.id) IS NULL  |
+
+  Rule: Outer-only guards are hoisted across nested filters
+
+    Scenario: guards in nested derived tables are hoisted together
+      When query
+        """
+        SELECT (SELECT count(*) FROM (SELECT * FROM (SELECT * FROM range(1) i WHERE o.id >= 0) q1 WHERE o.id >= 1) q2 WHERE o.id >= 2) AS n
+        FROM range(1) o
+        """
+      Then query result collected
+        | n |
+        | 0 |
+
+    Scenario: pure and OR guards in nested derived tables are hoisted
+      When query
+        """
+        SELECT (SELECT count(*) FROM (SELECT * FROM (SELECT * FROM (SELECT * FROM range(3) i WHERE o.id >= 0) q1 WHERE q1.id >= 1 OR o.id = 5) q2 WHERE o.id >= 0) q3 WHERE q3.id <= 1 OR o.id = 7) AS n
+        FROM range(1) o
+        """
+      Then query result collected
+        | n |
+        | 1 |
+
+    Scenario: a null check on an equality-correlated aggregate as a grouping key is evaluated
+      When query
+        """
+        SELECT (SELECT count(*) FROM VALUES (0, '0'), (1, 'bad') AS t(x, s) WHERE t.x = o.id) IS NULL AS v, count(*) AS c
+        FROM range(2) o
+        GROUP BY (SELECT count(*) FROM VALUES (0, '0'), (1, 'bad') AS t(x, s) WHERE t.x = o.id) IS NULL
+        """
+      Then query result collected
+        | v     | c |
+        | false | 2 |
+
+  Rule: A guard branch is evaluated only when the guard selects it
+
+    Scenario: an unaggregated subquery with an OR guard returns its single match
+      When query
+        """
+        SELECT o.id, (SELECT t.x FROM VALUES (0, '0'), (1, 'bad') AS t(x, s) WHERE t.x = o.id OR o.id = 5) AS v
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | v |
+        | 0  | 0 |
+        | 1  | 1 |
+
+    Scenario: count of an unaggregated subquery with an OR guard counts every outer row
+      When query
+        """
+        SELECT count((SELECT t.x FROM VALUES (0, '0'), (1, 'bad') AS t(x, s) WHERE t.x = o.id OR o.id = 5)) AS v FROM range(2) o
+        """
+      Then query result collected
+        | v |
+        | 2 |
+
+  Rule: Subqueries below an aggregate are shared only when they are the same subquery
+
+    Scenario: subqueries correlated on different outer columns inside SUM stay distinct
+      When query
+        """
+        SELECT sum((SELECT max(v) FROM VALUES (1, 10), (2, 20) AS t(k, v) WHERE t.k = o.a)) AS sa,
+               sum((SELECT max(v) FROM VALUES (1, 10), (2, 20) AS t(k, v) WHERE t.k = o.b)) AS sb
+        FROM VALUES (1, 2) AS o(a, b)
+        """
+      Then query result collected
+        | sa | sb |
+        | 10 | 20 |
+
+    Scenario: subqueries correlated on different outer columns as grouping keys stay distinct
+      When query
+        """
+        SELECT o.a,
+               (SELECT max(v) FROM VALUES (1, 10), (2, 20) AS t(k, v) WHERE t.k = o.a) AS va,
+               (SELECT max(v) FROM VALUES (1, 10), (2, 20) AS t(k, v) WHERE t.k = o.b) AS vb
+        FROM VALUES (1, 2) AS o(a, b)
+        GROUP BY o.a,
+                 (SELECT max(v) FROM VALUES (1, 10), (2, 20) AS t(k, v) WHERE t.k = o.a),
+                 (SELECT max(v) FROM VALUES (1, 10), (2, 20) AS t(k, v) WHERE t.k = o.b)
+        """
+      Then query result collected
+        | a | va | vb |
+        | 1 | 10 | 20 |
+
+    Scenario: a subquery with grouping sets is not a single row
+      When query
+        """
+        SELECT count((SELECT count(*) FROM VALUES (1) AS t(x) GROUP BY ROLLUP(x))) AS n FROM range(2) o
+        """
+      Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+    Scenario: a null check on a correlated aggregate over a sorted derived table folds
+      When query
+        """
+        SELECT o.k, (SELECT count(*) FROM (SELECT * FROM VALUES (1, 2) AS t(k, v) WHERE t.k = o.k ORDER BY t.v) q) IS NULL AS n
+        FROM VALUES (1), (3) AS o(k)
+        ORDER BY o.k
+        """
+      Then query result collected ordered
+        | k | n     |
+        | 1 | false |
+        | 3 | false |
+
+    Scenario: a grouped aggregate behind an OR guard that never holds is evaluated lazily
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM VALUES (0, 0), (0, 1), (1, 2) AS t(x, y) GROUP BY t.x HAVING count(*) > 1 OR o.id = 5) AS v
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | v |
+        | 0  | 2 |
+        | 1  | 2 |
+
+    Scenario: OR guards at two aggregate levels are hoisted within the budget
+      When query
+        """
+        SELECT o.id, (SELECT sum(c) AS c2 FROM (SELECT count(*) AS c FROM VALUES (0, 0), (0, 1), (1, 2) AS t(x, y) WHERE t.x = o.id AND (t.y = 0 OR o.id = 10) AND (t.y = 1 OR o.id = 11) GROUP BY t.x) WHERE (c >= 0 OR o.id = 20) AND (c >= 1 OR o.id = 21)) AS v
+        FROM range(3) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | v    |
+        | 0  | NULL |
+        | 1  | NULL |
+        | 2  | NULL |
+
+    Scenario: the same unaggregated correlated subquery in two aggregate arguments is shared
+      When query
+        """
+        SELECT sum((SELECT i.id FROM range(3) i WHERE i.id = o.id)) AS a, sum((SELECT i.id FROM range(3) i WHERE i.id = o.id)) AS b FROM range(4) o
+        """
+      Then query result collected
+        | a | b |
+        | 3 | 3 |
+
+    Scenario: subqueries over literal relations that differ beyond their first rows stay distinct
+      When query
+        """
+        SELECT sum((SELECT count(*) FROM VALUES (0), (1), (2), (3), (4), (5) AS t(x) WHERE t.x = o.id)) AS a,
+               sum((SELECT count(*) FROM VALUES (0), (1), (2), (3), (4), (9) AS t(x) WHERE t.x = o.id)) AS b
+        FROM range(7) o
+        """
+      Then query result collected
+        | a | b |
+        | 6 | 5 |
+
+    Scenario: a null check on an aggregate correlated through an uncorrelated subquery folds
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM VALUES (1), (2) AS t(k) WHERE o.id = (SELECT max(x) FROM VALUES (1) AS t2(x)) AND t.k = o.id) IS NULL AS n
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n     |
+        | 0  | false |
+        | 1  | false |
+
+  Rule: A repeated scalar subquery is resolved once, unless its context or volatility differs
+
+    Scenario: the same correlated subquery repeated in a select list is evaluated once
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id) AS c1, (SELECT count(*) FROM VALUES (0), (1) AS t(x) WHERE t.x = o.id) AS c2
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c1 | c2 |
+        | 0  | 1  | 1  |
+        | 1  | 1  | 1  |
+
+    Scenario: subqueries over shadowing CTEs of the same name stay distinct
+      When query
+        """
+        SELECT (WITH t AS (SELECT 1 AS x) SELECT (SELECT max(x) FROM t)) AS a, (WITH t AS (SELECT 2 AS x) SELECT (SELECT max(x) FROM t)) AS b
+        """
+      Then query result collected
+        | a | b |
+        | 1 | 2 |
+
+    Scenario Outline: repeated volatile subqueries are evaluated separately
+      When query
+        """
+        SELECT <left> = <right> AS same
+        """
+      Then query result collected
+        | same  |
+        | false |
+
+      Examples:
+        | left            | right           |
+        | (SELECT uuid()) | (SELECT uuid()) |
+        | (SELECT rand()) | (SELECT rand()) |

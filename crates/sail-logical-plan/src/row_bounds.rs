@@ -1,5 +1,5 @@
 use datafusion_common::ScalarValue;
-use datafusion_expr::{Expr, LogicalPlan};
+use datafusion_expr::{Distinct, Expr, LogicalPlan};
 
 use crate::range::RangeNode;
 
@@ -59,7 +59,23 @@ pub fn row_bounds(plan: &LogicalPlan) -> (usize, Option<usize>) {
             }
         }
         LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty() => (1, Some(1)),
-        LogicalPlan::Aggregate(aggregate) => (0, row_bounds(&aggregate.input).1),
+        LogicalPlan::Aggregate(aggregate) => {
+            let (min, max) = row_bounds(&aggregate.input);
+            // Grouping sets (ROLLUP, CUBE) emit more rows than their input.
+            let grouping_sets = aggregate
+                .group_expr
+                .iter()
+                .any(|expr| matches!(expr, Expr::GroupingSet(_)));
+            (min.min(1), if grouping_sets { None } else { max })
+        }
+        LogicalPlan::Distinct(distinct) => {
+            let input = match distinct {
+                Distinct::All(input) => input,
+                Distinct::On(distinct) => &distinct.input,
+            };
+            let (min, max) = row_bounds(input);
+            (min.min(1), max)
+        }
         LogicalPlan::Filter(filter) => (0, row_bounds(&filter.input).1),
         LogicalPlan::Values(values) => (values.values.len(), Some(values.values.len())),
         LogicalPlan::EmptyRelation(relation) => {
