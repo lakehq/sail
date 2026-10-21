@@ -917,6 +917,9 @@ Feature: Scalar subquery nullability
         | 0  | 7 |
         | 1  | 8 |
 
+    # The sort key `v` mixes the outer `o.id` with the inner `x`; evaluating it below the row
+    # selection would ignore overflow, so Sail declines the rewrite and errors.
+    @sail-bug
     Scenario: an outer reference subtracted in the top row of an ordered limited subquery
       When query
         """
@@ -1233,3 +1236,106 @@ Feature: Scalar subquery nullability
         | id | c |
         | 0  | 1 |
         | 1  | 1 |
+
+  Rule: LIMIT, ORDER BY and null checks over a correlated subquery keep their semantics
+
+    Scenario: LIMIT 0 above a correlated aggregate yields NULL
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM range(2) i WHERE i.id = o.id LIMIT 0) AS n
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n    |
+        | 0  | NULL |
+        | 1  | NULL |
+
+    Scenario: OFFSET above a correlated aggregate skips its single row
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM range(2) i WHERE i.id = o.id LIMIT 1 OFFSET 1) AS n
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n    |
+        | 0  | NULL |
+        | 1  | NULL |
+
+    Scenario: count of a correlated aggregate under LIMIT 0 is zero
+      When query
+        """
+        SELECT count((SELECT count(*) FROM range(2) i WHERE i.id = o.id LIMIT 0)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 0 |
+
+    Scenario: ORDER BY with LIMIT 1 above a correlated aggregate keeps its single row
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM range(2) i WHERE i.id = o.id ORDER BY 1 LIMIT 1) AS n
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 1 |
+        | 1  | 1 |
+
+    # The sort key mixes the outer `o.id` with the inner `x`. Sorting by `x` alone would hide the
+    # overflow, so Sail declines the rewrite and errors instead of raising the overflow itself.
+    @sail-bug
+    Scenario: an overflowing sort key that mixes outer and inner columns raises
+      When query
+        """
+        SELECT (SELECT o.id + x AS v FROM VALUES (9223372036854775807L), (0L) AS t(x) ORDER BY v ASC LIMIT 1) AS v
+        FROM range(1, 2) o
+        """
+      Then query error (?i)(ARITHMETIC_OVERFLOW|overflow)
+
+    Scenario Outline: a null check on a correlated aggregate with an invalid cast raises the cast error
+      When query
+        """
+        SELECT <expression> AS result FROM range(2) o
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|cannot (be )?cast|invalid|NumberFormat|parse)
+
+      Examples:
+        | expression                                                                             |
+        | (SELECT CAST('bad' AS INT) + count(*) FROM range(1) i WHERE i.id = o.id) IS NULL       |
+        | (SELECT CAST('bad' AS INT) + count(*) FROM range(1) i WHERE i.id = o.id) IS NOT NULL   |
+        | isnull((SELECT CAST('bad' AS INT) + count(*) FROM range(1) i WHERE i.id = o.id))       |
+
+    Scenario: a volatile projected value is sorted and returned as one value under correlation
+      When query
+        """
+        SELECT count(*) AS high
+        FROM (SELECT (SELECT rand() AS v FROM range(10000) i WHERE i.id % 10 = o.id ORDER BY v ASC LIMIT 1) AS v FROM range(10) o) q
+        WHERE v > 0.1
+        """
+      Then query result collected
+        | high |
+        | 0    |
+
+    Scenario: a volatile projected value is sorted and returned as one value
+      When query
+        """
+        SELECT (SELECT rand() AS v FROM range(10000) ORDER BY v LIMIT 1) < 0.01 AS low
+        """
+      Then query result collected
+        | low  |
+        | true |
+
+    Scenario: the top of a volatile projected value under correlation is its maximum
+      When query
+        """
+        SELECT o.id, (SELECT rand() AS v FROM range(10000) i WHERE i.id % 10 = o.id ORDER BY v DESC LIMIT 1) > 0.9 AS high
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | high |
+        | 0  | true |
+        | 1  | true |

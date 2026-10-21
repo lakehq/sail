@@ -243,9 +243,9 @@ fn peel_scalar_subquery(plan: &LogicalPlan) -> Option<ScalarSubqueryShape<'_>> {
 }
 
 /// Expresses a sort key of the peeled bounds through the projection's input. A key that only
-/// depends on the outer row is constant for that row and is dropped (`None`); a key of the
-/// form `outer + inner` or `outer - inner` orders like the inner part alone; any other key
-/// that mixes outer and inner columns cannot be evaluated below the projection.
+/// depends on the outer row is constant for that row and is dropped (`None`); a key that mixes
+/// outer and inner columns cannot be evaluated below the projection (`outer + inner` does not
+/// order like `inner` once the addition overflows), so the rewrite is declined.
 fn input_sort_key(
     sort: SortExpr,
     outputs: &[(String, Expr)],
@@ -266,24 +266,7 @@ fn input_sort_key(
     if is_outer_only(&key) {
         return Ok(Some(None));
     }
-    let Expr::BinaryExpr(BinaryExpr {
-        left,
-        op: op @ (Operator::Plus | Operator::Minus),
-        right,
-    }) = key
-    else {
-        return Ok(None);
-    };
-    let (inner, asc) = match (is_outer_only(&left), is_outer_only(&right)) {
-        (true, false) if !right.contains_outer() => (*right, sort.asc == (op == Operator::Plus)),
-        (false, true) if !left.contains_outer() => (*left, sort.asc),
-        _ => return Ok(None),
-    };
-    Ok(Some(Some(SortExpr {
-        expr: inner,
-        asc,
-        nulls_first: sort.nulls_first,
-    })))
+    Ok(None)
 }
 
 /// Rewrites a scalar subquery that DataFusion cannot decorrelate: one that is correlated
@@ -317,34 +300,70 @@ fn rewrite_bounded_scalar_subquery(
     let correlated = !input.all_out_ref_exprs().is_empty();
     let expr = strip_alias(shape.expr);
     let outer = expr.contains_outer();
+    let index = shape
+        .projection
+        .expr
+        .iter()
+        .position(|candidate| candidate == shape.expr);
+    let data_type = index.map(|index| shape.projection.schema.field(index).data_type().clone());
     // DataFusion handles the other shapes itself: aggregated subqueries are decorrelated and
     // uncorrelated ones have their row count checked at execution. LIMIT and ORDER BY above a
-    // correlated ungrouped aggregate are dropped, since its single row makes them no-ops and
-    // DataFusion cannot decorrelate through them.
+    // correlated ungrouped aggregate, which DataFusion cannot decorrelate through, are dropped
+    // when they keep its single row (they are no-ops then) and yield NULL otherwise.
     if !outer && (!correlated || is_aggregated(input)) {
         return Ok(
             if correlated && !shape.bounds.is_empty() && row_bounds(input) == (1, Some(1)) {
-                let plan = LogicalPlanBuilder::from(input.clone())
-                    .project(vec![shape.expr.clone()])?
-                    .build()?;
-                Some(nullable_scalar_subquery(plan))
+                let kept = shape.bounds.iter().all(|bound| match bound {
+                    RowBound::Limit { skip, fetch } => *skip == 0 && *fetch != Some(0),
+                    RowBound::Sort(_, fetch) => *fetch != Some(0),
+                });
+                if kept {
+                    let plan = LogicalPlanBuilder::from(input.clone())
+                        .project(vec![shape.expr.clone()])?
+                        .build()?;
+                    Some(nullable_scalar_subquery(plan))
+                } else {
+                    data_type.map(|data_type| cast(lit(ScalarValue::Null), data_type))
+                }
             } else {
                 None
             },
         );
     }
-    let data_type = shape
-        .projection
-        .expr
-        .iter()
-        .position(|candidate| candidate == shape.expr)
-        .map(|index| shape.projection.schema.field(index).data_type().clone());
+    // A projected expression that is neither a bare column nor dependent on the outer row is
+    // evaluated once below the row selection, so that a volatile value is sorted and returned
+    // as the same value; sort keys and the selected value refer to its column.
+    let mut projected = vec![];
     let outputs = shape
         .projection
         .expr
         .iter()
-        .map(|expr| (expr.schema_name().to_string(), strip_alias(expr).clone()))
+        .map(|output| {
+            let name = output.schema_name().to_string();
+            let inner = strip_alias(output);
+            let value = if matches!(inner, Expr::Column(_)) || inner.contains_outer() {
+                inner.clone()
+            } else {
+                projected.push(inner.clone().alias(&name));
+                ident(&name)
+            };
+            (name, value)
+        })
         .collect::<Vec<_>>();
+    let input = if projected.is_empty() {
+        input.clone()
+    } else {
+        LogicalPlanBuilder::from(input.clone())
+            .project(
+                input
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .chain(projected),
+            )?
+            .build()?
+    };
     let mut bounds = vec![];
     let mut shape_bounds = shape.bounds.into_iter().peekable();
     // An ORDER BY above every LIMIT cannot change which single row a scalar subquery returns.
@@ -379,8 +398,8 @@ fn rewrite_bounded_scalar_subquery(
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
-    } else {
-        values.push(expr.clone());
+    } else if let Some(index) = index {
+        values.push(outputs[index].1.clone());
     }
     let names = values
         .iter()
@@ -417,9 +436,9 @@ fn rewrite_bounded_scalar_subquery(
                 nth_value(row, i64::try_from(skip + 1).unwrap_or(i64::MAX), sorts)
             }
         });
-        (input.clone(), selected, skip, fetch == Some(1))
+        (input, selected, skip, fetch == Some(1))
     } else {
-        let mut plan = input.clone();
+        let mut plan = input;
         for bound in bounds.into_iter().rev() {
             plan = match bound {
                 RowBound::Limit { skip, fetch } => {

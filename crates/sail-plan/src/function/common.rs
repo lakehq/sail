@@ -3,12 +3,12 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::prelude::SessionContext;
-use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
-    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl, Subquery,
-    WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit,
+    AggregateUDF, BinaryExpr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
+    Subquery, WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
@@ -28,14 +28,76 @@ pub(crate) fn single_row_scalar_subquery(expr: &expr::Expr) -> Option<&Subquery>
         .filter(|subquery| row_bounds(&subquery.subquery) == (1, Some(1)))
 }
 
-/// A correlated scalar subquery that provably returns exactly one non-null row can never be
-/// NULL, so the null check folds. Spark declares the subquery nullable all the same, but
-/// keeping the check would also keep the subquery in a plan that may need a decorrelation
-/// DataFusion does not support. Uncorrelated subqueries are left alone: they execute as they
-/// are, and that execution must still raise any error their expressions produce.
+/// Whether evaluating `plan` can raise an error. Only column references, literals,
+/// comparisons, boolean connectives, null checks and `count` are known not to; anything else
+/// (casts, arithmetic, other functions) is assumed to be able to, so this is conservative.
+fn plan_cannot_fail(plan: &LogicalPlan) -> bool {
+    matches!(
+        plan,
+        LogicalPlan::Projection(_)
+            | LogicalPlan::Filter(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::TableScan(_)
+            | LogicalPlan::Extension(_)
+    ) && plan.expressions().iter().all(expr_cannot_fail)
+        && plan.inputs().into_iter().all(plan_cannot_fail)
+}
+
+fn expr_cannot_fail(expr: &expr::Expr) -> bool {
+    let mut cannot_fail = true;
+    let _ = expr.apply(|expr| {
+        let allowed = match expr {
+            expr::Expr::Column(_)
+            | expr::Expr::OuterReferenceColumn(..)
+            | expr::Expr::Literal(..)
+            | expr::Expr::Alias(_)
+            | expr::Expr::Not(_)
+            | expr::Expr::IsNull(_)
+            | expr::Expr::IsNotNull(_) => true,
+            #[expect(deprecated)]
+            expr::Expr::Wildcard { .. } => true,
+            expr::Expr::BinaryExpr(expr::BinaryExpr { op, .. }) => matches!(
+                op,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::And
+                    | Operator::Or
+                    | Operator::IsDistinctFrom
+                    | Operator::IsNotDistinctFrom
+            ),
+            expr::Expr::AggregateFunction(function) => function.func.name() == "count",
+            _ => false,
+        };
+        cannot_fail &= allowed;
+        Ok(if allowed {
+            TreeNodeRecursion::Continue
+        } else {
+            TreeNodeRecursion::Stop
+        })
+    });
+    cannot_fail
+}
+
+/// A correlated scalar subquery that provably returns exactly one non-null row and whose
+/// evaluation cannot raise an error can never be NULL, so the null check folds. Spark declares
+/// the subquery nullable all the same, but keeping the check would also keep the subquery in a
+/// plan that may need a decorrelation DataFusion does not support. Any other subquery is left
+/// alone: it executes as it is, and that execution must still raise any error its expressions
+/// produce.
 fn is_single_non_null_row(expr: &expr::Expr) -> bool {
     single_row_scalar_subquery(expr).is_some_and(|subquery| {
-        !subquery.outer_ref_columns.is_empty() && !subquery.subquery.schema().field(0).is_nullable()
+        !subquery.outer_ref_columns.is_empty()
+            && !subquery.subquery.schema().field(0).is_nullable()
+            && plan_cannot_fail(&subquery.subquery)
     })
 }
 
