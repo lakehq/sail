@@ -164,3 +164,36 @@ Feature: aggregate higher-order function
         SELECT reduce(array(1, 2, 3), 0, acc -> acc + 1) AS result
         """
       Then query error (?i)lambda function
+
+
+  Rule: Qualified interval accumulators
+
+    Scenario: Aggregate retains its interval accumulator across workers
+      When query
+        """
+        SELECT id, extract(DAY FROM aggregate(array(1), CAST(id AS INTERVAL DAY), (acc, x) -> acc)) AS days
+        FROM range(3) ORDER BY id
+        """
+      Then query result
+        | id | days |
+        | 0  | 0    |
+        | 1  | 1    |
+        | 2  | 2    |
+
+    Scenario Outline: Aggregate retains an interval accumulator produced by <function> across workers
+      When query
+        """
+        SELECT id, extract(DAY FROM aggregate(array(1), <function>(a), (acc, x) -> acc)) AS days
+        FROM (SELECT id, CAST(array(CAST(id AS INTERVAL DAY)) AS ARRAY<INTERVAL DAY>) AS a FROM range(3))
+        ORDER BY id
+        """
+      Then query result
+        | id | days |
+        | 0  | 0    |
+        | 1  | 1    |
+        | 2  | 2    |
+
+      Examples:
+        | function  |
+        | array_min |
+        | array_max |

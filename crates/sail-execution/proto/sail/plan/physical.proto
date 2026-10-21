@@ -113,7 +113,14 @@ message ExtendedPhysicalExprNode {
     LambdaVariableExprNode lambda_variable = 4;
     IcebergPartitionTransformExprNode iceberg_partition_transform = 5;
     SchemaEvolutionDefaultExprNode schema_evolution_default = 6;
+    FieldCastExprNode field_cast = 7;
   }
+}
+
+message FieldCastExprNode {
+  bytes field = 1;
+  bool is_try = 2;
+  bool safe = 3;
 }
 
 message SchemaEvolutionDefaultExprNode {

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow::array::{ListArray, new_empty_array};
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions::expr_fn::coalesce;
 use datafusion::functions_aggregate::{
@@ -17,7 +19,7 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
-use sail_common::spec::SAIL_LIST_FIELD_NAME;
+use sail_common::spec::{SAIL_LIST_FIELD_NAME, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
@@ -616,6 +618,8 @@ fn duplicate_agnostic_extreme(
     input: AggFunctionInput,
     function: fn() -> Arc<AggregateUDF>,
 ) -> PlanResult<expr::Expr> {
+    // FIXME: DataFusion min/max return inference loses logical input metadata (e.g., interval qualifiers).
+    //  Preserve it upstream without forwarding user metadata.
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: function(),
         params: AggregateFunctionParams {
@@ -658,7 +662,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Spark's collect_set ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
-    let element_type = arg.get_type(schema)?;
+    let (_, element_field) = arg.to_field(schema)?;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
@@ -684,7 +688,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg, &element_type))
+    Ok(coalesce_to_empty_array(agg, &element_field))
 }
 
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -692,7 +696,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Spark's collect_list ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
-    let element_type = arg.get_type(schema)?;
+    let (_, element_field) = arg.to_field(schema)?;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
@@ -718,14 +722,26 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg, &element_type))
+    Ok(coalesce_to_empty_array(agg, &element_field))
 }
 
 /// Spark's `collect_list`/`collect_set` return an empty array for a group with no (non-NULL)
 /// values to collect, but DataFusion's `array_agg` returns NULL over zero rows. Coalesce the
 /// aggregate to a typed empty array so the empty case matches Spark instead of yielding NULL.
-fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
-    let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
+fn coalesce_to_empty_array(agg: expr::Expr, element_field: &Field) -> expr::Expr {
+    // FIXME: Upstream array_agg inference/state must also retain logical element metadata.
+    let values = new_empty_array(element_field.data_type());
+    let mut element_field = element_field
+        .clone()
+        .with_name(SAIL_LIST_FIELD_NAME)
+        .with_nullable(true);
+    element_field.metadata_mut().remove(SPARK_METADATA_JSON_KEY);
+    let empty = ScalarValue::List(Arc::new(ListArray::new(
+        Arc::new(element_field),
+        OffsetBuffer::new_zeroed(1),
+        values,
+        None,
+    )));
     coalesce(vec![agg, lit(empty)])
 }
 
@@ -1076,9 +1092,11 @@ pub(crate) fn list_built_in_aggregate_function_names() -> impl Iterator<Item = &
 }
 
 #[cfg(test)]
+#[expect(clippy::panic)]
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::Array;
     use arrow::datatypes::Schema;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::{ExprSchemable, col};
@@ -1086,6 +1104,37 @@ mod tests {
     use super::*;
     use crate::config::PlanConfig;
     use crate::function::common::FunctionContextInput;
+
+    #[test]
+    fn empty_collect_fallback_preserves_logical_field_metadata() {
+        let field = Field::new("input", DataType::Int64, false).with_metadata(HashMap::from([
+            ("logical_type".to_string(), "retained".to_string()),
+            (
+                SPARK_METADATA_JSON_KEY.to_string(),
+                "{\"comment\":\"input only\"}".to_string(),
+            ),
+        ]));
+        let expr::Expr::ScalarFunction(function) =
+            coalesce_to_empty_array(col("collected"), &field)
+        else {
+            panic!("expected coalesce");
+        };
+        let expr::Expr::Literal(ScalarValue::List(empty), _) = &function.args[1] else {
+            panic!("expected empty list fallback");
+        };
+        let DataType::List(element) = empty.data_type() else {
+            panic!("expected list type");
+        };
+        assert_eq!(element.name(), SAIL_LIST_FIELD_NAME);
+        assert!(element.is_nullable());
+        assert_eq!(
+            element.metadata().get("logical_type").map(String::as_str),
+            Some("retained")
+        );
+        assert!(!element.metadata().contains_key(SPARK_METADATA_JSON_KEY));
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty.value_length(0), 0);
+    }
 
     fn sum_test_schema(data_type: DataType) -> PlanResult<Arc<DFSchema>> {
         Ok(Arc::new(DFSchema::try_from(Schema::new(vec![

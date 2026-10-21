@@ -9,14 +9,14 @@ use datafusion::logical_expr::builder::unnest_with_options;
 use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Projection, ScalarUDF};
 use datafusion_common::{ExprSchema, plan_err};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ident, lit};
-use datafusion_functions_nested::expr_fn as nested_fn;
+use datafusion_expr::{ReturnFieldArgs, ident, lit};
 use either::Either;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::resolver::state::PlanResolverState;
@@ -78,12 +78,18 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             ExplodeKind::InlineOuter => (false, NullHandling::PreserveAndExpandEmpty, true),
         };
         let arg = args.one()?;
-        let arg_type = arg.get_type(self.plan.schema())?;
-        let return_type = func.return_type(&[arg_type])?;
+        // Func is `Explode` (crates/sail-function/src/scalar/explode.rs)
+        let return_field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[arg.to_field(self.plan.schema())?.1],
+            scalar_arguments: &[match &arg {
+                Expr::Literal(value, _) => Some(value),
+                _ => None,
+            }],
+        })?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
         let arg = match data_type {
             ExplodeDataType::List => arg,
-            ExplodeDataType::Map => nested_fn::map_entries(arg),
+            ExplodeDataType::Map => ScalarUDF::from(SparkMapEntries::new()).call(vec![arg]),
         };
         let arg = match with_position {
             true => ScalarUDF::from(ArrayItemWithPosition::new()).call(vec![arg]),
@@ -100,7 +106,7 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                     ident(&name).field("col").alias("col"),
                 ]
             }
-            (ExplodeDataType::List, _, true) => match return_type {
+            (ExplodeDataType::List, _, true) => match return_field.data_type() {
                 DataType::Struct(fields) => Ok(fields
                     .into_iter()
                     .map(|field| {

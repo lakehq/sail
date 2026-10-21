@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{Result, plan_datafusion_err, plan_err};
+use datafusion_common::{Result, internal_err, plan_datafusion_err, plan_err};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -51,37 +51,28 @@ impl ScalarUDFImpl for SparkArray {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types.len() {
-            0 => Ok(empty_array_type()),
-            _ => {
-                let expr_type = arg_types
-                    .iter()
-                    .find(|f| !f.is_null())
-                    .cloned()
-                    .unwrap_or(DataType::Null);
-
-                Ok(DataType::List(Arc::new(Field::new_list_field(
-                    expr_type, true,
-                ))))
-            }
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
+        if args.arg_fields.is_empty() {
+            return Ok(Arc::new(Field::new(self.name(), empty_array_type(), false)));
+        }
+        // FIXME: Resolve element logical metadata along with the common type. Copying
+        // one input field is incorrect when interval qualifiers differ across inputs.
+        let element_type = args
             .arg_fields
             .iter()
             .map(|f| f.data_type())
+            .find(|data_type| !data_type.is_null())
             .cloned()
-            .collect::<Vec<_>>();
+            .unwrap_or(DataType::Null);
         let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
-        let return_type = match self.return_type(&data_types)? {
-            DataType::List(field) => DataType::List(Arc::new(
-                field.as_ref().clone().with_nullable(contains_null),
-            )),
-            data_type => data_type,
-        };
+        let return_type =
+            DataType::List(Arc::new(Field::new_list_field(element_type, contains_null)));
         Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
 
@@ -89,12 +80,14 @@ impl ScalarUDFImpl for SparkArray {
         let ScalarFunctionArgs {
             args, return_field, ..
         } = args;
-        let value_nullable = match return_field.data_type() {
-            DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
-            _ => true,
+        let DataType::List(field) = return_field.data_type() else {
+            return internal_err!("{} expected a List return field", self.name());
         };
-        let func = make_scalar_function(move |arrays| {
-            make_array_inner_with_nullable(arrays, value_nullable)
+        let func = make_scalar_function(|arrays| {
+            if arrays.is_empty() || field.data_type().is_null() {
+                return make_array_inner_with_nullable(arrays, field.is_nullable());
+            }
+            array_array::<i32>(arrays, field.data_type().clone(), field.is_nullable())
         });
         func(args.as_slice())
     }

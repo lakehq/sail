@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::{DFSchemaRef, ScalarValue};
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common::spec;
 use sail_common::utils::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -316,8 +316,27 @@ impl PlanResolver<'_> {
             {
                 try_cast(expr, cast_to_type)
             }
+            (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View, to, false)
+                if to.is_floating() =>
+            {
+                // Spark marks string-to-float casts nullable even in ANSI mode;
+                // DataFusion inherits the input nullability. Preserve the cast's errors.
+                when(lit(true), cast(expr, to)).end()?
+            }
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
+        };
+        // ScalarValue::cast_to drops the immediate list child's metadata. Reapply
+        // the requested field after the cast; the cast still performs value conversion.
+        let expr = if let expr::Expr::Cast(expr::Cast { field, .. })
+        | expr::Expr::TryCast(expr::TryCast { field, .. }) = &expr
+            && matches!(field.data_type(), DataType::List(element) | DataType::LargeList(element)
+                | DataType::ListView(element) | DataType::LargeListView(element)
+                | DataType::FixedSizeList(element, _) if !element.metadata().is_empty())
+        {
+            ScalarUDF::from(SparkStructRename::new(field.data_type().clone())).call(vec![expr])
+        } else {
+            expr
         };
         Ok(match spark_interval_metadata {
             Some(metadata) => {

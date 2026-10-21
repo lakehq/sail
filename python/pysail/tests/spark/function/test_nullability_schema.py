@@ -66,6 +66,45 @@ def test_input_schema_is_honored(spark):
     assert _nullable(df, "nl") is True
 
 
+@pytest.mark.parametrize(
+    ("expression", "expected_type"),
+    [
+        ("array_repeat(a, 2)", "array<array<interval day>>"),
+        ("flatten(array(a))", "array<interval day>"),
+    ],
+)
+def test_nullable_array_conversion_preserves_interval_type(spark, expression, expected_type):
+    result = spark.sql("SELECT CAST(array(INTERVAL '1' DAY) AS ARRAY<INTERVAL DAY>) AS a").selectExpr(
+        f"{expression} AS result"
+    )
+    assert result.schema["result"].dataType.simpleString() == expected_type
+    assert len(result.collect()) == 1
+
+
+@pytest.mark.parametrize("function", ["min_by", "max_by"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_min_max_by_preserves_logical_type_without_column_metadata(spark, function, empty):
+    from datetime import timedelta
+
+    interval_type = T.DayTimeIntervalType(T.DayTimeIntervalType.DAY, T.DayTimeIntervalType.DAY)
+    frame = (
+        spark.range(0 if empty else 2)
+        .select(
+            F.expr("INTERVAL '1' DAY").alias("value", metadata={"comment": "input only", "source": "test"}),
+            F.col("id").alias("ordering"),
+        )
+        .repartition(2)
+    )
+    assert frame.schema["value"].dataType == interval_type
+    result = frame.agg(F.expr(f"{function}(value, ordering)").alias("result"))
+
+    # Spark preserves the value's interval qualifier, but aggregate expressions
+    # do not inherit the input column's user metadata (Alias.metadata).
+    assert result.schema == T.StructType([T.StructField("result", interval_type, True)])
+    expected = None if empty else timedelta(days=1)
+    assert [row.result for row in result.collect()] == [expected]
+
+
 @pytest.mark.parametrize("nullable", [False, True])
 def test_nullifzero_preserves_null_type_with_nullable_output(spark, nullable):
     # Arrange
@@ -155,3 +194,87 @@ def test_round_of_non_null_decimal_stays_nullable(spark):
     # Spark keeps round(decimal) nullable (overflow); Sail says non-nullable.
     out = _decimal_frame(spark).select(F.round("nn", 1).alias("result"))
     assert _nullable(out, "result") is True
+
+
+@pytest.mark.parametrize("expression", ["array_compact(a)", "filter(a, x -> x > 1)", "array_sort(a, (l,r) -> l-r)"])
+def test_derived_array_does_not_inherit_column_metadata(spark, expression):
+    frame = spark.range(1).select(
+        F.array(F.lit(2), F.lit(1)).alias(
+            "a",
+            metadata={"comment": "input only", "source": "test"},
+        )
+    )
+    result = frame.selectExpr(f"{expression} AS result")
+    assert result.schema["result"].metadata == {}
+    expected = [2] if expression.startswith("filter") else ([1, 2] if expression.startswith("array_sort") else [2, 1])
+    assert result.collect()[0].result == expected
+
+
+@pytest.mark.parametrize("kind", ["array", "map_values", "map_keys"])
+def test_aggregate_lambda_output_with_annotated_capture(spark, kind):
+    from datetime import timedelta
+
+    expressions = {
+        "array": "transform(array(1, 2), x -> i)",
+        "map_values": "transform_values(map(1, 2), (k, v) -> i)",
+        "map_keys": "transform_keys(map(1, 2), (k, v) -> i)",
+    }
+    source = spark.range(3).select(F.expr("CAST(id AS INTERVAL DAY)").alias("i", metadata={"source": "capture"}))
+    result = source.selectExpr(f"{expressions[kind]} AS value").agg(F.collect_list("value").alias("result"))
+    days = [timedelta(days=i) for i in range(3)]
+    if kind == "array":
+        expected = [[day, day] for day in days]
+    elif kind == "map_values":
+        expected = [{1: day} for day in days]
+    else:
+        expected = [{day: 2} for day in days]
+    assert sorted(result.collect()[0].result, key=repr) == sorted(expected, key=repr)
+
+
+@pytest.mark.parametrize("element_nullable", [False, True])
+@pytest.mark.parametrize("count_nullable", [False, True])
+def test_array_repeat_preserves_element_and_count_nullability(spark, element_nullable, count_nullable):
+    schema = T.StructType(
+        [
+            T.StructField("element", T.IntegerType(), element_nullable),
+            T.StructField("count", T.IntegerType(), count_nullable),
+        ]
+    )
+    rows = [(1, 2)]
+    if element_nullable:
+        rows.append((None, 2))
+    if count_nullable:
+        rows.append((1, None))
+    result = spark.createDataFrame(rows, schema).selectExpr("array_repeat(element, count) AS result")
+    assert result.schema == T.StructType(
+        [T.StructField("result", T.ArrayType(T.IntegerType(), element_nullable), count_nullable)]
+    )
+    expected = [None if count is None else [element] * count for element, count in rows]
+    assert [row.result for row in result.collect()] == expected
+
+
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_array_repeat_preserves_scalar_interval_type(spark, dynamic):
+    from datetime import timedelta
+
+    source = spark.range(2).selectExpr("CAST(id AS INTERVAL DAY) AS value" if dynamic else "INTERVAL '2' DAY AS value")
+    result = source.selectExpr("array_repeat(value, 2) AS result")
+    assert result.schema["result"].dataType.elementType == T.DayTimeIntervalType(0, 0)
+    assert [row.result for row in result.collect()] == [[timedelta(days=i if dynamic else 2)] * 2 for i in range(2)]
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "1"])
+@pytest.mark.parametrize("ansi", [True, False])
+def test_array_position_string_float_cast_is_nullable(spark, value, ansi):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        source = spark.range(1).select(F.lit(value).cast("double").alias("x"))
+        result = source.selectExpr("array_position(array(x), x) AS result")
+        assert result.schema["result"].nullable is True
+        assert result.collect()[0].result == 1
+        control = spark.sql("SELECT array_position(array(1D), 1D) AS result")
+        assert control.schema["result"].nullable is False
+        assert control.collect()[0].result == 1
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)

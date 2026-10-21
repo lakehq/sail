@@ -558,7 +558,9 @@ fn parse_fields(schema: &str, session_timezone: &str) -> Result<Fields> {
             )));
         }
         let dt = spec_to_arrow_data_type(&f.data_type, session_timezone)?;
-        out.push(Arc::new(Field::new(name, dt, f.nullable)));
+        out.push(Arc::new(
+            Field::new(name, dt, f.nullable).with_metadata(f.metadata.iter().cloned().collect()),
+        ));
     }
     Ok(Fields::from(out))
 }
@@ -664,11 +666,14 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Resul
         SDT::Struct { fields } => {
             let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
             for f in fields.iter() {
-                out.push(Arc::new(Field::new(
-                    f.name.clone(),
-                    spec_to_arrow_data_type(&f.data_type, session_timezone)?,
-                    f.nullable,
-                )));
+                out.push(Arc::new(
+                    Field::new(
+                        f.name.clone(),
+                        spec_to_arrow_data_type(&f.data_type, session_timezone)?,
+                        f.nullable,
+                    )
+                    .with_metadata(f.metadata.iter().cloned().collect()),
+                ));
             }
             Ok(DataType::Struct(Fields::from(out)))
         }

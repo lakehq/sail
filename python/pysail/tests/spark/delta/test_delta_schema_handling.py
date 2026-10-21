@@ -123,6 +123,24 @@ def test_delta_schema_evolution_with_merge_schema(spark, tmp_path):
     )
 
 
+def test_delta_merge_schema_preserves_existing_column_metadata(spark, tmp_path):
+    from pyspark.sql import functions as F  # noqa: N812
+
+    path = tmp_path / "delta_merge_metadata"
+    metadata = {"comment": "keep me", "source": "original"}
+    initial = spark.range(1).select(F.col("id").alias("id", metadata=metadata))
+    initial.write.format("delta").save(str(path))
+    stored_metadata = _delta_field(_latest_delta_schema(path), "id")["metadata"]
+    assert spark.read.format("delta").load(str(path)).schema["id"].metadata == metadata
+
+    spark.range(1, 2).write.format("delta").mode("append").option("mergeSchema", "true").save(str(path))
+
+    assert _delta_field(_latest_delta_schema(path), "id")["metadata"] == stored_metadata
+    result = spark.read.format("delta").load(str(path))
+    assert result.schema["id"].metadata == metadata
+    assert [row.id for row in result.orderBy("id").collect()] == [0, 1]
+
+
 def test_delta_schema_enforcement_without_merge_schema(spark, tmp_path):
     """Test that mergeSchema=false (default) rejects new columns."""
     delta_path = tmp_path / "delta_no_merge_schema"

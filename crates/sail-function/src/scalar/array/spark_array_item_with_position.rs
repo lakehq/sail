@@ -10,8 +10,8 @@ use datafusion::arrow::datatypes::{
 use datafusion::common::cast::{as_large_list_array, as_list_array};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_common::exec_err;
-use datafusion_expr::ScalarFunctionArgs;
+use datafusion_common::{exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayItemWithPosition {
@@ -34,11 +34,7 @@ impl ArrayItemWithPosition {
     fn item_fields<P: ArrowPrimitiveType>(field: &FieldRef) -> Fields {
         Fields::from(vec![
             Arc::new(Field::new("pos", P::DATA_TYPE, field.is_nullable())),
-            Arc::new(Field::new(
-                "col",
-                field.data_type().clone(),
-                field.is_nullable(),
-            )),
+            Arc::new(field.as_ref().clone().with_name("col")),
         ])
     }
 
@@ -91,17 +87,26 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let out = match arg_types {
-            [DataType::List(f)] => DataType::List(Arc::new(Field::new_list_field(
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [field] = args.arg_fields else {
+            return internal_err!("{} should only be called with a list", self.name());
+        };
+        let out = match field.data_type() {
+            DataType::List(f) => DataType::List(Arc::new(Field::new_list_field(
                 Self::item_type::<Int32Type>(f),
                 f.is_nullable(),
             ))),
-            [DataType::LargeList(f)] => DataType::LargeList(Arc::new(Field::new_list_field(
+            DataType::LargeList(f) => DataType::LargeList(Arc::new(Field::new_list_field(
                 Self::item_type::<Int64Type>(f),
                 f.is_nullable(),
             ))),
-            [DataType::FixedSizeList(f, n)] => DataType::FixedSizeList(
+            DataType::FixedSizeList(f, n) => DataType::FixedSizeList(
                 Arc::new(Field::new_list_field(
                     Self::item_type::<Int32Type>(f),
                     f.is_nullable(),
@@ -115,7 +120,7 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
                 )));
             }
         };
-        Ok(out)
+        Ok(Arc::new(Field::new(self.name(), out, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -148,6 +153,46 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
                 )));
             }
         };
-        Ok(ColumnarValue::Array(Arc::new(out)))
+        Ok(ColumnarValue::Array(out))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn positions_preserve_element_metadata() -> Result<()> {
+        let element = Arc::new(
+            Field::new("element", DataType::Int64, false)
+                .with_metadata(HashMap::from([("logical_type".into(), "element".into())])),
+        );
+        for data_type in [
+            DataType::List(Arc::clone(&element)),
+            DataType::LargeList(Arc::clone(&element)),
+            DataType::FixedSizeList(Arc::clone(&element), 2),
+        ] {
+            let result = ArrayItemWithPosition::new().return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::new(Field::new("input", data_type, true))],
+                scalar_arguments: &[None],
+            })?;
+            let (DataType::List(item)
+            | DataType::LargeList(item)
+            | DataType::FixedSizeList(item, _)) = result.data_type()
+            else {
+                return internal_err!("expected a list");
+            };
+            let DataType::Struct(fields) = item.data_type() else {
+                return internal_err!("expected a struct");
+            };
+            assert_eq!(
+                fields[1].as_ref(),
+                &element.as_ref().clone().with_name("col")
+            );
+            assert!(fields[0].metadata().is_empty());
+        }
+        Ok(())
     }
 }

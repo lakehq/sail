@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::datatypes::{FieldRef, Schema};
 use datafusion::common::{Result, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
-use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
-use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
+use datafusion::physical_expr::expressions::{CastExpr, LambdaExpr, LambdaVariable, TryCastExpr};
+use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
@@ -22,7 +23,8 @@ use prost::Message;
 
 use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
 use crate::plan::r#gen::{
-    ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
+    ExtendedPhysicalExprNode, FieldCastExprNode, HigherOrderUdfExprNode, LambdaExprNode,
+    LambdaVariableExprNode,
 };
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
@@ -70,6 +72,29 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let decoded = match decode_remote_expr_kind(proto)? {
+            Some((ExprKind::FieldCast(node), inputs)) => {
+                let [input] = inputs else {
+                    return plan_err!(
+                        "Field-aware cast expects exactly one input, got {}",
+                        inputs.len()
+                    );
+                };
+                let input = self.proto_to_physical_expr(input, input_schema, ctx)?;
+                let field = try_decode_field_ref(&node.field)?;
+                if node.is_try {
+                    Ok(Arc::new(TryCastExpr::new_with_target_field(input, field))
+                        as Arc<dyn PhysicalExpr>)
+                } else {
+                    Ok(Arc::new(CastExpr::new_with_target_field(
+                        input,
+                        field,
+                        Some(CastOptions {
+                            safe: node.safe,
+                            ..Default::default()
+                        }),
+                    )) as Arc<dyn PhysicalExpr>)
+                }
+            }
             Some((ExprKind::HigherOrderUdf(node), inputs)) => {
                 self.higher_order_proto_to_expr(node, inputs, input_schema, ctx)
             }
@@ -90,7 +115,33 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                 let body = self.proto_to_physical_expr(body, input_schema, ctx)?;
                 Ok(Arc::new(LambdaExpr::try_new(node.params, body)?) as Arc<dyn PhysicalExpr>)
             }
-            _ => self.default_proto_to_physical_expr(proto, input_schema, ctx),
+            _ => {
+                let decoded = self.default_proto_to_physical_expr(proto, input_schema, ctx)?;
+                if let Some(function) = decoded.downcast_ref::<ScalarFunctionExpr>() {
+                    // DataFusion serializes a scalar UDF's type/name/nullability without metadata.
+                    // Recover only its metadata through the same field inference used by planning.
+                    let inferred = ScalarFunctionExpr::try_new(
+                        Arc::new(function.fun().clone()),
+                        function.args().to_vec(),
+                        input_schema,
+                        Arc::clone(ctx.task_ctx().session_config().options()),
+                    )?;
+                    let field = decoded
+                        .return_field(input_schema)?
+                        .as_ref()
+                        .clone()
+                        .with_metadata(inferred.return_field(input_schema)?.metadata().clone());
+                    Ok(Arc::new(ScalarFunctionExpr::new(
+                        function.name(),
+                        Arc::new(function.fun().clone()),
+                        function.args().to_vec(),
+                        Arc::new(field),
+                        Arc::clone(ctx.task_ctx().session_config().options()),
+                    )) as Arc<dyn PhysicalExpr>)
+                } else {
+                    Ok(decoded)
+                }
+            }
         }?;
 
         let Some(expression_id) = proto.expr_id else {
@@ -118,6 +169,36 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalExprNode> {
+        // DataFusion's cast protobuf stores only the type, losing explicit interval metadata.
+        let cast = if let Some(cast) = expr.downcast_ref::<CastExpr>().filter(|cast| {
+            cast.target_metadata()
+                .is_some_and(|metadata| !metadata.is_empty())
+        }) {
+            Some((
+                cast.expr(),
+                cast.target_field(),
+                false,
+                cast.cast_options().safe,
+            ))
+        } else {
+            expr.downcast_ref::<TryCastExpr>()
+                .filter(|cast| {
+                    cast.target_metadata()
+                        .is_some_and(|metadata| !metadata.is_empty())
+                })
+                .map(|cast| (cast.expr(), cast.target_field(), true, true))
+        };
+        if let Some((input, field, is_try, safe)) = cast {
+            return extension_expr_to_proto(
+                expr,
+                ExprKind::FieldCast(FieldCastExprNode {
+                    field: try_encode_field_ref(field)?,
+                    is_try,
+                    safe,
+                }),
+                vec![self.physical_expr_to_proto(input, codec)?],
+            );
+        }
         if let Some(hof) = expr.downcast_ref::<HigherOrderFunctionExpr>() {
             return self.higher_order_expr_to_proto(expr, hof, codec);
         }

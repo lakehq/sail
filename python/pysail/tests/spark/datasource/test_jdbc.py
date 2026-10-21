@@ -622,6 +622,26 @@ def test_parse_custom_schema_unit():
     assert _parse_custom_schema("") == {}
 
 
+def test_custom_schema_preserves_metadata_unit():
+    import pyarrow as pa
+
+    from pysail.spark.datasource.jdbc import _apply_custom_schema
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), False, {"comment": "id"}),
+            pa.field("untouched", pa.string(), True, {"comment": "keep me"}),
+        ],
+        metadata={"source": "jdbc"},
+    )
+    result = _apply_custom_schema(schema, "id BIGINT")
+    assert result.field("id").type == pa.int64()
+    assert result.field("id").metadata == {b"comment": b"id"}
+    assert result.field("id").nullable is False
+    assert result.field("untouched").equals(schema.field("untouched"), check_metadata=True)
+    assert result.metadata == schema.metadata
+
+
 def test_lit_unit():
     import datetime as dt
 

@@ -22,13 +22,14 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Int32Array, LargeListArray, ListArray, UInt32Array,
 };
 use datafusion::arrow::compute::{take, take_arrays};
-use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{ArrowNativeType, DataType, FieldRef};
 use datafusion_common::utils::adjust_offsets_for_slice;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
+use sail_common_datafusion::metadata::without_spark_user_metadata;
 
 use crate::scalar::array::lambda_utils::{
     ListValuesResult, coerce_single_list_arg, extract_list_values, value_lambda_pair,
@@ -127,11 +128,9 @@ impl HigherOrderUDFImpl for SparkArraySort {
         // `array_sort` preserves the input array type (element type and
         // nullability are unchanged by sorting).
         match list.data_type() {
-            DataType::List(_) | DataType::LargeList(_) => Ok(Arc::new(Field::new(
-                "",
-                list.data_type().clone(),
-                list.is_nullable(),
-            ))),
+            DataType::List(_) | DataType::LargeList(_) => Ok(Arc::new(
+                without_spark_user_metadata(list.as_ref().clone().with_name("")),
+            )),
             other => plan_err!("{} expected a list, got {other}", self.name()),
         }
     }
@@ -285,6 +284,7 @@ mod tests {
 
     use datafusion::arrow::array::{Int32Array, RecordBatch};
     use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
+    use datafusion::arrow::datatypes::Field;
     use datafusion_common::{DFSchema, ScalarValue};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable};

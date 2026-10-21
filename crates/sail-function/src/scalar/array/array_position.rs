@@ -7,12 +7,14 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Field, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Field, FieldRef, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
-use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValue, exec_err};
+use datafusion::common::{
+    DataFusionError, Result as DataFusionResult, ScalarValue, exec_err, internal_err,
+};
 use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use num::Float;
@@ -46,7 +48,17 @@ impl ScalarUDFImpl for SparkArrayPosition {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> DataFusionResult<DataType> {
-        Ok(DataType::Int64)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> DataFusionResult<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Int64,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DataFusionResult<ColumnarValue> {
@@ -65,20 +77,18 @@ impl ScalarUDFImpl for SparkArrayPosition {
             | DataType::FixedSizeList(field, _) => {
                 let element_type = coerced_element_type(field.data_type(), element_type)?;
                 (
-                    DataType::List(Arc::new(Field::new_list_field(
-                        element_type.clone(),
-                        field.is_nullable(),
-                    ))),
+                    DataType::List(Arc::new(
+                        field.as_ref().clone().with_data_type(element_type.clone()),
+                    )),
                     element_type,
                 )
             }
             DataType::LargeList(field) | DataType::LargeListView(field) => {
                 let element_type = coerced_element_type(field.data_type(), element_type)?;
                 (
-                    DataType::LargeList(Arc::new(Field::new_list_field(
-                        element_type.clone(),
-                        field.is_nullable(),
-                    ))),
+                    DataType::LargeList(Arc::new(
+                        field.as_ref().clone().with_data_type(element_type.clone()),
+                    )),
                     element_type,
                 )
             }

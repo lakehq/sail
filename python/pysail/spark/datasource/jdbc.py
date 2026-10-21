@@ -555,5 +555,5 @@ def _apply_custom_schema(schema: pa.Schema, ddl: str) -> pa.Schema:
     if not overrides:
         return schema
 
-    new_fields = [pa.field(f.name, overrides.get(f.name.lower(), f.type), nullable=f.nullable) for f in schema]
-    return pa.schema(new_fields)
+    new_fields = [f.with_type(overrides.get(f.name.lower(), f.type)) for f in schema]
+    return pa.schema(new_fields, metadata=schema.metadata)

@@ -119,6 +119,8 @@ impl ReadFormat for ParquetReadFormat {
                 // so the inferred types stay identical to today for hinted and INT96 columns.
                 // `coerce_int96_tz` is never set on the reader, so INT96 columns coerce to a
                 // `None`-timezone timestamp, matching `fetch_schema`'s default.
+                // FIXME: Restore field metadata from Spark's
+                // org.apache.spark.sql.parquet.row.metadata footer when metadata is retained.
                 let schema = parquet_to_arrow_schema(
                     file_metadata.schema_descr(),
                     file_metadata.key_value_metadata(),

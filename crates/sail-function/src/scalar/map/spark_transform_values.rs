@@ -101,6 +101,7 @@ impl HigherOrderUDFImpl for SparkTransformValues {
         // Only the value type changes: the lambda's return type and nullability
         // replace the input's, while the key field and the entries struct keep
         // their names so the result stays a well-formed Arrow map.
+        // FIXME: Preserve lambda metadata once DataFusion logical inference retains it too.
         let value = Arc::new(Field::new(
             value.name(),
             lambda.data_type().clone(),

@@ -17,7 +17,7 @@ use datafusion::arrow::datatypes::{
     TimeUnit, TimestampMicrosecondType,
 };
 use datafusion::arrow::temporal_conversions::as_datetime;
-use datafusion_common::{Result, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, exec_datafusion_err, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
@@ -262,24 +262,18 @@ impl ScalarUDFImpl for SparkSequence {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let start_type = match arg_types {
-            [start, _] | [start, _, _] => start.clone(),
-            _ => return invalid_sequence_arity(arg_types.len()),
-        };
-
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            start_type, false,
-        ))))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let data_type = self.return_type(&arg_types)?;
+        let start_type = match args.arg_fields {
+            [start, _] | [start, _, _] => start.data_type().clone(),
+            _ => return invalid_sequence_arity(args.arg_fields.len()),
+        };
+        let data_type = DataType::List(Arc::new(Field::new_list_field(start_type, false)));
         let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
 
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))

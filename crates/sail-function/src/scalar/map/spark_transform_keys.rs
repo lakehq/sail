@@ -113,6 +113,7 @@ impl HigherOrderUDFImpl for SparkTransformKeys {
         let (key, value) = entry_fields(self.name(), entries)?;
         // Only the key type changes. A map key is never nullable: a null key
         // raises an error at evaluation time rather than widening the field.
+        // FIXME: Preserve lambda metadata once DataFusion logical inference retains it too.
         let key = Arc::new(Field::new(key.name(), lambda.data_type().clone(), false));
         let entries = Arc::new(Field::new(
             entries.name(),

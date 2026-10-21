@@ -30,6 +30,8 @@ impl WriteFormat for ParquetWriteFormat {
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
+        // FIXME: Write Spark's schema metadata footer as well as ARROW:schema so
+        // Spark readers can retain field metadata from Sail-written Parquet files.
         let format = ParquetFormat::default().with_options(options);
         input.sink.file_extension = self.file_extension()?;
         format

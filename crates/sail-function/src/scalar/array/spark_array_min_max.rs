@@ -18,11 +18,13 @@ enum ArrayOp {
     Max,
 }
 
-fn element_return_type(name: &str, data_type: Option<&DataType>) -> Result<DataType> {
+fn element_return_field(name: &str, data_type: Option<&DataType>) -> Result<Field> {
     match data_type {
-        Some(DataType::List(field) | DataType::LargeList(field)) => Ok(field.data_type().clone()),
-        Some(DataType::Null) => Ok(DataType::Null),
-        _ => plan_err!("{name} can only accept List or LargeList."),
+        Some(DataType::List(field) | DataType::LargeList(field)) => {
+            Ok(field.as_ref().clone().with_nullable(true))
+        }
+        Some(DataType::Null) => Ok(Field::new(name, DataType::Null, true)),
+        _ => plan_err!("{name} can only accept a list."),
     }
 }
 
@@ -63,9 +65,10 @@ impl ScalarUDFImpl for ArrayMin {
     /// Spark: `ArrayMin.nullable = true`, unconditional (an empty array yields NULL).
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/collectionOperations.scala#L2349>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_type =
-            element_return_type("ArrayMin", args.arg_fields.first().map(|f| f.data_type()))?;
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        Ok(Arc::new(
+            element_return_field("ArrayMin", args.arg_fields.first().map(|f| f.data_type()))?
+                .with_name(self.name()),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -114,9 +117,10 @@ impl ScalarUDFImpl for ArrayMax {
     /// Spark: `ArrayMax.nullable = true`, unconditional (an empty array yields NULL).
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/collectionOperations.scala#L2422>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_type =
-            element_return_type("ArrayMax", args.arg_fields.first().map(|f| f.data_type()))?;
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        Ok(Arc::new(
+            element_return_field("ArrayMax", args.arg_fields.first().map(|f| f.data_type()))?
+                .with_name(self.name()),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -184,6 +188,10 @@ where
 {
     let mut result_values = Vec::new();
     for i in 0..array.len() {
+        if array.is_null(i) {
+            result_values.push(ScalarValue::try_from(data_type)?);
+            continue;
+        }
         let inner_array = array.value(i);
         let value = match op {
             ArrayOp::Min => {
@@ -200,4 +208,44 @@ where
         result_values.push(value);
     }
     Ok(result_values)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn min_max_preserve_element_metadata() -> Result<()> {
+        let element = Arc::new(
+            Field::new("element", DataType::Int64, false)
+                .with_metadata(HashMap::from([("logical_type".into(), "element".into())])),
+        );
+        for data_type in [
+            DataType::List(Arc::clone(&element)),
+            DataType::LargeList(Arc::clone(&element)),
+        ] {
+            let input = Arc::new(
+                Field::new("array", data_type, false)
+                    .with_metadata(HashMap::from([("logical_type".into(), "container".into())])),
+            );
+            for func in [&ArrayMin::new() as &dyn ScalarUDFImpl, &ArrayMax::new()] {
+                let actual = func.return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &[Arc::clone(&input)],
+                    scalar_arguments: &[None],
+                })?;
+                assert_eq!(
+                    actual.as_ref(),
+                    &element
+                        .as_ref()
+                        .clone()
+                        .with_name(func.name())
+                        .with_nullable(true)
+                );
+                assert!(func.return_type(&[input.data_type().clone()]).is_err());
+            }
+        }
+        Ok(())
+    }
 }

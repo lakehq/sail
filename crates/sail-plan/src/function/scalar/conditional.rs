@@ -48,6 +48,8 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    // FIXME: DataFusion CASE inference must retain the common logical type metadata
+    // (e.g. interval qualifiers), without copying a branch's unrelated user metadata.
     let ScalarFunctionInput {
         arguments,
         function_context,
@@ -63,6 +65,8 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    // FIXME: DataFusion coalesce drops logical type metadata from its argument fields.
+    //  Need to retain the resolved common type annotation.
     let ScalarFunctionInput {
         arguments,
         function_context,

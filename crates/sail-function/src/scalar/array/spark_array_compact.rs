@@ -6,11 +6,15 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
+use sail_common_datafusion::metadata::without_spark_user_metadata;
 
 use crate::functions_nested_utils::make_scalar_function;
+use crate::scalar::array::lambda_utils::coerce_single_list_arg;
 
 /// `array_compact` removes all null values from the array.
 /// This is the Spark-compatible implementation.
@@ -31,7 +35,7 @@ impl Default for SparkArrayCompact {
 impl SparkArrayCompact {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -45,15 +49,61 @@ impl ScalarUDFImpl for SparkArrayCompact {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(_) | DataType::LargeList(_) => Ok(arg_types[0].clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!(
-                "spark_array_compact can only accept List or LargeList, got {:?}",
-                arg_types[0]
-            ),
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types == [DataType::Null] {
+            return Ok(vec![DataType::new_list(DataType::Null, true)]);
         }
+        let mut types = coerce_single_list_arg(self.name(), arg_types)?;
+        // An unused NULL dictionary value still makes Arrow's dictionary nullable.
+        // Decode dictionary elements before constructing the nonnullable result list.
+        match &types[0] {
+            DataType::List(field) | DataType::LargeList(field) => {
+                if let DataType::Dictionary(_, values) = field.data_type() {
+                    let field = Arc::new(
+                        field
+                            .as_ref()
+                            .clone()
+                            .with_data_type(values.as_ref().clone()),
+                    );
+                    types[0] = if matches!(types[0], DataType::LargeList(_)) {
+                        DataType::LargeList(field)
+                    } else {
+                        DataType::List(field)
+                    };
+                }
+            }
+            _ => {}
+        }
+        Ok(types)
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let [input] = args.arg_fields else {
+            return plan_err!("{} requires one list argument", self.name());
+        };
+        // Spark's ArrayCompact wraps its result in KnownNotContainsNull.
+        let data_type = match input.data_type() {
+            DataType::List(field) => {
+                DataType::List(Arc::new(field.as_ref().clone().with_nullable(false)))
+            }
+            DataType::LargeList(field) => {
+                DataType::LargeList(Arc::new(field.as_ref().clone().with_nullable(false)))
+            }
+            DataType::Null => DataType::Null,
+            other => return plan_err!("{} expected a list, got {other}", self.name()),
+        };
+        let field = input
+            .as_ref()
+            .clone()
+            .with_name(self.name())
+            .with_data_type(data_type);
+        Ok(Arc::new(without_spark_user_metadata(field)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -83,9 +133,12 @@ fn array_compact_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Result<ArrayRef> {
-    let values = list.values();
-    let values_nulls = values.logical_nulls();
     let offsets = list.offsets();
+    let first = offsets[0].as_usize();
+    let values = list
+        .values()
+        .slice(first, offsets[list.len()].as_usize() - first);
+    let values_nulls = values.logical_nulls();
 
     // Build a boolean filter mask for the flattened values array.
     // We keep a value if its parent row is not null AND the value itself is not null.
@@ -96,8 +149,8 @@ fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Resu
     let mut total_kept: usize = 0;
 
     for i in 0..list.len() {
-        let start = offsets[i].as_usize();
-        let end = offsets[i + 1].as_usize();
+        let start = offsets[i].as_usize() - first;
+        let end = offsets[i + 1].as_usize() - first;
 
         if list.is_null(i) {
             // Null row: mark all values in the range as not kept.
@@ -121,7 +174,9 @@ fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Resu
     let new_values = compute::filter(values.as_ref(), &keep_mask)?;
 
     let field = match list.data_type() {
-        DataType::List(f) | DataType::LargeList(f) => f.clone(),
+        DataType::List(f) | DataType::LargeList(f) => {
+            Arc::new(f.as_ref().clone().with_nullable(false))
+        }
         _ => unreachable!(),
     };
 
@@ -131,4 +186,44 @@ fn array_compact_generic<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> Resu
         new_values,
         list.nulls().cloned(),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    #[test]
+    fn compact_preserves_fields_and_removes_element_nullability() -> Result<()> {
+        let element = Field::new("element", DataType::Int32, true)
+            .with_metadata(HashMap::from([("logical_type".into(), "element".into())]));
+        for (list_type, output_type) in [
+            (
+                DataType::List as fn(FieldRef) -> DataType,
+                DataType::List as fn(FieldRef) -> DataType,
+            ),
+            (DataType::LargeList, DataType::LargeList),
+        ] {
+            for nullable in [false, true] {
+                let input = Field::new("array", list_type(Arc::new(element.clone())), nullable)
+                    .with_metadata(HashMap::from([("logical_type".into(), "container".into())]));
+                let actual = SparkArrayCompact::new().return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &[Arc::new(input.clone())],
+                    scalar_arguments: &[None],
+                })?;
+                assert_eq!(
+                    actual.as_ref(),
+                    &input
+                        .with_name("spark_array_compact")
+                        .with_data_type(output_type(Arc::new(
+                            element.clone().with_nullable(false)
+                        )))
+                );
+            }
+        }
+        Ok(())
+    }
 }

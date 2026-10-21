@@ -88,7 +88,6 @@ Feature: array_compact() removes null values from an array
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null array literal yields a non-nullable array
       When query
         """
@@ -101,7 +100,6 @@ Feature: array_compact() removes null values from an array
          |    |-- element: integer (containsNull = false)
         """
 
-    @sail-bug
     Scenario: a non-null array column yields a non-nullable array
       When query
         """
@@ -114,7 +112,6 @@ Feature: array_compact() removes null values from an array
          |    |-- element: long (containsNull = false)
         """
 
-    @sail-bug
     Scenario: a nullable array column stays nullable
       When query
         """
@@ -127,7 +124,6 @@ Feature: array_compact() removes null values from an array
          |    |-- element: integer (containsNull = false)
         """
 
-    @sail-bug
     Scenario: removing NULLs makes the element non-nullable regardless of input
       When query
         """

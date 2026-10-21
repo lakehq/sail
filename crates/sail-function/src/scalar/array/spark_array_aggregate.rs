@@ -13,7 +13,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::take_arrays;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
@@ -104,7 +104,7 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         };
 
         let element = list_element_field(self.name(), list.data_type())?;
-        let acc = Arc::new(Field::new("", zero.data_type().clone(), true));
+        let acc = Arc::new(zero.as_ref().clone().with_name("").with_nullable(true));
         let merge_params = if self.element_first {
             vec![element, Arc::clone(&acc)]
         } else {
@@ -130,11 +130,13 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
             );
         }
 
-        Ok(Arc::new(Field::new(
-            "",
-            finish.data_type().clone(),
-            list.is_nullable() || finish.is_nullable(),
-        )))
+        Ok(Arc::new(
+            finish
+                .as_ref()
+                .clone()
+                .with_name("")
+                .with_nullable(list.is_nullable() || finish.is_nullable()),
+        ))
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
