@@ -220,6 +220,8 @@ when the data is larger than `spark.sql.session.localRelationCacheThreshold` (64
 
 The cached local relation is the most useful part, since it is needed for any large `createDataFrame` call.
 
+**Decision.** Artifacts are left for future work. The tests above are marked as skipped in `scripts/spark-tests/plugins/spark.py`.
+
 ## Plan Analysis
 
 | Test                                         | Error                           |
@@ -366,6 +368,7 @@ The JDBC tests depend on a JVM JDBC driver, so they cannot pass with Sail's Pyth
 **Proposed fix.** Sort inferred JSON fields by name, then add the JSON and CSV options one at a time, since each is small and can be tested on its own. ORC and bucketed writes are larger features.
 
 `test_write_operations` failed because the CSV writer ignored `lineSep` (the reader supported it already). Fixed in this pull request: the CSV writer uses `lineSep` as the line terminator.
+The ORC data source is left for future work, and `test_orc` and `test_read_multiple_orc_file` are marked as skipped in `scripts/spark-tests/plugins/spark.py`.
 `test_checking_csv_header` failed because `enforceSchema=False` was not supported. Fixed in this pull request: with `header` enabled, the CSV header is checked against the schema by position, case-insensitively, with Spark's error messages.
 `test_json` (`primitivesAsString`), `test_multiline_json`, `test_linesep_json` (with `_corrupt_record`), and `test_encoding_json` needed control over parsing that the JSON source of DataFusion does not provide.
 Fixed in this pull request: a Sail JSON source finds and parses the records as Spark does for `lineSep`, `multiLine`, `encoding`, `primitivesAsString`, `mode`, and `columnNameOfCorruptRecord`, and the JSON writer supports `lineSep`. Reads without these options still use the newline-delimited source of DataFusion.

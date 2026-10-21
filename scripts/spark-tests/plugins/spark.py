@@ -270,6 +270,10 @@ _CACHE_MATERIALIZATION = (
     "while Sail keeps track of cached tables without materializing their data"
 )
 
+_ARTIFACTS = "Artifacts (the AddArtifacts and ArtifactStatus requests) are not supported yet"
+
+_ORC = "The ORC data source is not supported yet"
+
 _PARTITIONING_DIFFERENCE = (
     "Compares sampled rows with Spark, which samples each partition with its own seed, "
     "while Sail keeps range and local relations in one partition by default"
@@ -678,6 +682,39 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_udtf"],
         reason="Fails in the classic Spark session's udf() before the Sail session is used",
         spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_orc"],
+        reason=_ORC,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_datasources.py", "DataSourcesParityTests", "test_read_multiple_orc_file"],
+        reason=_ORC,
+        spark_major_version_less_than=4,
+    ),
+    *(
+        TestMarker(
+            keywords=["test_artifact.py", class_name, test_name],
+            reason=_ARTIFACTS,
+            spark_major_version_less_than=4,
+        )
+        for class_name, test_names in {
+            "ArtifactTests": [
+                "test_add_pyfile",
+                "test_add_zipped_package",
+                "test_basic_requests",
+                "test_cache_artifact",
+                "test_copy_from_local_to_fs",
+            ],
+            "LocalClusterArtifactTests": [
+                "test_add_archive",
+                "test_add_file",
+                "test_add_pyfile",
+                "test_add_zipped_package",
+            ],
+        }.items()
+        for test_name in test_names
     ),
     TestMarker(
         keywords=["test_parity_catalog.py", "CatalogParityTests", "test_refresh_table"],
