@@ -35,6 +35,7 @@ use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_python_udf::udf::expr_contains_python_udf;
 use sail_sql_analyzer::literal::interval::IntervalValue;
 use sail_sql_analyzer::parser::parse_interval;
@@ -115,9 +116,16 @@ fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> 
     let interval = match unit.to_lowercase().as_str() {
         "years" | "year" => match interval {
             Expr::Literal(ScalarValue::Int32(Some(years)), metadata) => {
-                let months = years
-                    .checked_mul(12)
-                    .ok_or_else(|| PlanError::invalid("year-month interval overflow"))?;
+                let Some(months) = years.checked_mul(12) else {
+                    // Defer overflow until a non-NULL date is evaluated, including in CASE branches.
+                    let error = ScalarUDF::from(RaiseError::new())
+                        .call(vec![lit("year-month interval overflow")]);
+                    return Ok(when(
+                        cast(date, DataType::Date32).is_null(),
+                        lit(ScalarValue::Date32(None)),
+                    )
+                    .otherwise(cast(error, DataType::Date32))?);
+                };
                 Expr::Literal(ScalarValue::IntervalYearMonth(Some(months)), metadata)
             }
             _ => cast(

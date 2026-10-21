@@ -158,3 +158,18 @@ Feature: Sort reference resolution
       | 2  |
       | 1  |
       | 0  |
+
+  Scenario Outline: The minimum INT literal is an invalid grouping ordinal
+    Given config spark.sql.groupByOrdinal = true
+    When query
+      """
+      SELECT count(*) AS n FROM range(2) GROUP BY <key>
+      """
+    Then query error (?i)(position|pos_out_of_range)
+
+    Examples:
+      | key           |
+      | -2147483648   |
+      | (-2147483648) |
+      | - 2147483648  |
+      | -002147483648 |

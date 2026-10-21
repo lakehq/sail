@@ -64,3 +64,48 @@ Feature: dateadd function
         root
          |-- result: date (nullable = false)
         """
+
+  # add_years is a Sail extension. The equivalent Spark timestampadd(YEAR, ...)
+  # preserves NULL dates and unselected branches, and rejects evaluated overflow.
+  @sail-only
+  Rule: Year overflow is evaluated only for selected non-NULL dates
+
+    Scenario Outline: Overflowing years preserve NULLs and unused branches with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT add_years(CAST(NULL AS DATE), <years>) AS literal_null,
+               add_years(CASE WHEN 2 > id THEN CAST(NULL AS DATE)
+                              ELSE DATE '2000-01-01' END, <years>) AS column_null,
+               CASE WHEN false THEN add_years(DATE '2000-01-01', <years>)
+                    ELSE DATE '2001-02-03' END AS constant_branch,
+               CASE WHEN 0 > id THEN add_years(DATE '2000-01-01', <years>)
+                    ELSE DATE '2001-02-03' END AS row_branch
+        FROM range(2)
+        """
+      Then query result
+        | literal_null | column_null | constant_branch | row_branch |
+        | NULL         | NULL        | 2001-02-03      | 2001-02-03 |
+        | NULL         | NULL        | 2001-02-03      | 2001-02-03 |
+
+      Examples:
+        | years      | ansi  |
+        | 357913941  | true  |
+        | 357913941  | false |
+        | -357913941 | true  |
+        | -357913941 | false |
+
+    Scenario Outline: Evaluated year overflow still errors with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT add_years(DATE '2000-01-01', <years>) AS result
+        """
+      Then query error (?i)year-month interval overflow
+
+      Examples:
+        | years      | ansi  |
+        | 357913941  | true  |
+        | 357913941  | false |
+        | -357913941 | true  |
+        | -357913941 | false |
