@@ -3,8 +3,9 @@ use std::sync::Arc;
 use datafusion_common::DFSchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::{Filter, Projection};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, expr_fn};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, ScalarUDF, expr_fn};
 use sail_common::spec;
+use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -91,10 +92,11 @@ impl PlanResolver<'_> {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             self.resolve_query_plan(subquery, scope.state()).await?
         };
-        Ok(NamedExpr::new(
-            vec!["subquery".to_string()],
-            expr_fn::scalar_subquery(Arc::new(subquery)),
-        ))
+        // Spark reports every scalar subquery as nullable since an empty result is NULL.
+        // DataFusion 55 derives nullability from the projected field, so wrap the expression.
+        let subquery = ScalarUDF::from(SparkScalarSubquery::new())
+            .call(vec![expr_fn::scalar_subquery(Arc::new(subquery))]);
+        Ok(NamedExpr::new(vec!["subquery".to_string()], subquery))
     }
 
     pub(super) async fn resolve_expression_exists(

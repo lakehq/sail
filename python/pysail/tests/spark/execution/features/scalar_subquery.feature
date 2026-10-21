@@ -104,9 +104,6 @@ Feature: Scalar subqueries in distributed execution
       | 1 | 2 |
       | 2 | 0 |
 
-  # TODO: Match Spark's nullable scalar-subquery schema even for COUNT. The same
-  # mismatch exists without the unaliased derived table before this PR.
-  @sail-bug
   Scenario: Correlated scalar counts retain nullable schemas through unaliased derived tables
     When query
       """
@@ -1234,3 +1231,67 @@ Feature: Scalar subqueries in distributed execution
         | 1  | true    |
         | 2  | false   |
         | 3  | false   |
+
+  Rule: Scalar subqueries are nullable
+    Scenario: Empty scalar subquery is nullable and passes null checks
+      When query
+        """
+        SELECT (SELECT 1 WHERE false) AS c,
+          (SELECT 1 WHERE false) IS NULL AS n,
+          (SELECT 1 WHERE false) IS NOT NULL AS m
+        """
+      Then query result collected
+        | c    | n    | m     |
+        | NULL | true | false |
+      Then query schema
+        """
+        root
+         |-- c: integer (nullable = true)
+         |-- n: boolean (nullable = false)
+         |-- m: boolean (nullable = false)
+        """
+
+    Scenario: Correlated scalar subquery is nullable when unmatched
+      When query
+        """
+        SELECT a FROM VALUES (1), (2) AS t(a)
+        WHERE (SELECT b FROM VALUES (1) AS u(b) WHERE u.b = t.a) IS NULL
+        """
+      Then query result collected
+        | a |
+        | 2 |
+
+    Scenario: Single-row scalar subquery is nullable
+      When query
+        """
+        SELECT (SELECT 1) AS c
+        """
+      Then query result collected
+        | c |
+        | 1 |
+      Then query schema
+        """
+        root
+         |-- c: integer (nullable = true)
+        """
+
+    Scenario: Empty scalar subquery stays nullable through a Parquet round trip
+      Given variable location for temporary directory scalar_subquery_parquet_nullable
+      Given statement template
+        """
+        INSERT OVERWRITE DIRECTORY {{ location.sql }} USING parquet
+        SELECT (SELECT 1 WHERE false) AS c, (SELECT 1) AS d
+        """
+      When query template
+        """
+        SELECT c, d FROM parquet.`{{ location.string }}`
+        """
+      Then query result collected
+        | c    | d |
+        | NULL | 1 |
+      Then query schema
+        """
+        root
+         |-- c: integer (nullable = true)
+         |-- d: integer (nullable = true)
+        """

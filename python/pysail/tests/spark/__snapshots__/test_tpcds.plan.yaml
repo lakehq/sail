@@ -364,7 +364,7 @@ data:
                                       ProjectionExec: expr=[_0@0 as #31, _2@1 as #33, _3@2 as #34]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[_0@0 as #54, CAST(_0@0 AS Float64) as CAST(d.#54 AS Float64)]
-                                  FilterExec: _3@1 = scalar_subquery(<pending>), projection=[_0@0]
+                                  FilterExec: _3@1 = spark_scalar_subquery(scalar_subquery(<pending>)), projection=[_0@0]
                                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                           ProjectionExec: expr=[avg(j.#138)@1 as #155, #145@0 as #145]
@@ -472,7 +472,7 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#363@0 as bucket1, #364@1 as bucket2, #365@2 as bucket3, #366@3 as bucket4, #367@4 as bucket5]
       ScalarSubqueryExec: subqueries=15
-        ProjectionExec: expr=[CASE WHEN scalar_subquery(<pending>) > 31002 THEN scalar_subquery(<pending>) ELSE scalar_subquery(<pending>) END as #363, CASE WHEN scalar_subquery(<pending>) > 588 THEN scalar_subquery(<pending>) ELSE scalar_subquery(<pending>) END as #364, CASE WHEN scalar_subquery(<pending>) > 2456 THEN scalar_subquery(<pending>) ELSE scalar_subquery(<pending>) END as #365, CASE WHEN scalar_subquery(<pending>) > 21645 THEN scalar_subquery(<pending>) ELSE scalar_subquery(<pending>) END as #366, CASE WHEN scalar_subquery(<pending>) > 20553 THEN scalar_subquery(<pending>) ELSE scalar_subquery(<pending>) END as #367]
+        ProjectionExec: expr=[CASE WHEN spark_scalar_subquery(scalar_subquery(<pending>)) > 31002 THEN spark_scalar_subquery(scalar_subquery(<pending>)) ELSE CAST(spark_scalar_subquery(scalar_subquery(<pending>)) AS Decimal128(11, 6)) END as #363, CASE WHEN spark_scalar_subquery(scalar_subquery(<pending>)) > 588 THEN spark_scalar_subquery(scalar_subquery(<pending>)) ELSE CAST(spark_scalar_subquery(scalar_subquery(<pending>)) AS Decimal128(11, 6)) END as #364, CASE WHEN spark_scalar_subquery(scalar_subquery(<pending>)) > 2456 THEN spark_scalar_subquery(scalar_subquery(<pending>)) ELSE CAST(spark_scalar_subquery(scalar_subquery(<pending>)) AS Decimal128(11, 6)) END as #365, CASE WHEN spark_scalar_subquery(scalar_subquery(<pending>)) > 21645 THEN spark_scalar_subquery(scalar_subquery(<pending>)) ELSE CAST(spark_scalar_subquery(scalar_subquery(<pending>)) AS Decimal128(11, 6)) END as #366, CASE WHEN spark_scalar_subquery(scalar_subquery(<pending>)) > 20553 THEN spark_scalar_subquery(scalar_subquery(<pending>)) ELSE CAST(spark_scalar_subquery(scalar_subquery(<pending>)) AS Decimal128(11, 6)) END as #367]
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
             FilterExec: _0@0 = 1, projection=[]
               DataSourceExec: partitions=1, partition_sizes=[1]
@@ -491,7 +491,7 @@ data:
                   FilterExec: _10@0 >= 1 AND _10@0 <= 20, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#73)@0 AS Decimal128(11, 6)) as #74]
+        ProjectionExec: expr=[avg(store_sales.#73)@0 as #74]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#73)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#73)]
@@ -514,7 +514,7 @@ data:
                   FilterExec: _10@0 >= 21 AND _10@0 <= 40, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#145)@0 AS Decimal128(11, 6)) as #146]
+        ProjectionExec: expr=[avg(store_sales.#145)@0 as #146]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#145)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#145)]
@@ -537,7 +537,7 @@ data:
                   FilterExec: _10@0 >= 41 AND _10@0 <= 60, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#217)@0 AS Decimal128(11, 6)) as #218]
+        ProjectionExec: expr=[avg(store_sales.#217)@0 as #218]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#217)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#217)]
@@ -560,7 +560,7 @@ data:
                   FilterExec: _10@0 >= 61 AND _10@0 <= 80, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#289)@0 AS Decimal128(11, 6)) as #290]
+        ProjectionExec: expr=[avg(store_sales.#289)@0 as #290]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#289)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#289)]
@@ -583,7 +583,7 @@ data:
                   FilterExec: _10@0 >= 81 AND _10@0 <= 100, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#361)@0 AS Decimal128(11, 6)) as #362]
+        ProjectionExec: expr=[avg(store_sales.#361)@0 as #362]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#361)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#361)]
@@ -811,7 +811,7 @@ data:
                   AggregateExec: mode=Partial, gby=[(NULL as #530, NULL as #531, NULL as #532, NULL as #533), (#530@0 as #530, NULL as #531, NULL as #532, NULL as #533), (#530@0 as #530, #531@1 as #531, NULL as #532, NULL as #533), (#530@0 as #530, #531@1 as #531, #532@2 as #532, NULL as #533), (#530@0 as #530, #531@1 as #531, #532@2 as #532, #533@3 as #533)], aggr=[sum(y.#534), sum(y.#535)]
                     InterleaveExec
                       ProjectionExec: expr=[store as #530, #485@0 as #531, #487@1 as #532, #489@2 as #533, sum(store_sales.#465 * store_sales.#467)@3 as #534, count(Int64(1))@4 as #535]
-                        FilterExec: sum(store_sales.#465 * store_sales.#467)@3 > scalar_subquery(<pending>)
+                        FilterExec: sum(store_sales.#465 * store_sales.#467)@3 > spark_scalar_subquery(scalar_subquery(<pending>))
                           AggregateExec: mode=FinalPartitioned, gby=[#485@0 as #485, #487@1 as #487, #489@2 as #489], aggr=[sum(store_sales.#465 * store_sales.#467), count(Int64(1))]
                             RepartitionExec: partitioning=Hash([#485@0, #487@1, #489@2], 4), input_partitions=4
                               AggregateExec: mode=Partial, gby=[#485@2 as #485, #487@3 as #487, #489@4 as #489], aggr=[sum(store_sales.#465 * store_sales.#467), count(Int64(1))]
@@ -881,7 +881,7 @@ data:
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                       ProjectionExec: expr=[catalog as #530, #577@0 as #531, #579@1 as #532, #581@2 as #533, sum(catalog_sales.#554 * catalog_sales.#556)@3 as #534, count(Int64(1))@4 as #535]
-                        FilterExec: sum(catalog_sales.#554 * catalog_sales.#556)@3 > scalar_subquery(<pending>)
+                        FilterExec: sum(catalog_sales.#554 * catalog_sales.#556)@3 > spark_scalar_subquery(scalar_subquery(<pending>))
                           AggregateExec: mode=FinalPartitioned, gby=[#577@0 as #577, #579@1 as #579, #581@2 as #581], aggr=[sum(catalog_sales.#554 * catalog_sales.#556), count(Int64(1))]
                             RepartitionExec: partitioning=Hash([#577@0, #579@1, #581@2], 4), input_partitions=4
                               AggregateExec: mode=Partial, gby=[#577@2 as #577, #579@3 as #579, #581@4 as #581], aggr=[sum(catalog_sales.#554 * catalog_sales.#556), count(Int64(1))]
@@ -951,7 +951,7 @@ data:
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                       ProjectionExec: expr=[web as #530, #671@0 as #531, #673@1 as #532, #675@2 as #533, sum(web_sales.#648 * web_sales.#650)@3 as #534, count(Int64(1))@4 as #535]
-                        FilterExec: sum(web_sales.#648 * web_sales.#650)@3 > scalar_subquery(<pending>)
+                        FilterExec: sum(web_sales.#648 * web_sales.#650)@3 > spark_scalar_subquery(scalar_subquery(<pending>))
                           AggregateExec: mode=FinalPartitioned, gby=[#671@0 as #671, #673@1 as #673, #675@2 as #675], aggr=[sum(web_sales.#648 * web_sales.#650), count(Int64(1))]
                             RepartitionExec: partitioning=Hash([#671@0, #673@1, #675@2], 4), input_partitions=4
                               AggregateExec: mode=Partial, gby=[#671@2 as #671, #673@3 as #673, #675@4 as #675], aggr=[sum(web_sales.#648 * web_sales.#650), count(Int64(1))]
@@ -1119,7 +1119,7 @@ data:
                 HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#560@1, #672@1), (#561@2, #673@2), (#562@3, #674@3)]
                   CoalescePartitionsExec
                     ProjectionExec: expr=[store as #559, #485@0 as #560, #487@1 as #561, #489@2 as #562, sum(store_sales.#465 * store_sales.#467)@3 as #563, count(Int64(1))@4 as #564]
-                      FilterExec: sum(store_sales.#465 * store_sales.#467)@3 > scalar_subquery(<pending>)
+                      FilterExec: sum(store_sales.#465 * store_sales.#467)@3 > spark_scalar_subquery(scalar_subquery(<pending>))
                         AggregateExec: mode=FinalPartitioned, gby=[#485@0 as #485, #487@1 as #487, #489@2 as #489], aggr=[sum(store_sales.#465 * store_sales.#467), count(Int64(1))]
                           RepartitionExec: partitioning=Hash([#485@0, #487@1, #489@2], 4), input_partitions=4
                             AggregateExec: mode=Partial, gby=[#485@2 as #485, #487@3 as #487, #489@4 as #489], aggr=[sum(store_sales.#465 * store_sales.#467), count(Int64(1))]
@@ -1185,11 +1185,11 @@ data:
                                         ProjectionExec: expr=[_0@0 as #455, _2@1 as #457, _10@2 as #465, _12@3 as #467]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[_0@0 as #500, CAST(_0@0 AS Float64) as CAST(date_dim.#500 AS Float64)]
-                                    FilterExec: _4@1 = scalar_subquery(<pending>), projection=[_0@0]
+                                    FilterExec: _4@1 = spark_scalar_subquery(scalar_subquery(<pending>)), projection=[_0@0]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                   ProjectionExec: expr=[store as #671, #595@0 as #672, #597@1 as #673, #599@2 as #674, sum(store_sales.#575 * store_sales.#577)@3 as #675, count(Int64(1))@4 as #676]
-                    FilterExec: sum(store_sales.#575 * store_sales.#577)@3 > scalar_subquery(<pending>)
+                    FilterExec: sum(store_sales.#575 * store_sales.#577)@3 > spark_scalar_subquery(scalar_subquery(<pending>))
                       AggregateExec: mode=FinalPartitioned, gby=[#595@0 as #595, #597@1 as #597, #599@2 as #599], aggr=[sum(store_sales.#575 * store_sales.#577), count(Int64(1))]
                         RepartitionExec: partitioning=Hash([#595@0, #597@1, #599@2], 4), input_partitions=4
                           AggregateExec: mode=Partial, gby=[#595@2 as #595, #597@3 as #597, #599@4 as #599], aggr=[sum(store_sales.#575 * store_sales.#577), count(Int64(1))]
@@ -1255,7 +1255,7 @@ data:
                                       ProjectionExec: expr=[_0@0 as #565, _2@1 as #567, _10@2 as #575, _12@3 as #577]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[_0@0 as #610, CAST(_0@0 AS Float64) as CAST(date_dim.#610 AS Float64)]
-                                  FilterExec: _4@1 = scalar_subquery(<pending>), projection=[_0@0]
+                                  FilterExec: _4@1 = spark_scalar_subquery(scalar_subquery(<pending>)), projection=[_0@0]
                                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                       DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[avg(x.#324 * x.#325)@0 as #558]
@@ -1634,7 +1634,7 @@ data:
                       HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#258@0, #198@0)], projection=[#213@1, #215@2]
                         CoalescePartitionsExec
                           ProjectionExec: expr=[CAST(#174@0 AS Float64) as #258]
-                            FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * scalar_subquery(<pending>), projection=[#174@0]
+                            FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * spark_scalar_subquery(scalar_subquery(<pending>)), projection=[#174@0]
                               AggregateExec: mode=FinalPartitioned, gby=[#174@0 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
                                 RepartitionExec: partitioning=Hash([#174@0], 4), input_partitions=4
                                   AggregateExec: mode=Partial, gby=[#174@2 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
@@ -1677,7 +1677,7 @@ data:
                       HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#329@0, #264@0)], projection=[#278@1, #280@2]
                         CoalescePartitionsExec
                           ProjectionExec: expr=[CAST(#174@0 AS Float64) as #329]
-                            FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * scalar_subquery(<pending>), projection=[#174@0]
+                            FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * spark_scalar_subquery(scalar_subquery(<pending>)), projection=[#174@0]
                               AggregateExec: mode=FinalPartitioned, gby=[#174@0 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
                                 RepartitionExec: partitioning=Hash([#174@0], 4), input_partitions=4
                                   AggregateExec: mode=Partial, gby=[#174@2 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
@@ -1754,7 +1754,7 @@ data:
                         HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#276@0, #198@0)], projection=[#213@1, #215@2, #237@3, #238@4]
                           CoalescePartitionsExec
                             ProjectionExec: expr=[CAST(#174@0 AS Float64) as #276]
-                              FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * scalar_subquery(<pending>), projection=[#174@0]
+                              FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * spark_scalar_subquery(scalar_subquery(<pending>)), projection=[#174@0]
                                 AggregateExec: mode=FinalPartitioned, gby=[#174@0 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
                                   RepartitionExec: partitioning=Hash([#174@0], 4), input_partitions=4
                                     AggregateExec: mode=Partial, gby=[#174@2 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
@@ -1803,7 +1803,7 @@ data:
                         HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#367@0, #284@0)], projection=[#298@1, #300@2, #322@3, #323@4]
                           CoalescePartitionsExec
                             ProjectionExec: expr=[CAST(#174@0 AS Float64) as #367]
-                              FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * scalar_subquery(<pending>), projection=[#174@0]
+                              FilterExec: sum(store_sales.#161 * store_sales.#164)@1 > 0.95 * spark_scalar_subquery(scalar_subquery(<pending>)), projection=[#174@0]
                                 AggregateExec: mode=FinalPartitioned, gby=[#174@0 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
                                   RepartitionExec: partitioning=Hash([#174@0], 4), input_partitions=4
                                     AggregateExec: mode=Partial, gby=[#174@2 as #174], aggr=[sum(store_sales.#161 * store_sales.#164)]
@@ -1875,7 +1875,7 @@ data:
         SortPreservingMergeExec: [#148@0 ASC, #149@1 ASC, #150@2 ASC]
           ProjectionExec: expr=[#125@0 as #148, #126@1 as #149, #127@2 as #150, sum(ssales.#135)@3 as #151]
             SortExec: expr=[#125@0 ASC, #126@1 ASC, #127@2 ASC], preserve_partitioning=[true]
-              FilterExec: CAST(sum(ssales.#135)@3 AS Decimal128(32, 8)) > scalar_subquery(<pending>)
+              FilterExec: CAST(sum(ssales.#135)@3 AS Decimal128(32, 8)) > CAST(spark_scalar_subquery(scalar_subquery(<pending>)) AS Decimal128(32, 8))
                 AggregateExec: mode=FinalPartitioned, gby=[#125@0 as #125, #126@1 as #126, #127@2 as #127], aggr=[sum(ssales.#135)]
                   RepartitionExec: partitioning=Hash([#125@0, #126@1, #127@2], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#125@0 as #125, #126@1 as #126, #127@2 as #127], aggr=[sum(ssales.#135)]
@@ -1910,7 +1910,7 @@ data:
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[_0@0 as #112, _8@1 as #120, _9@2 as #121, _10@3 as #122]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(0.05 * avg(ssales.#146)@0 AS Decimal128(32, 8)) as #147]
+        ProjectionExec: expr=[0.05 * avg(ssales.#146)@0 as #147]
           AggregateExec: mode=Final, gby=[], aggr=[avg(ssales.#146)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(ssales.#146)]
@@ -1952,7 +1952,7 @@ data:
         SortPreservingMergeExec: [#148@0 ASC, #149@1 ASC, #150@2 ASC]
           ProjectionExec: expr=[#125@0 as #148, #126@1 as #149, #127@2 as #150, sum(ssales.#135)@3 as #151]
             SortExec: expr=[#125@0 ASC, #126@1 ASC, #127@2 ASC], preserve_partitioning=[true]
-              FilterExec: CAST(sum(ssales.#135)@3 AS Decimal128(32, 8)) > scalar_subquery(<pending>)
+              FilterExec: CAST(sum(ssales.#135)@3 AS Decimal128(32, 8)) > CAST(spark_scalar_subquery(scalar_subquery(<pending>)) AS Decimal128(32, 8))
                 AggregateExec: mode=FinalPartitioned, gby=[#125@0 as #125, #126@1 as #126, #127@2 as #127], aggr=[sum(ssales.#135)]
                   RepartitionExec: partitioning=Hash([#125@0, #126@1, #127@2], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#125@0 as #125, #126@1 as #126, #127@2 as #127], aggr=[sum(ssales.#135)]
@@ -1987,7 +1987,7 @@ data:
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[_0@0 as #112, _8@1 as #120, _9@2 as #121, _10@3 as #122]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(0.05 * avg(ssales.#146)@0 AS Decimal128(32, 8)) as #147]
+        ProjectionExec: expr=[0.05 * avg(ssales.#146)@0 as #147]
           AggregateExec: mode=Final, gby=[], aggr=[avg(ssales.#146)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(ssales.#146)]
@@ -2940,7 +2940,7 @@ data:
             RepartitionExec: partitioning=Hash([#45@0], 4), input_partitions=4
               AggregateExec: mode=Partial, gby=[#45@0 as #45], aggr=[], lim=[100]
                 ProjectionExec: expr=[#21@0 as #45]
-                  FilterExec: CASE WHEN __always_true@2 IS NULL THEN 0 ELSE #44@1 END > 0, projection=[#21@0]
+                  FilterExec: spark_scalar_subquery(CASE WHEN __always_true@2 IS NULL THEN 0 ELSE #44@1 END) > 0, projection=[#21@0]
                     HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#36@1, #14@0)], projection=[#21@4, #44@0, __always_true@2]
                       CoalescePartitionsExec
                         ProjectionExec: expr=[count(Int64(1))@1 as #44, #36@0 as #36, true as __always_true]
@@ -3029,7 +3029,7 @@ data:
                                 SortPreservingMergeExec: [#48@1 ASC]
                                   ProjectionExec: expr=[#2@0 as #47, avg(ss1.#22)@1 as #48]
                                     SortExec: expr=[avg(ss1.#22)@1 ASC], preserve_partitioning=[true]
-                                      FilterExec: CAST(avg(ss1.#22)@1 AS Decimal128(12, 7)) > 0.9 * scalar_subquery(<pending>)
+                                      FilterExec: CAST(avg(ss1.#22)@1 AS Decimal128(12, 7)) > 0.9 * spark_scalar_subquery(scalar_subquery(<pending>))
                                         AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[avg(ss1.#22)]
                                           RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
                                             AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[avg(ss1.#22)]
@@ -3045,7 +3045,7 @@ data:
                               SortPreservingMergeExec: [#102@1 DESC NULLS LAST]
                                 ProjectionExec: expr=[#56@0 as #101, avg(ss1.#76)@1 as #102]
                                   SortExec: expr=[avg(ss1.#76)@1 DESC NULLS LAST], preserve_partitioning=[true]
-                                    FilterExec: CAST(avg(ss1.#76)@1 AS Decimal128(12, 7)) > 0.9 * scalar_subquery(<pending>)
+                                    FilterExec: CAST(avg(ss1.#76)@1 AS Decimal128(12, 7)) > 0.9 * spark_scalar_subquery(scalar_subquery(<pending>))
                                       AggregateExec: mode=FinalPartitioned, gby=[#56@0 as #56], aggr=[avg(ss1.#76)]
                                         RepartitionExec: partitioning=Hash([#56@0], 4), input_partitions=4
                                           AggregateExec: mode=Partial, gby=[#56@0 as #56], aggr=[avg(ss1.#76)]
@@ -3569,7 +3569,7 @@ data:
                                       ProjectionExec: expr=[_0@0 as #167, _7@1 as #174, _8@2 as #175]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[_0@0 as #209, CAST(_0@0 AS Float64) as CAST(date_dim.#209 AS Float64)]
-                                FilterExec: _3@1 >= scalar_subquery(<pending>) AND _3@1 <= scalar_subquery(<pending>), projection=[_0@0]
+                                FilterExec: _3@1 >= spark_scalar_subquery(scalar_subquery(<pending>)) AND _3@1 <= spark_scalar_subquery(scalar_subquery(<pending>)), projection=[_0@0]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
         AggregateExec: mode=FinalPartitioned, gby=[#265@0 as #265], aggr=[]
@@ -3825,7 +3825,7 @@ data:
                                             ProjectionExec: expr=[_0@0 as #45, _2@1 as #47]
                                               DataSourceExec: partitions=1, partition_sizes=[1]
                                     ProjectionExec: expr=[_2@0 as #130]
-                                      FilterExec: _4@1 = scalar_subquery(<pending>), projection=[_2@0]
+                                      FilterExec: _4@1 = spark_scalar_subquery(scalar_subquery(<pending>)), projection=[_2@0]
                                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                           DataSourceExec: partitions=1, partition_sizes=[1]
                         ProjectionExec: expr=[#168@0 as #275, sum(catalog_sales.#156)@1 as #276]
@@ -3847,7 +3847,7 @@ data:
                                           ProjectionExec: expr=[_0@0 as #189, _2@1 as #191]
                                             DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[_2@0 as #274]
-                                    FilterExec: _4@1 = scalar_subquery(<pending>), projection=[_2@0]
+                                    FilterExec: _4@1 = spark_scalar_subquery(scalar_subquery(<pending>)), projection=[_2@0]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                     ProjectionExec: expr=[#312@0 as #419, sum(web_sales.#300)@1 as #420]
@@ -3867,7 +3867,7 @@ data:
                                       ProjectionExec: expr=[_0@0 as #333, _2@1 as #335]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
                               ProjectionExec: expr=[_2@0 as #418]
-                                FilterExec: _4@1 = scalar_subquery(<pending>), projection=[_2@0]
+                                FilterExec: _4@1 = spark_scalar_subquery(scalar_subquery(<pending>)), projection=[_2@0]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                     DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[_4@0 as #129]

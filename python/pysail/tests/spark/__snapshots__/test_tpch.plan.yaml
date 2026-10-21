@@ -313,7 +313,7 @@ data:
         SortPreservingMergeExec: [#34@1 DESC NULLS LAST]
           ProjectionExec: expr=[#0@0 as #33, sum(partsupp.#3 * partsupp.#2)@1 as #34]
             SortExec: expr=[sum(partsupp.#3 * partsupp.#2)@1 DESC NULLS LAST], preserve_partitioning=[true]
-              FilterExec: CAST(sum(partsupp.#3 * partsupp.#2)@1 AS Decimal128(38, 12)) > scalar_subquery(<pending>)
+              FilterExec: CAST(sum(partsupp.#3 * partsupp.#2)@1 AS Decimal128(38, 12)) > spark_scalar_subquery(scalar_subquery(<pending>))
                 AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0], aggr=[sum(partsupp.#3 * partsupp.#2)]
                   RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#0@0 as #0], aggr=[sum(partsupp.#3 * partsupp.#2)]
@@ -423,7 +423,7 @@ data:
                 ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _4@3 as #4]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[#2@0 as #7, sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 as #8]
-                  FilterExec: sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 = scalar_subquery(<pending>)
+                  FilterExec: sum(lineitem.#5 * Int32(1) - lineitem.#6)@1 = spark_scalar_subquery(scalar_subquery(<pending>))
                     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * 1 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
                       RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
                         AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(lineitem.#5 * 1 - lineitem.#6) as sum(lineitem.#5 * Int32(1) - lineitem.#6)]
@@ -565,14 +565,14 @@ data:
                 ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[#12@0 as #43]
-                HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#11@0, #27@1), (#12@1, #28@2)], filter=CAST(#13@0 AS Decimal128(23, 3)) > #42@1, projection=[#12@1]
+                HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#11@0, #27@1), (#12@1, #28@2)], filter=CAST(#13@0 AS Decimal128(23, 3)) > CAST(#42@1 AS Decimal128(23, 3)), projection=[#12@1]
                   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#25@0, #11@0)]
                     ProjectionExec: expr=[_0@0 as #25]
                       FilterExec: _1@1 LIKE blanched%, projection=[_0@0]
                         DataSourceExec: partitions=1, partition_sizes=[1]
                     ProjectionExec: expr=[_0@0 as #11, _1@1 as #12, _2@2 as #13]
                       DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[CAST(0.5 * sum(lineitem.#30)@2 AS Decimal128(23, 3)) as #42, #27@0 as #27, #28@1 as #28]
+                  ProjectionExec: expr=[0.5 * sum(lineitem.#30)@2 as #42, #27@0 as #27, #28@1 as #28]
                     AggregateExec: mode=FinalPartitioned, gby=[#27@0 as #27, #28@1 as #28], aggr=[sum(lineitem.#30)]
                       RepartitionExec: partitioning=Hash([#27@0, #28@1], 4), input_partitions=4
                         AggregateExec: mode=Partial, gby=[#27@0 as #27, #28@1 as #28], aggr=[sum(lineitem.#30)]
@@ -637,7 +637,7 @@ data:
                           DataSourceExec: partitions=1, partition_sizes=[1]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                           ProjectionExec: expr=[_0@0 as #0, _4@1 as #4, _5@2 as #5]
-                            FilterExec: substr(_4@1, 1, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]) AND CAST(_5@2 AS Decimal128(10, 6)) > scalar_subquery(<pending>)
+                            FilterExec: substr(_4@1, 1, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]) AND CAST(_5@2 AS Decimal128(10, 6)) > spark_scalar_subquery(scalar_subquery(<pending>))
                               DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[avg(customer.#13)@0 as #16]
           AggregateExec: mode=Final, gby=[], aggr=[avg(customer.#13)]
