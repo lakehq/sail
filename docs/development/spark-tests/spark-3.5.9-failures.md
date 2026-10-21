@@ -10,7 +10,7 @@ The failures were the same before and after the catalog changes in [#2801](https
 
 Every failure was reproduced locally.
 Where the root cause was not clear from the error, the behavior was compared with Spark 3.5.9, using both a classic session and a Spark Connect server running in a local JVM.
-Two differences, affecting four tests, are not explained yet, and they are marked as such.
+One difference, affecting `test_schema`, is not explained yet, and it is marked as such.
 
 ## Reproducing the Failures
 
@@ -285,7 +285,7 @@ Sail takes the column type from the first row (`Null`) and then cannot cast the 
 The same `VALUES` clause works in Sail when a map comes first.
 
 **Fix (in this pull request).** `zip_with` and `map_zip_with` are implemented as higher-order functions. `zip_with` pads the shorter array with nulls, and `map_zip_with` keeps the keys of the first map followed by the keys only in the second map, passing null for a missing value, as in Spark. The `zip_with` and `map_zip_with` doctests pass.
-For `VALUES`, find the common type of each column over all the rows before casting, so that a `NULL` in the first row does not decide the type.
+A `NULL` row of a `VALUES` map column is ignored when the type of the column is chosen, so the type is the map type of the other rows, as in Spark.
 
 ### Other Expression Differences
 
@@ -297,16 +297,16 @@ For `VALUES`, find the common type of each column over all the rows before casti
 | `SparkConnectFunctionTests.test_date_ts_functions`                                                                    | `last_day('1997/02/28 10:30:00')` fails with a cast error in Sail and is `NULL` in Spark |
 | `SparkConnectFunctionTests.test_window_functions`                                                                     | the column is named `row_number()`; Spark includes the window in the name                |
 | `SparkConnectColumnTests.test_decimal`                                                                                | the column is named `(b < 2.5)`; the classic Spark session names it `(b < 3)`            |
-| `SparkConnectFunctionTests.test_string_functions_multi_args`, `test_collection_functions`, `test_generator_functions` | array columns print the same but compare as different (not explained yet)                |
+| `SparkConnectFunctionTests.test_string_functions_multi_args`, `test_collection_functions`, `test_generator_functions` | array columns print the same but compare as different                                    |
 
 **Root causes.**
 
 - Type coercion: Spark coerces a decimal and a double to `double`, and a decimal and a string to `string`. Sail keeps the decimal in both cases.
 - Decimal division: Spark's result type has `scale = max(6, s1 + p2 + 1)` and `precision = p1 - s1 + s2 + scale`, reduced to at most 38 digits.
   For `decimal(10,1) / decimal(10,0) / 3`, this gives `decimal(23,14)` and `0.38888888888900`. Sail gives `decimal(18,9)` and `0.388886666`, so precision is lost in the intermediate result.
-- `factorial` only had an `Int64` signature, and decimals were not implicitly cast to it. The argument is now cast to `int` as in Spark.
+- `factorial` only had an `Int64` signature, and decimals were not implicitly cast to it. Fixed in this pull request: the argument is cast to `int` as in Spark.
 - An explicit `CAST('1997/02/28 10:30:00' AS DATE)` returns `NULL` in Sail as in Spark, but the implicit cast for the `date` argument of `last_day` raised an error instead.
-  `last_day` now casts a string argument as an explicit cast does. The other date functions in the test (`year`, `quarter`, `month`, `dayofweek`, and so on) still use a cast that raises an error.
+  The other date functions in the test (`year`, `quarter`, `month`, `dayofweek`, and so on) used the same implicit cast.
 - Window expressions are named without their window specification.
 - The array columns that print identically differ in their Python types, not in their values.
   The classic session of these tests has Arrow disabled, so its `toPandas()` returns array columns as Python lists,
@@ -328,9 +328,9 @@ For `VALUES`, find the common type of each column over all the rows before casti
 | `SparkConnectBasicTests.test_deduplicate_within_watermark_in_batch`              | `deduplicate within watermark` |
 
 **Root cause.** `session_window` was registered as an unknown function (`crates/sail-plan/src/function/scalar/datetime.rs`).
-`test_deduplicate_within_watermark_in_batch` only expects an `AnalysisException` saying that `dropDuplicatesWithinWatermark` is not supported for batch DataFrames, but Sail reports an unsupported operation for every input.
+`test_deduplicate_within_watermark_in_batch` only expects an `AnalysisException` saying that `dropDuplicatesWithinWatermark` is not supported for batch DataFrames, but Sail reported an unsupported operation for every input.
 
-**Proposed fix.** For batch input, raise an `AnalysisException` with Spark's message.
+**Fix (in this pull request, for batch input).** `dropDuplicatesWithinWatermark` on a batch DataFrame raises an `AnalysisException` with Spark's message, and the test passes. Deduplication within the watermark of a stream is not supported yet.
 
 **Fix (in this pull request, for `session_window`).** In a grouping, `session_window` is planned as its own aggregation.
 The rows are ordered by time for each value of the other grouping expressions, and a row starts a new session when its time is after the latest end of the sessions of the previous rows, so sessions that overlap or touch are merged as in Spark.
@@ -354,7 +354,9 @@ All four tests use `first()`.
 
 `inputFiles()` itself is correct. `spark.range(1, 100, 1, 10).write.parquet(path)` writes 4 files in Sail (the default parallelism) and 10 in Spark (one per partition), so there are only 4 files to list.
 
-**Proposed fix.** Let the rule pass through limits. For the file count, keep the number of partitions given to `range` when writing, as Spark does.
+**Fix (in this pull request).** The rule passes the input file metadata through limits, and the `input_file_name` tests pass.
+
+For the file count, the writer would have to keep the number of partitions given to `range`, as Spark does.
 
 ### Join Hints
 
@@ -386,7 +388,7 @@ Sail plans the hinted join as DataFusion's `HashJoinExec: mode=CollectLeft`, whi
 `test_multi_paths` looks like a row-order problem in the report, but the rows are the same. Spark sorts the fields of an inferred JSON schema by name (`age`, `name`), and Sail keeps them in the order they appear (`name`, `age`).
 The JDBC tests depend on a JVM JDBC driver, so they cannot pass with Sail's Python JDBC data source and are skipped.
 
-**Proposed fix.** Sort inferred JSON fields by name, then add the JSON and CSV options one at a time, since each is small and can be tested on its own. ORC and bucketed writes are larger features.
+**Fix (in this pull request).** Inferred JSON fields are sorted by name, and `test_multi_paths` passes. ORC and bucketed writes are larger features.
 
 `test_write_operations` failed because the CSV writer ignored `lineSep` (the reader supported it already). Fixed in this pull request: the CSV writer uses `lineSep` as the line terminator.
 The ORC data source is left for future work, and `test_orc` and `test_read_multiple_orc_file` are marked as skipped in `scripts/spark-tests/plugins/spark.py`.
@@ -406,7 +408,7 @@ Fixed in this pull request: a Sail JSON source finds and parses the records as S
 So the client expects the struct fields in the Arrow data to have deduplicated names.
 Sail sends the original duplicate names, which PyArrow cannot convert to a dictionary.
 
-**Proposed fix.** Rename duplicate struct field names in the Arrow batches sent to the client with the same rule as `_dedup_names` (`<name>_<index>` for names that appear more than once), at every nesting level.
+**Fix (in this pull request).** Duplicate struct field names in the Arrow batches sent to the client are renamed with the same rule as `_dedup_names` (`<name>_<index>` for names that appear more than once), at every nesting level, and the four tests pass.
 
 ### User-Defined Types
 
