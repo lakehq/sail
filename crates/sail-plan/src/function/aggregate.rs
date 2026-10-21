@@ -13,7 +13,8 @@ use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{
-    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
+    AggregateUDF, BinaryExpr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, cast, expr, lit,
+    try_cast, when,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
@@ -39,6 +40,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -451,6 +453,26 @@ fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+/// A scalar subquery over an ungrouped aggregate returns exactly one row, so its value is never
+/// NULL when the projected field is not nullable, whatever the subquery's correlation. Spark still
+/// declares such a subquery nullable, so this only serves COUNT, which may drop the argument.
+fn is_never_null_scalar_subquery(expr: &expr::Expr) -> bool {
+    fn yields_one_row(plan: &LogicalPlan) -> bool {
+        match plan {
+            LogicalPlan::Projection(projection) => yields_one_row(&projection.input),
+            LogicalPlan::SubqueryAlias(alias) => yields_one_row(&alias.input),
+            LogicalPlan::Sort(sort) => {
+                sort.fetch.is_none_or(|fetch| fetch >= 1) && yields_one_row(&sort.input)
+            }
+            LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),
+            _ => false,
+        }
+    }
+    SparkScalarSubquery::subquery(expr).is_some_and(|subquery| {
+        yields_one_row(&subquery.subquery) && !subquery.subquery.schema().field(0).is_nullable()
+    })
+}
+
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,
@@ -531,6 +553,7 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         let mut nullable_args = Vec::with_capacity(args.len());
         for argument in args {
             if argument.nullable(function_context.schema)?
+                && !is_never_null_scalar_subquery(&argument)
                 && !matches!(&argument, expr::Expr::Column(column) if nullable_args.iter().any(
                     |existing| matches!(existing, expr::Expr::Column(other) if other == column)
                 ))

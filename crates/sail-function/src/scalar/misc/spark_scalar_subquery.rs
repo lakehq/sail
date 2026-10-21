@@ -4,7 +4,8 @@ use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Subquery,
+    Volatility,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -39,6 +40,19 @@ impl SparkScalarSubquery {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
+        }
+    }
+
+    /// Returns the scalar subquery wrapped by this function when `expr` is such a call.
+    pub fn subquery(expr: &Expr) -> Option<&Subquery> {
+        match expr {
+            Expr::ScalarFunction(function) if function.func.inner().is::<Self>() => {
+                match function.args.as_slice() {
+                    [Expr::ScalarSubquery(subquery)] => Some(subquery),
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 }

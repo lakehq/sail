@@ -65,17 +65,9 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
 }
 
 fn is_correlated_scalar_subquery(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::ScalarFunction(function)
-            if function.func.inner().is::<SparkScalarSubquery>()
-                && matches!(
-                    function.args.as_slice(),
-                    [Expr::ScalarSubquery(subquery)]
-                        if !subquery.outer_ref_columns.is_empty()
-                            || subquery.subquery.contains_outer_reference()
-                )
-    )
+    SparkScalarSubquery::subquery(expr).is_some_and(|subquery| {
+        !subquery.outer_ref_columns.is_empty() || subquery.subquery.contains_outer_reference()
+    })
 }
 
 /// Replaces correlated scalar subqueries inside aggregate function arguments with

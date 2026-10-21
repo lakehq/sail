@@ -562,6 +562,24 @@ Feature: Scalar subquery nullability
         | k |
         | 0 |
 
+    Scenario: count of a correlated count subquery filtered only by the outer row counts every outer row
+      When query
+        """
+        SELECT count((SELECT count(*) FROM range(1) i WHERE o.id >= 0)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: count of a correlated count subquery with a non-equality correlation counts every outer row
+      When query
+        """
+        SELECT count((SELECT count(*) FROM range(2) i WHERE i.id < o.id)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
   Rule: Correlated scalar subqueries keyed by a computed inner value
 
     Scenario: count of a correlated count subquery keyed by a cast inner value counts every outer row
@@ -607,6 +625,16 @@ Feature: Scalar subquery nullability
         | id | c    |
         | 0  | NULL |
         | 1  | 1    |
+
+    Scenario: count of a correlated count subquery short-circuits an invalid cast behind an outer predicate
+      When query
+        """
+        SELECT count((SELECT count(*) FROM VALUES ('bad') AS i(k) WHERE o.id = 0 OR CAST(k AS BIGINT) = o.id)) AS n
+        FROM range(1) o
+        """
+      Then query result collected
+        | n |
+        | 1 |
 
   Rule: Correlated scalar subqueries without aggregation
 
@@ -654,9 +682,7 @@ Feature: Scalar subquery nullability
         | 2  |
 
     # DataFusion cannot decorrelate a correlated scalar subquery through LIMIT.
-
     @sail-bug
-
     Scenario: an unaggregated correlated subquery with LIMIT yields the matched row
       When query
         """
@@ -680,3 +706,88 @@ Feature: Scalar subquery nullability
         SELECT count((SELECT i.k FROM VALUES (1, 4), (1, 2) AS i(k, x) WHERE i.k = o.k)) AS n FROM VALUES (1) AS o(k)
         """
       Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+    Scenario: count of an outer reference projected through a subquery with LIMIT counts every outer row
+      When query
+        """
+        SELECT count((SELECT o.id FROM range(1) LIMIT 1)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: count of an outer reference projected through a subquery with ORDER BY counts every outer row
+      When query
+        """
+        SELECT count((SELECT o.id FROM range(1) ORDER BY id)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: an outer reference combined with the top row of an ordered limited subquery
+      When query
+        """
+        SELECT o.id, (SELECT o.id + x FROM VALUES (5), (7) AS t(x) ORDER BY x DESC LIMIT 1) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 7 |
+        | 1  | 8 |
+
+    Scenario: count of an outer reference projected through a multi-row subquery errors
+      When query
+        """
+        SELECT count((SELECT o.id FROM range(2) i)) AS n FROM range(1) o
+        """
+      Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+  Rule: Inlined subqueries evaluate their input once
+
+    Scenario: a random inner value compared with itself inside a correlated subquery is stable
+      When query
+        """
+        SELECT (SELECT x = x AND o.id = o.id FROM (SELECT rand() AS x) i) AS ok FROM range(2) o
+        """
+      Then query result collected
+        | ok   |
+        | true |
+        | true |
+
+    Scenario: a uuid projected twice inside a correlated subquery compares equal
+      When query
+        """
+        SELECT (SELECT CASE WHEN x = y THEN o.id ELSE -1L END FROM (SELECT u AS x, u AS y FROM (SELECT uuid() AS u)) q) AS result
+        FROM range(1) o
+        """
+      Then query result collected
+        | result |
+        | 0      |
+
+  Rule: Outer references in a correlated aggregate select list
+
+    # Spark rejects outer references in an aggregate's select list (UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE); Sail evaluates them.
+    @sail-only
+    Scenario: an outer reference added to a correlated aggregate result
+      When query
+        """
+        SELECT o.id, (SELECT max(x) + o.id FROM VALUES (5), (7) AS t(x)) AS c FROM range(2) o ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 7 |
+        | 1  | 8 |
+
+    # Spark rejects outer references in an aggregate's select list (UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE); Sail evaluates them.
+    @sail-only
+    Scenario: an outer reference added to an empty correlated aggregate result is NULL
+      When query
+        """
+        SELECT o.id, (SELECT max(x) + o.id FROM VALUES (5) AS t(x) WHERE false) AS c FROM range(2) o ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | NULL |
+        | 1  | NULL |
