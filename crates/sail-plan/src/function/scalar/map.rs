@@ -7,6 +7,7 @@ use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array::SparkArray;
+use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -160,27 +161,12 @@ fn map_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn map_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let schema = input.function_context.schema;
-    let map = input.arguments.one()?;
-    let value_contains_null = map_value_contains_null(&map.get_type(schema.as_ref())?);
-    let map = cast_map_value_nullability(map, schema, true)?;
-    // FIXME: DataFusion's ScalarValue list conversion drops child metadata for constant maps,
-    //  causing a return-type mismatch for interval values.
-    let expr = expr_fn::map_values(map);
-    cast_list_value_nullability(expr, schema, value_contains_null)
+    Ok(map_values_expr(input.arguments.one()?))
 }
 
-fn map_value_contains_null(data_type: &DataType) -> bool {
-    let DataType::Map(entries, _) = data_type else {
-        return true;
-    };
-    let DataType::Struct(fields) = entries.data_type() else {
-        return true;
-    };
-    fields
-        .get(1)
-        .map(|field| field.is_nullable())
-        .unwrap_or(true)
+fn map_values_expr(map: expr::Expr) -> expr::Expr {
+    let entries = ScalarUDF::from(SparkMapEntries::new()).call(vec![map]);
+    ScalarUDF::from(ArrayStructField::new()).call(vec![entries, lit("value")])
 }
 
 fn map_entries_value_contains_null(data_type: &DataType) -> bool {
@@ -310,12 +296,7 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (keys, values) = input
         .arguments
         .iter()
-        .map(|map| {
-            (
-                expr_fn::map_keys(map.clone()),
-                expr_fn::map_values(map.clone()),
-            )
-        })
+        .map(|map| (expr_fn::map_keys(map.clone()), map_values_expr(map.clone())))
         .unzip();
 
     let keys = expr_fn::array_concat(keys);

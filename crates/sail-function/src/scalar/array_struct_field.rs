@@ -13,6 +13,8 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
+use crate::functions_nested_utils::make_scalar_function;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayStructField {
     signature: Signature,
@@ -152,7 +154,11 @@ impl ScalarUDFImpl for ArrayStructField {
         };
         let field_name = self.field_name(args.scalar_arguments.get(1).copied().flatten())?;
         let data_type = self.return_type_for_list(array_field.data_type(), field_name)?;
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            array_field.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -170,29 +176,31 @@ impl ScalarUDFImpl for ArrayStructField {
             .ok_or_else(|| {
                 plan_datafusion_err!("{} requires a non-empty literal field name", self.name())
             })?;
-        let arrays = ColumnarValue::values_to_arrays(&args[..1])?;
-        let [array] = arrays.as_slice() else {
-            return exec_err!("{} requires an array argument", self.name());
-        };
-        let out = match array.data_type() {
-            DataType::List(_) => Self::project_list(as_list_array(array)?, field_name)?,
-            DataType::LargeList(_) => Self::project_list(as_large_list_array(array)?, field_name)?,
-            DataType::FixedSizeList(_, size) => {
-                let Some(array) = array.as_any().downcast_ref::<FixedSizeListArray>() else {
-                    return exec_err!(
-                        "array_struct_field expected FixedSizeListArray, got {}",
+        make_scalar_function(|arrays| {
+            let [array] = arrays else {
+                return exec_err!("{} requires an array argument", self.name());
+            };
+            match array.data_type() {
+                DataType::List(_) => Self::project_list(as_list_array(array)?, field_name),
+                DataType::LargeList(_) => {
+                    Self::project_list(as_large_list_array(array)?, field_name)
+                }
+                DataType::FixedSizeList(_, size) => {
+                    let Some(array) = array.as_any().downcast_ref::<FixedSizeListArray>() else {
+                        return exec_err!(
+                            "array_struct_field expected FixedSizeListArray, got {}",
+                            array.data_type()
+                        );
+                    };
+                    Self::project_fixed_size_list(array, *size, field_name)
+                }
+                _ => {
+                    exec_err!(
+                        "array_struct_field requires a list, got {}",
                         array.data_type()
-                    );
-                };
-                Self::project_fixed_size_list(array, *size, field_name)?
+                    )
+                }
             }
-            _ => {
-                return exec_err!(
-                    "array_struct_field requires a list, got {}",
-                    array.data_type()
-                );
-            }
-        };
-        Ok(ColumnarValue::Array(out))
+        })(&args[..1])
     }
 }
