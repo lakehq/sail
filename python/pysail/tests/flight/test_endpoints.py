@@ -11,7 +11,7 @@ import pyarrow as pa
 import pytest
 from adbc_driver_flightsql import ConnectionOptions
 
-from pysail.tests.flight.conftest import connect
+from pysail.tests.flight.conftest import connect, local_flight_uri
 
 
 def read_result(statement):
@@ -95,6 +95,84 @@ def test_nested_schema_discovery(flight_connection, tmp_path):
     assert flight_connection.adbc_get_table_schema(
         "nested_table", catalog_filter="sail", db_schema_filter=schema
     ).names == ["value"]
+
+
+@pytest.mark.parametrize("initial", [False, True])
+def test_schema_discovery_creates_intermediate_databases(monkeypatch, tmp_path, initial):
+    schema = "flight_orphan.child.grandchild"
+    namespace = '["flight_orphan", "child", "grandchild"]' if initial else '["default"]'
+    monkeypatch.setenv("SAIL_CATALOG__LIST", f'[{{type="memory", name="sail", initial_database={namespace}}}]')
+    monkeypatch.setenv("SAIL_CATALOG__DEFAULT_CATALOG", "sail")
+    if initial:
+        monkeypatch.setenv("SAIL_CATALOG__DEFAULT_DATABASE", namespace)
+    with local_flight_uri() as uri, connect(uri) as connection:
+        if not initial:
+            query(connection, f"CREATE DATABASE {schema}")
+        query(
+            connection,
+            f"CREATE TABLE {schema}.orphan_table (value BIGINT) USING parquet LOCATION '{tmp_path.as_posix()}'",
+        )
+        connection.adbc_current_db_schema = schema
+        assert query(connection, "SELECT count(*) FROM orphan_table") == [(0,)]
+        with connection.adbc_get_objects(
+            depth="db_schemas", catalog_filter="sail", db_schema_filter="flight_orphan%"
+        ) as reader:
+            catalogs = reader.read_all().to_pylist()
+        assert [db["db_schema_name"] for catalog in catalogs for db in catalog["catalog_db_schemas"]] == [
+            "flight_orphan",
+            "flight_orphan.child",
+            schema,
+        ]
+        matches = tables(connection, catalog_filter="sail", db_schema_filter=schema)
+        assert [table["table_name"] for table in matches] == ["orphan_table"]
+        assert [column["column_name"] for column in matches[0]["table_columns"]] == ["value"]
+
+
+@pytest.mark.parametrize("option", ["catalog", "schema"])
+@pytest.mark.parametrize("operation", ["query", "update"])
+def test_prepared_statement_preserves_namespace(monkeypatch, tmp_path, option, operation):
+    monkeypatch.setenv(
+        "SAIL_CATALOG__LIST",
+        '[{type="memory", name="sail", initial_database=["default"]}, '
+        '{type="memory", name="other", initial_database=["default"]}]',
+    )
+    monkeypatch.setenv("SAIL_CATALOG__DEFAULT_CATALOG", "sail")
+    with local_flight_uri() as uri, connect(uri) as connection:
+        query(connection, "CREATE DATABASE second")
+        original = "sail.default.namespace_table"
+        alternate = "other.default.namespace_table" if option == "catalog" else "sail.second.namespace_table"
+        for name, location, value in ((original, "original", 1), (alternate, "alternate", 99)):
+            query(
+                connection,
+                f"CREATE TABLE {name} (value BIGINT) USING delta LOCATION '{(tmp_path / location).as_posix()}'",
+            )
+            query(connection, f"INSERT INTO {name} VALUES ({value})")  # noqa: S608
+        with adbc_driver_manager.AdbcStatement(connection.adbc_connection) as statement:
+            sql = (
+                "SELECT value FROM namespace_table WHERE value > CAST(? AS BIGINT) ORDER BY value"
+                if operation == "query"
+                else "INSERT INTO namespace_table VALUES (CAST(? AS BIGINT))"
+            )
+            statement.set_sql_query(sql)
+            statement.prepare()
+            if option == "catalog":
+                connection.adbc_current_catalog = "other"
+            else:
+                connection.adbc_current_db_schema = "second"
+            statement.bind(pa.record_batch([pa.array([0 if operation == "query" else 2])], names=["value"]))
+            if operation == "query":
+                assert read_result(statement).column("value").to_pylist() == [1]
+                query(connection, "INSERT INTO sail.default.namespace_table VALUES (2)")
+                assert read_result(statement).column("value").to_pylist() == [1, 2]
+            else:
+                assert statement.execute_update() == -1
+                statement.bind(pa.record_batch([pa.array([3])], names=["value"]))
+                assert statement.execute_update() == -1
+            assert connection.adbc_current_catalog == ("other" if option == "catalog" else "sail")
+            assert connection.adbc_current_db_schema == ("default" if option == "catalog" else "second")
+        expected = [(1,), (2,)] if operation == "query" else [(1,), (2,), (3,)]
+        assert query(connection, "SELECT value FROM sail.default.namespace_table ORDER BY value") == expected
+        assert query(connection, f"SELECT value FROM {alternate}") == [(99,)]  # noqa: S608
 
 
 @pytest.mark.parametrize("file_format", ["delta", "iceberg"])
@@ -219,6 +297,27 @@ def test_session_options(flight_connection):
     assert values["catalog"] == "sail"
     with pytest.raises(adbc_driver_manager.Error):
         options.set_options(**{prefix + "schema": "no_such_schema"})
+
+
+def test_prepared_session_commands_update_live_session(flight_connection):
+    query(flight_connection, "CREATE DATABASE flight_session_command")
+    with adbc_driver_manager.AdbcStatement(flight_connection.adbc_connection) as statement:
+        statement.set_sql_query("USE DATABASE flight_session_command")
+        statement.prepare()
+        assert flight_connection.adbc_current_db_schema == "default"
+        assert statement.execute_update() == -1
+    assert flight_connection.adbc_current_db_schema == "flight_session_command"
+    batch_size = 64
+    row_count = 1000
+    with adbc_driver_manager.AdbcStatement(flight_connection.adbc_connection) as statement:
+        statement.set_sql_query(f"SET datafusion.execution.batch_size = {batch_size}")
+        statement.prepare()
+        assert statement.execute_update() == -1
+    with flight_connection.cursor() as cursor:
+        cursor.execute("SELECT id FROM range(1000) ORDER BY id DESC")
+        table = cursor.fetch_arrow_table()
+    assert table.num_rows == row_count
+    assert all(batch.num_rows <= batch_size for batch in table.to_batches())
 
 
 def test_bad_binding_does_not_execute(flight_connection):

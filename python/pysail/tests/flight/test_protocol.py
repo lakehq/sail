@@ -12,9 +12,10 @@ from google.protobuf.any_pb2 import Any
 from pyarrow import flight
 
 from pysail.flight import FlightSqlServer
+from pysail.tests.flight.conftest import local_flight_uri
 
 
-def message_type(name, fields):
+def message_type(name, fields, *, optional_fields=()):
     """Define the wire fields used here from Flight.proto and FlightSql.proto.
 
     PyArrow exposes the Flight client but does not ship Flight SQL protobufs.
@@ -23,7 +24,11 @@ def message_type(name, fields):
     file = descriptor_pb2.FileDescriptorProto(name=f"{name}.proto", syntax="proto3")
     message = file.message_type.add(name=name)
     for number, field_name, field_type in fields:
-        message.field.add(name=field_name, number=number, type=field_type, label=1)
+        field = message.field.add(name=field_name, number=number, type=field_type, label=1)
+        if field_name in optional_fields:
+            field.proto3_optional = True
+            field.oneof_index = len(message.oneof_decl)
+            message.oneof_decl.add(name=f"_{field_name}")
     pool = descriptor_pool.DescriptorPool()
     pool.Add(file)
     return message_factory.GetMessageClass(pool.FindMessageTypeByName(name))
@@ -36,6 +41,8 @@ Action = message_type("Action", [(1, "type", _STRING), (2, "body", _BYTES)])
 Result = message_type("Result", [(1, "body", _BYTES)])
 StatementQuery = message_type("CommandStatementQuery", [(1, "query", _STRING)])
 PreparedQuery = message_type("CommandPreparedStatementQuery", [(1, "prepared_statement_handle", _BYTES)])
+GetDbSchemas = message_type("CommandGetDbSchemas", [(1, "catalog", _STRING)], optional_fields=("catalog",))
+GetTables = message_type("CommandGetTables", [(1, "catalog", _STRING)], optional_fields=("catalog",))
 PrepareRequest = message_type("ActionCreatePreparedStatementRequest", [(1, "query", _STRING)])
 PrepareResult = message_type(
     "ActionCreatePreparedStatementResult",
@@ -77,6 +84,61 @@ def rpc_action(channel, name, metadata=()):
         response_deserializer=Result.FromString,
     )
     return call(Action(type=name), metadata=metadata, timeout=5)
+
+
+@pytest.mark.parametrize("command_type", [GetDbSchemas, GetTables])
+@pytest.mark.parametrize("catalog", ["sail", "", "missing"])
+def test_metadata_catalog_filter_skips_unrelated_providers(monkeypatch, command_type, catalog):
+    monkeypatch.setenv(
+        "SAIL_CATALOG__LIST",
+        '[{type="memory", name="sail", initial_database=["default"]}, '
+        '{type="iceberg-rest", name="offline", uri="http://127.0.0.1:1"}]',
+    )
+    monkeypatch.setenv("SAIL_CATALOG__DEFAULT_CATALOG", "sail")
+    with local_flight_uri() as uri, flight.connect(uri) as client:
+        query(client, "CREATE TEMP VIEW filtered_view AS SELECT 1 AS value")
+        command = descriptor(command_type(catalog=catalog))
+        schema = client.get_schema(command).schema
+        info = client.get_flight_info(command)
+        table = client.do_get(info.endpoints[0].ticket).read_all()
+        assert table.schema == schema
+        if catalog == "sail":
+            assert table.column("catalog_name").to_pylist() == ["sail"]
+            column = "db_schema_name" if command_type is GetDbSchemas else "table_name"
+            assert table.column(column).to_pylist() == (
+                ["default"] if command_type is GetDbSchemas else ["filtered_view"]
+            )
+        else:
+            assert table.num_rows == 0
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+def test_mutating_procedure_finishes_before_fetch(flight_uri, tmp_path, prepared):
+    with flight.connect(flight_uri) as client:
+        options = flight.FlightCallOptions(headers=[client.authenticate_basic_token("", "")])
+        query(
+            client, f"CREATE TABLE eager_procedure (value INT) USING iceberg LOCATION '{tmp_path.as_posix()}'", options
+        )
+        query(client, "INSERT INTO eager_procedure VALUES (1)", options)
+        snapshot = query(client, "SELECT snapshot_id FROM eager_procedure.snapshots", options).column(0)[0].as_py()
+        query(client, "INSERT INTO eager_procedure VALUES (2)", options)
+        sql = f"CALL system.rollback_to_snapshot('eager_procedure', {snapshot})"
+        command = descriptor(
+            PreparedQuery(prepared_statement_handle=prepare(client, sql, options))
+            if prepared
+            else StatementQuery(query=sql)
+        )
+        schema = client.get_schema(command, options).schema
+        assert query(client, "SELECT value FROM eager_procedure ORDER BY value", options).to_pylist() == [
+            {"value": 1},
+            {"value": 2},
+        ]
+        info = client.get_flight_info(command, options)
+        assert query(client, "SELECT value FROM eager_procedure", options).to_pylist() == [{"value": 1}]
+        result = client.do_get(info.endpoints[0].ticket, options).read_all()
+        assert result.schema == schema
+        assert result.column("current_snapshot_id").to_pylist() == [snapshot]
+        assert query(client, "SELECT value FROM eager_procedure", options).to_pylist() == [{"value": 1}]
 
 
 @pytest.mark.parametrize("name", ["GetSessionOptions", "CloseSession"])

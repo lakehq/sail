@@ -6,6 +6,7 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::{StreamExt, TryStreamExt, stream};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
@@ -42,10 +43,32 @@ impl SailFlightSqlService {
         session: &FlightSession,
         sql: &str,
     ) -> Result<PreparedStatement, Status> {
+        let catalog = session
+            .context
+            .extension::<CatalogManager>()
+            .map_err(internal)?;
+        let catalog = Arc::new(catalog.with_current_namespace().map_err(internal)?);
+        self.prepare_in_catalog(session, sql, catalog).await
+    }
+
+    async fn prepare_in_catalog(
+        &self,
+        session: &FlightSession,
+        sql: &str,
+        catalog: Arc<CatalogManager>,
+    ) -> Result<PreparedStatement, Status> {
+        let session = session.with_catalog(catalog.clone());
         let (sql, _) = rewrite_positional_parameter_markers(sql).map_err(invalid)?;
         let plan =
             from_ast_statement(parse_one_statement(&sql).map_err(invalid)?).map_err(invalid)?;
         let is_query = matches!(&plan, spec::Plan::Query(_));
+        let mutates_session = matches!(&plan, spec::Plan::Command(command) if matches!(
+            &command.node,
+            spec::CommandNode::SetVariable { .. }
+                | spec::CommandNode::ResetVariable { .. }
+                | spec::CommandNode::SetCurrentCatalog { .. }
+                | spec::CommandNode::SetCurrentDatabase { .. }
+        ));
         // Resolving the logical plan must not execute catalog commands or SET.
         let returns_rows = matches!(&plan, spec::Plan::Command(command) if matches!(&command.node,
             spec::CommandNode::ShowString(_)
@@ -119,8 +142,10 @@ impl SailFlightSqlService {
         Ok(PreparedStatement {
             session_id: session.id.clone(),
             sql,
+            catalog,
             plan: named.plan,
             is_query,
+            mutates_session,
             fields: named.fields,
             parameter_schema,
             parameters: None,
@@ -135,7 +160,9 @@ impl SailFlightSqlService {
         // Lakehouse sources and write plans capture snapshots and base metadata
         // during resolution. Cloning a prepared logical plan would reuse those
         // across executions, even after this session has committed new data.
-        let mut refreshed = self.prepare(session, &statement.sql).await?;
+        let mut refreshed = self
+            .prepare_in_catalog(session, &statement.sql, statement.catalog)
+            .await?;
         refreshed.parameters = statement.parameters;
         Ok(refreshed)
     }
@@ -179,6 +206,7 @@ impl SailFlightSqlService {
         session: &FlightSession,
         plan: LogicalPlan,
         fields: Option<&Vec<String>>,
+        is_query: bool,
     ) -> Result<SendableRecordBatchStream, Status> {
         let (plan, _) = execute_named_plan(
             &session.context,
@@ -203,7 +231,7 @@ impl SailFlightSqlService {
                 metrics.clone(),
                 MetricsRecordingContext {
                     session_id: session.id.clone(),
-                    statement_type: if fields.is_some() {
+                    statement_type: if is_query {
                         StatementType::Query
                     } else {
                         StatementType::Command
@@ -213,11 +241,19 @@ impl SailFlightSqlService {
         } else {
             stream
         };
-        if fields.is_some() {
+        if is_query {
             Ok(stream)
         } else {
             // Commands must finish even when the client never calls DoGet.
-            stream.try_collect::<Vec<_>>().await.map_err(internal)?;
+            // Some commands (including mutating CALLs) also return result rows.
+            let schema = stream.schema();
+            let batches = stream.try_collect::<Vec<_>>().await.map_err(internal)?;
+            if fields.is_some() {
+                return Ok(Box::pin(RecordBatchStreamAdapter::new(
+                    schema,
+                    stream::iter(batches.into_iter().map(Ok)),
+                )));
+            }
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 Arc::new(Schema::empty()),
                 stream::empty(),
@@ -252,10 +288,17 @@ impl SailFlightSqlService {
         for input in plans {
             plan = plan.union(input).map_err(invalid)?;
         }
+        // SET/RESET/USE operate on the live session rather than its preparation scope.
+        let session = if statement.mutates_session {
+            session.clone()
+        } else {
+            session.with_catalog(statement.catalog.clone())
+        };
         self.execute_plan(
-            session,
+            &session,
             plan.build().map_err(invalid)?,
             statement.fields.as_ref(),
+            statement.is_query,
         )
         .await
     }

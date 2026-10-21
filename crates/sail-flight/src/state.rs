@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
+use sail_catalog::manager::CatalogManager;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -13,13 +15,27 @@ pub struct FlightSession {
     pub context: SessionContext,
 }
 
+impl FlightSession {
+    pub fn with_catalog(&self, catalog: Arc<CatalogManager>) -> Self {
+        let mut state = self.context.state();
+        state.config_mut().set_extension(catalog);
+        Self {
+            id: self.id.clone(),
+            context: SessionContext::new_with_state(state),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PreparedStatement {
     pub session_id: String,
     /// Re-resolve this SQL before execution: logical plans can capture table snapshots.
     pub sql: String,
+    /// Keep preparation-time name resolution while refreshing live table metadata.
+    pub catalog: Arc<CatalogManager>,
     pub plan: LogicalPlan,
     pub is_query: bool,
+    pub mutates_session: bool,
     pub fields: Option<Vec<String>>,
     pub parameter_schema: SchemaRef,
     /// None means unbound; an empty vector means a bound empty parameter stream.

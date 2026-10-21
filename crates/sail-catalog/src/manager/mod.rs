@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::{LogicalPlan, ScalarUDF};
@@ -20,16 +21,34 @@ pub mod view;
 /// Each catalog has a name and a corresponding [`CatalogProvider`] instance.
 pub struct CatalogManager {
     state: Arc<Mutex<CatalogManagerState>>,
-    pub(super) temporary_views: TemporaryViewManager,
-    pub(super) tracker: CatalogObjectTracker,
+    namespace: Option<(Arc<str>, Namespace)>,
+    pub(super) temporary_views: Arc<TemporaryViewManager>,
+    pub(super) tracker: Arc<CatalogObjectTracker>,
 }
 
+#[derive(Clone)]
 pub(super) struct CatalogManagerState {
     pub(super) catalogs: HashMap<Arc<str>, Arc<dyn CatalogProvider>>,
     pub(super) functions: HashMap<Arc<str>, datafusion_expr::ScalarUDF>,
     pub(super) default_catalog: Arc<str>,
     pub(super) default_database: Namespace,
     pub(super) global_temporary_database: Namespace,
+}
+
+pub(super) enum CatalogManagerStateView<'a> {
+    Shared(MutexGuard<'a, CatalogManagerState>),
+    Scoped(Box<CatalogManagerState>),
+}
+
+impl Deref for CatalogManagerStateView<'_> {
+    type Target = CatalogManagerState;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Shared(state) => state,
+            Self::Scoped(state) => state,
+        }
+    }
 }
 
 pub struct CatalogManagerOptions {
@@ -64,12 +83,41 @@ impl CatalogManager {
         };
         Ok(CatalogManager {
             state: Arc::new(Mutex::new(state)),
+            namespace: None,
             temporary_views: Default::default(),
             tracker: Default::default(),
         })
     }
 
-    pub(super) fn state(&self) -> CatalogResult<MutexGuard<'_, CatalogManagerState>> {
+    /// Freeze name resolution while sharing live catalogs, functions, temporary
+    /// views, and tracked objects with this session. Mutations still affect the session.
+    pub fn with_current_namespace(&self) -> CatalogResult<Self> {
+        let state = self.state()?;
+        Ok(Self {
+            state: self.state.clone(),
+            namespace: Some((
+                state.default_catalog.clone(),
+                state.default_database.clone(),
+            )),
+            temporary_views: self.temporary_views.clone(),
+            tracker: self.tracker.clone(),
+        })
+    }
+
+    pub(super) fn state(&self) -> CatalogResult<CatalogManagerStateView<'_>> {
+        let state = self.state_mut()?;
+        match &self.namespace {
+            Some((catalog, database)) => {
+                let mut state = state.clone();
+                state.default_catalog = catalog.clone();
+                state.default_database = database.clone();
+                Ok(CatalogManagerStateView::Scoped(Box::new(state)))
+            }
+            None => Ok(CatalogManagerStateView::Shared(state)),
+        }
+    }
+
+    pub(super) fn state_mut(&self) -> CatalogResult<MutexGuard<'_, CatalogManagerState>> {
         self.state
             .lock()
             .map_err(|e| CatalogError::Internal(e.to_string()))

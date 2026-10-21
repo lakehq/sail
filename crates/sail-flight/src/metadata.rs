@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use arrow::datatypes::{Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -42,6 +43,18 @@ async fn all_databases(
         databases.push(database);
     }
     Ok(databases)
+}
+
+fn matching_catalogs(
+    catalogs: &CatalogManager,
+    filter: Option<&str>,
+) -> Result<Vec<Arc<str>>, Status> {
+    Ok(catalogs
+        .list_catalogs(None)
+        .map_err(internal)?
+        .into_iter()
+        .filter(|name| filter.is_none_or(|filter| name.as_ref() == filter))
+        .collect())
 }
 
 /// Metadata builders implement Flight SQL's LIKE filters and ordering. Do not
@@ -149,8 +162,9 @@ pub async fn metadata_batch(
             builder.build().map_err(internal)
         }
         Command::CommandGetDbSchemas(query) => {
+            let names = matching_catalogs(&catalogs, query.catalog.as_deref())?;
             let mut builder = query.into_builder();
-            for catalog in catalogs.list_catalogs(None).map_err(internal)? {
+            for catalog in names {
                 for db in all_databases(&catalogs, &catalog).await? {
                     builder.append(catalog.as_ref(), quote_names_if_needed(&db.database));
                 }
@@ -164,8 +178,9 @@ pub async fn metadata_batch(
             builder.build().map_err(internal)
         }
         Command::CommandGetTables(query) => {
+            let names = matching_catalogs(&catalogs, query.catalog.as_deref())?;
             let mut builder = query.into_builder();
-            for catalog in catalogs.list_catalogs(None).map_err(internal)? {
+            for catalog in names {
                 for db in all_databases(&catalogs, &catalog).await? {
                     let mut namespace = vec![catalog.to_string()];
                     namespace.extend(db.database.clone());

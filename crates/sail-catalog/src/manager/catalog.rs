@@ -13,7 +13,7 @@ impl CatalogManager {
     /// An error is returned if the catalog does not exist.
     pub fn set_default_catalog(&self, catalog: impl Into<Arc<str>>) -> CatalogResult<()> {
         let catalog = catalog.into();
-        let mut state = self.state()?;
+        let mut state = self.state_mut()?;
         if !state.catalogs.contains_key(&catalog) {
             return Err(CatalogError::NotFound(
                 CatalogObject::Catalog,
