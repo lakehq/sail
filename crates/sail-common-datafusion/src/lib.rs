@@ -1,12 +1,16 @@
 pub mod array;
 pub mod catalog;
+pub mod column_change;
 pub mod column_features;
 pub mod datasource;
 pub mod display;
 pub mod error;
 pub mod extension;
 pub mod formatter;
+pub mod input_file;
 mod java_float;
+pub mod lakeprocedure;
+pub mod lakerelation;
 pub mod lakesource;
 pub mod literal;
 pub mod logical_expr;

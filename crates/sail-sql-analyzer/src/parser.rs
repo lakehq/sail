@@ -1,13 +1,6 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::thread::LocalKey;
-
-use chumsky::cache::{Cache, Cached};
-use chumsky::error::Rich;
-use chumsky::input::{Input, MappedInput};
+use chumsky::Parser;
+use chumsky::input::Input;
 use chumsky::span::SimpleSpan;
-use chumsky::{Boxed, Parser, extra};
 use sail_common::spec;
 use sail_sql_parser::ast::data_type::DataType;
 use sail_sql_parser::ast::expression::{Expr, IntervalLiteral};
@@ -31,170 +24,38 @@ use crate::literal::datetime::{
 };
 use crate::literal::interval::{IntervalValue, parse_unqualified_interval_string};
 
-fn map_parser_input<'a>(
-    (t, s): &'a (Token<'a>, SimpleSpan<usize>),
-) -> (&'a Token<'a>, &'a SimpleSpan<usize>) {
+fn map_parser_input<'a, C>(
+    (t, s): &'a (Token<'a>, SimpleSpan<usize, C>),
+) -> (&'a Token<'a>, &'a SimpleSpan<usize, C>) {
     (t, s)
 }
 
-type MapFn<'a> = fn(&'a (Token<'a>, SimpleSpan<usize>)) -> (&'a Token<'a>, &'a SimpleSpan<usize>);
-type TokenInput<'a> =
-    MappedInput<'a, Token<'a>, SimpleSpan<usize>, &'a [(Token<'a>, SimpleSpan<usize>)], MapFn<'a>>;
-type TokenExtra<'a> = extra::Err<Rich<'a, Token<'a>, SimpleSpan<usize>>>;
-type CharExtra<'a> = extra::Err<Rich<'a, char, SimpleSpan<usize>>>;
-type Tokens<'a> = Vec<(Token<'a>, SimpleSpan<usize>)>;
-
-/// Builds a parser once per thread instead of once per call.
-///
-/// The grammars behind `statement()` and `expression()` use
-/// `Recursive::declare()`, whose definition holds a strong `Rc` to itself, so
-/// every construction leaks. A thread keeps what it builds even after it exits,
-/// so parse these only on threads that outlive the process: moving a parse onto
-/// the blocking pool or a spawned thread turns a fixed cost back into a leak.
-macro_rules! cached_parser {
-    ($cache:ident, $output:ty, $factory:ident $(,)?) => {
-        struct $cache(&'static ParserOptions);
-
-        impl Cached for $cache {
-            type Parser<'a> = Boxed<'a, 'a, TokenInput<'a>, $output, TokenExtra<'a>>;
-
-            fn make_parser<'a>(self) -> Self::Parser<'a> {
-                $factory(self.0).boxed()
-            }
-        }
-    };
-}
-
-struct LexerCache(&'static ParserOptions);
-
-impl Cached for LexerCache {
-    type Parser<'a> = Boxed<'a, 'a, &'a str, Tokens<'a>, CharExtra<'a>>;
-
-    fn make_parser<'a>(self) -> Self::Parser<'a> {
-        create_lexer(self.0).boxed()
-    }
-}
-
-cached_parser!(DataTypeCache, DataType, create_data_type_parser);
-cached_parser!(ExpressionCache, Expr, create_expression_parser);
-cached_parser!(StatementCache, Vec<Statement>, create_parser);
-cached_parser!(ObjectNameCache, ObjectName, create_object_name_parser);
-cached_parser!(
-    QualifiedWildcardCache,
-    QualifiedWildcard,
-    create_qualified_wildcard_parser,
-);
-cached_parser!(NamedExprCache, NamedExpr, create_named_expression_parser);
-cached_parser!(
-    IntervalLiteralCache,
-    IntervalLiteral,
-    create_interval_literal_parser,
-);
-
-/// One parser per dialect, per thread: sessions sharing a dialect share a
-/// parser, and the map holds only the dialects actually used.
-type DialectCaches<C> = RefCell<HashMap<ParserOptions, Rc<Cache<C>>>>;
-
-/// Returns the parser for a dialect, building it on first use.
-///
-/// `Cached::make_parser` is quantified over the parser lifetime, so the options
-/// it borrows must be `'static`: every cache map leaks one `ParserOptions` per
-/// thread per dialect — up to one per parser kind, since each kind misses
-/// independently. The map is never borrowed across a build, which would make future
-/// re-entry a panic instead of a compile error, and `try_with` keeps a parse
-/// during thread-local teardown from panicking in a destructor.
-fn cache_for<C: Cached>(
-    caches: &'static LocalKey<DialectCaches<C>>,
+fn tokenize<'a>(
+    input: &'a str,
     options: &ParserOptions,
-    make: impl FnOnce(&'static ParserOptions) -> C,
-) -> Rc<Cache<C>> {
-    let cached = caches.try_with(|caches| caches.borrow().get(options).map(Rc::clone));
-    if let Ok(Some(cache)) = cached {
-        return cache;
-    }
-    let cache = Rc::new(Cache::new(make(Box::leak(Box::new(options.clone())))));
-    if cached.is_ok() {
-        let _ = caches.try_with(|caches| {
-            caches
-                .borrow_mut()
-                .insert(options.clone(), Rc::clone(&cache));
-        });
-    }
-    cache
-}
-
-thread_local! {
-    static LEXER: DialectCaches<LexerCache> = RefCell::new(HashMap::new());
-    static DATA_TYPE: DialectCaches<DataTypeCache> = RefCell::new(HashMap::new());
-    static EXPRESSION: DialectCaches<ExpressionCache> = RefCell::new(HashMap::new());
-    static STATEMENT: DialectCaches<StatementCache> = RefCell::new(HashMap::new());
-    static OBJECT_NAME: DialectCaches<ObjectNameCache> = RefCell::new(HashMap::new());
-    static QUALIFIED_WILDCARD: DialectCaches<QualifiedWildcardCache> = RefCell::new(HashMap::new());
-    static NAMED_EXPR: DialectCaches<NamedExprCache> = RefCell::new(HashMap::new());
-    static INTERVAL_LITERAL: DialectCaches<IntervalLiteralCache> = RefCell::new(HashMap::new());
-}
-
-fn tokenize<'a>(input: &'a str, options: &ParserOptions) -> SqlResult<Tokens<'a>> {
-    let cache = cache_for(&LEXER, options, LexerCache);
-    cache
-        .get()
-        .parse(input)
-        .into_result()
-        .map_err(SqlError::parser)
+) -> SqlResult<Vec<(Token<'a>, SimpleSpan<usize>)>> {
+    let lexer = create_lexer::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(options);
+    lexer.parse(input).into_result().map_err(SqlError::parser)
 }
 
 macro_rules! parse {
-    ($input:ident, $caches:ident, $cache:ident $(,)?) => {{
+    ($input:ident, $parser:ident $(,)?) => {{
         let options = ParserOptions::default();
         let length = $input.len();
         let tokens = tokenize($input, &options)?;
         let tokens = tokens
             .as_slice()
-            .map((length..length).into(), map_parser_input as MapFn);
-        let cache = cache_for(&$caches, &options, $cache);
-        cache
-            .get()
-            .parse(tokens)
-            .into_result()
-            .map_err(SqlError::parser)
+            .map((length..length).into(), map_parser_input);
+        let parser = $parser::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
+        parser.parse(tokens).into_result().map_err(SqlError::parser)
     }};
 }
 
-/// The same, for the dialect-independent parsers. They take no options, so
-/// there is nothing to key on, and none of them is recursive, so none leaked:
-/// they are cached so every entry point here reaches its parser the same way.
-macro_rules! simple_parser {
-    ($cache:ident, $output:ty, $factory:ident $(,)?) => {
-        struct $cache;
-
-        impl Cached for $cache {
-            type Parser<'a> = Boxed<'a, 'a, &'a str, $output, CharExtra<'a>>;
-
-            fn make_parser<'a>(self) -> Self::Parser<'a> {
-                $factory().boxed()
-            }
-        }
-    };
-}
-
-simple_parser!(DateCache, DateValue, create_date_parser);
-simple_parser!(TimeCache, TimeValue, create_time_parser);
-// `'a` is the one `Parser<'a>` introduces: a timestamp borrows its timezone.
-simple_parser!(TimestampCache, TimestampValue<'a>, create_timestamp_parser);
-
-thread_local! {
-    static DATE: Cache<DateCache> = Cache::new(DateCache);
-    static TIME: Cache<TimeCache> = Cache::new(TimeCache);
-    static TIMESTAMP: Cache<TimestampCache> = Cache::new(TimestampCache);
-}
-
 macro_rules! parse_simple {
-    ($input:ident, $caches:ident, $cache:ident $(,)?) => {
-        $caches
-            .try_with(|cache| cache.get().parse($input).into_result())
-            .unwrap_or_else(|_| Cache::new($cache).get().parse($input).into_result())
-            .map_err(SqlError::parser)
-    };
+    ($input:ident, $parser:ident $(,)?) => {{
+        let parser = $parser::<chumsky::extra::Err<chumsky::error::Rich<_, _>>>();
+        parser.parse($input).into_result().map_err(SqlError::parser)
+    }};
 }
 
 pub fn rewrite_positional_parameter_markers(s: &str) -> SqlResult<(String, usize)> {
@@ -217,11 +78,11 @@ pub fn rewrite_positional_parameter_markers(s: &str) -> SqlResult<(String, usize
 }
 
 pub fn parse_data_type(s: &str) -> SqlResult<DataType> {
-    parse!(s, DATA_TYPE, DataTypeCache)
+    parse!(s, create_data_type_parser)
 }
 
 pub fn parse_expression(s: &str) -> SqlResult<Expr> {
-    parse!(s, EXPRESSION, ExpressionCache)
+    parse!(s, create_expression_parser)
 }
 
 /// Ignores SQL comments and decodes string literals for native configuration settings.
@@ -246,7 +107,7 @@ pub fn parse_native_config_value(s: &str) -> SqlResult<String> {
 }
 
 pub fn parse_statements(s: &str) -> SqlResult<Vec<Statement>> {
-    parse!(s, STATEMENT, StatementCache)
+    parse!(s, create_parser)
 }
 
 /// Parses a SQL string containing exactly one statement into an AST.
@@ -259,19 +120,19 @@ pub fn parse_one_statement(s: &str) -> SqlResult<Statement> {
 }
 
 pub fn parse_object_name(s: &str) -> SqlResult<ObjectName> {
-    parse!(s, OBJECT_NAME, ObjectNameCache)
+    parse!(s, create_object_name_parser)
 }
 
 pub fn parse_qualified_wildcard(s: &str) -> SqlResult<QualifiedWildcard> {
-    parse!(s, QUALIFIED_WILDCARD, QualifiedWildcardCache)
+    parse!(s, create_qualified_wildcard_parser)
 }
 
 pub fn parse_named_expression(s: &str) -> SqlResult<NamedExpr> {
-    parse!(s, NAMED_EXPR, NamedExprCache)
+    parse!(s, create_named_expression_parser)
 }
 
 pub(crate) fn parse_interval_literal(s: &str) -> SqlResult<IntervalLiteral> {
-    parse!(s, INTERVAL_LITERAL, IntervalLiteralCache)
+    parse!(s, create_interval_literal_parser)
 }
 
 pub fn parse_interval(s: &str) -> SqlResult<IntervalValue> {
@@ -279,56 +140,25 @@ pub fn parse_interval(s: &str) -> SqlResult<IntervalValue> {
 }
 
 pub fn parse_date(s: &str) -> SqlResult<DateValue> {
-    parse_simple!(s, DATE, DateCache)
+    parse_simple!(s, create_date_parser)
 }
 
 pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue<'_>> {
-    parse_simple!(s, TIMESTAMP, TimestampCache)
+    parse_simple!(s, create_timestamp_parser)
 }
 
 pub fn parse_time(s: &str) -> SqlResult<TimeValue> {
-    parse_simple!(s, TIME, TimeCache)
+    parse_simple!(s, create_time_parser)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
-
     use sail_sql_parser::ast::query::Query;
-    use sail_sql_parser::ast::statement::Statement;
-    use sail_sql_parser::options::ParserOptions;
+    use sail_sql_parser::ast::statement::{DescribeItem, Statement};
     use sail_sql_parser::tree::TreeText;
 
     use crate::error::SqlResult;
-    use crate::parser::{
-        STATEMENT, StatementCache, cache_for, parse_one_statement, parse_statements,
-    };
-
-    #[test]
-    fn test_cached_parser_reuse() {
-        let default = ParserOptions::default();
-        let first = cache_for(&STATEMENT, &default, StatementCache);
-        let second = cache_for(&STATEMENT, &default, StatementCache);
-        assert!(
-            Rc::ptr_eq(&first, &second),
-            "equal options must reuse the parser"
-        );
-
-        let dialect = ParserOptions {
-            allow_double_quote_identifier: true,
-            ..Default::default()
-        };
-        let third = cache_for(&STATEMENT, &dialect, StatementCache);
-        assert!(
-            !Rc::ptr_eq(&first, &third),
-            "differing options must build their own parser"
-        );
-        let fourth = cache_for(&STATEMENT, &dialect, StatementCache);
-        assert!(
-            Rc::ptr_eq(&third, &fourth),
-            "the second dialect must be cached too"
-        );
-    }
+    use crate::parser::{parse_one_statement, parse_statements};
 
     #[test]
     fn test_parse() -> SqlResult<()> {
@@ -377,6 +207,168 @@ mod tests {
             parse_one_statement("SET k=` a;b``c `")?.text(),
             "SET k = ` a;b``c ` "
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_call_procedure() -> SqlResult<()> {
+        let statement = parse_one_statement(
+            "CALL sail.system.rollback_to_snapshot(table => 'events', snapshot_id => 42)",
+        )?;
+        assert!(matches!(statement, Statement::CallProcedure { .. }));
+        assert_eq!(
+            statement.text(),
+            "CALL sail . system . rollback_to_snapshot ( table => 'events' , snapshot_id => 42 ) "
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_describe_table_and_query_disambiguation() -> SqlResult<()> {
+        for sql in [
+            "DESCRIBE t",
+            "DESC default.t",
+            "DESCRIBE TABLE t",
+            "DESCRIBE table",
+            "DESCRIBE table.t",
+            "DESCRIBE TABLE table",
+            "DESCRIBE TABLE table.t",
+            "DESCRIBE EXTENDED t",
+            "DESCRIBE TABLE FORMATTED t",
+            "DESCRIBE FORMATTED t PARTITION (p = 1) c",
+            "DESCRIBE formatted",
+            "DESCRIBE TABLE formatted",
+            "DESCRIBE TABLE formatted.t",
+            "DESCRIBE TABLE formatted PARTITION (p = 1)",
+            "DESCRIBE TABLE extended",
+            "DESCRIBE TABLE extended.t",
+            "DESCRIBE TABLE extended PARTITION (p = 1)",
+            "DESCRIBE SELECT a",
+            "DESCRIBE SELECT 1m",
+            "DESCRIBE SELECT `1`",
+            "DESCRIBE VALUES x",
+            "DESCRIBE QUERY t",
+            "DESCRIBE `query`",
+        ] {
+            assert!(
+                matches!(
+                    parse_one_statement(sql)?,
+                    Statement::Describe {
+                        item: DescribeItem::Table { .. },
+                        ..
+                    }
+                ),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "DESCRIBE SELECT 1",
+            "DESCRIBE SELECT 1L",
+            "DESCRIBE SELECT 1.2",
+            "DESCRIBE SELECT a FROM t",
+            "DESCRIBE TABLE t ORDER BY a",
+            "DESCRIBE VALUES (1)",
+            "DESCRIBE VALUES 1",
+            "DESCRIBE (SELECT 1)",
+            "DESCRIBE WITH s AS (SELECT 1) SELECT * FROM s",
+            "DESCRIBE QUERY SELECT a",
+            "DESCRIBE QUERY SELECT a FROM t",
+            "DESCRIBE QUERY TABLE t",
+            "DESCRIBE QUERY WITH s AS (SELECT 1) SELECT * FROM s",
+        ] {
+            assert!(
+                matches!(
+                    parse_one_statement(sql)?,
+                    Statement::Describe {
+                        item: DescribeItem::Query { .. },
+                        ..
+                    }
+                ),
+                "{sql}"
+            );
+        }
+        for sql in [
+            "DESCRIBE SELECT a FROM",
+            "DESCRIBE t c unexpected",
+            "DESCRIBE QUERY SELECT 1 unexpected trailing",
+        ] {
+            assert!(parse_one_statement(sql).is_err(), "{sql}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_describe_statement_boundaries() -> SqlResult<()> {
+        let statements = parse_statements(
+            "DESCRIBE SELECT a /* table and column */; \
+             DESCRIBE SELECT a FROM t /* query */; \
+             EXPLAIN DESCRIBE SELECT a FROM t; SELECT 1",
+        )?;
+        assert!(matches!(
+            statements.as_slice(),
+            [
+                Statement::Describe {
+                    item: DescribeItem::Table { .. },
+                    ..
+                },
+                Statement::Describe {
+                    item: DescribeItem::Query { .. },
+                    ..
+                },
+                Statement::Explain { .. },
+                Statement::Query(_),
+            ]
+        ));
+        assert!(matches!(
+            parse_one_statement("EXPLAIN DESCRIBE SELECT a FROM t")?,
+            Statement::Explain { statement, .. }
+                if matches!(statement.as_ref(), Statement::Describe {
+                    item: DescribeItem::Query { .. },
+                    ..
+                })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_with_ctes() -> SqlResult<()> {
+        let statement = parse_one_statement(
+            "WITH s AS (SELECT 1 AS x) INSERT INTO t \
+             WITH s AS (SELECT 2 AS x) SELECT x FROM s",
+        )?;
+        assert!(matches!(
+            statement,
+            Statement::InsertInto {
+                with: Some(_),
+                query: Query { with: Some(_), .. },
+                ..
+            }
+        ));
+        for sql in [
+            "WITH s AS (SELECT 1 AS x) INSERT OVERWRITE TABLE t (x) SELECT x FROM s",
+            "WITH s AS (SELECT 1 AS x) INSERT INTO t BY NAME SELECT x FROM s",
+            "WITH s AS (SELECT 1 AS x) INSERT INTO t PARTITION (p = 1) SELECT x FROM s",
+        ] {
+            assert!(
+                matches!(
+                    parse_one_statement(sql)?,
+                    Statement::InsertInto { with: Some(_), .. }
+                ),
+                "{sql}"
+            );
+        }
+        assert!(matches!(
+            parse_one_statement(
+                "WITH s AS (SELECT 1 AS x) INSERT INTO t REPLACE WHERE x = 1 SELECT x FROM s"
+            )?,
+            Statement::InsertIntoAndReplace { with: Some(_), .. }
+        ));
+        assert!(matches!(
+            parse_one_statement(
+                "WITH s AS (SELECT 1 AS x) INSERT OVERWRITE DIRECTORY '/tmp/t' USING parquet SELECT x FROM s"
+            )?,
+            Statement::InsertOverwriteDirectory { with: Some(_), .. }
+        ));
         Ok(())
     }
 }

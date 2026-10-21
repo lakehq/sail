@@ -1,7 +1,7 @@
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
-use chumsky::prelude::{Recursive, end};
+use chumsky::prelude::end;
 use chumsky::recursive::recursive;
 use chumsky::{IterParser, Parser};
 
@@ -24,36 +24,40 @@ where
     E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    let mut statement = Recursive::declare();
-    let mut query = Recursive::declare();
-    let mut expression = Recursive::declare();
-    let mut data_type = Recursive::declare();
-    let mut table_with_joins = Recursive::declare();
+    recursive(|statement| {
+        Statement::parser(
+            (
+                statement,
+                query(options),
+                expression(options),
+                data_type(options),
+            ),
+            options,
+        )
+    })
+}
 
-    statement.define(Statement::parser(
-        (
-            statement.clone(),
-            query.clone(),
-            expression.clone(),
-            data_type.clone(),
-        ),
-        options,
-    ));
-    query.define(Query::parser(
-        (query.clone(), expression.clone(), table_with_joins.clone()),
-        options,
-    ));
-    expression.define(Expr::parser(
-        (expression.clone(), query.clone(), data_type.clone()),
-        options,
-    ));
-    data_type.define(DataType::parser(data_type.clone(), options));
-    table_with_joins.define(TableWithJoins::parser(
-        (query.clone(), expression.clone(), table_with_joins.clone()),
-        options,
-    ));
-
-    statement
+fn query<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, Query, E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I> + 'a,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
+    // The root owns the nested parsers. References back to the root supplied by
+    // `recursive()` are weak, so the mutually recursive grammar is freed on drop.
+    recursive(|query| {
+        let expression = recursive(|expression| {
+            Expr::parser((expression, query.clone(), data_type(options)), options)
+        });
+        let table_with_joins = recursive(|table_with_joins| {
+            TableWithJoins::parser(
+                (query.clone(), expression.clone(), table_with_joins),
+                options,
+            )
+        });
+        Query::parser((query, expression, table_with_joins), options)
+    })
 }
 
 fn data_type<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, DataType, E> + Clone
@@ -63,8 +67,6 @@ where
     E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    // `recursive()` builds the back edge weakly, so this grammar is freed on
-    // drop. The mutually recursive ones below cannot use it and still leak.
     recursive(|data_type| DataType::parser(data_type, options))
 }
 
@@ -97,26 +99,20 @@ where
     E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
-    let mut expression = Recursive::declare();
-    let mut query = Recursive::declare();
-    let mut data_type = Recursive::declare();
-    let mut table_with_joins = Recursive::declare();
-
-    expression.define(Expr::parser(
-        (expression.clone(), query.clone(), data_type.clone()),
-        options,
-    ));
-    query.define(Query::parser(
-        (query.clone(), expression.clone(), table_with_joins.clone()),
-        options,
-    ));
-    data_type.define(DataType::parser(data_type.clone(), options));
-    table_with_joins.define(TableWithJoins::parser(
-        (query.clone(), expression.clone(), table_with_joins.clone()),
-        options,
-    ));
-
-    expression
+    // Expressions can also be parsed independently. Give this entry point its
+    // own ownership root, with weak references back from subqueries and joins.
+    recursive(|expression| {
+        let query = recursive(|query| {
+            let table_with_joins = recursive(|table_with_joins| {
+                TableWithJoins::parser(
+                    (query.clone(), expression.clone(), table_with_joins),
+                    options,
+                )
+            });
+            Query::parser((query, expression.clone(), table_with_joins), options)
+        });
+        Expr::parser((expression, query, data_type(options)), options)
+    })
 }
 
 fn named_expression<'a, I, E>(

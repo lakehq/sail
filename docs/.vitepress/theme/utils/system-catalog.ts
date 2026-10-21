@@ -1,7 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 
-import yaml from "js-yaml";
+import { load } from "js-yaml";
 
 export const SYSTEM_CATALOG_DATA_PATH = path.join(
   import.meta.dirname,
@@ -29,5 +29,5 @@ export interface SystemDatabase {
 
 export async function loadSystemCatalog(): Promise<SystemDatabase[]> {
   const content = await fs.readFile(SYSTEM_CATALOG_DATA_PATH, "utf-8");
-  return yaml.load(content) as SystemDatabase[];
+  return load(content) as SystemDatabase[];
 }

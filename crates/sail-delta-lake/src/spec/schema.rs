@@ -394,12 +394,10 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = std::string::String::deserialize(deserializer)?;
-    if !(value.starts_with("decimal(") && value.ends_with(')')) {
-        return Err(serde::de::Error::custom(format!(
-            "Invalid decimal: {value}"
-        )));
-    }
-    let mut parts = value[8..value.len() - 1].split(',');
+    let inner = value
+        .strip_circumfix("decimal(", ')')
+        .ok_or_else(|| serde::de::Error::custom(format!("Invalid decimal: {value}")))?;
+    let mut parts = inner.split(',');
     let precision = parts
         .next()
         .and_then(|v| v.trim().parse::<u8>().ok())

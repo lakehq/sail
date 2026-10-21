@@ -63,6 +63,13 @@ impl From<CatalogTableBucketBy> for BucketBy {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct CatalogSortField {
+    pub field: CatalogPartitionField,
+    pub ascending: bool,
+    pub nulls_first: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CatalogTableSort {
     pub column: String,
     pub ascending: bool,

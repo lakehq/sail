@@ -1,13 +1,20 @@
+use chumsky::Parser;
+use chumsky::extra::ParserExtra;
+use chumsky::input::{Input, ValueInput};
+use chumsky::label::LabelError;
+use chumsky::prelude::end;
 use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast;
 use crate::ast::config::{ConfigValue, config_assignment};
 use crate::ast::data_type::DataType;
-use crate::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
+use crate::ast::expression::{
+    BooleanLiteral, Expr, FunctionArgumentList, IntervalExpr, OrderDirection,
+};
 use crate::ast::identifier::{Ident, ObjectName, table_ident};
 use crate::ast::keywords::{
-    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
+    Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Call, Cascade, Catalog,
     Catalogs, Change, Check, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns,
     Comment, Compute, Constraint, Cost, Create, Data, Database, Databases, Dbproperties, Default,
     Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
@@ -26,17 +33,39 @@ use crate::ast::operator::{
     Ampersand, Asterisk, Caret, Colon, Comma, DoubleEquals, DoubleGreaterThan, DoubleLessThan,
     DoubleVerticalBar, Equals, ExclamationMark, GreaterThan, GreaterThanEquals, LeftParenthesis,
     LessThan, LessThanEquals, LessThanGreaterThan, Minus, NotEquals, Percent, Plus,
-    RightParenthesis, Slash, Spaceship, Tilde, TripleGreaterThan, VerticalBar,
+    RightParenthesis, Semicolon, Slash, Spaceship, Tilde, TripleGreaterThan, VerticalBar,
 };
-use crate::ast::query::{AliasClause, IdentList, Query, WhereClause};
+use crate::ast::query::{AliasClause, IdentList, Query, WhereClause, WithClause};
 use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
-use crate::token::TokenLabel;
+use crate::options::ParserOptions;
+use crate::span::TokenSpan;
+use crate::token::{Token, TokenLabel};
+use crate::tree::TreeParser;
+
+/// Parse a statement terminator: a semicolon or the end of input.
+pub(crate) fn statement_end<'a, I, E>(
+    options: &'a ParserOptions,
+) -> impl Parser<'a, I, (), E> + Clone
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: std::convert::Into<TokenSpan> + Clone,
+    E: ParserExtra<'a, I> + 'a,
+    E::Error: LabelError<'a, I, TokenLabel>,
+{
+    Semicolon::parser((), options).ignored().or(end())
+}
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
 pub enum Statement {
     Query(#[parser(function = |(_, q, _, _), _| q)] Query),
+    CallProcedure {
+        call: Call,
+        name: ObjectName,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        arguments: FunctionArgumentList,
+    },
     SetCatalog {
         set: Set,
         catalog: Catalog,
@@ -214,6 +243,8 @@ pub enum Statement {
         statement: Box<Statement>,
     },
     InsertOverwriteDirectory {
+        #[parser(function = |(_, q, _, _), o| compose(q, o))]
+        with: Option<WithClause>,
         insert: Insert,
         overwrite: Overwrite,
         local: Option<Local>,
@@ -223,6 +254,8 @@ pub enum Statement {
         query: Query,
     },
     InsertIntoAndReplace {
+        #[parser(function = |(_, q, _, _), o| compose(q, o))]
+        with: Option<WithClause>,
         insert: Insert,
         into: Into,
         table: Option<Table>,
@@ -234,6 +267,8 @@ pub enum Statement {
         query: Query,
     },
     InsertInto {
+        #[parser(function = |(_, q, _, _), o| compose(q, o))]
+        with: Option<WithClause>,
         insert: Insert,
         into_or_overwrite: Either<Into, Overwrite>,
         table: Option<Table>,
@@ -764,8 +799,84 @@ pub struct ViewColumn {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub enum TableWriteSpec {
+    Distributed {
+        distributed: Distributed,
+        by: By,
+        partition: Partition,
+    },
+    Ordered {
+        locally: Option<crate::ast::keywords::Locally>,
+        ordered: crate::ast::keywords::Ordered,
+        by: By,
+        #[parser(function = |e, o| compose(e, o))]
+        columns: TableWriteOrderList,
+    },
+    Unordered(crate::ast::keywords::Unordered),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub enum TableWriteOrderList {
+    Delimited {
+        left: LeftParenthesis,
+        #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+        columns: Sequence<crate::ast::expression::OrderByExpr, Comma>,
+        right: RightParenthesis,
+    },
+    NotDelimited {
+        #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+        columns: Sequence<crate::ast::expression::OrderByExpr, Comma>,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum AlterTableOperation {
+    SetIdentifierFields {
+        set: Set,
+        identifier: crate::ast::keywords::Identifier,
+        fields: Fields,
+        names: Sequence<ObjectName, Comma>,
+    },
+    DropIdentifierFields {
+        drop: Drop,
+        identifier: crate::ast::keywords::Identifier,
+        fields: Fields,
+        names: Sequence<ObjectName, Comma>,
+    },
+    AddPartitionField {
+        add: Add,
+        partition: Partition,
+        field: crate::ast::keywords::Field,
+        #[parser(function = |(e, _), _| e)]
+        transform: Expr,
+        name: Option<(As, Ident)>,
+    },
+    DropPartitionField {
+        drop: Drop,
+        partition: Partition,
+        field: crate::ast::keywords::Field,
+        #[parser(function = |(e, _), _| e)]
+        transform: Expr,
+    },
+    ReplacePartitionField {
+        replace: Replace,
+        partition: Partition,
+        field: crate::ast::keywords::Field,
+        #[parser(function = |(e, _), _| e)]
+        old: Expr,
+        with: With,
+        #[parser(function = |(e, _), _| boxed(e))]
+        new: Box<Expr>,
+        name: Option<(As, Ident)>,
+    },
+    Write {
+        write: crate::ast::keywords::Write,
+        #[parser(function = |(e, _), o| compose(e, o))]
+        specifications: Vec<TableWriteSpec>,
+    },
     RenameTable {
         rename: Rename,
         to: To,
@@ -794,6 +905,12 @@ pub enum AlterTableOperation {
         #[parser(function = |(e, _), _| e)]
         expression: Expr,
         right: RightParenthesis,
+    },
+    DropConstraint {
+        drop: Drop,
+        constraint: Constraint,
+        if_exists: Option<(If, Exists)>,
+        name: Ident,
     },
     DropColumns {
         drop: Drop,
@@ -1130,24 +1247,23 @@ pub enum DescribeItem {
         extended: Option<Extended>,
         item: ObjectName,
     },
+    // Prefer a complete table description, matching Spark when both forms are valid.
+    // Check the statement boundary before committing so query prefixes can fall through.
     Table {
-        table: Table,
-        extended: Option<Extended>,
+        #[parser(backtrack)]
+        table: Option<Table>,
+        #[parser(backtrack)]
+        extended: Option<Either<Extended, Formatted>>,
         name: ObjectName,
         #[parser(function = |(_, e), o| compose(e, o))]
         partition: Option<PartitionClause>,
+        // Numeric literals are word tokens in Sail, but DESCRIBE SELECT 1 is a query.
+        #[parser(function = |_, o| unit(o)
+            .and_is(NumberLiteral::parser((), o).not()))]
         column: Option<ObjectName>,
+        #[parser(function = |_, o| statement_end(o).rewind())]
+        end: (),
     },
-    // Spark also allows DESCRIBE EXTENDED <table> without the TABLE keyword.
-    // We keep it as a separate branch so DESCRIBE QUERY can still remain the catch-all last case.
-    TableExtended {
-        extended: Extended,
-        name: ObjectName,
-        #[parser(function = |(_, e), o| compose(e, o))]
-        partition: Option<PartitionClause>,
-        column: Option<ObjectName>,
-    },
-    // We try `DESCRIBE QUERY` last since the `QUERY` keyword is optional.
     Query {
         query: Option<ast::keywords::Query>,
         #[parser(function = |(q, _), _| q)]

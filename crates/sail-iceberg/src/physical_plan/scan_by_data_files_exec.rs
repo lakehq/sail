@@ -5,34 +5,52 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{Array, BooleanArray, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::physical_plan::{
+    FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
+};
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
+use sail_common_datafusion::input_file::{
+    InputFileMetadataSource, projection_references_input_file_metadata,
+};
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
 };
 use url::Url;
 
+use crate::datasource::partition_defaults::{
+    IdentityPartitionDefaults, create_data_scan_with_partition_defaults,
+};
 use crate::io::StoreContext;
+use crate::physical_plan::file_tasks_exec::COL_IDENTITY_PARTITION_DEFAULTS;
 use crate::physical_plan::manifest_scan_exec::{
     COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE, COL_RECORD_COUNT,
 };
+
+struct ScanFile {
+    path: String,
+    size: u64,
+    records: u64,
+    nan_free: bool,
+    defaults: IdentityPartitionDefaults,
+}
 
 /// State machine for the streaming scan-by-data-files loop.
 struct ScanByDataFilesState {
@@ -48,8 +66,9 @@ struct ScanByDataFilesState {
     projection: Option<Vec<usize>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     limit: Option<usize>,
-    /// Pending file entries (path, size_in_bytes) accumulated from the metadata stream.
-    pending_files: Vec<(String, u64, u64, bool)>,
+    input_file_projection: Option<ProjectionExprs>,
+    /// Pending file entries accumulated from the metadata stream.
+    pending_files: Vec<ScanFile>,
     /// Currently active scan stream (draining Parquet data).
     current_scan: Option<SendableRecordBatchStream>,
     /// Whether we've emitted at least one (possibly empty) batch.
@@ -72,6 +91,7 @@ impl ScanByDataFilesState {
             projection: plan.projection.clone(),
             predicate: plan.predicate.clone(),
             limit: plan.limit,
+            input_file_projection: plan.input_file_projection.clone(),
             pending_files: Vec::new(),
             current_scan: None,
             emitted_batch: false,
@@ -79,7 +99,7 @@ impl ScanByDataFilesState {
     }
 
     /// Extract file paths and sizes from a metadata RecordBatch.
-    fn extract_file_info(&self, batch: &RecordBatch) -> Result<Vec<(String, u64, u64, bool)>> {
+    fn extract_file_info(&self, batch: &RecordBatch) -> Result<Vec<ScanFile>> {
         let path_col = batch
             .column_by_name(COL_FILE_PATH)
             .and_then(|c| c.as_any().downcast_ref::<StringArray>())
@@ -108,15 +128,33 @@ impl ScanByDataFilesState {
             .column_by_name(COL_NAN_FREE)
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>())
             .ok_or_else(|| DataFusionError::Internal("Missing Iceberg NaN evidence".into()))?;
+        let defaults = batch
+            .column_by_name(COL_IDENTITY_PARTITION_DEFAULTS)
+            .map(|column| {
+                column
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Invalid Iceberg identity partition defaults".into(),
+                        )
+                    })
+            })
+            .transpose()?;
         let mut files = Vec::with_capacity(path_col.len());
         for i in 0..path_col.len() {
             if !path_col.is_null(i) {
-                files.push((
-                    path_col.value(i).to_string(),
-                    size_col.value(i),
-                    rows.value(i),
-                    nan_free.value(i),
-                ));
+                files.push(ScanFile {
+                    path: path_col.value(i).to_string(),
+                    size: size_col.value(i),
+                    records: rows.value(i),
+                    nan_free: nan_free.value(i),
+                    defaults: defaults
+                        .map(|column| serde_json::from_str(column.value(i)))
+                        .transpose()
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?
+                        .unwrap_or_default(),
+                });
             }
         }
         Ok(files)
@@ -132,8 +170,8 @@ impl ScanByDataFilesState {
         if self.output_schema.fields().is_empty() {
             let rows = files
                 .iter()
-                .try_fold(0usize, |rows, (_, _, count, _)| {
-                    usize::try_from(*count)
+                .try_fold(0usize, |rows, file| {
+                    usize::try_from(file.records)
                         .ok()
                         .and_then(|count| rows.checked_add(count))
                 })
@@ -180,13 +218,15 @@ impl ScanByDataFilesState {
         // Retain that timestamp per file through footer preparation and execution for
         // cache reuse within this scan; rebuilding the scan generates new timestamps.
         let mut partitioned_files = Vec::with_capacity(files.len());
-        for (raw_path, file_size, _, _) in &files {
-            let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
+        for file in &files {
+            let file_path = store_ctx.resolve_to_absolute_path(&file.path)?;
+            let mut extensions = datafusion::common::extensions::Extensions::default();
+            extensions.insert(file.defaults.clone());
             partitioned_files.push(PartitionedFile {
                 object_meta: ObjectMeta {
                     location: file_path,
                     last_modified: chrono::Utc::now(),
-                    size: *file_size,
+                    size: file.size,
                     e_tag: None,
                     version: None,
                 },
@@ -194,7 +234,7 @@ impl ScanByDataFilesState {
                 range: None,
                 statistics: None,
                 ordering: None,
-                extensions: Default::default(),
+                extensions,
                 metadata_size_hint: None,
                 arrow_schema: None,
                 table_reference: None,
@@ -209,7 +249,7 @@ impl ScanByDataFilesState {
         // Use session Parquet options for parity with the driver-based scan path.
         let parquet_options = crate::datasource::parquet::parquet_options(
             &self.file_schema,
-            files.iter().all(|(_, _, _, nan_free)| *nan_free),
+            files.iter().all(|file| file.nan_free),
             self.context
                 .session_config()
                 .options()
@@ -247,8 +287,7 @@ impl ScanByDataFilesState {
         }
         let parquet_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
             Arc::new(parquet_source);
-
-        let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
+        let mut file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
             .with_file_groups(file_groups)
             .with_projection_indices(self.projection.clone())?
             .with_limit(self.limit)
@@ -258,8 +297,20 @@ impl ScanByDataFilesState {
                 ),
             ) as Arc<dyn PhysicalExprAdapterFactory>))
             .build();
+        if let Some(projection) = &self.input_file_projection {
+            // Metadata expressions reference the projected scan columns, not the file schema.
+            let source = InputFileMetadataSource::try_new_with_projection(
+                Arc::clone(&file_scan_config.file_source),
+                projection.clone(),
+            )?;
+            let statistics = Statistics::new_unknown(source.table_schema().table_schema());
+            file_scan_config = FileScanConfigBuilder::from(file_scan_config)
+                .with_source(Arc::new(source))
+                .with_statistics(statistics)
+                .build();
+        }
 
-        let scan_exec = DataSourceExec::from_data_source(file_scan_config);
+        let scan_exec = create_data_scan_with_partition_defaults(file_scan_config)?;
         let output_schema = Arc::clone(&self.output_schema);
 
         // Execute all partitions of the scan and flatten into a single stream.
@@ -293,11 +344,15 @@ pub struct IcebergScanByDataFilesExec {
     /// Table URL for object store access.
     table_url: String,
     /// The Arrow schema of the actual user data.
+    scan_output_schema: SchemaRef,
     output_schema: SchemaRef,
     file_schema: SchemaRef,
     projection: Option<Vec<usize>>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     limit: Option<usize>,
+    input_file_projection: Option<ProjectionExprs>,
+    /// Whether each upstream partition owns a complete rewrite group.
+    preserve_file_groups: bool,
     /// Cached plan properties.
     cache: Arc<PlanProperties>,
 }
@@ -325,11 +380,14 @@ impl IcebergScanByDataFilesExec {
         Ok(Self {
             input,
             table_url,
+            scan_output_schema: Arc::clone(&output_schema),
             output_schema,
             file_schema,
             projection,
             predicate,
             limit,
+            input_file_projection: None,
+            preserve_file_groups: false,
             cache,
         })
     }
@@ -354,8 +412,45 @@ impl IcebergScanByDataFilesExec {
         &self.output_schema
     }
 
+    pub fn scan_output_schema(&self) -> &SchemaRef {
+        &self.scan_output_schema
+    }
+
+    pub fn input_file_projection(&self) -> Option<&ProjectionExprs> {
+        self.input_file_projection.as_ref()
+    }
+
+    pub fn with_input_file_projection(
+        mut self,
+        projection: Option<ProjectionExprs>,
+    ) -> Result<Self> {
+        self.output_schema = match &projection {
+            Some(projection) => Arc::new(projection.project_schema(&self.scan_output_schema)?),
+            None => Arc::clone(&self.scan_output_schema),
+        };
+        self.input_file_projection = projection;
+        self.cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(Arc::clone(&self.output_schema)),
+            Partitioning::UnknownPartitioning(
+                self.input.output_partitioning().partition_count().max(1),
+            ),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        ));
+        Ok(self)
+    }
+
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub fn preserve_file_groups(mut self) -> Self {
+        self.preserve_file_groups = true;
+        self
+    }
+
+    pub fn preserves_file_groups(&self) -> bool {
+        self.preserve_file_groups
     }
 }
 
@@ -393,10 +488,14 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
         &self,
         f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
-        if let Some(predicate) = &self.predicate {
-            return f(predicate);
-        }
-        Ok(TreeNodeRecursion::Continue)
+        datafusion::physical_plan::apply_expression_roots(
+            self.predicate.iter().chain(
+                self.input_file_projection
+                    .iter()
+                    .flat_map(|projection| projection.iter().map(|expression| &expression.expr)),
+            ),
+            f,
+        )
     }
 
     #[expect(deprecated)]
@@ -428,12 +527,34 @@ impl ExecutionPlan for IcebergScanByDataFilesExec {
         Ok(Arc::new(cloned))
     }
 
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.input_file_projection.is_none()
+            && !projection_references_input_file_metadata(projection.projection_expr())
+        {
+            return Ok(None);
+        }
+        let projection = match &self.input_file_projection {
+            Some(current) => current.try_merge(projection.projection_expr())?,
+            None => projection.projection_expr().clone(),
+        };
+        Ok(Some(Arc::new(
+            self.clone().with_input_file_projection(Some(projection))?,
+        )))
+    }
+
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::UnspecifiedDistribution]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![!self.preserve_file_groups]
     }
 
     fn execute(

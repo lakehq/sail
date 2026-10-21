@@ -91,7 +91,12 @@ pub(crate) fn table_to_status(
         .as_ref()
         .map(|keys| field_names(keys))
         .unwrap_or_default();
-    let columns = match columns_from_spark_properties(table.parameters.as_ref())? {
+    let spark_columns = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        None
+    } else {
+        columns_from_spark_properties(table.parameters.as_ref())?
+    };
+    let columns = match spark_columns {
         Some(spark_columns) => reorder_spark_columns(spark_columns, &partition_columns)?,
         None => columns_from_hms(storage, table.partition_keys.as_ref())?,
     };
@@ -902,6 +907,115 @@ fn current_time_secs() -> CatalogResult<i32> {
     Utc::now().timestamp().try_into().map_err(|_| {
         CatalogError::Internal("Current time is out of range for HMS i32 timestamps".to_string())
     })
+}
+
+pub(crate) fn alter_columns(
+    table: &mut Table,
+    changes: &[sail_catalog::provider::ColumnChange<DataType>],
+    case_sensitive: bool,
+) -> CatalogResult<()> {
+    let partition_names = table
+        .partition_keys
+        .as_deref()
+        .map(field_names)
+        .unwrap_or_default();
+    let spark_schema = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        None
+    } else {
+        read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)?
+    };
+    let fields = if let Some(schema) = spark_schema {
+        spark_struct_json_to_fields(&schema)?
+    } else {
+        columns_from_hms(table.sd.as_ref(), table.partition_keys.as_ref())?
+            .iter()
+            .map(TableColumnStatus::field)
+            .collect()
+    };
+    let schema = arrow::datatypes::Schema::new(fields);
+    let updated =
+        sail_common_datafusion::column_change::alter_schema(&schema, changes, case_sensitive)
+            .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+    let mut partition_names = partition_names;
+    for change in changes {
+        if let sail_catalog::provider::ColumnChange::Rename { path, name } = change
+            && let [old] = path.as_slice()
+        {
+            for partition in &mut partition_names {
+                if partition.eq_ignore_ascii_case(old) {
+                    *partition = name.clone();
+                }
+            }
+        }
+    }
+    replace_columns_with_partitions(table, &updated, partition_names)
+}
+
+pub(crate) fn replace_columns(
+    table: &mut Table,
+    schema: &arrow::datatypes::Schema,
+) -> CatalogResult<()> {
+    let partition_names = table
+        .partition_keys
+        .iter()
+        .flatten()
+        .map(|c| c.name.as_ref().map(ToString::to_string).unwrap_or_default())
+        .collect();
+    replace_columns_with_partitions(table, schema, partition_names)
+}
+
+fn replace_columns_with_partitions(
+    table: &mut Table,
+    updated: &arrow::datatypes::Schema,
+    partition_names: Vec<String>,
+) -> CatalogResult<()> {
+    let mut columns = Vec::new();
+    let mut partitions = Vec::new();
+    for field in updated.fields() {
+        let column = create_field_schema(
+            field.name().clone(),
+            field.data_type(),
+            field.metadata().get("comment").cloned(),
+        )?;
+        if partition_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(field.name()))
+        {
+            partitions.push(column);
+        } else {
+            columns.push(column);
+        }
+    }
+    let storage = table
+        .sd
+        .as_mut()
+        .ok_or_else(|| CatalogError::InvalidArgument("Missing HMS storage descriptor".into()))?;
+    storage.cols = Some(columns);
+    table.partition_keys = Some(partitions);
+    if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        // Native Iceberg clients maintain sd.cols, not Spark's datasource schema cache.
+        if let Some(parameters) = table.parameters.as_mut() {
+            let prefix = format!("{SPARK_SCHEMA_KEY}.");
+            parameters.retain(|key, _| key != SPARK_SCHEMA_KEY && !key.starts_with(&prefix));
+        }
+        return Ok(());
+    }
+    let fields = updated
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect::<Vec<_>>();
+    let value = spark_struct_json_from_fields(&fields)?;
+    let json = serde_json::to_string(&value).map_err(|e| CatalogError::External(e.to_string()))?;
+    let parameters = table.parameters.get_or_insert_with(AHashMap::new);
+    write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &json);
+    for (i, partition) in partition_names.iter().enumerate() {
+        parameters.insert(
+            format!("spark.sql.sources.schema.partCol.{i}").into(),
+            partition.clone().into(),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
