@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::ScalarValue;
 use datafusion::execution::SendableRecordBatchStream;
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, col, lit};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use futures::{StreamExt, TryStreamExt, stream};
 use sail_catalog::manager::CatalogManager;
@@ -12,6 +12,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::execute_named_plan;
+use sail_plan::explain::{ExplainOptions, explain_string_from_logical_plan};
 use sail_plan::resolver::PlanResolver;
 use sail_plan::resolver::plan::NamedPlan;
 use sail_sql_analyzer::parser::{parse_one_statement, rewrite_positional_parameter_markers};
@@ -20,7 +21,7 @@ use tonic::Status;
 
 use crate::metrics::{MetricsRecordingContext, MetricsRecordingStream, StatementType};
 use crate::service::SailFlightSqlService;
-use crate::state::{FlightSession, PreparedStatement};
+use crate::state::{FlightSession, PreparedExplain, PreparedStatement};
 
 pub fn invalid(error: impl std::fmt::Display) -> Status {
     Status::invalid_argument(error.to_string())
@@ -31,8 +32,45 @@ pub fn internal(error: impl std::fmt::Display) -> Status {
 }
 
 pub fn dataset_schema(statement: &PreparedStatement) -> Result<SchemaRef, Status> {
+    if !statement.explain.is_empty() {
+        return Ok(Arc::new(Schema::new(vec![Field::new(
+            "plan",
+            DataType::Utf8,
+            false,
+        )])));
+    }
     match &statement.fields {
-        Some(fields) => rename_schema(statement.plan.schema().as_arrow(), fields).map_err(internal),
+        Some(fields) => {
+            // Bind a row to infer the schema without executing it. Typed nulls
+            // preserve parameter types for schema-only and zero-row uploads.
+            let plan = if let Some(parameters) = &statement.parameters {
+                let values = if let Some(batch) =
+                    parameters.batches.iter().find(|batch| batch.num_rows() > 0)
+                {
+                    batch
+                        .columns()
+                        .iter()
+                        .map(|array| ScalarValue::try_from_array(array, 0))
+                        .collect::<Result<Vec<_>, _>>()
+                } else {
+                    parameters
+                        .schema
+                        .fields()
+                        .iter()
+                        .map(|field| ScalarValue::try_from(field.data_type()))
+                        .collect::<Result<Vec<_>, _>>()
+                }
+                .map_err(invalid)?;
+                statement
+                    .plan
+                    .clone()
+                    .with_param_values(values)
+                    .map_err(invalid)?
+            } else {
+                statement.plan.clone()
+            };
+            rename_schema(plan.schema().as_arrow(), fields).map_err(internal)
+        }
         None => Ok(Arc::new(Schema::empty())),
     }
 }
@@ -98,13 +136,36 @@ impl SailFlightSqlService {
             | spec::CommandNode::DescribeDatabase { .. }
             | spec::CommandNode::DescribeTable { .. }
         ));
+        // Sail resolves EXPLAIN eagerly, including executing EXPLAIN ANALYZE.
+        // Resolve only the innermost input until an execution request arrives.
+        let mut plan = plan;
+        let mut explain_options = Vec::new();
+        let plan = loop {
+            match plan {
+                spec::Plan::Command(spec::CommandPlan {
+                    node: spec::CommandNode::Explain { input, mode },
+                    ..
+                }) => {
+                    explain_options.push(ExplainOptions::from_mode(mode));
+                    plan = *input;
+                }
+                plan => break plan,
+            }
+        };
         let mut named = PlanResolver::new(&session.context, self.config.clone())
             .resolve_named_plan(plan)
             .await
             .map_err(invalid)?;
         // SHOW/DESCRIBE are command plans in Sail, but have user-facing result
         // sets. DDL success flags are internal and must not become result sets.
-        if returns_rows {
+        let mut explain = Vec::new();
+        for options in explain_options.into_iter().rev() {
+            explain.push(PreparedExplain {
+                options,
+                fields: named.fields.replace(vec!["plan".to_string()]),
+            });
+        }
+        if explain.is_empty() && returns_rows {
             named.fields = Some(
                 named
                     .plan
@@ -146,6 +207,7 @@ impl SailFlightSqlService {
             plan: named.plan,
             is_query,
             mutates_session,
+            explain,
             fields: named.fields,
             parameter_schema,
             parameters: None,
@@ -172,11 +234,11 @@ impl SailFlightSqlService {
         if count == 0 {
             return Ok(vec![statement.plan.clone()]);
         }
-        let batches = statement.parameters.as_ref().ok_or_else(|| {
+        let parameters = statement.parameters.as_ref().ok_or_else(|| {
             Status::invalid_argument("prepared statement parameters have not been bound")
         })?;
         let mut plans = Vec::new();
-        for batch in batches {
+        for batch in &parameters.batches {
             if batch.num_columns() != count {
                 return Err(Status::invalid_argument(
                     "incorrect number of prepared statement parameters",
@@ -294,9 +356,26 @@ impl SailFlightSqlService {
         } else {
             session.with_catalog(statement.catalog.clone())
         };
+        let mut plan = plan.build().map_err(invalid)?;
+        for explain in &statement.explain {
+            let explain = explain_string_from_logical_plan(
+                &session.context,
+                plan,
+                explain.fields.clone(),
+                explain.options,
+            )
+            .await
+            .map_err(invalid)?;
+            plan = LogicalPlanBuilder::values(vec![vec![lit(explain.output)]])
+                .map_err(invalid)?
+                .project(vec![col("column1").alias("plan")])
+                .map_err(invalid)?
+                .build()
+                .map_err(invalid)?;
+        }
         self.execute_plan(
             &session,
-            plan.build().map_err(invalid)?,
+            plan,
             statement.fields.as_ref(),
             statement.is_query,
         )

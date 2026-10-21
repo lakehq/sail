@@ -7,6 +7,7 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use sail_catalog::manager::CatalogManager;
+use sail_plan::explain::ExplainOptions;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -36,10 +37,24 @@ pub struct PreparedStatement {
     pub plan: LogicalPlan,
     pub is_query: bool,
     pub mutates_session: bool,
+    /// Explain the input plan from the innermost EXPLAIN outwards, at execution.
+    pub explain: Vec<PreparedExplain>,
     pub fields: Option<Vec<String>>,
     pub parameter_schema: SchemaRef,
-    /// None means unbound; an empty vector means a bound empty parameter stream.
-    pub parameters: Option<Vec<RecordBatch>>,
+    /// None means unbound; a binding may contain no parameter rows.
+    pub parameters: Option<BoundParameters>,
+}
+
+#[derive(Clone)]
+pub struct PreparedExplain {
+    pub options: ExplainOptions,
+    pub fields: Option<Vec<String>>,
+}
+
+#[derive(Clone)]
+pub struct BoundParameters {
+    pub schema: SchemaRef,
+    pub batches: Vec<RecordBatch>,
 }
 
 pub struct QueryResult {

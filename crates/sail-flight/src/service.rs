@@ -30,7 +30,9 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::metadata::metadata_batch;
 use crate::protocol::{CloseSessionResult, SessionOptions};
 use crate::query::{dataset_schema, internal, invalid};
-use crate::state::{FlightSession, PreparedStatement, QueryResult, SailFlightSqlState, new_handle};
+use crate::state::{
+    BoundParameters, FlightSession, PreparedStatement, QueryResult, SailFlightSqlState, new_handle,
+};
 
 type FlightStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
@@ -164,7 +166,10 @@ impl SailFlightSqlService {
                     "incorrect number of prepared statement parameters",
                 ));
             }
-            statement.parameters = Some(batches);
+            statement.parameters = Some(BoundParameters {
+                schema: schema.clone(),
+                batches,
+            });
         } else if !statement.parameter_schema.fields().is_empty() && statement.parameters.is_none()
         {
             return Err(Status::invalid_argument(
@@ -269,12 +274,7 @@ impl FlightService for SailFlightSqlService {
         let schema = match command(request.get_ref())? {
             query @ (Command::CommandStatementQuery(_)
             | Command::CommandPreparedStatementQuery(_)) => {
-                let mut statement = self.command_statement(&session, query).await?;
-                if statement.parameters.is_some()
-                    && let Some(plan) = Self::bound_plans(&statement)?.into_iter().next()
-                {
-                    statement.plan = plan;
-                }
+                let statement = self.command_statement(&session, query).await?;
                 dataset_schema(&statement)?
             }
             metadata => metadata_batch(&session, metadata).await?.schema(),

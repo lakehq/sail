@@ -249,22 +249,67 @@ def test_command_query_batch_is_rejected_before_side_effects(flight_uri, tmp_pat
         assert query(client, "SELECT value FROM batch_query", options).to_pylist() == [{"value": 1}]
 
 
-def test_bound_schema_and_result_are_consistent(flight_uri):
+@pytest.mark.parametrize("binding", ["rows", "empty_batch", "schema_only"])
+def test_bound_schema_and_result_are_consistent(flight_uri, binding):
     with flight.connect(flight_uri) as client:
         options = flight.FlightCallOptions(headers=[client.authenticate_basic_token("", "")])
         handle = prepare(client, "SELECT ? AS value", options)
-        batch = pa.record_batch([pa.array([11, 22], type=pa.int64())], names=["value"])
+        values = [11, 22] if binding == "rows" else []
+        batch = pa.record_batch([pa.array(values, type=pa.int64())], names=["value"])
         command = descriptor(PreparedQuery(prepared_statement_handle=handle))
         writer, reader = client.do_put(command, batch.schema, options)
         with writer:
-            writer.write_batch(batch)
+            if binding != "schema_only":
+                writer.write_batch(batch)
             writer.done_writing()
             reader.read()
         schema = client.get_schema(command, options).schema
         info = client.get_flight_info(command, options)
         table = client.do_get(info.endpoints[0].ticket, options).read_all()
         assert schema == info.schema == table.schema
-        assert sorted(table.column("value").to_pylist()) == [11, 22]
+        assert schema.field("value").type == pa.int64()
+        assert sorted(table.column("value").to_pylist()) == values
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "EXPLAIN INSERT INTO explain_analyze_target VALUES (1)",
+        "EXPLAIN ANALYZE INSERT INTO explain_analyze_target VALUES (1)",
+        "EXPLAIN EXPLAIN ANALYZE INSERT INTO explain_analyze_target VALUES (1)",
+    ],
+)
+def test_explain_preparation_and_schema_do_not_execute(flight_uri, tmp_path, prepared, sql):
+    with flight.connect(flight_uri) as client:
+        options = flight.FlightCallOptions(headers=[client.authenticate_basic_token("", "")])
+        query(
+            client,
+            f"CREATE TABLE explain_analyze_target (value INT) USING parquet LOCATION '{tmp_path.as_posix()}'",
+            options,
+        )
+        command = descriptor(
+            PreparedQuery(prepared_statement_handle=prepare(client, sql, options))
+            if prepared
+            else StatementQuery(query=sql)
+        )
+        assert query(client, "SELECT count(*) AS n FROM explain_analyze_target", options).to_pylist() == [{"n": 0}]
+        schema = client.get_schema(command, options).schema
+        assert schema.names == ["plan"]
+        assert query(client, "SELECT count(*) AS n FROM explain_analyze_target", options).to_pylist() == [{"n": 0}]
+        for count in (1, 2):
+            expected_count = count if "ANALYZE" in sql else 0
+            info = client.get_flight_info(command, options)
+            assert query(client, "SELECT count(*) AS n FROM explain_analyze_target", options).to_pylist() == [
+                {"n": expected_count}
+            ]
+            table = client.do_get(info.endpoints[0].ticket, options).read_all()
+            assert table.schema == schema == info.schema
+            assert table.num_rows == 1
+            assert "Physical Plan" in table.column("plan")[0].as_py()
+            assert query(client, "SELECT count(*) AS n FROM explain_analyze_target", options).to_pylist() == [
+                {"n": expected_count}
+            ]
 
 
 def http2_query(host, port, sql, source_port=0):
