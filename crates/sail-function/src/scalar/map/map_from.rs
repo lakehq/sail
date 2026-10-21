@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::{Array, ArrayRef, NullArray, NullBufferBuilder, StructArray};
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::cast;
-use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -12,8 +14,8 @@ use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 
 use crate::scalar::map::utils::{
-    get_element_type, get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
-    map_type_from_key_value_types,
+    get_element_field, get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
+    map_type_from_key_value_fields,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -49,31 +51,39 @@ impl ScalarUDFImpl for SparkMapFromArrays {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // FIXME: Preserve key/value field metadata in the upstream delegate and the
-        // runtime map constructors together; fixing inference alone is insufficient.
-        self.delegate.return_field_from_args(args)
+        let [keys, values] = args.arg_fields else {
+            return internal_err!("map_from_arrays expects exactly 2 arguments");
+        };
+        let data_type = map_type_from_key_value_fields(
+            get_element_field(keys.data_type())?.as_ref(),
+            get_element_field(values.data_type())?.as_ref(),
+        );
+        Ok(Arc::new(Field::new(
+            self.name(),
+            data_type,
+            keys.is_nullable() || values.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let last_value_wins = self.last_value_wins;
+        let return_type = args.return_field.data_type();
         make_scalar_function(
-            move |args| map_from_arrays_inner(args, last_value_wins),
+            move |args| map_from_arrays_inner(args, last_value_wins, return_type),
             vec![],
         )(&args.args)
     }
 }
 
-fn map_from_arrays_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
+fn map_from_arrays_inner(
+    args: &[ArrayRef],
+    last_value_wins: bool,
+    return_type: &DataType,
+) -> Result<ArrayRef> {
     let [keys, values] = take_function_args("map_from_arrays", args)?;
 
     if *keys.data_type() == DataType::Null || *values.data_type() == DataType::Null {
-        return Ok(cast(
-            &NullArray::new(keys.len()),
-            &map_type_from_key_value_types(
-                get_element_type(keys.data_type())?,
-                get_element_type(values.data_type())?,
-            ),
-        )?);
+        return Ok(cast(&NullArray::new(keys.len()), return_type)?);
     }
 
     map_from_keys_values_offsets_nulls(
@@ -84,6 +94,7 @@ fn map_from_arrays_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<Arr
         keys.nulls(),
         values.nulls(),
         last_value_wins,
+        return_type,
     )
 }
 
@@ -120,21 +131,53 @@ impl ScalarUDFImpl for SparkMapFromEntries {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // FIXME: Preserve entry child metadata in the upstream delegate and runtime
-        // map constructors together, as for SparkMapFromArrays.
-        self.delegate.return_field_from_args(args)
+        let [entries] = args.arg_fields else {
+            return exec_err!("map_from_entries: expected one argument");
+        };
+        let element = match entries.data_type() {
+            DataType::List(element)
+            | DataType::LargeList(element)
+            | DataType::FixedSizeList(element, _) => element,
+            other => {
+                return exec_err!(
+                    "map_from_entries: expected array<struct<key, value>>, got {other:?}"
+                );
+            }
+        };
+        let DataType::Struct(fields) = element.data_type() else {
+            return exec_err!(
+                "map_from_entries: expected array<struct<key, value>>, got {:?}",
+                element.data_type()
+            );
+        };
+        let [key, value] = fields.as_ref() else {
+            return exec_err!(
+                "map_from_entries: expected array<struct<key, value>>, got {:?}",
+                element.data_type()
+            );
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            map_type_from_key_value_fields(key, value),
+            entries.is_nullable() || element.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let last_value_wins = self.last_value_wins;
+        let return_type = args.return_field.data_type();
         make_scalar_function(
-            move |args| map_from_entries_inner(args, last_value_wins),
+            move |args| map_from_entries_inner(args, last_value_wins, return_type),
             vec![],
         )(&args.args)
     }
 }
 
-fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
+fn map_from_entries_inner(
+    args: &[ArrayRef],
+    last_value_wins: bool,
+    return_type: &DataType,
+) -> Result<ArrayRef> {
     let [entries] = take_function_args("map_from_entries", args)?;
     let entries_offsets = get_list_offsets(entries)?;
     let entries_values = get_list_values(entries)?;
@@ -177,5 +220,6 @@ fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<Ar
         None,
         result_nulls.as_ref(),
         last_value_wins,
+        return_type,
     )
 }

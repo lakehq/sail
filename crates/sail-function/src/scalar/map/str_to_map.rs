@@ -13,7 +13,7 @@ use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::scalar::map::utils::{
-    map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
+    map_from_keys_values_offsets_nulls, map_type_from_key_value_fields,
 };
 use crate::scalar::string::spark_split::{SparkSplit, parse_regex, split_to_array};
 
@@ -55,9 +55,9 @@ impl ScalarUDFImpl for StrToMap {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(map_type_from_key_value_types(
-            &DataType::Utf8,
-            &DataType::Utf8,
+        Ok(map_type_from_key_value_fields(
+            &Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+            &Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Utf8, true),
         ))
     }
 
@@ -88,14 +88,19 @@ impl ScalarUDFImpl for StrToMap {
         })?;
 
         let last_value_wins = self.last_value_wins;
+        let return_type = args.return_field.data_type();
         make_scalar_function(
-            move |args| str_to_map_inner(args, last_value_wins),
+            move |args| str_to_map_inner(args, last_value_wins, return_type),
             vec![Hint::Pad, Hint::AcceptsSingular],
         )(&[split_result, key_value_delims])
     }
 }
 
-fn str_to_map_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {
+fn str_to_map_inner(
+    args: &[ArrayRef],
+    last_value_wins: bool,
+    return_type: &DataType,
+) -> Result<ArrayRef> {
     let [pair_strs, key_value_delims] = take_function_args("str_to_map", args)?;
     let pair_lists = pair_strs.as_list::<i32>();
     match (
@@ -150,6 +155,7 @@ fn str_to_map_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef
                 keys.nulls(),
                 values.nulls(),
                 last_value_wins,
+                return_type,
             )
         }
         _ => internal_err!("str_to_map: failed to downcast arguments to StringArrays"),

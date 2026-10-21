@@ -7,20 +7,23 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{filter, take};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
-use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common::spec::{
+    SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+    SPARK_METADATA_JSON_KEY,
+};
 
-/// Helper function to get element [`DataType`]
+/// Helper function to get the element [`Field`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
-/// [`Null`](DataType::Null) can be coerced to `ListType`([`Null`](DataType::Null)), so [`Null`](DataType::Null) is returned<br>
+/// [`Null`](DataType::Null) yields a nullable null element field.<br>
 /// For all other types [`exec_err`] is raised
-pub fn get_element_type(data_type: &DataType) -> Result<&DataType> {
+pub fn get_element_field(data_type: &DataType) -> Result<FieldRef> {
     match data_type {
-        DataType::Null => Ok(data_type),
+        DataType::Null => Ok(Arc::new(Field::new_list_field(DataType::Null, true))),
         DataType::List(element)
         | DataType::LargeList(element)
-        | DataType::FixedSizeList(element, _) => Ok(element.data_type()),
+        | DataType::FixedSizeList(element, _) => Ok(Arc::clone(element)),
         _ => exec_err!(
             "map_from_arrays expects 2 listarrays for keys and values as arguments, got {data_type:?}"
         ),
@@ -66,22 +69,24 @@ pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
     }
 }
 
-/// Helper function to construct [`MapType<K, V>`](DataType::Map) given K and V DataTypes for keys and values
+/// Helper function to construct [`MapType<K, V>`](DataType::Map) from key and value fields.
 /// - Map keys are unsorted
 /// - Map keys are non-nullable
 /// - Map entries are non-nullable
-/// - Map values can be null
-pub fn map_type_from_key_value_types(key_type: &DataType, value_type: &DataType) -> DataType {
-    // FIXME: Carry key/value Fields through the map construction helpers so both
-    // inferred and materialized maps retain logical metadata such as interval qualifiers.
+/// - Map values retain the value field's nullability
+pub fn map_type_from_key_value_fields(key_field: &Field, value_field: &Field) -> DataType {
+    let mut key_field = key_field
+        .clone()
+        .with_name(SAIL_MAP_KEY_FIELD_NAME)
+        .with_nullable(false);
+    let mut value_field = value_field.clone().with_name(SAIL_MAP_VALUE_FIELD_NAME);
+    // Spark MapType retains the logical types, not the source fields' user metadata.
+    key_field.metadata_mut().remove(SPARK_METADATA_JSON_KEY);
+    value_field.metadata_mut().remove(SPARK_METADATA_JSON_KEY);
     DataType::Map(
         Arc::new(Field::new(
             SAIL_MAP_FIELD_NAME,
-            DataType::Struct(Fields::from(vec![
-                // the key must not be nullable
-                Field::new(SAIL_MAP_KEY_FIELD_NAME, key_type.clone(), false),
-                Field::new(SAIL_MAP_VALUE_FIELD_NAME, value_type.clone(), true),
-            ])),
+            DataType::Struct(Fields::from(vec![key_field, value_field])),
             false, // the entry is not nullable
         )),
         false, // the keys are not sorted
@@ -106,6 +111,7 @@ pub fn map_from_keys_values_offsets_nulls(
     keys_nulls: Option<&NullBuffer>,
     values_nulls: Option<&NullBuffer>,
     last_value_wins: bool,
+    data_type: &DataType,
 ) -> Result<ArrayRef> {
     let (keys, values, offsets) = map_deduplicate_keys(
         flat_keys,
@@ -118,26 +124,19 @@ pub fn map_from_keys_values_offsets_nulls(
     )?;
     let nulls = NullBuffer::union(keys_nulls, values_nulls);
 
-    let fields = Fields::from(vec![
-        Field::new(
-            SAIL_MAP_KEY_FIELD_NAME,
-            flat_keys.data_type().clone(),
-            false,
-        ),
-        Field::new(
-            SAIL_MAP_VALUE_FIELD_NAME,
-            flat_values.data_type().clone(),
-            true,
-        ),
-    ]);
+    let DataType::Map(field, ordered) = data_type else {
+        return internal_err!("Expected a map return type, got {data_type}");
+    };
+    let DataType::Struct(fields) = field.data_type() else {
+        return internal_err!("Expected struct map entries, got {}", field.data_type());
+    };
     let entries = StructArray::try_new(fields.clone(), vec![keys, values], None)?;
-    let field = Arc::new(Field::new(
-        SAIL_MAP_FIELD_NAME,
-        DataType::Struct(fields),
-        false,
-    ));
     Ok(Arc::new(MapArray::try_new(
-        field, offsets, entries, nulls, false,
+        Arc::clone(field),
+        offsets,
+        entries,
+        nulls,
+        *ordered,
     )?))
 }
 

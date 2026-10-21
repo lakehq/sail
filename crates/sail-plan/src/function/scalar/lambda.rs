@@ -20,7 +20,7 @@ use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
-use sail_function::scalar::map::utils::map_type_from_key_value_types;
+use sail_function::scalar::map::utils::map_type_from_key_value_fields;
 
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
@@ -225,9 +225,9 @@ fn map_filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         // An explicit lambda remains unresolved and must still reject this input.
         if map.get_type(input.function_context.schema)? == DataType::Null {
             validate_map_filter_null_expr(&map, input.function_context.schema)?;
-            map = lit(ScalarValue::try_new_null(&map_type_from_key_value_types(
-                &DataType::Null,
-                &DataType::Null,
+            map = lit(ScalarValue::try_new_null(&map_type_from_key_value_fields(
+                &Field::new_list_field(DataType::Null, true),
+                &Field::new_list_field(DataType::Null, true),
             ))?);
         }
         let mut params = Vec::with_capacity(2);
@@ -286,9 +286,9 @@ fn bind_map_entry_function(
         // An explicit lambda remains unresolved and must still reject this input.
         if map.get_type(schema)? == DataType::Null {
             validate_map_filter_null_expr(&map, schema)?;
-            map = lit(ScalarValue::try_new_null(&map_type_from_key_value_types(
-                &DataType::Null,
-                &DataType::Null,
+            map = lit(ScalarValue::try_new_null(&map_type_from_key_value_fields(
+                &Field::new_list_field(DataType::Null, true),
+                &Field::new_list_field(DataType::Null, true),
             ))?);
         }
         let mut params = Vec::with_capacity(2);
