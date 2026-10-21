@@ -301,3 +301,23 @@ def test_list_python_functions_in_namespaces(spark, python_function):
             spark.catalog.listFunctions(f"missing_{database}")
     finally:
         spark.sql(f"DROP DATABASE {database}")
+
+
+# Ported from Spark 3 (3.5.9): pyspark/sql/catalog.py, Catalog.listFunctions doctest.
+def test_catalog_list_functions(spark):
+    functions = spark.catalog.listFunctions()
+    assert len(functions) > 0
+    assert functions[0]._fields == (
+        "name",
+        "catalog",
+        "namespace",
+        "description",
+        "className",
+        "isTemporary",
+    )
+
+    matched = spark.catalog.listFunctions(pattern="to_*")
+    assert len(matched) > 0
+    assert all(f.name.startswith("to_") for f in matched)
+
+    assert spark.catalog.listFunctions(pattern="*not_existing_func*") == []
