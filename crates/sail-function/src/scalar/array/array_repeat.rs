@@ -76,8 +76,7 @@ impl ScalarUDFImpl for ArrayRepeat {
             args.arg_fields[0]
                 .as_ref()
                 .clone()
-                .with_name(Field::LIST_FIELD_DEFAULT_NAME)
-                .with_nullable(true),
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME),
         ));
         let data_type = match element.data_type() {
             LargeList(_) => LargeList(element),
@@ -91,8 +90,7 @@ impl ScalarUDFImpl for ArrayRepeat {
             args.arg_fields[0]
                 .as_ref()
                 .clone()
-                .with_name(Field::LIST_FIELD_DEFAULT_NAME)
-                .with_nullable(true),
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME),
         ));
         make_scalar_function(|arrays| array_repeat_inner(arrays, Arc::clone(&element)))(&args.args)
     }
