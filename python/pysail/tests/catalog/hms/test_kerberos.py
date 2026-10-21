@@ -38,6 +38,8 @@ def _run_probe(
             f"{service.host}:{service.port}",
             "--service-principal",
             service.service_principal,
+            "--min-sasl-qop",
+            service.min_sasl_qop,
         ],
         env=env,
         capture_output=True,
