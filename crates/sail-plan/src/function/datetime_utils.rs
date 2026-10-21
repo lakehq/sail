@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{Offset, TimeZone};
@@ -35,9 +36,13 @@ pub(crate) fn cast_temporal(
     map_key_dedup_policy: Option<MapKeyDedupPolicy>,
 ) -> DataFusionResult<expr::Expr> {
     if from == &to {
-        // Folding can narrow nested fields after this common type has been selected.
+        // Pin nested types through folding; physical planning elides matching native casts.
         return Ok(if to.is_nested() {
-            ScalarUDF::from(SparkStructRename::new(to)).call(vec![expression])
+            if supports_nested_identity_cast(&to) {
+                cast(expression, to)
+            } else {
+                ScalarUDF::from(SparkStructRename::new(to)).call(vec![expression])
+            }
         } else {
             expression
         });
@@ -212,6 +217,26 @@ pub(crate) fn cast_temporal(
         }
         _ if is_try => Ok(try_cast(expression, to)),
         _ => Ok(cast(expression, to)),
+    }
+}
+
+fn supports_nested_identity_cast(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(fields) => {
+            // Native nested casts match by name and reject empty structs.
+            let mut names = HashSet::new();
+            !fields.is_empty()
+                && fields.iter().all(|field| {
+                    names.insert(field.name()) && supports_nested_identity_cast(field.data_type())
+                })
+        }
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field)
+        | DataType::Map(field, _) => supports_nested_identity_cast(field.data_type()),
+        _ => !data_type.is_nested(),
     }
 }
 

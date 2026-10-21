@@ -201,7 +201,7 @@ impl PlanResolver<'_> {
             right.schema(),
             &JoinType::Inner,
         )?);
-        let conditions = left_columns
+        let (left_keys, right_keys) = left_columns
             .iter()
             .zip(&right_columns)
             .map(|(left, right)| {
@@ -212,10 +212,17 @@ impl PlanResolver<'_> {
                     &schema,
                     &self.config,
                 )?;
-                Ok(left.eq(right))
+                Ok((left, right))
             })
-            .collect::<PlanResult<Vec<_>>>()?;
-        let builder = LogicalPlanBuilder::from(left).join_on(right, join_type, conditions)?;
+            .collect::<PlanResult<Vec<_>>>()?
+            .into_iter()
+            .unzip::<_, _, Vec<_>, Vec<_>>();
+        let builder = LogicalPlanBuilder::from(left).join_with_expr_keys(
+            right,
+            join_type,
+            (left_keys, right_keys),
+            None,
+        )?;
         // Re-register join key columns as hidden fields so that subsequent
         // attribute resolution (by plan_id) can still find them.
         // TODO: Spark keeps the left key (the right key for right joins) as the visible

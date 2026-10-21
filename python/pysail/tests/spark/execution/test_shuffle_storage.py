@@ -88,3 +88,90 @@ def test_repartition_collect_with_storage_shuffle(spark):
         Row(group=1, count=10),
         Row(group=2, count=10),
     ]
+
+
+@pytest.mark.parametrize("container", ["struct", "array"])
+@pytest.mark.parametrize("join_type", ["inner", "full", "left_semi"])
+def test_nested_timestamp_join_preserves_hash_partitioning(spark, container, join_type):
+    timestamp = F.expr("TIMESTAMP_NTZ '2024-01-01' + INTERVAL 1 SECOND * id")
+    key = F.struct(timestamp.alias("ts")) if container == "struct" else F.array(timestamp)
+    # Explain large inputs to choose a partitioned join without executing them.
+    left = spark.range(0, 10_000_000, 1, 8).select(key.alias("k"), F.col("id").alias("lid"))
+    right = spark.range(0, 10_000_000, 1, 8).select(key.alias("k"), F.col("id").alias("rid"))
+    query = left.repartition(8, "k").join(right.repartition(8, "k"), "k", join_type)
+
+    plan = query._explain_string()  # noqa: SLF001
+    assert "HashJoinExec: mode=Partitioned" in plan
+    expected_repartitions = 2
+    assert plan.count("RepartitionExec: partitioning=Hash(") == expected_repartitions
+
+
+@pytest.mark.parametrize("container", ["struct", "array"])
+def test_nested_timestamp_full_join_with_storage_shuffle(spark, container):
+    timestamp = F.expr("TIMESTAMP_NTZ '2024-01-01' + INTERVAL 1 SECOND * value")
+    key = F.struct(timestamp.alias("ts")) if container == "struct" else F.array(timestamp)
+    key = F.when(F.col("value") == -1, F.lit(None)).otherwise(key).alias("k")
+    left = spark.createDataFrame(
+        [(0, 0), (1, 0), (2, None), (3, -1), (4, 1), (5, 2)], "lid BIGINT, value BIGINT"
+    ).select("lid", key)
+    right = spark.createDataFrame([(10, 0), (11, None), (12, -1), (13, 2), (14, 3)], "rid BIGINT, value BIGINT").select(
+        "rid", key
+    )
+    query = left.repartition(8, "k").join(right.repartition(8, "k"), "k", "full")
+    timestamp = F.col("k.ts") if container == "struct" else F.col("k")[0]
+
+    rows = (
+        query.select("lid", "rid", F.col("k").isNull().alias("null_key"), timestamp.isNull().alias("null_ts"))
+        .orderBy("lid", "rid")
+        .collect()
+    )
+    assert rows == [
+        Row(lid=None, rid=12, null_key=True, null_ts=True),
+        Row(lid=None, rid=14, null_key=False, null_ts=False),
+        Row(lid=0, rid=10, null_key=False, null_ts=False),
+        Row(lid=1, rid=10, null_key=False, null_ts=False),
+        Row(lid=2, rid=11, null_key=False, null_ts=True),
+        Row(lid=3, rid=None, null_key=True, null_ts=True),
+        Row(lid=4, rid=None, null_key=False, null_ts=False),
+        Row(lid=5, rid=13, null_key=False, null_ts=False),
+    ]
+
+
+@pytest.mark.parametrize("ansi", ["true", "false"])
+@pytest.mark.parametrize("layout", ["plain", "duplicate", "nested_duplicate", "empty"])
+def test_nested_timestamp_keys_after_projection_folding(spark, ansi, layout):
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    try:
+
+        def key(value):
+            if layout == "duplicate":
+                return F.struct(value.alias("t"), (value + F.expr("INTERVAL 1 DAY")).alias("t"))
+            if layout == "nested_duplicate":
+                return F.struct(
+                    value.alias("ts"),
+                    F.array(F.struct(value.alias("t"), (value + F.expr("INTERVAL 1 DAY")).alias("t"))).alias("nested"),
+                )
+            if layout == "empty":
+                return F.struct(value.alias("ts"), F.struct().alias("empty"))
+            return F.struct(value.alias("t"))
+
+        raw = spark.range(1).select(F.lit("2024-01-01").alias("s"))
+        left = raw.select(
+            key(F.expr("TRY_CAST(s AS TIMESTAMP_NTZ)")).alias("k"),
+            F.lit(0).alias("lid"),
+        )
+        right = spark.range(2).select(
+            key(F.expr("TRY_CAST(CASE WHEN id = 0 THEN '2024-01-01' ELSE NULL END AS TIMESTAMP_NTZ)")).alias("k"),
+            F.col("id").alias("rid"),
+        )
+        equality = (
+            left.select(F.col("k").alias("lk"), "lid")
+            .crossJoin(right.select(F.col("k").alias("rk"), "rid"))
+            .select("rid", (F.col("lk") == F.col("rk")).alias("equal"))
+            .orderBy("rid")
+        )
+        assert equality.collect() == [Row(rid=0, equal=True), Row(rid=1, equal=False)]
+        assert left.join(right, "k").select("lid", "rid").collect() == [Row(lid=0, rid=0)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
