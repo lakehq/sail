@@ -21,7 +21,6 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
-use sail_function::scalar::datetime::spark_interval::YearMonthIntervalOverflow;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
@@ -115,13 +114,10 @@ fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> 
 
     let interval = match unit.to_lowercase().as_str() {
         "years" | "year" => match interval {
-            Expr::Literal(ScalarValue::Int32(Some(years)), metadata) => {
-                let Some(months) = years.checked_mul(12) else {
-                    return Ok(ScalarUDF::from(YearMonthIntervalOverflow::new())
-                        .call(vec![cast(date, DataType::Date32)]));
-                };
-                Expr::Literal(ScalarValue::IntervalYearMonth(Some(months)), metadata)
-            }
+            Expr::Literal(ScalarValue::Int32(Some(years)), metadata) => Expr::Literal(
+                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(years, 0))),
+                metadata,
+            ),
             _ => cast(
                 format_interval(interval, "years"),
                 DataType::Interval(IntervalUnit::YearMonth),

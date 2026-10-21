@@ -10,7 +10,7 @@ use datafusion_common::arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -101,61 +101,6 @@ define_interval_udf!(
     string_to_year_month_interval,
     ScalarValue::IntervalYearMonth,
 );
-
-/// Defers a known year-month overflow until a non-NULL date is evaluated.
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct YearMonthIntervalOverflow {
-    signature: Signature,
-}
-
-impl Default for YearMonthIntervalOverflow {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl YearMonthIntervalOverflow {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::exact(vec![DataType::Date32], Volatility::Immutable),
-        }
-    }
-}
-
-impl ScalarUDFImpl for YearMonthIntervalOverflow {
-    fn name(&self) -> &str {
-        "year_month_interval_overflow"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Date32)
-    }
-
-    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        // Empty scalar subqueries can be NULL even when their output field is not nullable.
-        Ok(Arc::new(Field::new(self.name(), DataType::Date32, true)))
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let date = args.args.one()?;
-        let all_null = match &date {
-            ColumnarValue::Scalar(ScalarValue::Date32(value)) => value.is_none(),
-            ColumnarValue::Array(array) if array.data_type() == &DataType::Date32 => {
-                array.null_count() == array.len()
-            }
-            _ => return internal_err!("year_month_interval_overflow expects a date"),
-        };
-        if all_null {
-            Ok(date)
-        } else {
-            exec_err!("year-month interval overflow")
-        }
-    }
-}
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct YearMonthIntervalMonths {

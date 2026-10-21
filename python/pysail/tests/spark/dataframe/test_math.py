@@ -10,9 +10,7 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import any_of
 
 
-@pytest.mark.xfail(
-    not is_jvm_spark(), reason="Pre-existing projected array-index type validation bug", strict=True
-)
+@pytest.mark.xfail(not is_jvm_spark(), reason="Pre-existing projected array-index type validation bug", strict=True)
 @pytest.mark.parametrize("ansi", [True, False])
 @pytest.mark.parametrize("value", ["0.5", "0.5D"])
 @pytest.mark.parametrize("operation", ["schema", "collect"])
@@ -24,12 +22,15 @@ def test_projected_array_index_analysis_error(spark, ansi, value, operation):
             F.array(F.lit(10), F.lit(20)).alias("a"),
             F.when(F.col("id") == 0, F.lit(0)).otherwise(F.expr(value)).alias("0"),
         )
-        with pytest.raises(AnalysisException, match="DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"):
+
+        def evaluate():
             result = source.select(F.col("a")[F.col("0")].alias("v"))
             if operation == "schema":
-                _ = result.schema
-            else:
-                result.collect()
+                return result.schema
+            return result.collect()
+
+        with pytest.raises(AnalysisException, match=r"DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE"):
+            evaluate()
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous)
 
