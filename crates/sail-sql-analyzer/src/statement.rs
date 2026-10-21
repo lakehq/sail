@@ -3,7 +3,10 @@ use std::iter::once;
 use either::Either;
 use sail_common::spec;
 use sail_common::spec::QueryPlan;
-use sail_common::utils::datetime::get_system_timezone;
+use sail_common::utils::datetime::{
+    MAX_TIME_ZONE_OFFSET_MICROS, MICROS_PER_DAY, MICROS_PER_HOUR, MICROS_PER_SECOND,
+    get_system_timezone,
+};
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Overwrite, Restrict};
@@ -2053,13 +2056,6 @@ const INVALID_RESET_COMMAND_FORMAT: &str = "[INVALID_RESET_COMMAND_FORMAT] Expec
 /// It must equal `SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE` in `sail-spark-connect`.
 const SESSION_TIME_ZONE_KEY: &str = "spark.sql.session.timeZone";
 
-const MICROS_PER_SECOND: i64 = 1_000_000;
-const MICROS_PER_HOUR: u64 = 3_600 * 1_000_000;
-const MICROS_PER_DAY: i64 = 24 * 3_600 * 1_000_000;
-
-/// The largest absolute offset that `SET TIME ZONE INTERVAL ...` accepts.
-const MAX_TIME_ZONE_OFFSET_MICROS: u64 = 18 * MICROS_PER_HOUR;
-
 /// `QueryParsingErrors.intervalValueOutOfRangeError`, where `input` is the part of the interval that
 /// Spark rejects: its months, its days, its whole hours, or its whole seconds.
 fn interval_out_of_range(input: impl std::fmt::Display) -> SqlError {
@@ -2121,7 +2117,7 @@ fn from_ast_time_zone(timezone: TimeZoneValue) -> SqlResult<String> {
             }
             if microseconds.unsigned_abs() > MAX_TIME_ZONE_OFFSET_MICROS {
                 return Err(interval_out_of_range(
-                    microseconds.unsigned_abs() / MICROS_PER_HOUR,
+                    microseconds.unsigned_abs() / (MICROS_PER_HOUR as u64),
                 ));
             }
             if microseconds % MICROS_PER_SECOND != 0 {

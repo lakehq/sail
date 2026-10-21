@@ -23,6 +23,7 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
 };
+use sail_common::utils::datetime::MICROS_PER_DAY;
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
@@ -31,7 +32,6 @@ use crate::functions_nested_utils::{
 };
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
-const MICROS_PER_DAY: i64 = 86_400_000_000;
 const MICROS_PER_MONTH: i64 = 28 * MICROS_PER_DAY;
 
 // TODO: Remove the `use_wide_utc_arithmetic` split once Sail has Spark-compatible
