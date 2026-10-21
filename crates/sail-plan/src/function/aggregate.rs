@@ -1092,6 +1092,7 @@ pub(crate) fn list_built_in_aggregate_function_names() -> impl Iterator<Item = &
 }
 
 #[cfg(test)]
+#[expect(clippy::panic)]
 mod tests {
     use std::sync::Arc;
 
