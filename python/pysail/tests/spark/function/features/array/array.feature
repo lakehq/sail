@@ -164,7 +164,7 @@ Feature: array output schema
                      CASE WHEN id = 0 THEN 0 ELSE <value> END AS `0`
               FROM range(2)) t
         """
-      Then query error (?i)(DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE|Function 'shiftleft' requires Int32, but received)
+      Then query error (?i)DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
 
       Examples:
         | value | ansi  |

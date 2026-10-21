@@ -2,11 +2,33 @@ import datetime
 from decimal import Decimal
 
 import pytest
+from pyspark.errors import AnalysisException
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import any_of
+
+
+@pytest.mark.parametrize("ansi", [True, False])
+@pytest.mark.parametrize("value", ["0.5", "0.5D"])
+@pytest.mark.parametrize("operation", ["schema", "collect"])
+def test_projected_array_index_analysis_error(spark, ansi, value, operation):
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    try:
+        spark.conf.set("spark.sql.ansi.enabled", ansi)
+        source = spark.range(2).select(
+            F.array(F.lit(10), F.lit(20)).alias("a"),
+            F.when(F.col("id") == 0, F.lit(0)).otherwise(F.expr(value)).alias("0"),
+        )
+        with pytest.raises(AnalysisException, match="DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"):
+            result = source.select(F.col("a")[F.col("0")].alias("v"))
+            if operation == "schema":
+                _ = result.schema
+            else:
+                result.collect()
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
 
 
 @pytest.mark.parametrize(
