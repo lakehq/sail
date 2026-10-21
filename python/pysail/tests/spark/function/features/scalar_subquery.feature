@@ -476,3 +476,34 @@ Feature: Scalar subquery nullability
       Then query result collected
         | a |
         | 1 |
+
+    Scenario: two correlated scalar subqueries in one filter are both evaluated
+      When query
+        """
+        SELECT a FROM VALUES (1), (2), (3) AS t(a)
+        WHERE (SELECT max(b) FROM VALUES (1), (2) AS u(b) WHERE u.b = t.a) = a
+          AND (SELECT min(c) FROM VALUES (1), (3) AS v(c) WHERE v.c = t.a) = a
+        """
+      Then query result collected
+        | a |
+        | 1 |
+
+    @function(nullability)
+    Scenario: count over a correlated scalar subquery column skips unmatched rows
+      When query
+        """
+        SELECT a, count(c) AS n
+        FROM (SELECT a, (SELECT b FROM VALUES (1) AS u(b) WHERE u.b = t.a) AS c FROM VALUES (1), (2) AS t(a))
+        GROUP BY a
+        ORDER BY a
+        """
+      Then query result collected ordered
+        | a | n |
+        | 1 | 1 |
+        | 2 | 0 |
+      Then query schema
+        """
+        root
+         |-- a: integer (nullable = false)
+         |-- n: long (nullable = false)
+        """

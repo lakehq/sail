@@ -70,6 +70,7 @@ impl ScalarUDFImpl for SparkScalarSubquery {
     /// adds nothing and would only turn equi-join keys into expressions, so it
     /// unwraps itself; a column that is still non-nullable keeps the wrapper.
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        // A column the simplifier cannot resolve (no schema in the context) keeps the wrapper.
         if matches!(args.as_slice(), [column @ Expr::Column(_)] if info.nullable(column).unwrap_or(false))
         {
             Ok(ExprSimplifyResult::Simplified(args.one()?))
