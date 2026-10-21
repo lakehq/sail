@@ -15,6 +15,12 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use ordered_float::OrderedFloat;
 use sail_common_datafusion::literal::LiteralValue;
 
+/// Compares floating-point values with `NaN` after all other values, as Spark does.
+fn nan_last_cmp(a: &f64, b: &f64) -> std::cmp::Ordering {
+    a.partial_cmp(b)
+        .unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
+}
+
 /// The `PercentileFunction` calculates the exact percentile (quantile) from a set of values.
 ///
 /// Unlike `approx_percentile_cont`, this function calculates the exact percentile by:
@@ -229,7 +235,7 @@ impl NumericPercentileAccumulator {
             }
         }
 
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.sort_by(nan_last_cmp);
         values
     }
 }
@@ -398,7 +404,7 @@ impl MultiNumericPercentileAccumulator {
             }
         }
 
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values.sort_by(nan_last_cmp);
         values
     }
 }
