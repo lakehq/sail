@@ -252,7 +252,6 @@ def patch_pyspark_connect_test_class():
     ReusedConnectTestCase.assertEqual = assertEqual
 
 
-
 @dataclass
 class TestMarker:
     keywords: list[str]
