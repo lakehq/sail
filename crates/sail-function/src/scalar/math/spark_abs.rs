@@ -86,7 +86,7 @@ impl ScalarUDFImpl for SparkAbs {
                 data_type,
             ));
         }
-        let mut field = Field::new(self.name(), data_type.clone(), true);
+        let mut field = Field::new(self.name(), data_type.clone(), input.is_nullable());
         // ABS preserves the interval qualifier used to select DATE arithmetic.
         if matches!(
             field.data_type(),

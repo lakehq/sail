@@ -1,12 +1,14 @@
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_spark::function::math::negative::SparkNegative as DataFusionNegative;
+
+use crate::error::invalid_arg_count_exec_err;
 
 /// `ConfigOptions` snapshots with `execution.enable_ansi_mode` pinned. Negation
 /// only reads the ANSI flag, so the two possible snapshots are built once and
@@ -28,7 +30,7 @@ fn make_config(ansi_mode: bool) -> Arc<ConfigOptions> {
 /// reaches every worker — unlike reading DataFusion's session-level
 /// `execution.enable_ansi_mode`, which only reflects the driver's context.
 ///
-/// Name, signature, return type, and the negate kernel are delegated to upstream
+/// Name, signature, and the negate kernel are delegated to upstream
 /// `datafusion_spark::SparkNegative` (its free `spark_negative` helper is private).
 /// We drive the kernel by handing it the matching pinned-ANSI [`ConfigOptions`]
 /// snapshot per batch.
@@ -66,20 +68,25 @@ impl ScalarUDFImpl for SparkNegative {
         self.inner.signature()
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        self.inner.return_type(arg_types)
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg = &args.arg_fields[0];
-        if matches!(arg.data_type(), DataType::Interval(_)) {
-            return Ok(Arc::new(Field::new(
+        let [arg] = args.arg_fields else {
+            return Err(invalid_arg_count_exec_err(
                 self.name(),
-                arg.data_type().clone(),
-                arg.is_nullable(),
-            )));
-        }
-        self.inner.return_field_from_args(args)
+                (1, 1),
+                args.arg_fields.len(),
+            ));
+        };
+        Ok(Arc::new(Field::new(
+            self.name(),
+            arg.data_type().clone(),
+            arg.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
