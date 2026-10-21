@@ -3,6 +3,8 @@ mod handler;
 mod message;
 mod options;
 
+use std::sync::{Arc, Mutex};
+
 use indexmap::IndexMap;
 pub(crate) use message::SessionManagerMessage;
 pub use options::{SessionManagerComponents, SessionManagerOptions};
@@ -11,6 +13,7 @@ use sail_execution::{DriverId, IdGenerator};
 use sail_telemetry::events::SystemEventReporter;
 
 use crate::session_factory::{ServerSessionInfo, SessionFactory, SessionJobRunnerFactory};
+use crate::session_manager::SessionCleanup;
 use crate::session_manager::session::ServerSession;
 
 pub struct SessionManagerActor {
@@ -23,4 +26,5 @@ pub struct SessionManagerActor {
     driver_id_generator: IdGenerator<DriverId>,
     shutdown_notifier: Option<tokio::sync::oneshot::Sender<()>>,
     event_reporter: SystemEventReporter,
+    cleanup: Arc<Mutex<Vec<SessionCleanup>>>,
 }

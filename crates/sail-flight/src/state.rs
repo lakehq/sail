@@ -1,67 +1,52 @@
 use std::collections::HashMap;
-use std::fmt;
 
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
 use datafusion::execution::SendableRecordBatchStream;
-use tonic::Status;
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::prelude::SessionContext;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct QueryHandle(String);
-
-impl QueryHandle {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        self.0.as_bytes()
-    }
+#[derive(Clone)]
+pub struct FlightSession {
+    pub id: String,
+    pub context: SessionContext,
 }
 
-impl fmt::Display for QueryHandle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
+#[derive(Clone)]
+pub struct PreparedStatement {
+    pub session_id: String,
+    /// Re-resolve this SQL before execution: logical plans can capture table snapshots.
+    pub sql: String,
+    pub plan: LogicalPlan,
+    pub is_query: bool,
+    pub fields: Option<Vec<String>>,
+    pub parameter_schema: SchemaRef,
+    /// None means unbound; an empty vector means a bound empty parameter stream.
+    pub parameters: Option<Vec<RecordBatch>>,
 }
 
-impl Default for QueryHandle {
-    fn default() -> Self {
-        Self::new()
-    }
+pub struct QueryResult {
+    pub session_id: String,
+    pub stream: SendableRecordBatchStream,
 }
 
-impl TryFrom<&[u8]> for QueryHandle {
-    type Error = Status;
-
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        let s = std::str::from_utf8(bytes)
-            .map_err(|_| Status::invalid_argument("invalid ticket encoding"))?;
-        Ok(Self(s.to_string()))
-    }
-}
-
+#[derive(Default)]
 pub struct SailFlightSqlState {
-    streams: HashMap<QueryHandle, SendableRecordBatchStream>,
+    pub sessions: HashMap<String, String>,
+    pub statements: HashMap<String, PreparedStatement>,
+    pub results: HashMap<String, QueryResult>,
 }
 
 impl SailFlightSqlState {
-    pub fn new() -> Self {
-        Self {
-            streams: HashMap::new(),
-        }
-    }
-
-    pub fn add_stream(&mut self, handle: QueryHandle, stream: SendableRecordBatchStream) {
-        self.streams.insert(handle, stream);
-    }
-
-    pub fn remove_stream(&mut self, handle: &QueryHandle) -> Option<SendableRecordBatchStream> {
-        self.streams.remove(handle)
+    pub fn remove_session(&mut self, id: &str) {
+        self.sessions.remove(id);
+        self.statements
+            .retain(|_, statement| statement.session_id != id);
+        self.results.retain(|_, result| result.session_id != id);
     }
 }
 
-impl Default for SailFlightSqlState {
-    fn default() -> Self {
-        Self::new()
-    }
+pub fn new_handle() -> String {
+    Uuid::new_v4().to_string()
 }

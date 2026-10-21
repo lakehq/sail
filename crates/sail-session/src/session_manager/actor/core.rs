@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 use log::{info, warn};
@@ -9,8 +9,10 @@ use sail_execution::{DriverId, IdGenerator};
 use sail_system_store::SystemEvent;
 
 use crate::session_manager::actor::SessionManagerActor;
+use crate::session_manager::session::ServerSessionState;
 use crate::session_manager::{
-    SessionManagerComponents, SessionManagerMessage, SessionManagerOptions,
+    SessionCleanup, SessionManagerComponents, SessionManagerMessage, SessionManagerOptions,
+    run_session_cleanup,
 };
 
 struct SessionDriverRegistry {
@@ -34,14 +36,18 @@ impl DriverRegistryAccessor for SessionDriverRegistry {
 
 impl Actor for SessionManagerActor {
     type Message = SessionManagerMessage;
-    type Options = (SessionManagerOptions, SessionManagerComponents);
+    type Options = (
+        SessionManagerOptions,
+        SessionManagerComponents,
+        Arc<Mutex<Vec<SessionCleanup>>>,
+    );
 
     fn name() -> &'static str {
         "SessionManagerActor"
     }
 
     fn new(options: Self::Options) -> Self {
-        let (options, components) = options;
+        let (options, components, cleanup) = options;
         let SessionManagerComponents {
             session_factory,
             job_runner_factory,
@@ -58,6 +64,7 @@ impl Actor for SessionManagerActor {
             driver_id_generator: IdGenerator::new(),
             shutdown_notifier: None,
             event_reporter,
+            cleanup,
         }
     }
 
@@ -83,6 +90,9 @@ impl Actor for SessionManagerActor {
         message: Self::Message,
     ) -> ActorAction {
         match message {
+            SessionManagerMessage::GetSession { session_id, result } => {
+                self.handle_get_session(ctx, session_id, result)
+            }
             SessionManagerMessage::GetOrCreateSession {
                 session_id,
                 user_id,
@@ -118,6 +128,14 @@ impl Actor for SessionManagerActor {
     }
 
     async fn stop(mut self, ctx: &mut ActorContext<Self>) {
+        for (session_id, session) in &self.sessions {
+            if matches!(
+                session.state,
+                ServerSessionState::Running { .. } | ServerSessionState::Creating { .. }
+            ) {
+                run_session_cleanup(&self.cleanup, session_id);
+            }
+        }
         // Keep the gateway available while drivers stop. Graceful gateway shutdown waits for
         // active task stream connections, which are owned by the drivers.
         let drivers = self.drivers.drain().collect::<Vec<_>>();

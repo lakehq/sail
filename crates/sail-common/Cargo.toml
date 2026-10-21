@@ -37,3 +37,4 @@ tonic-health = { workspace = true }
 tower = { workspace = true }
 axum = { workspace = true }
 pin-project-lite = { workspace = true }
+futures = { workspace = true }

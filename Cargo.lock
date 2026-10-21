@@ -7195,6 +7195,7 @@ dependencies = [
  "axum",
  "fastrace",
  "figment",
+ "futures",
  "glob",
  "half",
  "iana-time-zone",

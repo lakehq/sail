@@ -192,9 +192,14 @@ impl CatalogManagerState {
                 let catalog = self.default_catalog.clone();
                 Ok((catalog, None))
             }
-            [name] if self.catalogs.contains_key(name.as_ref()) => {
+            [name, tail @ ..] if self.catalogs.contains_key(name.as_ref()) => {
                 let catalog = name.as_ref().into();
-                Ok((catalog, None))
+                let database = if tail.is_empty() {
+                    None
+                } else {
+                    Some(tail.try_into()?)
+                };
+                Ok((catalog, database))
             }
             x => {
                 let catalog = self.default_catalog.clone();
