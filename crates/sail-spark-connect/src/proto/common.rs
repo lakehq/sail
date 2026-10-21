@@ -24,3 +24,25 @@ impl TryFrom<StorageLevel> for spec::StorageLevel {
         })
     }
 }
+
+impl TryFrom<spec::StorageLevel> for StorageLevel {
+    type Error = SparkError;
+
+    fn try_from(level: spec::StorageLevel) -> SparkResult<StorageLevel> {
+        let spec::StorageLevel {
+            use_disk,
+            use_memory,
+            use_off_heap,
+            deserialized,
+            replication,
+        } = level;
+        let replication = i32::try_from(replication).required("replication")?;
+        Ok(StorageLevel {
+            use_disk,
+            use_memory,
+            use_off_heap,
+            deserialized,
+            replication,
+        })
+    }
+}

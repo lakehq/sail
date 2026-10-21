@@ -59,18 +59,21 @@ So `df.storageLevel` is `OFF_HEAP` for a DataFrame that was never cached, where 
 
 `test_cache_table` reports a different error because of a second bug, described in [Dropping Temporary Views](#dropping-temporary-views).
 
-**Proposed fix.** These tests check the cache bookkeeping rather than the cached data, except `test_refresh_table`.
-A session-level cache registry in the catalog manager would make them pass without materializing anything:
+**Fix (in this pull request).** A session-level registry in the catalog manager keeps track of what is cached, without materializing any data:
 
-- `cacheTable` and `persist` record the resolved table (or the plan) with its storage level, and fail with "not found" for a missing table, as Spark does.
-- `isCached`, `uncacheTable`, `clearCache`, `unpersist`, and `storageLevel` read and update that registry.
-  `storageLevel` returns `NONE` for a plan that is not cached.
-- `refreshTable` and `refreshByPath` invalidate any provider caches for the table and drop it from the registry.
+- `cacheTable` (and `CACHE [LAZY] TABLE`) records the resolved table or view, and fails with "not found" for a missing table, as Spark does.
+  The table is identified by its resolved catalog, database, and name, so `some_db.tab1` and `spark_catalog.some_db.tab1` refer to the same entry.
+- `isCached`, `uncacheTable` (and `UNCACHE TABLE [IF EXISTS]`), and `clearCache` (and `CLEAR CACHE`) read and update the registry.
+- `persist` and `unpersist` record the storage level of a DataFrame, identified by its serialized plan, and `storageLevel` returns `NONE` for a DataFrame that is not cached.
+  `clearCache` also removes the cached DataFrames, as in Spark.
+- `refreshTable` checks that the table exists, and `refreshByPath` does nothing, since no data is cached.
 
-`test_refresh_table` additionally expects cached data to survive the deletion of the underlying files until the table is refreshed.
-That requires materializing the cached plan (for example, as an in-memory table), which belongs to the caching design in [#1014](https://github.com/lakehq/sail/issues/1014).
-A registry-only implementation would make `isCached` report `True` for data that is not actually cached,
-so whether that is acceptable as a first step is a decision for the maintainers.
+`test_table_cache`, `test_cache_table`, `test_cache_dataframe`, and the `cacheTable`, `isCached`, `uncacheTable`, `clearCache`, and `DataFrame.storageLevel` doctests pass.
+`CACHE TABLE ... AS SELECT` is not supported yet.
+
+`test_refresh_table` and the `refreshTable` and `refreshByPath` doctests still fail.
+They expect cached data to survive the deletion of the underlying files until the table is refreshed,
+which requires materializing the cached plan (for example, as an in-memory table), as part of the caching design in [#1014](https://github.com/lakehq/sail/issues/1014).
 
 ### Dropping Temporary Views
 
@@ -87,7 +90,7 @@ After `isCached("tab1")` fails, `tab2` was never created, so dropping it raised 
 **Fix (in this pull request).** `TemporaryViewManager::drop_view` now returns whether the view existed,
 `DropTempView` uses `if_exists: true`, and the command returns the result.
 This also fixes the known issue covered by the strict `xfail` on `test_drop_missing_global_temp_view_returns_false`, which now passes.
-`test_cache_table` still fails, now with the `PlanNode::IsCached` error from the caching group.
+`test_cache_table` passes with the cache registry described in [Table and DataFrame Caching](#table-and-dataframe-caching).
 
 ### Persistent Functions
 

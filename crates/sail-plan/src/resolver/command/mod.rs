@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_common::DFSchema;
+use datafusion_expr::{EmptyRelation, Extension, LogicalPlan};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::provider::{DropDatabaseOptions, DropTableOptions};
 use sail_common::spec;
@@ -204,12 +205,43 @@ impl PlanResolver<'_> {
             CommandNode::RecoverPartitions { .. } => {
                 Err(PlanError::todo("PlanNode::RecoverPartitions"))
             }
-            CommandNode::IsCached { .. } => Err(PlanError::todo("PlanNode::IsCached")),
-            CommandNode::CacheTable { .. } => Err(PlanError::todo("PlanNode::CacheTable")),
-            CommandNode::UncacheTable { .. } => Err(PlanError::todo("PlanNode::UncacheTable")),
-            CommandNode::ClearCache => Err(PlanError::todo("PlanNode::ClearCache")),
-            CommandNode::RefreshTable { .. } => Err(PlanError::todo("PlanNode::RefreshTable")),
-            CommandNode::RefreshByPath { .. } => Err(PlanError::todo("PlanNode::RefreshByPath")),
+            CommandNode::IsCached { table } => {
+                self.resolve_catalog_command(CatalogCommand::IsCached {
+                    table: table.into(),
+                })
+            }
+            CommandNode::CacheTable {
+                table,
+                lazy: _,
+                storage_level: _,
+                query,
+            } => {
+                if query.is_some() {
+                    return Err(PlanError::todo("CACHE TABLE ... AS SELECT"));
+                }
+                self.resolve_catalog_command(CatalogCommand::CacheTable {
+                    table: table.into(),
+                })
+            }
+            CommandNode::UncacheTable { table, if_exists } => {
+                self.resolve_catalog_command(CatalogCommand::UncacheTable {
+                    table: table.into(),
+                    if_exists,
+                })
+            }
+            CommandNode::ClearCache => self.resolve_catalog_command(CatalogCommand::ClearCache),
+            CommandNode::RefreshTable { table } => {
+                self.resolve_catalog_command(CatalogCommand::RefreshTable {
+                    table: table.into(),
+                })
+            }
+            // No data is cached by path, so there is nothing to refresh.
+            CommandNode::RefreshByPath { path: _ } => {
+                Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::new(DFSchema::empty()),
+                }))
+            }
             CommandNode::CurrentCatalog => {
                 self.resolve_catalog_command(CatalogCommand::CurrentCatalog)
             }

@@ -1,5 +1,6 @@
 use datafusion::prelude::SessionContext;
-use log::warn;
+use prost::Message;
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
@@ -31,7 +32,7 @@ use crate::spark::connect::analyze_plan_response::{
     SemanticHash as SemanticHashResponse, SparkVersion as SparkVersionResponse,
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
-use crate::spark::connect::{StorageLevel, plan};
+use crate::spark::connect::plan;
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
@@ -163,36 +164,56 @@ pub(crate) async fn handle_analyze_semantic_hash(
     Err(SparkError::todo("handle analyze semantic hash"))
 }
 
+// The data of a persisted plan is not materialized. Only the storage level is kept,
+// with the plan identified by its serialized form, so that it is reported as in Spark.
+
 pub(crate) async fn handle_analyze_persist(
-    _ctx: &SessionContext,
-    _request: PersistRequest,
+    ctx: &SessionContext,
+    request: PersistRequest,
 ) -> SparkResult<PersistResponse> {
-    // TODO: Implement
-    warn!("Persist operation is not yet supported and is a no-op");
+    let PersistRequest {
+        relation,
+        storage_level,
+    } = request;
+    let relation = relation.required("relation")?;
+    let storage_level = match storage_level {
+        Some(level) => level.try_into()?,
+        None => "MEMORY_AND_DISK".parse()?,
+    };
+    ctx.extension::<CatalogManager>()?
+        .cache_plan(relation.encode_to_vec(), storage_level)?;
     Ok(PersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_unpersist(
-    _ctx: &SessionContext,
-    _request: UnpersistRequest,
+    ctx: &SessionContext,
+    request: UnpersistRequest,
 ) -> SparkResult<UnpersistResponse> {
-    // TODO: Implement
-    warn!("Unpersist operation is not yet supported and is a no-op");
+    let UnpersistRequest {
+        relation,
+        blocking: _,
+    } = request;
+    let relation = relation.required("relation")?;
+    ctx.extension::<CatalogManager>()?
+        .uncache_plan(&relation.encode_to_vec())?;
     Ok(UnpersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_get_storage_level(
-    _ctx: &SessionContext,
-    _request: GetStorageLevelRequest,
+    ctx: &SessionContext,
+    request: GetStorageLevelRequest,
 ) -> SparkResult<GetStorageLevelResponse> {
+    let GetStorageLevelRequest { relation } = request;
+    let relation = relation.required("relation")?;
+    let storage_level = match ctx
+        .extension::<CatalogManager>()?
+        .get_cached_plan_storage_level(&relation.encode_to_vec())?
+    {
+        Some(level) => level,
+        None => "NONE".parse()?,
+    };
     Ok(GetStorageLevelResponse {
-        storage_level: Some(StorageLevel {
-            use_disk: false,
-            use_memory: true,
-            use_off_heap: true,
-            deserialized: false,
-            replication: 1,
-        }),
+        storage_level: Some(storage_level.try_into()?),
     })
 }
 
