@@ -64,6 +64,7 @@ regex-syntax = "0.8.11"
 glob = "0.3.3"
 chrono = { version = "0.4.44", features = ["serde"] }
 chrono-tz = "0.10.4"
+jiff = { version = "0.2.35", features = ["tzdb-bundle-always"] }
 futures = "0.3.32"
 fjall = "3.1.12"
 flate2 = "1.1.9"

@@ -291,3 +291,100 @@ Feature: datetime edge cases
         | case                                           | in                         | result                     |
         | `to_timestamp` parses without optional section | 2026-06-15 14:30:45        | 2026-06-15 14:30:45        |
         | `to_timestamp` parses with optional section    | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 |
+
+  Rule: Mixed timestamp comparison bounds
+
+    Scenario Outline: Mixed timestamp comparisons retain valid inputs in <zone> with ANSI <ansi>
+      Given config spark.sql.session.timeZone = <zone>
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expression> AS result FROM range(1)
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | zone             | expression                                                                                                          | ansi  |
+        | +05:30:15        | TIMESTAMP_NTZ '2020-01-01 00:00:00' < timestamp_micros(1609459200000000L)                                              | true  |
+        | +05:30:15        | TIMESTAMP_NTZ '2020-01-01 00:00:00' < timestamp_micros(1609459200000000L)                                              | false |
+        | America/New_York | TIMESTAMP_NTZ '2100-07-02 00:00:00' < timestamp_micros(4118185800000000L)                                              | true  |
+        | America/New_York | TIMESTAMP_NTZ '2100-07-02 00:00:00' < timestamp_micros(4118185800000000L)                                              | false |
+        | Europe/Paris     | CAST(concat('+280000-01-01 00:00:0', CAST(id AS STRING)) AS TIMESTAMP_NTZ) > timestamp_micros(0L)                       | true  |
+        | Europe/Paris     | CAST(concat('+280000-01-01 00:00:0', CAST(id AS STRING)) AS TIMESTAMP_NTZ) > timestamp_micros(0L)                       | false |
+
+    # Spark moves a round-trippable literal to NTZ before comparing the wall times.
+    # Converting every input value instead would incorrectly include the missing 02:30.
+    Scenario Outline: Mixed timestamp literal bounds preserve Spark gap membership with ANSI <ansi>
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT count(*) AS n
+        FROM (SELECT TIMESTAMP_NTZ '2024-03-10 02:30:00' + id * INTERVAL 1 SECOND AS ts FROM range(1))
+        WHERE ts = TIMESTAMP '2024-03-10 03:30:00'
+        """
+      Then query result
+        | n |
+        | 0 |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    # Sail supports nanosecond timestamp types; Spark SQL only accepts microseconds.
+    @sail-only
+    Scenario: Mixed timestamps preserve supported nanosecond precision
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT CAST('2024-01-01 00:00:00.000000001' AS TIMESTAMP_NTZ(9))
+             = CAST('2024-01-01 00:00:00.000000001Z' AS TIMESTAMP_LTZ(9)) AS same
+        """
+      Then query result
+        | same |
+        | true |
+
+    # Constant propagation must not change comparisons around missing wall times.
+    Scenario Outline: Mixed timestamp bounds preserve folded gap comparisons: <case>
+      Given config spark.sql.session.timeZone = <zone>
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT TIMESTAMP '<bound>' > ts AS result <input>
+        """
+      Then query result
+        | result |
+        | false  |
+
+      Examples:
+        | case               | zone             | bound               | input                                                                              | ansi  |
+        | projected gap      | Australia/Sydney | 2024-10-06 03:15:00  | FROM (SELECT TIMESTAMP_NTZ '2024-10-06 02:30:00' AS ts FROM range(1))                 | true  |
+        | projected gap      | Australia/Sydney | 2024-10-06 03:15:00  | FROM (SELECT TIMESTAMP_NTZ '2024-10-06 02:30:00' AS ts FROM range(1))                 | false |
+        | inline gap         | Australia/Sydney | 2024-10-06 03:15:00  | FROM VALUES (TIMESTAMP_NTZ '2024-10-06 02:30:00') AS t(ts)                            | true  |
+        | inline gap         | Australia/Sydney | 2024-10-06 03:15:00  | FROM VALUES (TIMESTAMP_NTZ '2024-10-06 02:30:00') AS t(ts)                            | false |
+        | skipped day        | Pacific/Apia     | 2011-12-31 00:00:00  | FROM (SELECT TIMESTAMP_NTZ '2011-12-30 12:00:00' AS ts FROM range(1))                 | true  |
+        | skipped day        | Pacific/Apia     | 2011-12-31 00:00:00  | FROM (SELECT TIMESTAMP_NTZ '2011-12-30 12:00:00' AS ts FROM range(1))                 | false |
+
+    Scenario Outline: Mixed timestamp bounds preserve future and overlap comparisons: <case>
+      Given config spark.sql.session.timeZone = <zone>
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT TIMESTAMP '<bound>' > (TIMESTAMP_NTZ '<input>' + id * INTERVAL 1 SECOND) AS result
+        FROM range(1)
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | case          | zone                | input               | bound                     | ansi  |
+        | future summer | America/New_York    | 2100-07-02 00:00:00  | 2100-07-02 04:30:00Z       | true  |
+        | future summer | America/New_York    | 2100-07-02 00:00:00  | 2100-07-02 04:30:00Z       | false |
+        | later overlap | America/Los_Angeles | 2024-11-03 01:30:00  | 2024-11-03 01:30:00-08:00  | true  |
+        | later overlap | America/Los_Angeles | 2024-11-03 01:30:00  | 2024-11-03 01:30:00-08:00  | false |

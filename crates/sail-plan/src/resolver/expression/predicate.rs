@@ -1,8 +1,10 @@
 use std::sync::{Arc, LazyLock};
 
+use chrono::{DateTime, Offset, TimeZone, Utc};
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
+use datafusion_common::{DFSchemaRef, Result as DataFusionResult, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
@@ -18,7 +20,6 @@ use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::cast::cast_timestamp_ntz_to_ltz;
 use crate::resolver::state::PlanResolverState;
 
 static SPARK_IN_ARRAY_TRANSFORM_UDF: LazyLock<Arc<HigherOrderUDF>> =
@@ -471,20 +472,22 @@ fn coerce_timestamp_pair(
     let left_type = left.get_type(schema.as_ref())?;
     let right_type = right.get_type(schema.as_ref())?;
 
-    // Spark compares NTZ wall times and LTZ instants in the session time zone.
-    // Keep that conversion explicit instead of relying on generic timestamp coercion.
+    // Resolve literal bounds in local time before DataFusion unwraps its implicit
+    // timestamp cast: its unwrapping changes the type but does not shift the value.
     match (&left_type, &right_type) {
-        (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_))) => {
-            return Ok((
-                cast_timestamp_ntz_to_ltz(left, Arc::clone(&config.session_timezone), false)?,
-                right,
-            ));
+        (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_)))
+            if left.any_column_refs() =>
+        {
+            if let Some(bound) = local_timestamp_bound(&right, &config.session_timezone) {
+                return Ok((left, bound));
+            }
         }
-        (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
-            return Ok((
-                left,
-                cast_timestamp_ntz_to_ltz(right, Arc::clone(&config.session_timezone), false)?,
-            ));
+        (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None))
+            if right.any_column_refs() =>
+        {
+            if let Some(bound) = local_timestamp_bound(&left, &config.session_timezone) {
+                return Ok((bound, right));
+            }
         }
         _ => {}
     }
@@ -522,6 +525,69 @@ fn coerce_timestamp_pair(
         return Ok((left, right));
     }
     Ok((left, right))
+}
+
+// Use Spark's inverse-bound comparison only where it also preserves folding.
+// Preserve the literal's precision and avoid converting the column's values.
+fn local_timestamp_bound(expression: &expr::Expr, timezone: &str) -> Option<expr::Expr> {
+    let expr::Expr::Literal(value, metadata) = expression else {
+        return None;
+    };
+    let (value, unit) = match value {
+        ScalarValue::TimestampSecond(Some(value), Some(_)) => (*value, TimeUnit::Second),
+        ScalarValue::TimestampMillisecond(Some(value), Some(_)) => (*value, TimeUnit::Millisecond),
+        ScalarValue::TimestampMicrosecond(Some(value), Some(_)) => (*value, TimeUnit::Microsecond),
+        ScalarValue::TimestampNanosecond(Some(value), Some(_)) => (*value, TimeUnit::Nanosecond),
+        _ => return None,
+    };
+    let units_per_second = sail_common::utils::datetime::time_unit_to_multiplier(&unit);
+    let instant = DateTime::<Utc>::from_timestamp(
+        value.div_euclid(units_per_second),
+        (value.rem_euclid(units_per_second) * (1_000_000_000 / units_per_second)) as u32,
+    )?;
+    let zone = timezone.parse::<Tz>().ok()?;
+    let offset = instant.with_timezone(&zone).offset().fix();
+    let local = instant.naive_utc().checked_add_offset(offset)?;
+    if zone
+        .from_local_datetime(&local)
+        .earliest()?
+        .with_timezone(&Utc)
+        != instant
+    {
+        return None;
+    }
+    let reference = jiff::fmt::temporal::DateTimeParser::new()
+        .parse_time_zone(timezone)
+        .ok()?;
+    let timestamp =
+        jiff::Timestamp::new(instant.timestamp(), instant.timestamp_subsec_nanos() as i32).ok()?;
+    // Do not move a bound across differing timezone databases (notably future DST).
+    if reference.to_offset(timestamp).seconds() != offset.local_minus_utc() {
+        return None;
+    }
+    // A gap creates two wall-clock preimages for instants immediately after the
+    // transition. Leave that comparison unchanged instead of preempting folding.
+    let after = timestamp
+        .checked_add(jiff::SignedDuration::from_nanos(1))
+        .ok()?;
+    if let Some(transition) = reference.preceding(after).next() {
+        let before = transition
+            .timestamp()
+            .checked_sub(jiff::SignedDuration::from_nanos(1))
+            .ok()?;
+        let gap = i64::from(transition.offset().seconds() - reference.to_offset(before).seconds());
+        if gap > 0 && timestamp.as_second() - transition.timestamp().as_second() < gap {
+            return None;
+        }
+    }
+    let local = value.checked_add(i64::from(offset.local_minus_utc()) * units_per_second)?;
+    let value = match unit {
+        TimeUnit::Second => ScalarValue::TimestampSecond(Some(local), None),
+        TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(local), None),
+        TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(local), None),
+        TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(local), None),
+    };
+    Some(expr::Expr::Literal(value, metadata.clone()))
 }
 
 fn coerce_string_to_timestamp(

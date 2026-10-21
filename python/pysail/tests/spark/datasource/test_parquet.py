@@ -852,3 +852,19 @@ def test_parquet_timestamp_window(spark, tmp_path, first_instant, producer_timez
     )
     first = 24 if producer_timezone is None else first_instant
     assert [row.id for row in rows] == list(range(first, first + 48))
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_parquet_int96_timestamp_window_precision(spark, tmp_path):
+    path = tmp_path / "int96.parquet"
+    pq.write_table(
+        pa.table({"id": range(3), "ts": pa.array([-1000, -1, 0], type=pa.timestamp("ns"))}),
+        path,
+        use_deprecated_int96_timestamps=True,
+    )
+    # Spark reads the pre-epoch nanosecond as -1 microsecond. Sail can retain
+    # nanoseconds; neither representation may compare equal to the epoch.
+    frame = spark.read.option("coerce_int96", "ns").parquet(str(path))
+    assert frame.filter("id = 1 AND ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == []
+    assert frame.filter("ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == [(2,)]
