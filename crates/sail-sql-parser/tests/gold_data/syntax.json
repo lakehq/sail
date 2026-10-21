@@ -2804,26 +2804,10 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Keyword(Table)"
+                        "nonTerminal": "Option(Keyword(Table))"
                       },
                       {
-                        "nonTerminal": "Option(Keyword(Extended))"
-                      },
-                      {
-                        "nonTerminal": "ObjectName"
-                      },
-                      {
-                        "nonTerminal": "Option(PartitionClause)"
-                      },
-                      {
-                        "nonTerminal": "Option(ObjectName)"
-                      }
-                    ]
-                  },
-                  {
-                    "sequence": [
-                      {
-                        "nonTerminal": "Keyword(Extended)"
+                        "nonTerminal": "Option(Either(Keyword(Extended), Keyword(Formatted)))"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -2833,6 +2817,9 @@
                       },
                       {
                         "nonTerminal": "Option(ObjectName)"
+                      },
+                      {
+                        "nonTerminal": "Unit"
                       }
                     ]
                   },
@@ -2970,6 +2957,19 @@
                   },
                   {
                     "nonTerminal": "Keyword(Describe)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Either(Keyword(Extended), Keyword(Formatted))",
+              "node": {
+                "choice": [
+                  {
+                    "nonTerminal": "Keyword(Extended)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Formatted)"
                   }
                 ]
               }
@@ -7633,6 +7633,14 @@
               }
             },
             {
+              "name": "Option(Either(Keyword(Extended), Keyword(Formatted)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Either(Keyword(Extended), Keyword(Formatted))"
+                }
+              }
+            },
+            {
               "name": "Option(Either(Keyword(Restrict), Keyword(Cascade)))",
               "node": {
                 "optional": {
@@ -10385,6 +10393,9 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Option(WithClause)"
+                      },
+                      {
                         "nonTerminal": "Keyword(Insert)"
                       },
                       {
@@ -10406,6 +10417,9 @@
                   },
                   {
                     "sequence": [
+                      {
+                        "nonTerminal": "Option(WithClause)"
+                      },
                       {
                         "nonTerminal": "Keyword(Insert)"
                       },
@@ -10431,6 +10445,9 @@
                   },
                   {
                     "sequence": [
+                      {
+                        "nonTerminal": "Option(WithClause)"
+                      },
                       {
                         "nonTerminal": "Keyword(Insert)"
                       },
@@ -12338,6 +12355,12 @@
                     ]
                   }
                 ]
+              }
+            },
+            {
+              "name": "Unit",
+              "node": {
+                "sequence": []
               }
             },
             {

@@ -3,7 +3,10 @@ use std::iter::once;
 use either::Either;
 use sail_common::spec;
 use sail_common::spec::QueryPlan;
-use sail_common::utils::datetime::get_system_timezone;
+use sail_common::utils::datetime::{
+    MAX_TIME_ZONE_OFFSET_MICROS, MICROS_PER_DAY, MICROS_PER_HOUR, MICROS_PER_SECOND,
+    get_system_timezone,
+};
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Overwrite, Restrict};
@@ -36,7 +39,7 @@ use crate::expression::{
 };
 use crate::literal::interval::{IntervalValue, from_ast_signed_interval, multi_unit_interval_days};
 use crate::literal::utils::Signed;
-use crate::query::from_ast_query;
+use crate::query::{from_ast_query, from_ast_with_clause};
 use crate::value::from_ast_string;
 
 fn from_ast_show_function_scope(scope: Option<ShowFunctionScope>) -> (bool, bool) {
@@ -672,6 +675,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertOverwriteDirectory {
+            with,
             insert: _,
             overwrite: _,
             local,
@@ -723,7 +727,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 }
             };
             let node = spec::CommandNode::InsertOverwriteDirectory {
-                input: Box::new(from_ast_query(query)?),
+                input: Box::new(from_ast_with_clause(from_ast_query(query)?, with)?),
                 local: local.is_some(),
                 location,
                 file_format,
@@ -733,6 +737,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertIntoAndReplace {
+            with,
             insert: _,
             into: _,
             table: _,
@@ -741,7 +746,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             r#where,
             query,
         } => {
-            let query = from_ast_query(query)?;
+            let query = from_ast_with_clause(from_ast_query(query)?, with)?;
             let WhereClause {
                 r#where: _,
                 condition,
@@ -762,6 +767,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertInto {
+            with,
             insert: _,
             into_or_overwrite,
             table: _,
@@ -785,7 +791,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 },
                 None => spec::InsertMode::InsertByPosition { overwrite },
             };
-            let query = from_ast_query(query)?;
+            let query = from_ast_with_clause(from_ast_query(query)?, with)?;
             let node = spec::CommandNode::InsertInto {
                 input: Box::new(query),
                 table: from_ast_object_name(name)?,
@@ -1275,6 +1281,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     name,
                     partition,
                     column,
+                    end: _,
                 } => {
                     let partition = partition
                         .map(from_ast_partition)
@@ -1284,24 +1291,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     spec::CommandNode::DescribeTable {
                         table: from_ast_object_name(name)?,
                         extended: extended.is_some(),
-                        partition,
-                        column,
-                    }
-                }
-                DescribeItem::TableExtended {
-                    extended: _,
-                    name,
-                    partition,
-                    column,
-                } => {
-                    let partition = partition
-                        .map(from_ast_partition)
-                        .transpose()?
-                        .unwrap_or_default();
-                    let column = column.map(from_ast_object_name).transpose()?;
-                    spec::CommandNode::DescribeTable {
-                        table: from_ast_object_name(name)?,
-                        extended: true,
                         partition,
                         column,
                     }
@@ -2067,13 +2056,6 @@ const INVALID_RESET_COMMAND_FORMAT: &str = "[INVALID_RESET_COMMAND_FORMAT] Expec
 /// It must equal `SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE` in `sail-spark-connect`.
 const SESSION_TIME_ZONE_KEY: &str = "spark.sql.session.timeZone";
 
-const MICROS_PER_SECOND: i64 = 1_000_000;
-const MICROS_PER_HOUR: u64 = 3_600 * 1_000_000;
-const MICROS_PER_DAY: i64 = 24 * 3_600 * 1_000_000;
-
-/// The largest absolute offset that `SET TIME ZONE INTERVAL ...` accepts.
-const MAX_TIME_ZONE_OFFSET_MICROS: u64 = 18 * MICROS_PER_HOUR;
-
 /// `QueryParsingErrors.intervalValueOutOfRangeError`, where `input` is the part of the interval that
 /// Spark rejects: its months, its days, its whole hours, or its whole seconds.
 fn interval_out_of_range(input: impl std::fmt::Display) -> SqlError {
@@ -2135,7 +2117,7 @@ fn from_ast_time_zone(timezone: TimeZoneValue) -> SqlResult<String> {
             }
             if microseconds.unsigned_abs() > MAX_TIME_ZONE_OFFSET_MICROS {
                 return Err(interval_out_of_range(
-                    microseconds.unsigned_abs() / MICROS_PER_HOUR,
+                    microseconds.unsigned_abs() / (MICROS_PER_HOUR as u64),
                 ));
             }
             if microseconds % MICROS_PER_SECOND != 0 {
