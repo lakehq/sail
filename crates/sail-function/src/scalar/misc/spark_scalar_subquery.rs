@@ -43,15 +43,23 @@ impl SparkScalarSubquery {
         }
     }
 
-    /// Returns the scalar subquery wrapped by this function when `expr` is such a call.
-    pub fn subquery(expr: &Expr) -> Option<&Subquery> {
+    /// Returns the argument of this function when `expr` is such a call.
+    pub fn argument(expr: &Expr) -> Option<&Expr> {
         match expr {
             Expr::ScalarFunction(function) if function.func.inner().is::<Self>() => {
                 match function.args.as_slice() {
-                    [Expr::ScalarSubquery(subquery)] => Some(subquery),
+                    [argument] => Some(argument),
                     _ => None,
                 }
             }
+            _ => None,
+        }
+    }
+
+    /// Returns the scalar subquery wrapped by this function when `expr` is such a call.
+    pub fn subquery(expr: &Expr) -> Option<&Subquery> {
+        match Self::argument(expr) {
+            Some(Expr::ScalarSubquery(subquery)) => Some(subquery),
             _ => None,
         }
     }

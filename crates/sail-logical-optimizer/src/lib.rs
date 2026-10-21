@@ -6,13 +6,13 @@ mod lateral_join;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
-mod share_scalar_subqueries;
+mod spark_scalar_subqueries;
 
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
-use share_scalar_subqueries::ShareScalarSubqueries;
+use spark_scalar_subqueries::SparkScalarSubqueries;
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     // FIXME: Create analyzer rule for TypeCoercion in Sail
@@ -37,13 +37,17 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // Projection expressions (e.g. `LATERAL (SELECT t1.a + 1)`), rewriting
     // it into a CrossJoin + Projection. The remaining complex cases (OuterRef
     // in Filter/Aggregate) are left for DataFusion's `DecorrelateLateralJoin`.
-    // `ShareScalarSubqueries` must run before `ScalarSubqueryToJoin`, which builds one join
-    // per occurrence of a scalar subquery expression.
-    let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![
-        Arc::new(DecorrelateLateralProjection::new()),
-        Arc::new(ShareScalarSubqueries),
-    ];
+    let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+        vec![Arc::new(DecorrelateLateralProjection::new())];
     custom.extend(rules);
+    // `SparkScalarSubqueries` must run after `SimplifyExpressions`, which analyzes and
+    // constant-folds scalar subqueries, and before `ScalarSubqueryToJoin`, which builds one
+    // join per occurrence of a scalar subquery expression and fails on the ones Sail folds.
+    let position = custom
+        .iter()
+        .position(|rule| rule.name() == "scalar_subquery_to_join")
+        .unwrap_or(custom.len());
+    custom.insert(position, Arc::new(SparkScalarSubqueries));
     custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
     // folding can change the type or nullability of higher-order function

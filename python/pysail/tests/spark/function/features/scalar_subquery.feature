@@ -1426,3 +1426,75 @@ Feature: Scalar subquery nullability
       Then query result collected
         | high |
         | true |
+
+  Rule: A null check on a subquery DataFusion cannot plan folds only after the subquery is planned
+
+    # The fold runs after DataFusion has analyzed and simplified the subquery, so an invalid
+    # constant cast inside it still raises. A subquery that folds is not evaluated, so an error
+    # it would only raise at execution is not surfaced; that is inherited from before scalar
+    # subqueries were nullable, when DataFusion folded such checks itself.
+
+    Scenario: a constant invalid cast inside a non-equality correlated aggregate under a null check raises
+      When query
+        """
+        SELECT (SELECT CAST('bad' AS INT) + count(*) FROM range(1) i WHERE i.id < o.id) IS NULL AS result FROM range(2) o
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|cannot (be )?cast|invalid|NumberFormat|parse)
+
+    Scenario: a guarded null check folds without evaluating the guarded branch
+      When query
+        """
+        SELECT (SELECT count(*) FROM VALUES ('bad') t(k) WHERE o.id = 0 OR CAST(k AS BIGINT) = o.id) IS NULL AS n FROM range(1) o
+        """
+      Then query result collected
+        | n     |
+        | false |
+
+    # Inherited: the subquery is never evaluated because DataFusion cannot plan it, so the
+    # per-row cast error Spark raises is not surfaced.
+    @sail-bug
+    Scenario: a runtime cast error inside a non-equality correlated aggregate under a null check is not raised
+      When query
+        """
+        SELECT (SELECT count(*) FROM range(2) i WHERE i.id < o.id AND CAST(concat('bad', i.id) AS BIGINT) = o.id) IS NULL AS n FROM range(2) o
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|cannot (be )?cast|invalid|NumberFormat|parse)
+
+  Rule: Outer-only guards are hoisted together
+
+    Scenario: many predicates on the outer row alone are hoisted as one guard
+      When query
+        """
+        SELECT (SELECT count(*) FROM range(1) i WHERE o.id >= 0 AND o.id >= 1 AND o.id >= 2 AND o.id >= 3 AND o.id >= 4 AND o.id >= 5 AND o.id >= 6 AND o.id >= 7 AND o.id >= 8 AND o.id >= 9 AND o.id >= 10 AND o.id >= 11 AND o.id >= 12 AND o.id >= 13) AS n
+        FROM range(1) o
+        """
+      Then query result collected
+        | n |
+        | 0 |
+
+    Scenario: four OR guards mixing outer and inner columns are hoisted
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM range(4) i WHERE (o.id = 0 OR i.id = 1) AND (o.id = 1 OR i.id = 1) AND (o.id = 2 OR i.id = 1) AND (o.id = 3 OR i.id = 1)) AS n
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 1 |
+        | 1  | 1 |
+
+    # Support limit: each OR guard doubles the number of subquery plans, so Sail hoists at most
+    # four of them and otherwise declines the rewrite, which DataFusion then cannot plan.
+    @sail-bug
+    Scenario: more than four OR guards are not hoisted
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM range(4) i WHERE (o.id = 0 OR i.id = 1) AND (o.id = 1 OR i.id = 1) AND (o.id = 2 OR i.id = 1) AND (o.id = 3 OR i.id = 1) AND (o.id = 4 OR i.id = 1)) AS n
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 1 |
+        | 1  | 1 |

@@ -40,6 +40,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -460,9 +461,17 @@ fn count_argument_nullable(argument: &expr::Expr, schema: &DFSchema) -> PlanResu
     let probe = argument
         .clone()
         .transform(|expr| {
-            let subquery = single_row_scalar_subquery(&expr).cloned();
-            Ok(match subquery {
-                Some(subquery) => Transformed::yes(expr::Expr::ScalarSubquery(subquery)),
+            if let Some(subquery) = single_row_scalar_subquery(&expr).cloned() {
+                return Ok(Transformed::yes(expr::Expr::ScalarSubquery(subquery)));
+            }
+            // The resolver marks the CASE it builds over guarded subqueries with the same
+            // wrapper; its branches have been probed already.
+            let case = match SparkScalarSubquery::argument(&expr) {
+                Some(case @ expr::Expr::Case(_)) => Some(case.clone()),
+                _ => None,
+            };
+            Ok(match case {
+                Some(case) => Transformed::yes(case),
                 None => Transformed::no(expr),
             })
         })?

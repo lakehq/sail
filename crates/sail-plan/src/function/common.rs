@@ -3,13 +3,12 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::prelude::SessionContext;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
-use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{
-    AggregateUDF, BinaryExpr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
-    Subquery, WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit,
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl, Subquery,
+    WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
@@ -27,77 +26,6 @@ use crate::error::{IntoPlanResult, PlanError, PlanResult};
 pub(crate) fn single_row_scalar_subquery(expr: &expr::Expr) -> Option<&Subquery> {
     SparkScalarSubquery::subquery(expr)
         .filter(|subquery| row_bounds(&subquery.subquery) == (1, Some(1)))
-}
-
-/// An expression that refers to the outer query only, with no inner column.
-pub(crate) fn is_outer_only(expr: &expr::Expr) -> bool {
-    expr.contains_outer() && !expr.any_column_refs()
-}
-
-/// Whether DataFusion can decorrelate the subquery plan: every outer reference sits in a
-/// filter conjunct that compares an inner expression with an outer one for equality. A
-/// non-equality comparison, an OR, or an outer reference in any other node makes
-/// `ScalarSubqueryToJoin` fail to plan the subquery.
-fn decorrelates(plan: &LogicalPlan) -> bool {
-    let mut decorrelates = true;
-    let _ = plan.apply(|node| {
-        decorrelates = match node {
-            LogicalPlan::Filter(filter) => split_conjunction(&filter.predicate)
-                .into_iter()
-                .all(|conjunct| !conjunct.contains_outer() || is_correlated_equality(conjunct)),
-            node => !node.contains_outer_reference(),
-        };
-        Ok(if decorrelates {
-            TreeNodeRecursion::Continue
-        } else {
-            TreeNodeRecursion::Stop
-        })
-    });
-    decorrelates
-}
-
-fn is_correlated_equality(expr: &expr::Expr) -> bool {
-    match expr {
-        expr::Expr::BinaryExpr(expr::BinaryExpr {
-            left,
-            op: Operator::Eq,
-            right,
-        }) => {
-            (is_outer_only(left) && !right.contains_outer())
-                || (is_outer_only(right) && !left.contains_outer())
-        }
-        _ => false,
-    }
-}
-
-/// A correlated scalar subquery that provably returns exactly one non-null row can never be
-/// NULL, so the null check folds, but only when DataFusion cannot decorrelate the subquery:
-/// keeping the check would then fail planning, whereas folding keeps such a query working as
-/// it did before scalar subqueries were nullable (the subquery is not evaluated, so an error
-/// it would raise is not surfaced, as before). Any subquery DataFusion can plan is evaluated,
-/// so that its errors surface and Spark's nullable result is honored.
-fn is_single_non_null_row(expr: &expr::Expr) -> bool {
-    single_row_scalar_subquery(expr).is_some_and(|subquery| {
-        !subquery.outer_ref_columns.is_empty()
-            && !subquery.subquery.schema().field(0).is_nullable()
-            && !decorrelates(&subquery.subquery)
-    })
-}
-
-pub(crate) fn is_null(expr: expr::Expr) -> expr::Expr {
-    if is_single_non_null_row(&expr) {
-        lit(false)
-    } else {
-        expr::Expr::IsNull(Box::new(expr))
-    }
-}
-
-pub(crate) fn is_not_null(expr: expr::Expr) -> expr::Expr {
-    if is_single_non_null_row(&expr) {
-        lit(true)
-    } else {
-        expr::Expr::IsNotNull(Box::new(expr))
-    }
 }
 
 pub struct FunctionContextInput<'a> {

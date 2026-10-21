@@ -14,10 +14,10 @@ use datafusion_expr::{
 use sail_common::spec;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
+use sail_logical_plan::correlation::is_outer_only;
 use sail_logical_plan::row_bounds::{integer_literal, row_bounds};
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::is_outer_only;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::coerce_timestamp_in_subquery_pair;
@@ -111,7 +111,12 @@ fn project_correlated_keys(
 
 /// Wraps a resolved scalar subquery so that it reports Spark's nullability.
 fn nullable_scalar_subquery(plan: LogicalPlan) -> Expr {
-    ScalarUDF::from(SparkScalarSubquery::new()).call(vec![expr_fn::scalar_subquery(Arc::new(plan))])
+    wrap_scalar_subquery(expr_fn::scalar_subquery(Arc::new(plan)))
+}
+
+/// Marks `expr` as one scalar subquery expression with Spark's nullability.
+fn wrap_scalar_subquery(expr: Expr) -> Expr {
+    ScalarUDF::from(SparkScalarSubquery::new()).call(vec![expr])
 }
 
 fn scalar_subquery_error() -> Expr {
@@ -515,11 +520,14 @@ fn rewrite_bounded_scalar_subquery(
     Ok(Some(case.otherwise(result)?))
 }
 
-/// Splits a filter predicate at its first conjunct that has outer-only disjuncts, returning
-/// the guard (those disjuncts), the predicate when the guard holds (the conjunct dropped) and
-/// the predicate when it does not (the conjunct reduced to its remaining disjuncts).
+/// Splits the outer-only guards off a filter predicate, returning the guard, the predicate
+/// when the guard holds and the predicate when it does not. The conjuncts on the outer row
+/// alone are hoisted together (the predicate is `false` without them); failing that, the
+/// first conjunct `r OR p` with outer-only disjuncts `p` is split (`r` remains without it).
 fn split_filter_guard(predicate: &Expr) -> Option<(Expr, Option<Expr>, Expr)> {
     let conjuncts = split_conjunction(predicate);
+    let mut pure = vec![];
+    let mut or_guards = vec![];
     for (index, conjunct) in conjuncts.iter().enumerate() {
         let (outer, rest): (Vec<_>, Vec<_>) = split_binary(conjunct, Operator::Or)
             .into_iter()
@@ -528,28 +536,51 @@ fn split_filter_guard(predicate: &Expr) -> Option<(Expr, Option<Expr>, Expr)> {
         let Some(guard) = disjunction(outer) else {
             continue;
         };
-        let others = |skip: usize| {
-            conjuncts
-                .iter()
-                .enumerate()
-                .filter(move |(i, _)| *i != skip)
-                .map(|(_, expr)| (*expr).clone())
-        };
-        let when_true = conjunction(others(index));
-        let when_false =
-            conjunction(others(index).chain([disjunction(rest).unwrap_or(lit(false))]))
-                .unwrap_or(lit(false));
-        return Some((guard, when_true, when_false));
+        if rest.is_empty() {
+            pure.push(index);
+        } else {
+            or_guards.push((index, guard, rest));
+        }
     }
-    None
+    // Each `r OR p` conjunct doubles the number of subquery plans, so the rewrite is declined
+    // before any of them is built when there are too many.
+    if or_guards.len() > MAX_OR_GUARDS {
+        return None;
+    }
+    let without = |skip: &dyn Fn(usize) -> bool| -> Vec<Expr> {
+        conjuncts
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !skip(*i))
+            .map(|(_, expr)| (*expr).clone())
+            .collect()
+    };
+    if !pure.is_empty() {
+        let guard = conjunction(pure.iter().map(|&index| conjuncts[index].clone()))?;
+        let when_true = conjunction(without(&|index| pure.contains(&index)));
+        return Some((guard, when_true, lit(false)));
+    }
+    let (index, guard, rest) = or_guards.into_iter().next()?;
+    let when_true = conjunction(without(&|i| i == index));
+    let when_false = conjunction(
+        without(&|i| i == index)
+            .into_iter()
+            .chain([disjunction(rest).unwrap_or(lit(false))]),
+    )
+    .unwrap_or(lit(false));
+    Some((guard, when_true, when_false))
 }
 
-/// DataFusion decorrelates only predicates that compare inner and outer columns. A predicate
-/// on the outer row alone, or an OR with such a disjunct, is hoisted out of the topmost spine
-/// filter of a correlated subquery as a CASE guard: `(SELECT .. WHERE p)` becomes
-/// `CASE WHEN p THEN (SELECT ..) ELSE (SELECT .. WHERE false) END`, and `WHERE r OR p`
-/// becomes `CASE WHEN p THEN (SELECT ..) ELSE (SELECT .. WHERE r) END`. Returns the guard
-/// and the two subquery plans.
+/// The number of `r OR p` guard conjuncts a correlated subquery may have before Sail stops
+/// hoisting them (the rewrite builds `2^n` subquery plans); more are left to DataFusion.
+const MAX_OR_GUARDS: usize = 4;
+
+/// DataFusion decorrelates only predicates that compare inner and outer columns. The
+/// predicates on the outer row alone, or an OR with such a disjunct, are hoisted out of the
+/// topmost spine filter of a correlated subquery as a CASE guard: `(SELECT .. WHERE p1 AND
+/// p2)` becomes `CASE WHEN p1 AND p2 THEN (SELECT ..) ELSE (SELECT .. WHERE false) END`, and
+/// `WHERE r OR p` becomes `CASE WHEN p THEN (SELECT ..) ELSE (SELECT .. WHERE r) END`.
+/// Returns the guard and the two subquery plans.
 fn split_outer_guard(plan: &LogicalPlan) -> PlanResult<Option<(Expr, LogicalPlan, LogicalPlan)>> {
     let split_input = |input: &Arc<LogicalPlan>| split_outer_guard(input);
     Ok(match plan {
@@ -638,10 +669,13 @@ fn split_outer_guard(plan: &LogicalPlan) -> PlanResult<Option<(Expr, LogicalPlan
 }
 
 /// The expression evaluating a resolved scalar subquery plan.
-/// Hoists the outer-only guards of the plan's topmost filter one conjunct at a time, so that
-/// `WHERE (p1 OR r1) AND (p2 OR r2)` becomes nested CASE expressions over subqueries that
-/// DataFusion can decorrelate.
-fn guarded_scalar_subquery(plan: LogicalPlan, state: &mut PlanResolverState) -> PlanResult<Expr> {
+/// Hoists the outer-only guards of the plan's topmost filter, so that `WHERE p AND (p1 OR r1)
+/// AND (p2 OR r2)` becomes nested CASE expressions over subqueries that DataFusion can
+/// decorrelate. Returns whether a guard CASE was built.
+fn guarded_scalar_subquery(
+    plan: LogicalPlan,
+    state: &mut PlanResolverState,
+) -> PlanResult<(Expr, bool)> {
     match split_outer_guard(&plan)? {
         Some((guard, when_true, when_false)) => {
             let guard = guard
@@ -652,10 +686,11 @@ fn guarded_scalar_subquery(plan: LogicalPlan, state: &mut PlanResolverState) -> 
                     expr => Ok(Transformed::no(expr)),
                 })?
                 .data;
-            Ok(when(guard, guarded_scalar_subquery(when_true, state)?)
-                .otherwise(guarded_scalar_subquery(when_false, state)?)?)
+            let case = when(guard, guarded_scalar_subquery(when_true, state)?.0)
+                .otherwise(guarded_scalar_subquery(when_false, state)?.0)?;
+            Ok((case, true))
         }
-        None => scalar_subquery_expr(plan, state),
+        None => Ok((scalar_subquery_expr(plan, state)?, false)),
     }
 }
 
@@ -762,7 +797,12 @@ impl PlanResolver<'_> {
         } else {
             project_correlated_keys(subquery, state)?
         };
-        let subquery = guarded_scalar_subquery(subquery, state)?;
+        let subquery = match guarded_scalar_subquery(subquery, state)? {
+            // The wrapper marks the guard CASE as one scalar subquery expression, so that a
+            // null check on it may fold (`never_null_unplannable`) and COUNT may probe it.
+            (case, true) => wrap_scalar_subquery(case),
+            (expr, false) => expr,
+        };
         Ok(NamedExpr::new(vec!["subquery".to_string()], subquery))
     }
 

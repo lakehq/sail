@@ -45,9 +45,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -67,6 +64,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -188,9 +188,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -223,6 +220,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -321,9 +321,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -354,6 +351,9 @@ data:
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -739,9 +739,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -761,6 +758,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -874,9 +874,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -907,6 +904,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -969,9 +969,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -991,6 +988,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -1378,9 +1378,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -1400,6 +1397,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -1513,9 +1513,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -1546,6 +1543,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -1608,9 +1608,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -1630,6 +1627,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2025,9 +2025,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -2047,6 +2044,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2195,9 +2195,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -2236,6 +2233,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2352,9 +2352,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -2391,6 +2388,9 @@ data:
                     Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2877,9 +2877,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -2899,6 +2896,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3039,9 +3039,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -3078,6 +3075,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3140,9 +3140,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -3162,6 +3159,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3638,9 +3638,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -3660,6 +3657,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3731,9 +3731,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -3753,6 +3750,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4066,9 +4066,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -4088,6 +4085,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4172,9 +4172,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -4194,6 +4191,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4538,9 +4538,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -4560,6 +4557,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4638,9 +4638,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -4660,6 +4657,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5067,9 +5067,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -5089,6 +5086,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5167,9 +5167,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -5189,6 +5186,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5585,9 +5585,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -5619,6 +5616,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5691,9 +5691,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -5713,6 +5710,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6041,9 +6041,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -6063,6 +6060,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6135,9 +6135,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -6157,6 +6154,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6528,9 +6528,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -6562,6 +6559,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6648,9 +6648,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -6670,6 +6667,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7040,9 +7040,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -7062,6 +7059,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7148,9 +7148,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -7170,6 +7167,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7551,9 +7551,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -7573,6 +7570,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7645,9 +7645,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -7667,6 +7664,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8024,9 +8024,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -8046,6 +8043,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8118,9 +8118,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -8140,6 +8137,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8513,9 +8513,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -8535,6 +8532,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8608,9 +8608,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -8630,6 +8627,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9003,9 +9003,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -9025,6 +9022,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9118,9 +9118,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -9140,6 +9137,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9561,9 +9561,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -9583,6 +9580,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9678,9 +9678,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -9700,6 +9697,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10081,9 +10081,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -10103,6 +10100,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10177,9 +10177,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -10199,6 +10196,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10576,9 +10576,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -10610,6 +10607,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10682,9 +10682,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -10704,6 +10701,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11032,9 +11032,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -11054,6 +11051,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11126,9 +11126,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -11148,6 +11145,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11476,9 +11476,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -11498,6 +11495,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11571,9 +11571,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -11593,6 +11590,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11939,9 +11939,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -11974,6 +11971,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -12047,9 +12047,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -12069,6 +12066,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -12428,9 +12428,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -12463,6 +12460,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -12536,9 +12536,6 @@ data:
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
-    logical_plan after share_scalar_subqueries:
-    SAME TEXT AS ABOVE
-
     logical_plan after rewrite_set_comparison:
     SAME TEXT AS ABOVE
 
@@ -12558,6 +12555,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after spark_scalar_subqueries:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
