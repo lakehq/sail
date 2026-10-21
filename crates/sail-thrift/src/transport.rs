@@ -1,12 +1,44 @@
 //! Async binary-message boundary detection. Typed decoding uses Apache Thrift.
+//!
+//! Wire layouts follow the [Thrift Binary protocol] and [framed transport] specifications.
+//! The message size, container size, and nesting limits below are local safety policies.
+//!
+//! [Thrift Binary protocol]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-binary-protocol.md
+//! [framed transport]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-rpc.md#framed-vs-unframed-transport
 
 use std::io;
 
+use num_enum::TryFromPrimitive;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 /// Bound complete messages, including unframed messages, before typed decoding.
 pub(crate) const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 const MAX_DEPTH: usize = 64;
+/// Bound scanner work independently of the message byte limit.
+const MAX_CONTAINER_ELEMENTS: usize = 32 * 1024 * 1024;
+
+const BINARY_VERSION_MASK: u32 = 0xffff_0000;
+const BINARY_VERSION_1: u32 = 0x8001_0000;
+const UUID_BYTE_LEN: usize = 16;
+
+/// Field type identifiers in the Binary protocol, including the struct terminator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive)]
+#[repr(u8)]
+enum BinaryType {
+    Stop = 0,
+    Bool = 2,
+    Byte = 3,
+    Double = 4,
+    I16 = 6,
+    I32 = 8,
+    I64 = 10,
+    String = 11,
+    Struct = 12,
+    Map = 13,
+    Set = 14,
+    List = 15,
+    Uuid = 16,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Transport {
@@ -56,7 +88,7 @@ pub async fn read_message<R: AsyncRead + Unpin>(
 
     let header = scanner.i32().await?;
     if header < 0 {
-        if (header as u32 & 0xffff_0000) != 0x8001_0000 {
+        if (header as u32 & BINARY_VERSION_MASK) != BINARY_VERSION_1 {
             return Err(invalid("invalid Thrift binary protocol version"));
         }
 
@@ -65,18 +97,18 @@ pub async fn read_message<R: AsyncRead + Unpin>(
     } else {
         // Legacy non-versioned binary message header.
         scanner.bytes(checked_size(header)?).await?;
-        scanner.bytes(1).await?;
+        scanner.bytes(size_of::<u8>()).await?; // message type
     }
 
-    scanner.bytes(4).await?; // sequence number
+    scanner.bytes(size_of::<i32>()).await?; // sequence number
     // Explicit tasks keep nested/container scanning linear without recursive futures.
-    let mut tasks = vec![Task::Value(12, 0)];
+    let mut tasks = vec![Task::Value(BinaryType::Struct, 0)];
     while let Some(task) = tasks.pop() {
         match task {
             Task::Struct(depth) => {
-                let ty = scanner.byte().await?;
-                if ty != 0 {
-                    scanner.bytes(2).await?; // field ID
+                let ty = scanner.field_type().await?;
+                if ty != BinaryType::Stop {
+                    scanner.bytes(size_of::<i16>()).await?; // field ID
                     tasks.push(Task::Struct(depth));
                     tasks.push(Task::Value(ty, depth));
                 }
@@ -106,31 +138,32 @@ pub async fn read_message<R: AsyncRead + Unpin>(
                 }
 
                 match ty {
-                    2 | 3 => scanner.bytes(1).await?,
-                    6 => scanner.bytes(2).await?,
-                    8 => scanner.bytes(4).await?,
-                    4 | 10 => scanner.bytes(8).await?,
-                    16 => scanner.bytes(16).await?,
-                    11 => {
+                    BinaryType::Bool | BinaryType::Byte => scanner.bytes(size_of::<u8>()).await?,
+                    BinaryType::I16 => scanner.bytes(size_of::<i16>()).await?,
+                    BinaryType::I32 => scanner.bytes(size_of::<i32>()).await?,
+                    BinaryType::I64 => scanner.bytes(size_of::<i64>()).await?,
+                    BinaryType::Double => scanner.bytes(size_of::<f64>()).await?,
+                    BinaryType::Uuid => scanner.bytes(UUID_BYTE_LEN).await?,
+                    BinaryType::String => {
                         let size = scanner.i32().await?;
                         scanner.bytes(checked_size(size)?).await?;
                     }
-                    12 => tasks.push(Task::Struct(depth + 1)),
-                    13..=15 => {
-                        let first = scanner.byte().await?;
-                        let second = if ty == 13 {
-                            Some(scanner.byte().await?)
+                    BinaryType::Struct => tasks.push(Task::Struct(depth + 1)),
+                    BinaryType::Map | BinaryType::Set | BinaryType::List => {
+                        let first = scanner.field_type().await?;
+                        let second = if ty == BinaryType::Map {
+                            Some(scanner.field_type().await?)
                         } else {
                             None
                         };
 
-                        if !valid_type(first) || second.is_some_and(|t| !valid_type(t)) {
+                        if first == BinaryType::Stop || second == Some(BinaryType::Stop) {
                             return Err(invalid("invalid Thrift container type"));
                         }
 
                         let size = scanner.i32().await?;
                         let size = checked_size(size)?;
-                        if size > MAX_MESSAGE_SIZE / 2 {
+                        if size > MAX_CONTAINER_ELEMENTS {
                             return Err(invalid("Thrift container exceeds size limit"));
                         }
                         tasks.push(Task::Repeated {
@@ -140,17 +173,13 @@ pub async fn read_message<R: AsyncRead + Unpin>(
                             depth: depth + 1,
                         });
                     }
-                    _ => return Err(invalid("unsupported Thrift binary field type")),
+                    BinaryType::Stop => return Err(invalid("unexpected Thrift stop field")),
                 }
             }
         }
     }
 
     Ok(scanner.message)
-}
-
-fn valid_type(ty: u8) -> bool {
-    matches!(ty, 2 | 3 | 4 | 6 | 8 | 10 | 11 | 12 | 13 | 14 | 15 | 16)
 }
 
 fn checked_size(size: i32) -> io::Result<usize> {
@@ -166,11 +195,11 @@ fn invalid(message: &str) -> io::Error {
 }
 
 enum Task {
-    Value(u8, usize),
+    Value(BinaryType, usize),
     Struct(usize),
     Repeated {
-        first: u8,
-        second: Option<u8>,
+        first: BinaryType,
+        second: Option<BinaryType>,
         remaining: usize,
         depth: usize,
     },
@@ -194,13 +223,18 @@ impl<R: AsyncRead + Unpin> Scanner<'_, R> {
     }
 
     async fn byte(&mut self) -> io::Result<u8> {
-        self.bytes(1).await?;
+        self.bytes(size_of::<u8>()).await?;
         Ok(self.message[self.message.len() - 1])
     }
 
+    async fn field_type(&mut self) -> io::Result<BinaryType> {
+        BinaryType::try_from(self.byte().await?)
+            .map_err(|_| invalid("unsupported Thrift binary field type"))
+    }
+
     async fn i32(&mut self) -> io::Result<i32> {
-        self.bytes(4).await?;
-        let start = self.message.len() - 4;
+        self.bytes(size_of::<i32>()).await?;
+        let start = self.message.len() - size_of::<i32>();
         let bytes = self.message[start..]
             .try_into()
             .map_err(|_| invalid("invalid i32"))?;

@@ -3,7 +3,7 @@
 use std::future::poll_fn;
 use std::io::Cursor;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::task::Poll;
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ use crate::codec::invalid_data;
 use crate::transport::Transport;
 
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_CONCURRENT_CALLS: usize = 8;
 
 pub type ReadHalf = Box<dyn AsyncRead + Unpin + Send>;
 pub type WriteHalf = Box<dyn AsyncWrite + Unpin + Send>;
@@ -65,8 +66,14 @@ pub struct Client(Arc<ClientInner>);
 struct ClientInner {
     connector: Arc<dyn Connector>,
     transport: Transport,
-    idle: Mutex<Vec<IdleConnection>>,
+    idle: Mutex<IdlePool>,
     permits: Semaphore,
+}
+
+#[derive(Default)]
+struct IdlePool {
+    connections: Vec<IdleConnection>,
+    expiring: bool,
 }
 
 struct Connection {
@@ -85,8 +92,8 @@ impl Client {
         Self(Arc::new(ClientInner {
             connector: Arc::new(connector),
             transport,
-            idle: Mutex::new(Vec::new()),
-            permits: Semaphore::new(8),
+            idle: Mutex::new(IdlePool::default()),
+            permits: Semaphore::new(MAX_CONCURRENT_CALLS),
         }))
     }
 
@@ -94,8 +101,9 @@ impl Client {
         loop {
             let idle = {
                 let mut idle = self.0.idle.lock().await;
-                idle.retain(|idle| idle.since.elapsed() < IDLE_TIMEOUT);
-                idle.pop()
+                idle.connections
+                    .retain(|idle| idle.since.elapsed() < IDLE_TIMEOUT);
+                idle.connections.pop()
             };
             let mut connection = idle?.connection;
             // No response is outstanding while idle. EOF, an error, or unsolicited
@@ -112,6 +120,41 @@ impl Client {
             if reusable {
                 return Some(connection);
             }
+        }
+    }
+
+    async fn put_idle_connection(&self, connection: Connection) {
+        let mut idle = self.0.idle.lock().await;
+        idle.connections.push(IdleConnection {
+            connection,
+            since: Instant::now(),
+        });
+        if !idle.expiring {
+            idle.expiring = true;
+            tokio::spawn(Self::expire_idle_connections(Arc::downgrade(&self.0)));
+        }
+    }
+
+    async fn expire_idle_connections(inner: Weak<ClientInner>) {
+        loop {
+            // Do not keep the client or its sockets alive while waiting for expiration.
+            let deadline = {
+                let Some(inner) = inner.upgrade() else {
+                    return;
+                };
+                let mut idle = inner.idle.lock().await;
+                idle.connections
+                    .retain(|idle| idle.since.elapsed() < IDLE_TIMEOUT);
+                // Connections are appended in order of their return to the pool.
+                match idle.connections.first() {
+                    Some(connection) => connection.since + IDLE_TIMEOUT,
+                    None => {
+                        idle.expiring = false;
+                        return;
+                    }
+                }
+            };
+            tokio::time::sleep_until(deadline).await;
         }
     }
 
@@ -220,10 +263,7 @@ impl Client {
             return Err(invalid_data("trailing bytes in Thrift reply").into());
         }
 
-        self.0.idle.lock().await.push(IdleConnection {
-            connection,
-            since: Instant::now(),
-        });
+        self.put_idle_connection(connection).await;
         Ok(result)
     }
 }

@@ -2,6 +2,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     sail_build_scripts::thrift::generate_client(
         "thrift/hive_metastore.thrift",
+        std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("hms.rs"),
         &[
             "create_database",
             "get_database",

@@ -187,6 +187,85 @@ async fn closed_idle_connections_are_replaced() -> TestResult {
 async fn expired_idle_connections_are_replaced() -> TestResult {
     for transport in [Transport::Buffered, Transport::Framed] {
         let (client, mut peers, count) = client(transport);
+        let (expired, mut was_expired) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let peer = peers.recv().await.unwrap();
+                let (reader, mut writer) = tokio::io::split(peer);
+                let mut reader = BufReader::new(reader);
+                let request = read_message(&mut reader, transport).await.unwrap();
+                assert_eq!(request_header(&request).unwrap().sequence_number, 1);
+                write_message(&mut writer, transport, &databases_reply(1).unwrap())
+                    .await
+                    .unwrap();
+                let mut extra = Vec::new();
+                reader.read_to_end(&mut extra).await.unwrap();
+                assert!(
+                    extra.is_empty(),
+                    "expired connection received another request"
+                );
+                expired.send(()).unwrap();
+            }
+        });
+        for expected_count in 1..=2 {
+            assert_eq!(
+                client.get_all_databases().await?,
+                MaybeException::Ok(vec!["default".into(), "analytics".into()])
+            );
+            tokio::time::advance(Duration::from_secs(16)).await;
+            // Expiration must close the socket before another RPC checks out a connection,
+            // including after the pool has emptied and been used again.
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), was_expired.recv()).await?,
+                Some(())
+            );
+            assert_eq!(count.load(Ordering::SeqCst), expected_count);
+        }
+        server.await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn reusing_connections_resets_idle_expiration() -> TestResult {
+    for transport in [Transport::Buffered, Transport::Framed] {
+        let (client, mut peers, count) = client(transport);
+        let server = tokio::spawn(async move {
+            let peer = peers.recv().await.unwrap();
+            let (reader, mut writer) = tokio::io::split(peer);
+            let mut reader = BufReader::new(reader);
+            for sequence in [1, 2] {
+                read_message(&mut reader, transport).await.unwrap();
+                write_message(&mut writer, transport, &databases_reply(sequence).unwrap())
+                    .await
+                    .unwrap();
+            }
+            let mut extra = Vec::new();
+            reader.read_to_end(&mut extra).await.unwrap();
+            assert!(extra.is_empty());
+        });
+        client.get_all_databases().await?;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        client.get_all_databases().await?;
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::task::yield_now().await;
+        assert!(
+            !server.is_finished(),
+            "connection expired before its new deadline"
+        );
+        tokio::time::advance(Duration::from_secs(10)).await;
+        tokio::time::timeout(Duration::from_secs(1), server).await??;
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_client_closes_idle_connections() -> TestResult {
+    for transport in [Transport::Buffered, Transport::Framed] {
+        let (client, mut peers, _) = client(transport);
         let server = tokio::spawn(async move {
             let peer = peers.recv().await.unwrap();
             let (reader, mut writer) = tokio::io::split(peer);
@@ -197,29 +276,13 @@ async fn expired_idle_connections_are_replaced() -> TestResult {
                 .unwrap();
             let mut extra = Vec::new();
             reader.read_to_end(&mut extra).await.unwrap();
-            assert!(
-                extra.is_empty(),
-                "expired connection received another request"
-            );
-
-            let peer = peers.recv().await.unwrap();
-            let (reader, mut writer) = tokio::io::split(peer);
-            let request = read_message(&mut BufReader::new(reader), transport)
-                .await
-                .unwrap();
-            assert_eq!(request_header(&request).unwrap().sequence_number, 1);
-            write_message(&mut writer, transport, &databases_reply(1).unwrap())
-                .await
-                .unwrap();
+            assert!(extra.is_empty());
         });
         client.get_all_databases().await?;
-        tokio::time::advance(Duration::from_secs(16)).await;
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(1), client.get_all_databases()).await??,
-            MaybeException::Ok(vec!["default".into(), "analytics".into()])
-        );
-        server.await?;
-        assert_eq!(count.load(Ordering::SeqCst), 2);
+        // Allow the cleanup task to start waiting before dropping the last client.
+        tokio::task::yield_now().await;
+        drop(client);
+        tokio::time::timeout(Duration::from_secs(1), server).await??;
     }
 
     Ok(())

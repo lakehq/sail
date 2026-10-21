@@ -11,8 +11,9 @@ workspace = true
 sail-build-scripts = { path = "../sail-build-scripts" }
 
 [dependencies]
-thrift = { workspace = true }
 sail-thrift = { path = "../sail-thrift" }
+
+thrift = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }

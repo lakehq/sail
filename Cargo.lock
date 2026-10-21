@@ -4602,12 +4602,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "integer-encoding"
-version = "3.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
-
-[[package]]
 name = "interval-heap"
 version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7960,6 +7954,7 @@ name = "sail-thrift"
 version = "0.7.2"
 dependencies = [
  "async-trait",
+ "num_enum",
  "thiserror",
  "thrift",
  "tokio",
@@ -8623,14 +8618,14 @@ dependencies = [
 
 [[package]]
 name = "thrift"
-version = "0.24.0"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b29bdae81cc2dbc498a720e2734e08f26e388c791fca6e95464d41001913714"
+checksum = "1f8cd99ff3e9130b04b10cd955d18d09aed0fb2f2fc2b4555ef49169fc519efe"
 dependencies = [
  "byteorder",
- "integer-encoding",
  "ordered-float 3.9.2",
  "uuid",
+ "varint-rs",
 ]
 
 [[package]]

@@ -1,8 +1,8 @@
 //! Client-only Thrift generation using Apache's in-memory protocol API.
 //!
-//! The parser accepts the IDL subset used by the vendored HMS schema. Only selected
-//! methods and their transitive type dependencies are emitted; unsupported syntax
-//! or reachable types fail generation. Network I/O lives in `sail-thrift`.
+//! The parser accepts a subset of Thrift IDL. Only selected methods and their
+//! transitive type dependencies are emitted; unsupported syntax or reachable types
+//! fail generation. Network I/O lives in `sail-thrift`.
 
 mod codegen;
 mod parser;
@@ -135,17 +135,21 @@ fn generate(source: &str, selected: &[&str]) -> BuildResult<String> {
     Ok(prettyplease::unparse(&syn::parse2(tokens)?))
 }
 
-/// Generate selected client methods and reachable types into `$OUT_DIR/hms.rs`.
+/// Generate selected client methods and reachable types at the given output path.
 ///
 /// The IDL must contain exactly one service. Its name determines the generated
 /// client type; method names are the original IDL names. The consuming crate needs
 /// dependencies on `thrift` and `sail-thrift`.
-pub fn generate_client(idl: impl AsRef<Path>, methods: &[&str]) -> BuildResult<()> {
+pub fn generate_client(
+    idl: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+    methods: &[&str],
+) -> BuildResult<()> {
     let idl = idl.as_ref();
     println!("cargo:rerun-if-changed={}", idl.display());
     let output = generate(&std::fs::read_to_string(idl)?, methods)?;
-    let target = std::path::PathBuf::from(std::env::var("OUT_DIR")?).join("hms.rs");
-    if std::fs::read_to_string(&target).ok().as_ref() != Some(&output) {
+    let target = output_path.as_ref();
+    if std::fs::read_to_string(target).ok().as_ref() != Some(&output) {
         std::fs::write(target, output)?;
     }
 
