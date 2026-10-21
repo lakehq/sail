@@ -63,11 +63,10 @@ def spark(remote):
         yield sessions.create()
 
 
-@pytest.fixture(scope="module", autouse=True)
-def spark_doctest(doctest_namespace, spark):
-    # The Spark session is scoped to each module, so that the registered
-    # temporary views and UDFs do not interfere with each other.
-    doctest_namespace["spark"] = spark
+@pytest.fixture(autouse=True)
+def spark_doctest(request, doctest_namespace):
+    if isinstance(request.node, DoctestItem):
+        doctest_namespace["spark"] = request.getfixturevalue("spark")
 
 
 @pytest.fixture
