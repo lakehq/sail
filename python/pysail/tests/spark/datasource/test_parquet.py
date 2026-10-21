@@ -820,6 +820,37 @@ def test_external_parquet_timestamp_logical_type_roundtrip(spark, tmp_path, adju
 
 
 @pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+def test_external_parquet_timestamp_instant_roundtrip(spark, tmp_path):
+    # Check stored instants separately from the logical-type test's string rendering.
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    first = datetime(2020, 6, 14, 12, tzinfo=ZoneInfo(session_timezone))
+    values = [first + timedelta(minutes=30 * i) for i in range(24)]
+    path = tmp_path / "external_instants.parquet"
+    pq.write_table(
+        pa.table({"ts": pa.array(values, type=pa.timestamp("us", tz=session_timezone))}),
+        path,
+        store_schema=False,
+    )
+
+    source = spark.read.parquet(str(path))
+    destination = tmp_path / "rewritten_instants"
+    source.write.parquet(str(destination))
+    for frame in (source, spark.read.parquet(str(destination))):
+        assert isinstance(frame.schema["ts"].dataType, TimestampType)
+        row = (
+            frame.filter("ts >= TIMESTAMP '2020-06-14 00:00:00' AND ts < TIMESTAMP '2020-06-15 00:00:00'")
+            .selectExpr("count(*) AS n", "unix_micros(min(ts)) AS lo", "unix_micros(max(ts)) AS hi")
+            .collect()[0]
+        )
+        assert (row.n, row.lo, row.hi) == (
+            24,
+            int(values[0].timestamp() * 1_000_000),
+            int(values[-1].timestamp() * 1_000_000),
+        )
+
+
+@pytest.mark.usefixtures("session_timezone")
 @pytest.mark.parametrize("unit", ["ms", "us"])
 @pytest.mark.parametrize("producer_timezone", [None, "UTC", "America/New_York"])
 @pytest.mark.parametrize(
