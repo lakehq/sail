@@ -409,6 +409,9 @@ Feature: sequence() over DATE returns expected arrays
         | EST                 | [2022-03-09, 2022-03-13] |
         | MST                 | [2022-03-09, 2022-03-13] |
         | +0130               | [2022-03-09, 2022-03-13] |
+        | Z                   | [2022-03-09, 2022-03-13] |
+        | PST                 | [2022-03-09, 2022-03-14] |
+        | UT                  | [2022-03-09, 2022-03-13] |
 
     @sail-bug
     Scenario Outline: date sequence applies mixed day-hour intervals with Spark timezone ID <zone>
