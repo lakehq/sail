@@ -1234,3 +1234,30 @@ Feature: Scalar subqueries in distributed execution
         | 1  | true    |
         | 2  | false   |
         | 3  | false   |
+
+  Scenario Outline: Bitwise complement preserves scalar-subquery NULLs with ANSI <ansi>
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT ~(SELECT id FROM range(0)) AS empty_long,
+             ~(SELECT 1 FROM range(0)) AS empty_int,
+             ~(~(SELECT id FROM range(0))) AS nested_empty,
+             ~(SELECT -2147483648) AS minimum_int,
+             ~(SELECT CAST(-128 AS TINYINT)) AS minimum_byte,
+             typeof(~NULL) AS null_type
+      """
+    Then query result
+      | empty_long | empty_int | nested_empty | minimum_int | minimum_byte | null_type |
+      | NULL       | NULL      | NULL         | 2147483647  | 127          | int       |
+
+    Examples:
+      | ansi  |
+      | true  |
+      | false |
+
+  Scenario: Bitwise complement retains scalar-subquery cardinality errors
+    When query
+      """
+      SELECT ~(SELECT id FROM range(2)) AS result
+      """
+    Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)

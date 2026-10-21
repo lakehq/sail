@@ -612,8 +612,6 @@ Feature: abs comprehensive tests
   @function(nullability)
   Rule: Output schema
 
-    # TODO: Restore precise nullability after DataFusion fixes scalar-subquery nullability.
-    @sail-bug
     Scenario: a non-null integer literal yields a non-nullable integer
       When query
         """
@@ -711,3 +709,20 @@ Feature: abs comprehensive tests
         SELECT count(abs((SELECT id FROM range(2)))) AS result FROM range(1)
         """
       Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+    Scenario: abs retains non-null literal inference without evaluating overflow
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT count(abs(-2147483648)) AS result FROM range(1)
+        """
+      Then query result
+        | result |
+        | 1      |
+      When query
+        """
+        SELECT abs(-2147483648) IS NULL AS result
+        """
+      Then query result
+        | result |
+        | false  |

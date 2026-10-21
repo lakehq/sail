@@ -2,7 +2,7 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -82,10 +82,11 @@ impl ScalarUDFImpl for SparkNegative {
                 args.arg_fields.len(),
             ));
         };
-        // DataFusion can label an empty scalar subquery non-nullable. Keep this
-        // conservative until its scalar-subquery nullability fix is available.
-        // FIXME: After upgrading to DataFusion with that fix, replace true with arg.is_nullable().
-        Ok(Arc::new(Field::new(self.name(), arg.data_type().clone(), true)))
+        // Literal values have reliable nullability; field flags can still
+        // incorrectly mark an empty scalar subquery non-nullable.
+        // FIXME: After DataFusion's scalar-subquery fix, use arg.is_nullable() here.
+        let nullable = args.scalar_arguments[0].is_none_or(ScalarValue::is_null);
+        Ok(Arc::new(Field::new(self.name(), arg.data_type().clone(), nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

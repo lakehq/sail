@@ -275,3 +275,20 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         SELECT count(negative((SELECT id FROM range(2)))) AS result FROM range(1)
         """
       Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+    Scenario: negative retains non-null literal inference without evaluating overflow
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT count(negative(-2147483648)) AS result FROM range(1)
+        """
+      Then query result
+        | result |
+        | 1      |
+      When query
+        """
+        SELECT negative(-2147483648) IS NULL AS result
+        """
+      Then query result
+        | result |
+        | false  |

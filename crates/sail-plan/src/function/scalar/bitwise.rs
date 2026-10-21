@@ -1,5 +1,7 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::abs;
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_expr::{ExprSchemable, Operator, cast, expr, lit, when};
 use datafusion_spark::function::bitwise::expr_fn as bitwise_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -55,6 +57,11 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
             "~",
             F::custom(|input| {
                 let argument = input.arguments.one()?;
+                let mut coercion = TypeCoercionRewriter::new(input.function_context.schema);
+                let Ok(coerced) = argument.clone().rewrite(&mut coercion) else {
+                    return Ok(bitwise_fn::bitwise_not(argument));
+                };
+                let argument = coerced.data;
                 // Spark gives untyped NULL the default integral type, INT.
                 let argument =
                     if argument.get_type(input.function_context.schema)? == DataType::Null {
@@ -62,7 +69,14 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
                     } else {
                         argument
                     };
-                Ok(bitwise_fn::bitwise_not(argument))
+                match argument.get_type(input.function_context.schema)? {
+                    DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                        // XOR flips bits without overflow and follows repaired child nullability.
+                        // The TINYINT mask widens to the operand without widening the operand.
+                        Ok(argument ^ lit(-1_i8))
+                    }
+                    _ => Ok(bitwise_fn::bitwise_not(argument)),
+                }
             }),
         ),
     ]
