@@ -23,7 +23,7 @@
     "fast-glob": "^3.3.3",
     "gray-matter": "^4.0.3",
     "js-yaml": "^5.4.3",
-    "markdown-it": "^15.0.2",
+    "markdown-it": "^15.0.3",
     "markdown-it-deflist": "^4.0.0",
     "prettier": "^3.9.10",
     "prettier-plugin-tailwindcss": "^0.8.1",
