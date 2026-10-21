@@ -66,3 +66,24 @@ def test_map_constructors_preserve_interval_fields(spark, function, nullable_val
         assert result.toArrow().to_pylist() == [
             {"result": None if keys is None else list(zip(keys, values, strict=True))} for keys, values in rows
         ]
+
+
+@pytest.mark.parametrize("null_first", [False, True])
+@pytest.mark.parametrize("dynamic", [False, True])
+def test_array_of_interval_map_and_null(spark, null_first, dynamic):
+    from datetime import timedelta
+
+    source = spark.range(2).selectExpr(
+        "map_from_arrays(array(1), CAST(array(CAST(id AS INTERVAL DAY)) AS ARRAY<INTERVAL DAY>)) AS m"
+        if dynamic
+        else "map_from_arrays(array(1), CAST(array(INTERVAL '1' DAY) AS ARRAY<INTERVAL DAY>)) AS m"
+    )
+    values = [F.col("m"), F.lit(None)]
+    if null_first:
+        values.reverse()
+    result = source.select(F.array(*values).alias("result"))
+    assert result.schema["result"].dataType.elementType.valueType == T.DayTimeIntervalType(0, 0)
+    expected = [[{1: timedelta(days=i if dynamic else 1)}, None] for i in range(2)]
+    if null_first:
+        expected = [row[::-1] for row in expected]
+    assert [row.result for row in result.collect()] == expected

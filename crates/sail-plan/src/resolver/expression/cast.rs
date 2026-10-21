@@ -319,6 +319,18 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
+        // ScalarValue::cast_to drops the immediate list child's metadata. Reapply
+        // the requested field after the cast; the cast still performs value conversion.
+        let expr = if let expr::Expr::Cast(expr::Cast { field, .. })
+        | expr::Expr::TryCast(expr::TryCast { field, .. }) = &expr
+            && matches!(field.data_type(), DataType::List(element) | DataType::LargeList(element)
+                | DataType::ListView(element) | DataType::LargeListView(element)
+                | DataType::FixedSizeList(element, _) if !element.metadata().is_empty())
+        {
+            ScalarUDF::from(SparkStructRename::new(field.data_type().clone())).call(vec![expr])
+        } else {
+            expr
+        };
         Ok(match spark_interval_metadata {
             Some(metadata) => {
                 // Nested expressions consume the Expr without its NamedExpr metadata.
