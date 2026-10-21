@@ -1,21 +1,22 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::type_coercion::other::get_coerce_type_for_list;
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
-use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::spark_struct_rename::SparkStructRename;
+use sail_function::scalar::spark_struct_cast::SparkStructCast;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
-use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
+use crate::function::datetime_utils::{cast_temporal, common_temporal_type};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
@@ -129,11 +130,11 @@ fn find_timestamp_string_in_coercion(
         .iter()
         .any(|data_type| matches!(data_type, DataType::Timestamp(_, _)));
     let has_string = non_null_types.iter().any(is_string_type);
-    if !has_timestamp || !has_string {
+    if !has_timestamp {
         return None;
     }
 
-    if !ansi_mode {
+    if has_string && !ansi_mode {
         return data_types
             .iter()
             .all(non_ansi_in_string_promotable)
@@ -187,16 +188,14 @@ fn apply_timestamp_string_in_coercion(
                         .call(vec![expression])
                 }
                 DataType::Null => cast(expression, target_type),
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None)
-                    if timezone.is_some() =>
-                {
-                    let string = ScalarUDF::from(SparkToUtf8::new()).call(vec![expression]);
-                    ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), ansi_mode, false)?)
-                        .call(vec![string])
-                }
-                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => {
-                    cast(expression, target_type)
-                }
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _) => cast_temporal(
+                    expression,
+                    data_type,
+                    target_type,
+                    session_timezone,
+                    false,
+                    None,
+                )?,
                 _ => expression,
             })
         }
@@ -254,53 +253,46 @@ fn apply_timestamp_string_in_coercion(
                 _ => return Ok(expression),
             };
 
-            let unique_names = (0..source_fields.len())
-                .map(|index| format!("__sail_in_field_{index}"))
-                .collect::<Vec<_>>();
-            let unique_fields = source_fields
-                .iter()
-                .zip(&unique_names)
-                .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
-                .collect::<Vec<Arc<Field>>>();
-            expression = ScalarUDF::from(SparkStructRename::new(DataType::Struct(Fields::from(
-                unique_fields,
-            ))))
-            .call(vec![expression]);
-
-            for ((field, field_coercion), unique_name) in
-                source_fields.iter().zip(field_coercions).zip(&unique_names)
+            // Bind one evaluated struct so volatile inputs cannot supply mismatched fields.
+            let mut arguments = vec![expression];
+            let mut output_fields = Vec::with_capacity(source_fields.len());
+            for ((field, field_coercion), name) in
+                source_fields.iter().zip(field_coercions).zip(field_names)
             {
-                let Some(field_coercion) = field_coercion else {
-                    continue;
+                let parameter = "field".to_owned();
+                let value = expr::Expr::LambdaVariable(LambdaVariable::new(
+                    parameter.clone(),
+                    Some(Arc::clone(field)),
+                ));
+                let value = if let Some(field_coercion) = field_coercion {
+                    apply_timestamp_string_in_coercion(
+                        value,
+                        field.data_type(),
+                        field_coercion,
+                        schema,
+                        session_timezone,
+                        ansi_mode,
+                        list_depth,
+                    )?
+                } else {
+                    value
                 };
-                let value = get_field().call(vec![expression.clone(), lit(unique_name.clone())]);
-                let value = apply_timestamp_string_in_coercion(
-                    value,
-                    field.data_type(),
-                    field_coercion,
-                    schema,
-                    session_timezone,
-                    ansi_mode,
-                    list_depth,
-                )?;
-                expression = ScalarUDF::from(UpdateStructField::new(vec![unique_name.clone()]))
-                    .call(vec![expression, value]);
+                output_fields.push(Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_name(name)
+                        .with_data_type(value.get_type(schema.as_ref())?)
+                        .with_nullable(value.nullable(schema.as_ref())?),
+                ));
+                arguments.push(expr::Expr::Lambda(Lambda::new(vec![parameter], value)));
             }
-
-            let DataType::Struct(updated_fields) = expression.get_type(schema.as_ref())? else {
-                return Ok(expression);
-            };
-            let output_fields = updated_fields
-                .iter()
-                .zip(field_names)
-                .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
-                .collect::<Vec<Arc<Field>>>();
-            Ok(
-                ScalarUDF::from(SparkStructRename::new(DataType::Struct(Fields::from(
-                    output_fields,
-                ))))
-                .call(vec![expression]),
-            )
+            Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+                Arc::new(HigherOrderUDF::new_from_impl(SparkStructCast::new(
+                    output_fields.into(),
+                ))),
+                arguments,
+            )))
         }
     }
 }
@@ -345,15 +337,43 @@ fn timestamp_string_coercion_requires_rewrite(
     }
 }
 
-/// Applies Spark timestamp/string coercion to one predicate before DataFusion's generic
-/// coercion, preserving session-zone parsing and Spark TimestampType's microsecond precision.
+/// Applies Spark timestamp coercion to one predicate before DataFusion's generic coercion,
+/// preserving session-zone conversion and Spark TimestampType's microsecond precision.
+///
+/// Compare the converted values, without reversing their casts against a literal bound.
+/// Spark's `UnwrapCastInBinaryComparison` can change results because timezone conversions
+/// are not one-to-one; a successful round trip of the bound does not make the rewrite valid:
+/// - In Pacific/Apia, DATE '2011-12-30' and DATE '2011-12-31' both convert to
+///   TIMESTAMP '2011-12-31 00:00:00'. Spark reports TRUE for the literal skipped date's
+///   equality, but FALSE for the same date computed with date_add(..., id) at id = 0.
+/// - In America/Los_Angeles, NTZ '2020-03-08 02:30:00' converts across the gap to
+///   LTZ '2020-03-08 03:30:00'. Spark's rewrite instead compares the original 02:30
+///   with 03:30, returning FALSE for equality (and incorrectly TRUE for < LTZ 03:00).
+/// - Both LTZ instants '2020-11-01 08:30:00Z' and '2020-11-01 09:30:00Z' convert
+///   to NTZ '2020-11-01 01:30:00' in Los Angeles. Reversing that equality selects
+///   the first overlap instant and incorrectly rejects the second.
+///
+/// Sail deliberately preserves the cast results for literal and computed inputs alike,
+/// including IN comparisons, instead of reproducing these Spark optimizer bugs.
 pub(super) fn coerce_timestamp_string_predicate(
     expression: expr::Expr,
     schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> PlanResult<expr::Expr> {
     Ok(match expression {
-        expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(op) => {
+        expr::Expr::BinaryExpr(BinaryExpr {
+            left,
+            op:
+                op @ (Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::LtEq
+                | Operator::Gt
+                | Operator::GtEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom),
+            right,
+        }) => {
             let (left, right) = coerce_timestamp_pair(*left, *right, op, schema, config)?;
             expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
         }
@@ -382,31 +402,55 @@ pub(super) fn coerce_timestamp_string_predicate(
             let has_null_list_value = list.iter().any(is_null_literal_expression);
             let recursive_list_coercion =
                 matches!(&coercion, TimestampStringInCoercion::List { .. });
+            let coerce = |value, data_type: &DataType| -> DataFusionResult<expr::Expr> {
+                apply_timestamp_string_in_coercion(
+                    value,
+                    data_type,
+                    &coercion,
+                    schema,
+                    &config.session_timezone,
+                    config.ansi_mode,
+                    0,
+                )
+            };
 
-            let expr = apply_timestamp_string_in_coercion(
-                *expr,
-                &expr_type,
-                &coercion,
-                schema,
-                &config.session_timezone,
-                config.ansi_mode,
-                0,
-            )?;
-            let list = list
+            let mut expr = coerce(*expr, &expr_type)?;
+            let mut list = list
                 .into_iter()
                 .zip(list_types)
-                .map(|(value, data_type)| {
-                    apply_timestamp_string_in_coercion(
-                        value,
-                        &data_type,
-                        &coercion,
-                        schema,
-                        &config.session_timezone,
-                        config.ansi_mode,
-                        0,
-                    )
-                })
+                .map(|(value, data_type)| coerce(value, &data_type))
                 .collect::<DataFusionResult<Vec<_>>>()?;
+            let expr_type = expr.get_type(schema.as_ref())?;
+            let list_types = list
+                .iter()
+                .map(|value| value.get_type(schema.as_ref()))
+                .collect::<DataFusionResult<Vec<_>>>()?;
+            if let Some(target) =
+                get_coerce_type_for_list(&expr_type, &list_types).filter(DataType::is_nested)
+            {
+                expr = cast_temporal(
+                    expr,
+                    &expr_type,
+                    target.clone(),
+                    &config.session_timezone,
+                    false,
+                    None,
+                )?;
+                list = list
+                    .into_iter()
+                    .zip(list_types)
+                    .map(|(value, data_type)| {
+                        cast_temporal(
+                            value,
+                            &data_type,
+                            target.clone(),
+                            &config.session_timezone,
+                            false,
+                            None,
+                        )
+                    })
+                    .collect::<DataFusionResult<Vec<_>>>()?;
+            }
             if recursive_list_coercion && has_null_list_value && !expr.is_volatile() {
                 // A static nested IN set can miss an equal value when the set also contains NULL.
                 // Spark defines IN as a Kleene equality disjunction for non-volatile operands.
@@ -460,7 +504,7 @@ fn recursive_list_in_as_comparisons(
     }
 }
 
-fn coerce_timestamp_pair(
+pub(in crate::resolver) fn coerce_timestamp_pair(
     left: expr::Expr,
     right: expr::Expr,
     operator: Operator,
@@ -469,6 +513,30 @@ fn coerce_timestamp_pair(
 ) -> DataFusionResult<(expr::Expr, expr::Expr)> {
     let left_type = left.get_type(schema.as_ref())?;
     let right_type = right.get_type(schema.as_ref())?;
+
+    if let Some(target) = common_temporal_type(
+        &[left_type.clone(), right_type.clone()],
+        &config.session_timezone,
+    ) {
+        return Ok((
+            cast_temporal(
+                left,
+                &left_type,
+                target.clone(),
+                &config.session_timezone,
+                false,
+                None,
+            )?,
+            cast_temporal(
+                right,
+                &right_type,
+                target,
+                &config.session_timezone,
+                false,
+                None,
+            )?,
+        ));
+    }
 
     if !config.ansi_mode
         && config.legacy_type_coercion_datetime_to_string
@@ -635,6 +703,32 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
         config.ansi_mode,
         0,
     )?;
+    let coerced_left_type = left.get_type(left_schema.as_ref())?;
+    let coerced_right_type = right.get_type(right_schema.as_ref())?;
+    if let Some(target) =
+        comparison_coercion(&coerced_left_type, &coerced_right_type).filter(DataType::is_nested)
+    {
+        return Ok((
+            cast_temporal(
+                left,
+                &coerced_left_type,
+                target.clone(),
+                &config.session_timezone,
+                false,
+                None,
+            )?,
+            cast_temporal(
+                right,
+                &coerced_right_type,
+                target,
+                &config.session_timezone,
+                false,
+                None,
+            )?,
+            true,
+            true,
+        ));
+    }
     Ok((left, right, left_changed, right_changed))
 }
 
@@ -668,20 +762,6 @@ fn is_ordering_comparison(operator: Operator) -> bool {
     matches!(
         operator,
         Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq
-    )
-}
-
-fn is_comparison(operator: Operator) -> bool {
-    matches!(
-        operator,
-        Operator::Eq
-            | Operator::NotEq
-            | Operator::Lt
-            | Operator::LtEq
-            | Operator::Gt
-            | Operator::GtEq
-            | Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
     )
 }
 

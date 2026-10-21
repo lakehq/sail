@@ -7,7 +7,9 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{Array, PrimitiveArray, new_null_array};
 use datafusion::arrow::datatypes::{DataType, Date32Type, Field, FieldRef, Int64Type, TimeUnit};
 use datafusion_common::cast::as_date32_array;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
+};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -59,7 +61,44 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = !self.ansi_mode || args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [first, ..] = args.args.as_slice() else {
+            return exec_err!("spark_unix_timestamp function requires 1 or more arguments");
+        };
+        let format = match args.args.len() {
+            1 => None,
+            2 => Some(&args.args[1]),
+            _ => return exec_err!("spark_unix_timestamp function requires 1 or 2 arguments"),
+        };
+        let safe = !self.ansi_mode;
+        match first.data_type() {
+            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => match format {
+                Some(format) => self.invoke_with_format(first, format, safe),
+                None => self.invoke_with_scalar_format(
+                    first,
+                    ScalarUnixFormat::Format(DateTimeFormat::for_parsing(DEFAULT_PATTERN)?),
+                    safe,
+                ),
+            },
+            DataType::Date64 | DataType::Date32 => self.invoke_with_date(first),
+            DataType::Timestamp(_, timezone) => first
+                .cast_to(&DataType::Timestamp(TimeUnit::Second, timezone), None)?
+                .cast_to(&DataType::Int64, None),
+            DataType::Null => null_int64(first),
+            other => {
+                exec_err!("spark_unix_timestamp function unsupported data type: {other}")
+            }
+        }
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -98,41 +137,6 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
             }
         }
         Ok(coerced)
-    }
-
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = !self.ansi_mode || args.arg_fields.iter().any(|field| field.is_nullable());
-        Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [first, ..] = args.args.as_slice() else {
-            return exec_err!("spark_unix_timestamp function requires 1 or more arguments");
-        };
-        let format = match args.args.len() {
-            1 => None,
-            2 => Some(&args.args[1]),
-            _ => return exec_err!("spark_unix_timestamp function requires 1 or 2 arguments"),
-        };
-        let safe = !self.ansi_mode;
-        match first.data_type() {
-            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => match format {
-                Some(format) => self.invoke_with_format(first, format, safe),
-                None => self.invoke_with_scalar_format(
-                    first,
-                    ScalarUnixFormat::Format(DateTimeFormat::for_parsing(DEFAULT_PATTERN)?),
-                    safe,
-                ),
-            },
-            DataType::Date64 | DataType::Date32 => self.invoke_with_date(first),
-            DataType::Timestamp(_, timezone) => first
-                .cast_to(&DataType::Timestamp(TimeUnit::Second, timezone), None)?
-                .cast_to(&DataType::Int64, None),
-            DataType::Null => null_int64(first),
-            other => {
-                exec_err!("spark_unix_timestamp function unsupported data type: {other}")
-            }
-        }
     }
 }
 

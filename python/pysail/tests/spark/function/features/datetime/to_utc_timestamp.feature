@@ -26,7 +26,11 @@ Feature: to_utc_timestamp
 
   Rule: Invalid time zone validation
 
-    Scenario: `to_utc_timestamp` validates a constant zone for a runtime-null timestamp
+    # Spark's generated execution parses constant zones before checking the timestamp;
+    # higher-order zones and interpreted execution check NULL first. Sail deliberately
+    # checks NULL before parsing zones, while non-NULL timestamps still validate their zones.
+
+    Scenario: `to_utc_timestamp` skips a constant zone for a runtime-null timestamp
       When query
         """
         SELECT to_utc_timestamp(
@@ -37,6 +41,91 @@ Feature: to_utc_timestamp
           'Not/AZone'
         ) AS result
         FROM range(0, 1, 1, 1)
+        """
+      Then query result unless Spark raises INVALID_TIMEZONE
+        | result |
+        | NULL   |
+
+    Scenario: `to_utc_timestamp` skips a query-time constant zone for a null timestamp
+      When query
+        """
+        SELECT to_utc_timestamp(
+          CASE WHEN id = 0 THEN CAST(NULL AS TIMESTAMP) ELSE TIMESTAMP '2024-01-01' END,
+          concat('Not/AZone', substring(CAST(current_timestamp() AS STRING), 1, 0))
+        ) AS result FROM range(1)
+        """
+      Then query result unless Spark raises INVALID_TIMEZONE
+        | result |
+        | NULL   |
+
+    Scenario: `to_utc_timestamp` skips a constant zone containing convert_timezone for a null timestamp
+      When query
+        """
+        SELECT to_utc_timestamp(
+          CASE WHEN id = 0 THEN CAST(NULL AS TIMESTAMP) ELSE TIMESTAMP '2024-01-01' END,
+          concat('Not/AZone', substring(
+            CAST(convert_timezone('UTC', 'UTC', TIMESTAMP_NTZ '2024-01-01') AS STRING),
+            1, 0
+          ))
+        ) AS result FROM range(1)
+        """
+      Then query result unless Spark raises INVALID_TIMEZONE
+        | result |
+        | NULL   |
+
+    Scenario: `to_utc_timestamp` skips a higher-order zone for a null timestamp
+      # Spark treats higher-order expressions as non-foldable, even with constant inputs.
+      When query
+        """
+        SELECT to_utc_timestamp(
+          CASE WHEN id = 0 THEN CAST(NULL AS TIMESTAMP) ELSE TIMESTAMP '2024-01-01' END,
+          element_at(transform(array('Not/AZone'), x -> x), 1)
+        ) AS result FROM range(1)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: `to_utc_timestamp` skips a dynamic zone for a null timestamp
+      When query
+        """
+        SELECT to_utc_timestamp(source_ts, source_tz) AS result
+        FROM VALUES
+          (CAST(NULL AS TIMESTAMP), 'Not/AZone')
+          AS t(source_ts, source_tz)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: dynamic zones are validated only for non-NULL timestamps in a batch
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT i, to_utc_timestamp(source_ts, source_tz) AS result
+        FROM VALUES
+          (1, CAST(NULL AS TIMESTAMP), 'Not/AZone'),
+          (2, TIMESTAMP '2024-06-15 12:30:00', 'America/Los_Angeles'),
+          (3, CAST(NULL AS TIMESTAMP), CAST(NULL AS STRING)),
+          (4, TIMESTAMP '2024-06-15 12:30:00', CAST(NULL AS STRING))
+          AS t(i, source_ts, source_tz)
+        ORDER BY i
+        """
+      Then query result ordered
+        | i | result              |
+        | 1 | NULL                |
+        | 2 | 2024-06-15 19:30:00 |
+        | 3 | NULL                |
+        | 4 | NULL                |
+
+    Scenario: a dynamic invalid zone still raises on a non-NULL timestamp
+      When query
+        """
+        SELECT to_utc_timestamp(source_ts, source_tz) AS result
+        FROM VALUES
+          (CAST(NULL AS TIMESTAMP), 'Not/AZone'),
+          (TIMESTAMP '2024-01-01 00:00:00', 'Not/AZone')
+          AS t(source_ts, source_tz)
         """
       Then query error INVALID_TIMEZONE
 
@@ -95,3 +184,37 @@ Feature: to_utc_timestamp
         root
          |-- result: timestamp (nullable = true)
         """
+
+  Rule: Time zone argument types
+
+    # Skipping timezone-string validation for NULL timestamps must not skip type validation.
+    Scenario Outline: `to_utc_timestamp` rejects ARRAY time zones with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_utc_timestamp(<timestamp>, array('UTC')) AS result
+        """
+      Then query error DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
+
+      Examples:
+        | timestamp                       | ansi  |
+        | CAST(NULL AS TIMESTAMP)          | true  |
+        | CAST(NULL AS TIMESTAMP)          | false |
+        | TIMESTAMP '2024-01-01 00:00:00' | true  |
+        | TIMESTAMP '2024-01-01 00:00:00' | false |
+
+    Scenario Outline: `to_utc_timestamp` retains binary time zone coercion with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT to_utc_timestamp(TIMESTAMP '2024-01-01 00:00:00', CAST('UTC' AS BINARY)) AS result
+        """
+      Then query result
+        | result              |
+        | 2024-01-01 00:00:00 |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |

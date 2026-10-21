@@ -19,6 +19,7 @@ use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -52,6 +53,8 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
         if let Expr::ScalarFunction(f) = e
             && f.func.signature().volatility == Volatility::Volatile
             && f.func.as_async().is_none()
+            // RaiseError is deterministic; its volatility only prevents constant folding.
+            && !f.func.inner().is::<RaiseError>()
         {
             found_name = Some(f.func.name().to_string());
             return Ok(TreeNodeRecursion::Stop);

@@ -5,8 +5,8 @@ These assertions cannot live in a `.feature` file: `Then query schema` compares 
 Spark type and the Arrow type are two separate mappings, and they can drift apart
 independently — a column can have the right `treeString` and the wrong Arrow type.
 
-Every expected value here was measured against Spark JVM 4.2.0 with
-`spark.sql.session.timeZone = UTC` and `spark.sql.timeType.enabled = true`.
+Expected values were measured against Spark JVM 4.2.0. Unless overridden by a test,
+the session uses `spark.sql.session.timeZone = UTC` and `spark.sql.timeType.enabled = true`.
 """
 
 import contextlib
@@ -15,7 +15,7 @@ import pytest
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
-pytest.importorskip("pyarrow")
+pa = pytest.importorskip("pyarrow")
 
 pytestmark = pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.toArrow requires PySpark 4.0+")
 
@@ -99,3 +99,19 @@ def test_to_arrow_rejects_year_month_interval(arrow_spark):
 def test_to_arrow_struct_field_nullability(arrow_spark):
     table = arrow_spark.sql("SELECT named_struct('a',1,'b',CAST(NULL AS INT)) AS c").toArrow()
     assert str(table.schema.field(0).type) == "struct<a: int32 not null, b: int32>"
+
+
+@pytest.mark.parametrize("session_timezone", ["Africa/Abidjan", "Atlantic/Azores"], indirect=True)
+def test_wide_timestamp_ntz_cast_preserves_arrow_values(spark, session_timezone):  # noqa: ARG001
+    # Arrow exposes values beyond Python datetime's range without another timestamp cast.
+    table = spark.sql(
+        """
+        SELECT id,
+               CAST(timestamp_micros(CASE WHEN id=0 THEN 9000000000000000000L
+                                         ELSE CAST(NULL AS BIGINT) END) AS TIMESTAMP_NTZ) AS result
+        FROM range(2) ORDER BY id
+        """
+    ).toArrow()
+    assert table.schema.field("result").type == pa.timestamp("us")
+    assert table.column("id").to_pylist() == [0, 1]
+    assert table.column("result").cast(pa.int64()).to_pylist() == [9000000000000000000, None]

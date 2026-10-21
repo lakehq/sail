@@ -10,7 +10,7 @@ use datafusion_common::arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -54,8 +54,18 @@ macro_rules! define_interval_udf {
                 &self.signature
             }
 
+            fn is_strict(&self) -> bool {
+                true
+            }
+
             fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-                Ok($return_type)
+                internal_err!(
+                    "`return_type` should not be called; `return_field_from_args` is used instead"
+                )
+            }
+
+            fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+                Ok(Arc::new(Field::new(self.name(), $return_type, true)))
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -134,7 +144,9 @@ impl ScalarUDFImpl for YearMonthIntervalMonths {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -145,6 +157,10 @@ impl ScalarUDFImpl for YearMonthIntervalMonths {
             DataType::Int32,
             field.is_nullable(),
         )))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -216,7 +232,21 @@ impl ScalarUDFImpl for SparkDayTimeIntervalToCalendarInterval {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            true,
+        )))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

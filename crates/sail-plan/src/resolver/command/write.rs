@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -42,6 +42,7 @@ use sail_logical_plan::barrier::BarrierNode;
 
 use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
+use crate::function::datetime_utils::{cast_temporal, common_temporal_type};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -201,6 +202,31 @@ impl WritePlanBuilder {
 }
 
 impl PlanResolver<'_> {
+    fn cast_write_value(
+        &self,
+        value: Expr,
+        target: &DataType,
+        schema: &DFSchema,
+    ) -> PlanResult<Expr> {
+        let source = value.get_type(schema)?;
+        if common_temporal_type(
+            &[source.clone(), target.clone()],
+            &self.config.session_timezone,
+        )
+        .is_some()
+        {
+            Ok(cast_temporal(
+                value,
+                &source,
+                target.clone(),
+                &self.config.session_timezone,
+                false,
+                Some(self.config.map_key_dedup_policy),
+            )?)
+        } else {
+            Ok(value.cast_to(target, schema)?)
+        }
+    }
     /// Builds a write logical plan and any catalog preconditions needed before executing it.
     pub(super) async fn resolve_write_with_builder(
         &self,
@@ -869,13 +895,14 @@ impl PlanResolver<'_> {
             self.rewrite_write_input_with_column_expressions(input, column_match, info, state)
                 .await
         } else {
-            Self::rewrite_standard_write_input(input, column_match, info)
+            self.rewrite_standard_write_input(input, column_match, info)
         }
     }
 
     /// Fast path for tables without column-level expressions (no generated columns,
     /// no defaults, no identity). Pure schema coercion with alias/cast.
     fn rewrite_standard_write_input(
+        &self,
         input: LogicalPlan,
         column_match: WriteColumnMatch,
         info: &TableInfo,
@@ -896,7 +923,8 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .zip(table_schema.fields().iter())
                     .map(|(column, field)| {
-                        let expr = col(column).cast_to(field.data_type(), input.schema())?;
+                        let expr =
+                            self.cast_write_value(col(column), field.data_type(), input.schema())?;
                         Ok(Self::make_nullable_if_needed(expr, field, input.schema())?
                             .alias(field.name()))
                     })
@@ -915,8 +943,11 @@ impl PlanResolver<'_> {
                             .iter()
                             .filter(|f| f.name().eq_ignore_ascii_case(name))
                             .map(|f| {
-                                let expr =
-                                    col(f.name()).cast_to(field.data_type(), input.schema())?;
+                                let expr = self.cast_write_value(
+                                    col(f.name()),
+                                    field.data_type(),
+                                    input.schema(),
+                                )?;
                                 Self::make_nullable_if_needed(expr, field, input.schema())
                             })
                             .collect::<PlanResult<Vec<_>>>()?;
@@ -952,7 +983,7 @@ impl PlanResolver<'_> {
                     .map(|(column, name)| col(column).alias(name))
                     .collect::<Vec<_>>();
                 let plan = LogicalPlanBuilder::new(input).project(expr)?.build()?;
-                Self::rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
+                self.rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
             }
         }
     }
@@ -1036,9 +1067,11 @@ impl PlanResolver<'_> {
             if col.generated_always_as.is_some() {
                 if let Some(user_expr) = provided {
                     let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
+                    let cast_expr = self.cast_write_value(
+                        user_expr.clone(),
+                        col.field().data_type(),
+                        input.schema(),
+                    )?;
                     intermediate_aliases.push(cast_expr.alias(check_id.clone()));
                     gen_check_field_ids[idx] = Some(check_id);
                 }
@@ -1052,9 +1085,11 @@ impl PlanResolver<'_> {
                             col.name
                         )));
                     }
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
+                    let cast_expr = self.cast_write_value(
+                        user_expr.clone(),
+                        col.field().data_type(),
+                        input.schema(),
+                    )?;
                     intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
                 }
                 continue;
@@ -1069,7 +1104,8 @@ impl PlanResolver<'_> {
                     col.name
                 )));
             };
-            let cast_expr = input_expr.cast_to(col.field().data_type(), input.schema())?;
+            let cast_expr =
+                self.cast_write_value(input_expr, col.field().data_type(), input.schema())?;
             intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
         }
         let intermediate = LogicalPlanBuilder::new(input)

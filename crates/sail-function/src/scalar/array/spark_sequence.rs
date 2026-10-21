@@ -1,10 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use chrono::{
-    DateTime, Datelike, Days, LocalResult, Months, NaiveDate, NaiveDateTime, Offset, TimeDelta,
-    TimeZone, Utc,
-};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Date32Array, Int8Array, Int16Array, Int32Array, Int64Array,
@@ -23,15 +19,14 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
 };
-use sail_common::utils::datetime::{
-    MICROS_PER_DAY, civil_from_days, is_fixed_zero_offset_timezone,
-};
+use sail_common::utils::datetime::{MICROS_PER_DAY, is_fixed_zero_offset_timezone};
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, to_local_datetime};
 
 use crate::functions_nested_utils::{
     evaluate_lambda_rows, evaluate_lambdas_until_null, make_scalar_function, scatter_active_rows,
 };
+use crate::scalar::datetime::utils::{add_ltz_interval, add_ntz_interval};
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
 const MICROS_PER_MONTH: i64 = 28 * MICROS_PER_DAY;
@@ -106,10 +101,6 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
 
     fn signature(&self) -> &HigherOrderSignature {
         &self.signature
-    }
-
-    fn short_circuits(&self) -> bool {
-        true
     }
 
     fn lambda_parameters(
@@ -230,6 +221,10 @@ impl HigherOrderUDFImpl for SparkSequenceLazy {
         }
 
         Err(batch_error)
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
     }
 }
 
@@ -872,153 +867,6 @@ fn scaled_i64(value: i64, index: usize) -> Result<i64> {
     Ok(value.wrapping_mul(index))
 }
 
-fn checked_add_months(datetime: NaiveDateTime, months: i32) -> Option<NaiveDateTime> {
-    if months >= 0 {
-        datetime.checked_add_months(Months::new(months as u32))
-    } else {
-        datetime.checked_sub_months(Months::new(months.unsigned_abs()))
-    }
-}
-
-fn checked_add_days(datetime: NaiveDateTime, days: i32) -> Option<NaiveDateTime> {
-    if days >= 0 {
-        datetime.checked_add_days(Days::new(days as u64))
-    } else {
-        datetime.checked_sub_days(Days::new(u64::from(days.unsigned_abs())))
-    }
-}
-
-fn days_in_month(year: i64, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if year.rem_euclid(4) == 0
-            && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>
-        {
-            29
-        }
-        2 => 28,
-        _ => unreachable!("month is normalized to 1..=12"),
-    }
-}
-
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let year = year - if month <= 2 { 1 } else { 0 };
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
-    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
-fn add_wide_calendar_interval(start: i128, months: i32, days: i32, micros: i64) -> Result<i128> {
-    let epoch_day = i64::try_from(start.div_euclid(i128::from(MICROS_PER_DAY)))
-        .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
-    let micros_of_day = start.rem_euclid(i128::from(MICROS_PER_DAY));
-    let (year, month, day) = civil_from_days(epoch_day);
-
-    let month_index = year
-        .checked_mul(12)
-        .and_then(|value| value.checked_add(i64::from(month - 1)))
-        .and_then(|value| value.checked_add(i64::from(months)))
-        .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-    let year = month_index.div_euclid(12);
-    let month = u32::try_from(month_index.rem_euclid(12) + 1)
-        .map_err(|_| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-    let day = day.min(days_in_month(year, month));
-    let epoch_day = days_from_civil(year, month, day)
-        .checked_add(i64::from(days))
-        .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
-
-    Ok(i128::from(epoch_day) * i128::from(MICROS_PER_DAY) + micros_of_day + i128::from(micros))
-}
-
-fn add_calendar_interval_wide(
-    datetime: NaiveDateTime,
-    months: i32,
-    days: i32,
-) -> Option<NaiveDateTime> {
-    let date = datetime.date();
-    let month_index = i64::from(date.year())
-        .checked_mul(12)?
-        .checked_add(i64::from(date.month0()))?
-        .checked_add(i64::from(months))?;
-    let year = month_index.div_euclid(12);
-    let month = u32::try_from(month_index.rem_euclid(12) + 1).ok()?;
-    let day = date.day().min(days_in_month(year, month));
-    let epoch_day = days_from_civil(year, month, day).checked_add(i64::from(days))?;
-    let (year, month, day) = civil_from_days(epoch_day);
-    let year = i32::try_from(year).ok()?;
-
-    NaiveDate::from_ymd_opt(year, month, day).map(|date| date.and_time(datetime.time()))
-}
-
-fn localize_with_preferred_offset(
-    timezone: Tz,
-    datetime: NaiveDateTime,
-    preferred_offset: i32,
-) -> Result<DateTime<Tz>> {
-    match timezone.from_local_datetime(&datetime) {
-        LocalResult::Single(value) => Ok(value),
-        LocalResult::Ambiguous(first, second) => {
-            if first.offset().fix().local_minus_utc() == preferred_offset {
-                Ok(first)
-            } else if second.offset().fix().local_minus_utc() == preferred_offset {
-                Ok(second)
-            } else {
-                Ok(first)
-            }
-        }
-        LocalResult::None => {
-            Ok(localize_with_fallback(&timezone, &datetime)?.with_timezone(&timezone))
-        }
-    }
-}
-
-fn add_ltz_interval(start: i64, months: i32, days: i32, micros: i64, timezone: Tz) -> Result<i64> {
-    let mut datetime = as_datetime::<TimestampMicrosecondType>(start)
-        .map(|value| Utc.from_utc_datetime(&value).with_timezone(&timezone))
-        .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
-
-    let calendar_fits = checked_add_months(datetime.naive_local(), months)
-        .and_then(|value| checked_add_days(value, days))
-        .is_some();
-
-    if calendar_fits {
-        if months != 0 {
-            let preferred_offset = datetime.offset().fix().local_minus_utc();
-            let local = checked_add_months(datetime.naive_local(), months)
-                .ok_or_else(|| exec_datafusion_err!("cannot add {months} months to {start}"))?;
-            datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
-        }
-        if days != 0 {
-            let preferred_offset = datetime.offset().fix().local_minus_utc();
-            let local = checked_add_days(datetime.naive_local(), days)
-                .ok_or_else(|| exec_datafusion_err!("cannot add {days} days to {start}"))?;
-            datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
-        }
-    } else {
-        let preferred_offset = datetime.offset().fix().local_minus_utc();
-        let local =
-            add_calendar_interval_wide(datetime.naive_local(), months, days).ok_or_else(|| {
-                exec_datafusion_err!("cannot add {months} months and {days} days to {start}")
-            })?;
-        datetime = localize_with_preferred_offset(timezone, local, preferred_offset)?;
-    }
-
-    datetime
-        .with_timezone(&Utc)
-        .checked_add_signed(TimeDelta::microseconds(micros))
-        .map(|value| value.timestamp_micros())
-        .ok_or_else(|| exec_datafusion_err!("cannot add {micros} microseconds to {start}"))
-}
-
-fn add_ntz_interval(start: i64, months: i32, days: i32, micros: i64) -> Result<i64> {
-    let result = add_wide_calendar_interval(i128::from(start), months, days, micros)?;
-    i64::try_from(result).map_err(|_| exec_datafusion_err!("long overflow"))
-}
-
 fn add_temporal_interval(
     start: i64,
     index: usize,
@@ -1100,13 +948,9 @@ fn micros_to_date(micros: i64, timezone: Tz, use_wide_utc_arithmetic: bool) -> R
             .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {micros}"));
     }
 
-    let date = as_datetime::<TimestampMicrosecondType>(micros)
-        .map(|value| {
-            Utc.from_utc_datetime(&value)
-                .with_timezone(&timezone)
-                .date_naive()
-        })
+    let utc = as_datetime::<TimestampMicrosecondType>(micros)
         .ok_or_else(|| exec_datafusion_err!("cannot convert sequence timestamp {micros}"))?;
+    let date = to_local_datetime(&timezone, &utc.and_utc())?.date_naive();
     Ok(Date32Type::from_naive_date(date))
 }
 

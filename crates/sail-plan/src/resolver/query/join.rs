@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use datafusion_common::{Column, JoinType, NullEquality};
+use datafusion_common::{Column, JoinType};
 use datafusion_expr::utils::split_conjunction;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, build_join_schema};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Operator, build_join_schema};
 use sail_common::spec;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
@@ -10,6 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
 use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::predicate::coerce_timestamp_pair;
 use crate::resolver::state::PlanResolverState;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
@@ -195,12 +196,32 @@ impl PlanResolver<'_> {
             .map(|(_, (left, right))| (left.clone(), right.clone()))
             .unzip::<_, _, Vec<_>, Vec<_>>();
 
-        let builder = LogicalPlanBuilder::from(left).join_detailed(
+        let schema = Arc::new(build_join_schema(
+            left.schema(),
+            right.schema(),
+            &JoinType::Inner,
+        )?);
+        let (left_keys, right_keys) = left_columns
+            .iter()
+            .zip(&right_columns)
+            .map(|(left, right)| {
+                let (left, right) = coerce_timestamp_pair(
+                    Expr::Column(left.clone()),
+                    Expr::Column(right.clone()),
+                    Operator::Eq,
+                    &schema,
+                    &self.config,
+                )?;
+                Ok((left, right))
+            })
+            .collect::<PlanResult<Vec<_>>>()?
+            .into_iter()
+            .unzip::<_, _, Vec<_>, Vec<_>>();
+        let builder = LogicalPlanBuilder::from(left).join_with_expr_keys(
             right,
             join_type,
-            (left_columns.clone(), right_columns.clone()),
+            (left_keys, right_keys),
             None,
-            NullEquality::NullEqualsNothing,
         )?;
         // Re-register join key columns as hidden fields so that subsequent
         // attribute resolution (by plan_id) can still find them.

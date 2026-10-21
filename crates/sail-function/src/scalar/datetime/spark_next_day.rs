@@ -59,6 +59,10 @@ impl ScalarUDFImpl for SparkNextDay {
         Ok(Arc::new(Field::new(self.name(), DataType::Date32, true)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         let [date, day_of_week] = args.as_slice() else {

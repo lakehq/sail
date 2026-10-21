@@ -91,10 +91,8 @@ impl PlanResolver<'_> {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             self.resolve_query_plan(subquery, scope.state()).await?
         };
-        Ok(NamedExpr::new(
-            vec!["subquery".to_string()],
-            expr_fn::scalar_subquery(Arc::new(subquery)),
-        ))
+        let expression = expr_fn::scalar_subquery(Arc::new(subquery));
+        Ok(NamedExpr::new(vec!["subquery".to_string()], expression))
     }
 
     pub(super) async fn resolve_expression_exists(

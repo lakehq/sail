@@ -555,7 +555,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                 "the data source path must be specified for CREATE TEMPORARY VIEW ... USING",
                             )
                         })?;
-                    let input = spec::QueryPlan::new(spec::QueryNode::Read {
+                    let input = QueryPlan::new(spec::QueryNode::Read {
                         read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
                             format: Some(format.value),
                             schema,

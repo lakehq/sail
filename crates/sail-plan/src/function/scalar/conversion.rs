@@ -7,6 +7,7 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 
+use super::datetime::datetime_date;
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -25,6 +26,8 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput) -> PlanResult<expr::Expr>
             func: Arc::new(ScalarUDF::from(SparkDate::new(false))),
             args: vec![arg],
         }))
+    } else if matches!(data_type, DataType::Timestamp(_, Some(_))) {
+        datetime_date(arg, &input.function_context)
     } else {
         Ok(expr::Expr::Cast(expr::Cast::new(
             Box::new(arg),
@@ -49,6 +52,11 @@ fn cast_to_time(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             args: vec![arg],
         }))
     } else {
+        let arg = if matches!(data_type, DataType::Timestamp(_, Some(_))) {
+            ScalarUDF::from(SparkTime::new(false)).call(vec![arg])
+        } else {
+            arg
+        };
         Ok(expr::Expr::Cast(expr::Cast::new(
             Box::new(arg),
             DataType::Time64(TimeUnit::Microsecond),

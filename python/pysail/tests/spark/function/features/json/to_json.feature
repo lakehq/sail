@@ -234,6 +234,116 @@ Feature: to_json
         | default_result                   | false_result                     |
         | {"zeta":1,"alpha":2,"mid":3} | {"zeta":1,"alpha":2,"mid":3} |
 
+  Rule: Timestamp formatting
+
+    @sail-only
+    Scenario: Explicit timestampFormat continues to format naive timestamps
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT to_json(named_struct('timestamps', array(TIMESTAMP_NTZ '2020-03-08 02:30:00')),
+                       map('timestampFormat', 'yyyy/MM/dd HH:mm:ss')) AS result
+        """
+      Then query result
+        | result                                         |
+        | {"timestamps":["2020/03/08 02:30:00"]} |
+
+    Scenario: Explicit timestampNTZFormat takes precedence for naive timestamps
+      When query
+        """
+        SELECT to_json(named_struct('ts', TIMESTAMP_NTZ '2020-03-08 02:30:00'),
+                       map('timestampFormat', 'yyyy', 'timestampNTZFormat', 'yyyy/MM/dd')) AS result
+        """
+      Then query result
+        | result                |
+        | {"ts":"2020/03/08"} |
+
+  Rule: Timestamp map keys
+
+    Scenario Outline: timestamp map keys retain distinct microseconds
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT id, to_json(map(
+          CAST(timestamp_micros(id * 10 + 1) AS <type>), 'a',
+          CAST(timestamp_micros(id * 10 + 2) AS <type>), 'b'
+        )) AS result
+        FROM range(3)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result              |
+        | 0  | {"1":"a","2":"b"}   |
+        | 1  | {"11":"a","12":"b"} |
+        | 2  | {"21":"a","22":"b"} |
+
+      Examples:
+        | type          |
+        | TIMESTAMP_LTZ |
+        | TIMESTAMP_NTZ |
+
+    Scenario Outline: nested timestamp map keys preserve every entry
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        WITH timestamps AS (
+          SELECT id, timestamp_micros(id * 10 + 1) AS a,
+            timestamp_micros(id * 10 + 2) AS b
+          FROM range(3)
+        ), encoded AS (
+          SELECT id, to_json(map(<first_key>, 'a', <second_key>, 'b')) AS value
+          FROM timestamps
+        ), decoded AS (
+          SELECT id, from_json(value, 'MAP<STRING, STRING>') AS entries
+          FROM encoded
+        )
+        SELECT id, size(entries) AS count,
+          sort_array(map_values(entries)) = array('a', 'b') AS values_preserved
+        FROM decoded
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | count | values_preserved |
+        | 0  | 2     | true             |
+        | 1  | 2     | true             |
+        | 2  | 2     | true             |
+
+      Examples:
+        | first_key                                             | second_key                                            |
+        | named_struct('ts', array(CAST(NULL AS TIMESTAMP), a)) | named_struct('ts', array(CAST(NULL AS TIMESTAMP), b)) |
+        | array(named_struct('ts', a))                          | array(named_struct('ts', b))                          |
+
+    Scenario: timestamp values retain millisecond precision alongside map keys
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT to_json(map(
+          timestamp_micros(1), timestamp_micros(123456),
+          timestamp_micros(2), timestamp_micros(654321)
+        )) AS instant,
+          to_json(named_struct('ts', TIMESTAMP_NTZ '1970-01-01 00:00:00.123456')) AS naive
+        """
+      Then query result
+        | instant                                                                   | naive                            |
+        | {"1":"1969-12-31T16:00:00.123-08:00","2":"1969-12-31T16:00:00.654-08:00"} | {"ts":"1970-01-01T00:00:00.123"} |
+
+    Scenario: timestamp format options apply to map values independently of keys
+      Given config spark.sql.ansi.enabled = true
+      Given config spark.sql.session.timeZone = UTC
+      When query
+        """
+        SELECT to_json(map(
+          timestamp_micros(1), timestamp_micros(123456),
+          timestamp_micros(2), timestamp_micros(654321)
+        ), map('timestampFormat', 'yyyy/MM/dd HH:mm:ss.SSSSSS')) AS result
+        """
+      Then query result
+        | result                                                              |
+        | {"1":"1970/01/01 00:00:00.123456","2":"1970/01/01 00:00:00.654321"} |
+
   Rule: Sorted JSON object keys
 
     # The sortKeys JSON writer option was added in Spark 4.2.

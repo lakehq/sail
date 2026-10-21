@@ -6,9 +6,11 @@ use datafusion::arrow::array::{
     new_null_array,
 };
 use datafusion::arrow::compute::binary;
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::scalar::datetime::utils::{invalid_time_unit_err, to_time64_array};
 
@@ -54,7 +56,17 @@ impl ScalarUDFImpl for SparkTimeDiff {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, true)))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

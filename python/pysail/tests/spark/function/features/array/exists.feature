@@ -248,7 +248,7 @@ Feature: exists higher-order function
         """
         SELECT exists(<arr>, x -> <pred>) AS result
         """
-      Then query error Division by zero
+      Then query error (?i)divi(?:de|sion).*zero
 
       Examples:
         | case                                                | arr            | pred         |

@@ -169,6 +169,7 @@ message HigherOrderUdf {
     SparkRegexpInstrUdf regexp_instr = 10;
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
+    SparkStructCastUdf struct_cast = 13;
   }
 }
 
@@ -188,8 +189,13 @@ message SparkMapFilterUdf {}
 
 message SparkTransformValuesUdf {}
 
+message SparkStructCastUdf {
+  bytes target_type = 1;
+}
+
 message SparkTransformKeysUdf {
   bool last_value_wins = 1;
+  bool preserve_duplicates = 2;
 }
 
 message SparkArrayFilterUdf {
@@ -265,6 +271,9 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    RaiseErrorUdf raise_error = 40;
+    SparkMakeIntervalUdf spark_make_interval = 41;
+    SparkMakeDtIntervalUdf spark_make_dt_interval = 42;
   }
 }
 
@@ -298,6 +307,13 @@ message PercentileDiscUdaf {
 }
 
 message StandardUdf {}
+
+message RaiseErrorUdf {
+  // Explicit raise_error and assert_true differ from foldable internal value checks.
+  bool non_foldable = 1;
+  bool divide_by_zero = 2;
+  bool remainder_by_zero = 3;
+}
 
 message PySparkUdf {
   PySparkUdfKind kind = 1;
@@ -467,13 +483,23 @@ message SparkToCharUdf {
   bool ansi_mode = 1;
 }
 
+message SparkMakeDtIntervalUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkMakeIntervalUdf {
+  bool ansi_mode = 1;
+}
+
 message SparkMakeTimestampNtzUdf {
   bool is_try = 1;
+  bool ansi_mode = 2;
 }
 
 message ConvertTzUdf {
   bool classic = 1;
   bool null_short_circuit = 2;
+  bool ltz_to_ntz = 3;
 }
 
 message StandardUdaf {}

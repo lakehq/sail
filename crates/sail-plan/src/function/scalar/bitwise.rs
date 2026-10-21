@@ -51,6 +51,19 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("shiftrightunsigned", F::custom(shiftrightunsigned)),
         (">>>", F::custom(shiftrightunsigned)),
         ("|", F::binary_op(Operator::BitwiseOr)),
-        ("~", F::unary(|arg| (-arg) - lit(1))),
+        (
+            "~",
+            F::custom(|input| {
+                let argument = input.arguments.one()?;
+                // Spark gives untyped NULL the default integral type, INT.
+                let argument =
+                    if argument.get_type(input.function_context.schema)? == DataType::Null {
+                        cast(argument, DataType::Int32)
+                    } else {
+                        argument
+                    };
+                Ok(bitwise_fn::bitwise_not(argument))
+            }),
+        ),
     ]
 }

@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, AsArray};
-use datafusion::arrow::datatypes::{
-    DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, TimeUnit,
+use datafusion::arrow::array::ArrowNativeTypeOp;
+use datafusion::arrow::compute::kernels::numeric::neg;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_common::{Result, ScalarValue, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NegateDuration {
@@ -36,8 +37,27 @@ impl ScalarUDFImpl for NegateDuration {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg = &args.arg_fields[0];
+        let mut field = Field::new(self.name(), arg.data_type().clone(), arg.is_nullable());
+        // Negation preserves the interval type, not arbitrary column metadata.
+        if let Some(interval) = arg.metadata().get(SAIL_SPARK_INTERVAL_METADATA_KEY) {
+            field.metadata_mut().insert(
+                SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                interval.clone(),
+            );
+        }
+        Ok(Arc::new(field))
+    }
+
+    fn is_strict(&self) -> bool {
+        true
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -49,49 +69,28 @@ impl ScalarUDFImpl for NegateDuration {
             );
         };
         match arg {
-            ColumnarValue::Scalar(ScalarValue::DurationSecond(val)) => Ok(ColumnarValue::Scalar(
-                ScalarValue::DurationSecond(val.map(|x| -x)),
+            ColumnarValue::Scalar(ScalarValue::DurationSecond(value)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::DurationSecond(value.map(i64::neg_checked).transpose()?),
             )),
-            ColumnarValue::Scalar(ScalarValue::DurationMillisecond(val)) => Ok(
-                ColumnarValue::Scalar(ScalarValue::DurationMillisecond(val.map(|x| -x))),
-            ),
-            ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(val)) => Ok(
-                ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(val.map(|x| -x))),
-            ),
-            ColumnarValue::Scalar(ScalarValue::DurationNanosecond(val)) => Ok(
-                ColumnarValue::Scalar(ScalarValue::DurationNanosecond(val.map(|x| -x))),
-            ),
-            ColumnarValue::Array(array) => {
-                let result: ArrayRef = match array.data_type() {
-                    DataType::Duration(TimeUnit::Second) => Arc::new(
-                        array
-                            .as_primitive::<DurationSecondType>()
-                            .unary::<_, DurationSecondType>(|x| -x),
-                    ),
-                    DataType::Duration(TimeUnit::Millisecond) => Arc::new(
-                        array
-                            .as_primitive::<DurationMillisecondType>()
-                            .unary::<_, DurationMillisecondType>(|x| -x),
-                    ),
-                    DataType::Duration(TimeUnit::Microsecond) => Arc::new(
-                        array
-                            .as_primitive::<DurationMicrosecondType>()
-                            .unary::<_, DurationMicrosecondType>(|x| -x),
-                    ),
-                    DataType::Duration(TimeUnit::Nanosecond) => Arc::new(
-                        array
-                            .as_primitive::<DurationNanosecondType>()
-                            .unary::<_, DurationNanosecondType>(|x| -x),
-                    ),
-                    other => {
-                        return exec_err!(
-                            "Unsupported data type {other:?} for function negate_duration"
-                        );
-                    }
-                };
-                Ok(ColumnarValue::Array(result))
+            ColumnarValue::Scalar(ScalarValue::DurationMillisecond(value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationMillisecond(
+                    value.map(i64::neg_checked).transpose()?,
+                )))
             }
-            other => exec_err!("Unsupported arg {other:?} for function negate_duration"),
+            ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(
+                    value.map(i64::neg_checked).transpose()?,
+                )))
+            }
+            ColumnarValue::Scalar(ScalarValue::DurationNanosecond(value)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::DurationNanosecond(
+                    value.map(i64::neg_checked).transpose()?,
+                )))
+            }
+            ColumnarValue::Array(array) if matches!(array.data_type(), DataType::Duration(_)) => {
+                Ok(ColumnarValue::Array(neg(array.as_ref())?))
+            }
+            _ => exec_err!("Unsupported arg {arg:?} for function negate_duration"),
         }
     }
 }

@@ -43,17 +43,20 @@ macro_rules! downcast_and_convert {
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ToJsonOptions {
     timestamp_format: DateTimeFormat,
+    timestamp_ntz_format: DateTimeFormat,
     date_format: DateTimeFormat,
     sort_keys: bool,
 }
 
 impl ToJsonOptions {
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
+    pub const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
     pub const SORT_KEYS_OPTION: &'static str = "sortKeys";
     // Default ISO 8601 format with timezone offset (not Z)
     // Using Java DateTimeFormatter patterns
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX";
+    pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
@@ -78,6 +81,14 @@ impl ToJsonOptions {
                     .expect("default date format should be valid")
             });
 
+        let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
+            // Preserve Sail's explicit timestampFormat override for naive timestamps.
+            .or_else(|| find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION))
+            .as_deref()
+            .map(DateTimeFormat::for_formatting)
+            .transpose()?
+            .unwrap_or_else(|| Self::default().timestamp_ntz_format);
+
         let sort_keys = find_key_value(map, Self::SORT_KEYS_OPTION)
             .as_deref()
             .map(parse_boolean_option)
@@ -86,6 +97,7 @@ impl ToJsonOptions {
 
         Ok(Self {
             timestamp_format,
+            timestamp_ntz_format,
             date_format,
             sort_keys,
         })
@@ -98,6 +110,10 @@ impl Default for ToJsonOptions {
         Self {
             timestamp_format: DateTimeFormat::for_formatting(Self::TIMESTAMP_FORMAT_DEFAULT)
                 .expect("default timestamp format should be valid"),
+            timestamp_ntz_format: DateTimeFormat::for_formatting(
+                Self::TIMESTAMP_NTZ_FORMAT_DEFAULT,
+            )
+            .expect("default timestamp NTZ format should be valid"),
             date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
             sort_keys: false,
@@ -213,7 +229,7 @@ fn array_to_json_strings(array: &ArrayRef, options: &ToJsonOptions) -> Result<Ar
         if array.is_null(i) {
             builder.append_null();
         } else {
-            let json_value = array_value_to_json(array, i, options)?;
+            let json_value = array_value_to_json(array, i, options, false)?;
             let json_string = serde_json::to_string(&json_value)
                 .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
             builder.append_value(&json_string);
@@ -223,7 +239,12 @@ fn array_to_json_strings(array: &ArrayRef, options: &ToJsonOptions) -> Result<Ar
     Ok(Arc::new(builder.finish()))
 }
 
-fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) -> Result<Value> {
+fn array_value_to_json(
+    array: &ArrayRef,
+    index: usize,
+    options: &ToJsonOptions,
+    is_map_key: bool,
+) -> Result<Value> {
     if array.is_null(index) {
         return Ok(Value::Null);
     }
@@ -299,10 +320,19 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
             let arr =
                 array.as_primitive::<datafusion::arrow::datatypes::TimestampMicrosecondType>();
             let value = arr.value(index);
+            // Value formats can merge distinct microseconds. Preserve exact timestamp
+            // identity throughout map keys, including their nested containers.
+            if is_map_key {
+                return Ok(Value::Number(value.into()));
+            }
             let formatted = format_timestamp(
                 value,
                 tz.as_ref().map(|s| s.as_ref()),
-                &options.timestamp_format,
+                if tz.is_some() {
+                    &options.timestamp_format
+                } else {
+                    &options.timestamp_ntz_format
+                },
             );
             Ok(Value::String(formatted))
         }
@@ -315,7 +345,7 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                         "Failed to downcast to StructArray".to_string(),
                     )
                 })?;
-            struct_to_json(struct_array, index, options)
+            struct_to_json(struct_array, index, options, is_map_key)
         }
         DataType::Binary => {
             downcast_and_convert!(array, index, BinaryArray, |v: &[u8]| Value::String(
@@ -341,7 +371,7 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                     "Failed to downcast to ListArray".to_string(),
                 )
             })?;
-            list_to_json(list_array, index, options)
+            list_to_json(list_array, index, options, is_map_key)
         }
         DataType::FixedSizeList(_, _) => {
             let values = array
@@ -355,7 +385,7 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                 .value(index);
             let mut json_values = Vec::with_capacity(values.len());
             for i in 0..values.len() {
-                json_values.push(array_value_to_json(&values, i, options)?);
+                json_values.push(array_value_to_json(&values, i, options, is_map_key)?);
             }
             Ok(Value::Array(json_values))
         }
@@ -371,7 +401,7 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
             let values = list_array.value(index);
             let mut json_values = Vec::with_capacity(values.len());
             for i in 0..values.len() {
-                json_values.push(array_value_to_json(&values, i, options)?);
+                json_values.push(array_value_to_json(&values, i, options, is_map_key)?);
             }
             Ok(Value::Array(json_values))
         }
@@ -381,7 +411,7 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                     "Failed to downcast to MapArray".to_string(),
                 )
             })?;
-            map_to_json(map_array, index, options)
+            map_to_json(map_array, index, options, is_map_key)
         }
         dt => Err(datafusion_common::DataFusionError::NotImplemented(format!(
             "to_json does not support data type: {:?}",
@@ -394,6 +424,7 @@ fn struct_to_json(
     struct_array: &StructArray,
     row_index: usize,
     options: &ToJsonOptions,
+    is_map_key: bool,
 ) -> Result<Value> {
     let fields = struct_array.fields();
     let columns = struct_array.columns();
@@ -417,7 +448,7 @@ fn struct_to_json(
         // NullArray has no validity buffer, so is_null() alone misses untyped NULLs.
         // TODO: Honor the ignoreNullFields option and spark.sql.jsonGenerator.ignoreNullFields.
         if column.data_type() != &DataType::Null && !column.is_null(row_index) {
-            let value = array_value_to_json(column, row_index, options)?;
+            let value = array_value_to_json(column, row_index, options, is_map_key)?;
             map.insert(field.name().clone(), value);
         }
     }
@@ -425,19 +456,29 @@ fn struct_to_json(
     Ok(Value::Object(map))
 }
 
-fn list_to_json(list_array: &ListArray, index: usize, options: &ToJsonOptions) -> Result<Value> {
+fn list_to_json(
+    list_array: &ListArray,
+    index: usize,
+    options: &ToJsonOptions,
+    is_map_key: bool,
+) -> Result<Value> {
     let values = list_array.value(index);
     let mut json_values = Vec::with_capacity(values.len());
 
     for i in 0..values.len() {
-        let value = array_value_to_json(&values, i, options)?;
+        let value = array_value_to_json(&values, i, options, is_map_key)?;
         json_values.push(value);
     }
 
     Ok(Value::Array(json_values))
 }
 
-fn map_to_json(map_array: &MapArray, index: usize, options: &ToJsonOptions) -> Result<Value> {
+fn map_to_json(
+    map_array: &MapArray,
+    index: usize,
+    options: &ToJsonOptions,
+    is_map_key: bool,
+) -> Result<Value> {
     let entries = map_array.value(index);
     let struct_array = entries
         .as_any()
@@ -458,12 +499,12 @@ fn map_to_json(map_array: &MapArray, index: usize, options: &ToJsonOptions) -> R
             .collect::<Result<Vec<_>>>()?;
         entries.sort_by(|(left, _), (right, _)| compare_spark_json_keys(left, right));
         for (key, index) in entries {
-            insert_json_map_value(&mut map, key, values, index, options)?;
+            insert_json_map_value(&mut map, key, values, index, options, is_map_key)?;
         }
     } else {
         for index in 0..keys.len() {
             let key = map_key_to_string(keys, index, options)?;
-            insert_json_map_value(&mut map, key, values, index, options)?;
+            insert_json_map_value(&mut map, key, values, index, options, is_map_key)?;
         }
     }
 
@@ -486,8 +527,9 @@ fn insert_json_map_value(
     values: &ArrayRef,
     index: usize,
     options: &ToJsonOptions,
+    is_map_key: bool,
 ) -> Result<()> {
-    let value = array_value_to_json(values, index, options)?;
+    let value = array_value_to_json(values, index, options, is_map_key)?;
     map.insert(key, value);
     Ok(())
 }
@@ -518,7 +560,7 @@ fn map_key_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) -> R
     }
 
     // For other types, use normal conversion
-    array_value_to_json(array, index, options)
+    array_value_to_json(array, index, options, true)
 }
 
 /// Converts a struct to a JSON array of its values (without field names).
@@ -532,7 +574,7 @@ fn struct_to_values_array(
     let mut json_values = Vec::with_capacity(columns.len());
 
     for column in columns.iter() {
-        let value = array_value_to_json(column, index, options)?;
+        let value = array_value_to_json(column, index, options, true)?;
         json_values.push(value);
     }
 
@@ -549,7 +591,11 @@ fn format_timestamp(value: i64, tz: Option<&str>, format: &DateTimeFormat) -> St
     if let Some(dt_utc) = Utc.timestamp_micros(value).single() {
         let (datetime, timezone) = if let Some(tz_str) = tz {
             if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>() {
-                let local_dt = dt_utc.with_timezone(&tz);
+                let Ok(local_dt) =
+                    sail_common_datafusion::utils::datetime::to_local_datetime(&tz, &dt_utc)
+                else {
+                    return value.to_string();
+                };
                 let offset = local_dt.offset().fix();
                 (
                     local_dt.naive_local(),
@@ -741,7 +787,7 @@ mod tests {
             None,
         )?;
 
-        let default_json = struct_to_json(&outer, 0, &ToJsonOptions::default())?;
+        let default_json = struct_to_json(&outer, 0, &ToJsonOptions::default(), false)?;
         assert_eq!(
             json_string(&default_json)?,
             r#"{"zeta":[{"zeta_inner":"z","alpha_inner":"a"}],"alpha":"a","mid":"m"}"#
@@ -754,6 +800,7 @@ mod tests {
                 sort_keys: true,
                 ..ToJsonOptions::default()
             },
+            false,
         )?;
         assert_eq!(
             json_string(&sorted_json)?,
@@ -780,7 +827,7 @@ mod tests {
             vec![0, 2],
         )?;
 
-        let default_json = map_to_json(&outer, 0, &ToJsonOptions::default())?;
+        let default_json = map_to_json(&outer, 0, &ToJsonOptions::default(), false)?;
         assert_eq!(
             json_string(&default_json)?,
             r#"{"zeta":{"zeta_inner":"z","alpha_inner":"a"},"alpha":{"zeta_inner":"Z","alpha_inner":"A"}}"#
@@ -791,7 +838,7 @@ mod tests {
             Arc::new(StringArray::from(vec!["TRUE"])),
             vec![0, 1],
         )?;
-        let sorted_json = map_to_json(&outer, 0, &ToJsonOptions::from_map(&option_map)?)?;
+        let sorted_json = map_to_json(&outer, 0, &ToJsonOptions::from_map(&option_map)?, false)?;
         assert_eq!(
             json_string(&sorted_json)?,
             r#"{"alpha":{"alpha_inner":"A","zeta_inner":"Z"},"zeta":{"alpha_inner":"a","zeta_inner":"z"}}"#

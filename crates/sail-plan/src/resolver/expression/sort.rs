@@ -38,7 +38,6 @@ impl PlanResolver<'_> {
                 let num_fields = schema.fields().len();
                 let position = match literal {
                     spec::Literal::Int32 { value: Some(value) } => Some(*value as usize),
-                    spec::Literal::Int64 { value: Some(value) } => Some(*value as usize),
                     _ => None,
                 };
                 match position {

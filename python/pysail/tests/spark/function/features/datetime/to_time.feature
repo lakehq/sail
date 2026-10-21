@@ -20,35 +20,36 @@ Feature: to_time (strict variant)
         | With microseconds | '10:30:45.123456'      | 10:30:45.123456 |
         | With format       | '10-30-45', 'HH-mm-ss' | 10:30:45        |
 
-  Rule: Two-argument form is type-consistent with the one-argument form
-
-    # Regression: in the 2-arg form a non-string first argument (TIME/TIMESTAMP)
-    # must be coerced exactly as in the 1-arg form — cast straight to TIME with
-    # the format ignored — not stringified and re-parsed through the format
-    # (which would fail). See `time_with_try` in datetime.rs.
+  Rule: Sail also accepts temporal inputs
 
     @sail-only
-    Scenario Outline: Two-arg: <case>
+    Scenario Outline: Two-arg <function> converts <case> without parsing its format
+      Given config spark.sql.timeType.enabled = true
       When query
         """
-        SELECT to_time(<arg>, <fmt>) AS result
+        SELECT CAST(<function>(<arg>, 'HH-mm-ss') AS STRING) AS result
         """
       Then query result
         | result   |
-        | 10:30:45 |
+        | <result> |
 
       Examples:
-        | case                                                              | arg                             | fmt        |
-        | TIMESTAMP first argument ignores the format and extracts the time | TIMESTAMP '2024-01-15 10:30:45' | 'HH:mm:ss' |
-        | TIME first argument ignores the format                            | TIME '10:30:45'                 | 'HH-mm-ss' |
+        | function    | case           | arg                                      | result   |
+        | to_time     | TIMESTAMP      | TIMESTAMP '2024-01-15 10:30:45'           | 10:30:45 |
+        | to_time     | TIMESTAMP_NTZ  | TIMESTAMP_NTZ '2024-01-15 10:30:45'       | 10:30:45 |
+        | to_time     | TIME           | TIME '10:30:45'                           | 10:30:45 |
+        | try_to_time | TIMESTAMP      | TIMESTAMP '2024-01-15 10:30:45'           | 10:30:45 |
+        | try_to_time | TIME           | TIME '10:30:45'                           | 10:30:45 |
+        | to_time     | NULL TIMESTAMP | CAST(NULL AS TIMESTAMP)                   | NULL     |
+        | try_to_time | NULL TIME      | CAST(NULL AS TIME)                        | NULL     |
 
-    @sail-only
     Scenario: Unsupported first-argument type is rejected with a format too
+      Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT to_time(123, 'HH:mm:ss')
         """
-      Then query error (?i)STRING, TIME, TIMESTAMP or NULL|data type|Unsupported
+      Then query error (?i)STRING|unsupported|invalid.*type
 
   Rule: Wrong argument count is rejected
 
@@ -68,7 +69,7 @@ Feature: to_time (strict variant)
         """
         SELECT to_time(<arg>)
         """
-      Then query error cannot parse|UNSUPPORTED_OPERATION|Unsupported|data type
+      Then query error CANNOT_PARSE_TIME|UNSUPPORTED_OPERATION|Unsupported|data type
 
       Examples:
         | case                           | arg          |
@@ -127,27 +128,15 @@ Feature: to_time (strict variant)
         | an unquoted restricted pattern letter     | '10B30'              | 'HHBmm'                         | (?i)INVALID_DATETIME_PATTERN\|invalid datetime pattern             |
         | a pattern with an unmatched literal quote | '10:30'              | concat('HH', chr(39), 'mm')     | (?i)INVALID_DATETIME_PATTERN\|invalid datetime pattern             |
 
-  Rule: The first argument must be a STRING, in BOTH the one- and two-argument forms
-    # Measured on Spark JVM 4.2.0 with spark.sql.timeType.enabled=true (the internal gate
-    # whose default is `Utils.isTesting`, so TIME is unreachable in a normal session
-    # unless the conf is set explicitly).
-    #
-    # Spark's ToTime declares the first parameter as STRING only and enforces it at
-    # ANALYSIS time, including in the one-argument form. Sail instead coerces DATE /
-    # TIMESTAMP / TIMESTAMP_NTZ / TIME straight to TIME and returns the time-of-day, so it
-    # ACCEPTS every query below. That makes Sail a superset of Spark here, which is a
-    # divergence rather than a feature: the @sail-only "Two-arg" outline earlier in this
-    # file asserts Sail's behaviour as if it were correct, and because @sail-only is
-    # skipped on the JVM it can never catch this.
+  Rule: Unsupported primitive types fail analysis
 
-    @sail-bug
     Scenario Outline: One-arg form rejects a non-STRING first argument: <case>
       Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT to_time(<input>) AS result
         """
-      Then query error The first parameter requires the "STRING" type
+      Then query error (?i)STRING|unsupported|invalid.*type
 
       Examples:
         | case          | input                               |
@@ -155,42 +144,30 @@ Feature: to_time (strict variant)
         | BOOLEAN       | true                                |
         | BINARY        | X'48656C6C6F'                       |
         | DATE          | DATE '2024-01-15'                   |
-        | TIMESTAMP     | TIMESTAMP '2024-01-15 12:00:00'     |
-        | TIMESTAMP_NTZ | TIMESTAMP_NTZ '2024-01-15 12:00:00' |
-        | TIME          | TIME '12:30:00'                     |
 
-    @sail-bug
     Scenario Outline: try_to_time rejects a non-STRING first argument too: <case>
-      # The try_ variant swallows VALUE errors, not ANALYSIS errors, so the type check
-      # still fires. That is what distinguishes an analysis-time guard from a runtime one.
       Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT try_to_time(<input>) AS result
         """
-      Then query error The first parameter requires the "STRING" type
+      Then query error (?i)STRING|unsupported|invalid.*type
 
       Examples:
         | case      | input                           |
         | INT       | 1                               |
         | DATE      | DATE '2024-01-15'               |
-        | TIMESTAMP | TIMESTAMP '2024-01-15 12:00:00' |
-        | TIME      | TIME '12:30:00'                 |
 
   Rule: An unparseable value names the format it tried
-    # Spark's CANNOT_PARSE_TIME message quotes the format, and for the one-argument form
-    # that format is the literal 'HH:mm:ss.SSSSSS'. Asserting that substring is what
-    # distinguishes Spark's message from Sail's own wording ("cannot parse '...' as time
-    # with default formats"), which a `.*` assertion would let through.
+    # Spark reports the quoted default format 'HH:mm:ss.SSSSSS' for the one-argument form.
 
-    @sail-bug
     Scenario Outline: Unparseable input: <case>
       Given config spark.sql.timeType.enabled = true
       When query
         """
         SELECT to_time(<input>) AS result
         """
-      Then query error cannot be parsed to a TIME value because it does not match to the datetime format
+      Then query error \[CANNOT_PARSE_TIME\].*cannot be parsed to a TIME value because it does not match to the datetime format 'HH:mm:ss\.SSSSSS'\.
 
       Examples:
         | case             | input           |

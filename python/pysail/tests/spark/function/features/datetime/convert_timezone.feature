@@ -1,5 +1,16 @@
 Feature: convert_timezone
 
+  Scenario: timezone conversion shares the query timestamp
+    Given config spark.sql.session.timeZone = UTC
+    When query
+      """
+      SELECT convert_timezone('UTC', 'UTC', current_timestamp())
+        = CAST(current_timestamp() AS TIMESTAMP_NTZ) AS same_now
+      """
+    Then query result
+      | same_now |
+      | true     |
+
   Rule: Type coercion
 
   Background:
@@ -60,9 +71,12 @@ Feature: convert_timezone
         | CAST(NULL AS STRING)             | CAST(NULL AS MAP<STRING, INT>)                   |
         | CAST(NULL AS STRING)             | CAST(CAST(NULL AS STRUCT<value: INT>) AS VARIANT) |
         | CAST(NULL AS STRING)             | CAST(CAST(NULL AS MAP<STRING, INT>) AS VARIANT)   |
+        | CAST(NULL AS STRING)             | CASE WHEN CAST(map('x', 1) AS VARIANT) IS NULL THEN 'UTC' ELSE 'Europe/London' END |
+        | CAST(NULL AS STRING)             | coalesce(CAST(CAST(map('x', 1) AS VARIANT) AS STRING), 'UTC') |
+        | CAST(NULL AS STRING)             | CASE WHEN true THEN CAST(CAST(map('x', 1) AS VARIANT) AS STRING) ELSE 'UTC' END |
 
-    @sail-bug
-    Scenario: an ARRAY time zone fails analysis even when it is NULL
+    @sail-only
+    Scenario: a castable NULL ARRAY time zone propagates NULL
       When query
         """
         SELECT convert_timezone(
@@ -71,12 +85,37 @@ Feature: convert_timezone
           TIMESTAMP_NTZ '2024-01-01 00:00:00'
         ) AS result
         """
-      Then query error DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE
+      Then query result
+        | result |
+        | NULL   |
 
   Rule: Null propagation
 
-    @sail-bug
-    Scenario: a direct NULL suppresses a Python UDF before extraction
+    @sail-only
+    Scenario Outline: Sail preserves unused Variant casts in timezone expressions: <case>
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(NULL AS STRING),
+          <target>,
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        FROM range(1)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case                  | target |
+        | unselected MAP cast   | CASE WHEN false THEN CAST(CAST(map('x', 1) AS VARIANT) AS STRING) ELSE 'UTC' END |
+        | unselected STRUCT cast | CASE WHEN false THEN CAST(CAST(named_struct('x', 1) AS VARIANT) AS STRING) ELSE 'UTC' END |
+        | row-dependent branch | CASE WHEN id < 0 THEN CAST(CAST(map('x', 1) AS VARIANT) AS STRING) ELSE 'UTC' END |
+        | unused COALESCE input | coalesce('UTC', CAST(CAST(map('x', 1) AS VARIANT) AS STRING)) |
+
+    # Spark removes this call before Python extraction. Sail permits ordinary UDF
+    # execution before the converter's NULL check.
+    Scenario: Python UDF evaluation with a direct NULL source
       Given scalar Python UDF fail_string raises direct-null-target-evaluated
       When query
         """
@@ -87,11 +126,11 @@ Feature: convert_timezone
         ) AS result
         FROM range(1)
         """
-      Then query result
+      Then query result for Spark
         | result |
         | NULL   |
+      And query error for Sail direct-null-target-evaluated
 
-    @sail-bug
     Scenario: a direct NULL suppresses a valid Variant time zone expression
       When query
         """
@@ -142,8 +181,9 @@ Feature: convert_timezone
         | null_source | null_target | null_timestamp |
         | NULL        | NULL        | NULL           |
 
-    @sail-bug
-    Scenario: an arbitrary foldable NULL suppresses an earlier row-dependent error
+    # Spark recognizes the computed NULL before evaluating division. Sail lets
+    # surviving arguments execute left to right without emulating optimizer order.
+    Scenario: ordinary evaluation preserves an earlier row-dependent error
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -154,11 +194,14 @@ Feature: convert_timezone
         ) AS result
         FROM range(1)
         """
-      Then query result
+      Then query result for Spark
         | result |
         | NULL   |
+      And query error for Sail (?i)(DIVIDE_BY_ZERO|divide by zero)
 
-    Scenario: a foldable NULL does not suppress an earlier foldable error
+    # These first arguments fail before execution reaches the later computed NULL.
+    # Ordinary evaluation preserves the errors without reproducing Spark's folding order.
+    Scenario: constant evaluation preserves an earlier arithmetic error
       Given config spark.sql.ansi.enabled = true
       When query
         """
@@ -169,6 +212,106 @@ Feature: convert_timezone
         ) AS result
         """
       Then query error (?i)(DIVIDE_BY_ZERO|divide by zero)
+
+    Scenario Outline: constant evaluation preserves earlier native value errors: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(<value> AS STRING),
+          IF(true, CAST(NULL AS STRING), 'UTC'),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        """
+      Then query error <error>
+
+      Examples:
+        | case               | value                     | error                                      |
+        | computed division  | 1 / (1 - 1)               | (?i)divi(?:de\|sion).*zero                   |
+        | integer division   | 1 DIV (1 - 1)             | (?i)divi(?:de\|sion).*zero                   |
+        | remainder          | 1 % (1 - 1)               | (?i)(DIVIDE_BY_ZERO\|remainder by zero)       |
+        | array element zero | element_at(array('UTC'), 0) | (?i)(INVALID_INDEX_OF_ZERO\|index 0 is invalid) |
+
+    # Spark can eliminate these calls after finding the later NULL. Sail retains
+    # ordinary left-to-right evaluation, so the earlier explicit errors remain visible.
+    Scenario Outline: explicit error evaluation before a computed NULL: <case>
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(<value> AS STRING),
+          IF(true, CAST(NULL AS STRING), 'UTC'),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        """
+      Then query result for Spark
+        | result |
+        | NULL   |
+      And query error for Sail <error>
+
+      Examples:
+        | case                      | value                                | error            |
+        | explicit raise_error      | raise_error('explicit')              | explicit         |
+        | arithmetic error wording  | raise_error('Division by zero')      | Division by zero |
+        | explicit assert_true      | assert_true(false, 'explicit')       | explicit         |
+
+    Scenario: division evaluation before a direct typed NULL
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(
+          CAST(1 / 0 AS STRING),
+          CAST(NULL AS STRING),
+          TIMESTAMP_NTZ '2024-01-01 00:00:00'
+        ) AS result
+        """
+      Then query result for Spark
+        | result |
+        | NULL   |
+      And query error for Sail (?i)(DIVIDE_BY_ZERO|divide by zero)
+
+    # Spark eliminates the literal-NULL call before folding the invalid index, but
+    # reaches the same index before recognizing a computed NULL. Sail evaluates
+    # the first argument before either later NULL and preserves its error. Calls
+    # ordinarily removed, such as the empty input below, still do no runtime work.
+    Scenario: invalid array index evaluation before a literal NULL
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(element_at(array('UTC'), 0), CAST(NULL AS STRING), TIMESTAMP_NTZ '2024-01-01') AS result
+        """
+      Then query result for Spark
+        | result |
+        | NULL   |
+      And query error for Sail (?i)(INVALID_INDEX_OF_ZERO|index 0 is invalid)
+
+    Scenario: an invalid array index precedes a computed NULL
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(element_at(array('UTC'), 0), IF(true, CAST(NULL AS STRING), 'UTC'), TIMESTAMP_NTZ '2024-01-01') AS result
+        """
+      Then query error (?i)(INVALID_INDEX_OF_ZERO|index 0 is invalid)
+
+    Scenario: an invalid array index before a runtime NULL still raises
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(element_at(array('UTC'), CAST(id AS INT)),
+          CASE WHEN id = 0 THEN CAST(NULL AS STRING) ELSE 'UTC' END,
+          TIMESTAMP_NTZ '2024-01-01') AS result FROM range(1)
+        """
+      Then query error (?i)(INVALID_INDEX_OF_ZERO|index 0 is invalid)
+
+    Scenario: an empty input does not evaluate timezone arguments
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT convert_timezone(element_at(array('UTC'), CAST(id AS INT)),
+          CASE WHEN id = 0 THEN CAST(NULL AS STRING) ELSE 'UTC' END,
+          TIMESTAMP_NTZ '2024-01-01') AS result FROM range(0)
+        """
+      Then query result
+        | result |
 
     Scenario: per-row time zones are not parsed when another value is null
       When query
@@ -248,18 +391,19 @@ Feature: convert_timezone
 
     @sail-bug
     Scenario: `convert_timezone` preserves timestamps outside Chrono's range
+      # TODO: Support named-zone conversion beyond Chrono's calendar range.
       Given config spark.sql.session.timeZone = UTC
       When query
         """
-        SELECT convert_timezone(
+        SELECT CAST(convert_timezone(
           'UTC',
           'America/Los_Angeles',
           CAST(timestamp_micros(9000000000000000000) AS TIMESTAMP_NTZ)
-        ) IS NOT NULL AS result
+        ) AS STRING) AS result
         """
       Then query result
-        | result |
-        | true   |
+        | result                 |
+        | +287168-08-24 09:00:00 |
 
   Rule: Daylight saving time handling
 

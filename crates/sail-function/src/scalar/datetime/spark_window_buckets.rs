@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ListArray, StructArray, TimestampMicrosecondArray};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
 use datafusion_common::cast::as_timestamp_microsecond_array;
-use datafusion_common::{Result, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// Computes Spark `window` candidates at execute time, so the plan stays bounded
 /// regardless of the `windowDuration / slideDuration` ratio. For each input
@@ -51,8 +53,19 @@ impl ScalarUDFImpl for SparkWindowBuckets {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let tz = match arg_types {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let tz = match arg_types.as_slice() {
             [DataType::Timestamp(TimeUnit::Microsecond, tz)] => tz.clone(),
             other => {
                 return plan_err!(
@@ -65,7 +78,11 @@ impl ScalarUDFImpl for SparkWindowBuckets {
             Field::new("start", field_type.clone(), true),
             Field::new("end", field_type, true),
         ]));
-        Ok(DataType::List(Arc::new(Field::new("item", item, true))))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(Arc::new(Field::new("item", item, false))),
+            true,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

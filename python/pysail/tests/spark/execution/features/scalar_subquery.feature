@@ -693,6 +693,41 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query plan matches snapshot
 
+  Scenario: COUNT accepts a correlated scalar subquery directly as its argument
+    When query
+      """
+      SELECT count((SELECT o.id FROM range(1))) AS n
+      FROM range(2) o
+      """
+    Then query result
+      | n |
+      | 2 |
+
+  # TODO: DataFusion rejects these correlated scalar projections. Its scalar
+  # nullability also makes COUNT include the missing uncorrelated result.
+  # Recheck the empty uncorrelated example after the next DataFusion release
+  # containing the upstream scalar-nullability fix.
+  @sail-bug
+  Scenario Outline: COUNT preserves scalar-subquery missing-row nullability: <case>
+    # A non-null projection does not make its scalar result non-null: no row yields NULL.
+    # COUNT(x) must keep that distinction from COUNT(*) before subquery rewriting.
+    When query
+      """
+      SELECT count(x) AS nonnull, count(DISTINCT x) AS distinct_nonnull, count(*) AS rows
+      FROM (SELECT (<subquery>) AS x FROM range(2) o) t
+      """
+    Then query result
+      | nonnull   | distinct_nonnull | rows |
+      | <nonnull> | <distinct>       | 2    |
+
+    Examples:
+      | case                    | subquery                                             | nonnull | distinct |
+      | empty correlated        | SELECT o.id FROM range(0)                            | 0       | 0        |
+      | present correlated      | SELECT o.id FROM range(1)                            | 2       | 2        |
+      | empty limited           | SELECT coalesce(o.id, 7) FROM range(0) LIMIT 1        | 0       | 0        |
+      | present limited         | SELECT coalesce(o.id, 7) FROM range(1) LIMIT 1        | 2       | 2        |
+      | empty uncorrelated      | SELECT id FROM range(0)                              | 0       | 0        |
+
   Scenario: Null scalar subquery result
     When query
       """

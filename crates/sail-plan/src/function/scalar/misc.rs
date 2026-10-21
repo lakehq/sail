@@ -54,7 +54,7 @@ fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         when_then_expr: vec![(
             Box::new(expr::Expr::Not(Box::new(col.clone()))),
             Box::new(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                func: Arc::new(ScalarUDF::from(RaiseError::new())),
+                func: Arc::new(ScalarUDF::from(RaiseError::non_foldable())),
                 args: vec![err_msg],
             })),
         )],
@@ -300,7 +300,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
             "monotonically_increasing_id",
             F::udf(SparkMonotonicallyIncreasingId::new()),
         ),
-        ("raise_error", F::udf(RaiseError::new())),
+        ("raise_error", F::udf(RaiseError::non_foldable())),
         ("reflect", F::unknown("reflect")),
         ("schema_of_avro", F::unknown("schema_of_avro")),
         ("session_user", F::custom(current_user)),

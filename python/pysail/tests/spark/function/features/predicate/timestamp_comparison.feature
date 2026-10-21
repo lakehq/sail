@@ -2,6 +2,120 @@ Feature: Timestamp and string predicate coercion
 
   Rule: Timestamp comparisons use Spark coercion semantics
 
+    Scenario Outline: Nested temporal predicates retain their common type with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          array(named_struct('t', DATE '2024-01-01')) =
+            array(named_struct('t', TIMESTAMP '2024-01-01')) AS equal,
+          array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1)) IN (
+            array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1L)),
+            NULL
+          ) AS member
+        """
+      Then query result
+        | equal | member |
+        | true  | true   |
+      And query schema
+        """
+        root
+         |-- equal: boolean (nullable = false)
+         |-- member: boolean (nullable = true)
+        """
+      When query
+        """
+        SELECT named_struct('t', DATE '2024-01-01',
+                            'same', array(named_struct('x', TIMESTAMP '2024-01-01'))) =
+          named_struct('t', TIMESTAMP '2024-01-01',
+                       'same', array(named_struct('x', TIMESTAMP '2024-01-01'))) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Dynamic nested temporal predicates preserve nullable fields with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT id,
+          array(named_struct('t', TRY_CAST(text AS DATE), 'n', n)) =
+            array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1L)) AS equal,
+          array(named_struct('t', TRY_CAST(text AS DATE), 'n', n)) IN (
+            array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1L)),
+            NULL
+          ) AS member
+        FROM VALUES (0, '2024-01-01', 1), (1, NULL, NULL), (2, 'invalid', 2)
+          AS input(id, text, n)
+        ORDER BY id
+        """
+      Then query result
+        | id | equal | member |
+        | 0  | true  | true   |
+        | 1  | false | NULL   |
+        | 2  | false | NULL   |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Nested temporal predicates preserve null arrays and elements with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT
+          (CAST(NULL AS ARRAY<STRUCT<t: DATE>>) =
+            array(named_struct('t', TIMESTAMP '2024-01-01'))) IS NULL AS null_array,
+          CAST(NULL AS ARRAY<STRUCT<t: DATE>>) <=>
+            CAST(NULL AS ARRAY<STRUCT<t: TIMESTAMP>>) AS null_safe,
+          array(CAST(NULL AS STRUCT<t: DATE>), named_struct('t', DATE '2024-01-01')) =
+            array(CAST(NULL AS STRUCT<t: TIMESTAMP>),
+                  named_struct('t', TIMESTAMP '2024-01-01')) AS null_element,
+          array(CAST(NULL AS STRUCT<t: DATE>)) =
+            array(named_struct('t', TIMESTAMP '2024-01-01')) AS different_element
+        """
+      Then query result
+        | null_array | null_safe | null_element | different_element |
+        | true       | true      | true         | false             |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Nested temporal IN subqueries widen numeric siblings with ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT count(*) AS matched
+        FROM range(2)
+        WHERE array(named_struct('t', DATE '2024-01-01', 'n', CAST(id AS INT))) IN (
+          SELECT array(named_struct('t', TIMESTAMP '2024-01-01', 'n', 1L))
+        )
+        """
+      Then query result
+        | matched |
+        | 1       |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
     Scenario: String-to-timestamp comparison uses the session time zone and microsecond precision
       Given config spark.sql.session.timeZone = Asia/Shanghai
       When query
@@ -140,6 +254,40 @@ Feature: Timestamp and string predicate coercion
       Then query result
         | ltz_after_ntz | date_promoted | array_match | nested_array_match | struct_match |
         | true          | true          | true        | true               | true         |
+
+    Scenario Outline: Temporal IN evaluates a volatile struct once with <candidate_type> and ANSI <ansi>
+      Given config spark.sql.session.timeZone = UTC
+      And config spark.sql.timestampType = TIMESTAMP_LTZ
+      And config spark.sql.ansi.enabled = <ansi>
+      # Every possible struct belongs to the list. Re-evaluating it while converting a field
+      # can combine a timestamp from one branch with the integer from the other branch.
+      When query
+        """
+        SELECT count(*) AS incorrect
+        FROM (
+          SELECT (
+            CASE WHEN rand() < 0.5
+              THEN named_struct('t', TIMESTAMP_NTZ '2000-01-01', 'n', 0)
+              ELSE named_struct('t', TIMESTAMP_NTZ '2001-01-01', 'n', 1)
+            END
+          ) IN (
+            named_struct('t', CAST('2000-01-01 00:00:00' AS <candidate_type>), 'n', 0),
+            named_struct('t', CAST('2001-01-01 00:00:00' AS <candidate_type>), 'n', 1)
+          ) AS matched
+          FROM range(10000)
+        ) q
+        WHERE matched IS NOT TRUE
+        """
+      Then query result
+        | incorrect |
+        | 0         |
+
+      Examples:
+        | candidate_type | ansi  |
+        | TIMESTAMP      | true  |
+        | TIMESTAMP      | false |
+        | STRING         | true  |
+        | STRING         | false |
 
     Scenario: Struct IN resolves fields positionally and with the configured resolver
       Given config spark.sql.session.timeZone = UTC

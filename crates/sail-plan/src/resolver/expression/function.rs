@@ -413,8 +413,15 @@ impl PlanResolver<'_> {
                             )));
                         };
                         if let Some(display_name) = column_display_name(&column, state)? {
+                            let expression =
+                                self.rebind_expression_timezone(Expr::Column(column), schema);
+                            let expression = if matches!(expression, Expr::Column(_)) {
+                                expression
+                            } else {
+                                expression.alias(display_name.clone())
+                            };
                             names.push(display_name);
-                            exprs.push(Expr::Column(column));
+                            exprs.push(expression);
                         }
                     }
                 }
@@ -429,7 +436,7 @@ impl PlanResolver<'_> {
                             let field_name = n;
                             names.push(field_name.clone());
                             exprs.push(Expr::Alias(expr::Alias::new(
-                                arg,
+                                self.rebind_expression_timezone(arg, schema),
                                 None::<datafusion_common::TableReference>,
                                 field_name,
                             )));

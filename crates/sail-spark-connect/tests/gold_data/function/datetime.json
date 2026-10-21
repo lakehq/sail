@@ -4286,7 +4286,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_date"
+        "success": "ok"
       }
     },
     {
@@ -4308,7 +4308,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_date"
+        "success": "ok"
       }
     },
     {
@@ -4330,7 +4330,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_date"
+        "success": "ok"
       }
     },
     {

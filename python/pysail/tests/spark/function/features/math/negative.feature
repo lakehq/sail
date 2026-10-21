@@ -175,6 +175,237 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         | negate the maximum DECIMAL(38,0) errors under ANSI on       | true  |
         | negate the maximum DECIMAL(38,0) also errors under ANSI off | false |
 
+  Rule: Signed numeric literals are typed before unary operations
+
+    Scenario Outline: Signed numeric literal: <case>
+      When query
+        """
+        SELECT CAST(<expr> AS STRING) AS value, typeof(<expr>) AS type
+        """
+      Then query result
+        | value    | type   |
+        | <value> | <type> |
+
+      Examples:
+        | case                                  | expr                           | value                | type          |
+        | minimum tinyint                       | -128Y                          | -128                 | tinyint       |
+        | minimum smallint                      | -32768S                        | -32768               | smallint      |
+        | minimum int                           | -2147483648                    | -2147483648          | int           |
+        | below minimum int widens to bigint    | -2147483649                    | -2147483649          | bigint        |
+        | minimum bigint without suffix        | -9223372036854775808           | -9223372036854775808 | bigint        |
+        | minimum bigint with suffix           | -9223372036854775808L          | -9223372036854775808 | bigint        |
+        | below minimum bigint becomes decimal | -9223372036854775809           | -9223372036854775809 | decimal(19,0) |
+        | parenthesized magnitude stays decimal | -(9223372036854775808)         | -9223372036854775808 | decimal(19,0) |
+        | comments between sign and number     | - /* boundary */ 128Y         | -128                 | tinyint       |
+        | unary plus around a negative literal | + -9223372036854775808L        | -9223372036854775808 | bigint        |
+        | two minus operators                  | - -1L                         | 1                    | bigint        |
+        | signed number before postfix cast    | -9223372036854775808L::BIGINT  | -9223372036854775808 | bigint        |
+        | parenthesized number before cast     | (-9223372036854775808L)::BIGINT | -9223372036854775808 | bigint        |
+        | number sign belongs inside the cast  | -1::STRING                    | -1                   | string        |
+        | explicit unary minus stays outside   | -(1::STRING)                  | -1.0                 | double        |
+        | negative double zero                 | -0.0D                         | -0.0                 | double        |
+        | negative float zero                  | -0.0F                         | -0.0                 | float         |
+        | negative exponent literal            | -1.25E+2                      | -125.0               | double        |
+        | negative decimal exponent literal    | -.1234567E+2BD                | -12.34567            | decimal(7,5)  |
+
+    Scenario Outline: Out-of-range signed literal: <expr>
+      When query
+        """
+        SELECT <expr> AS value
+        """
+      Then query error (?i)<type>
+
+      Examples:
+        | expr                    | type     |
+        | 128Y                    | tinyint  |
+        | -129Y                   | tinyint  |
+        | 32768S                  | smallint |
+        | -32769S                 | smallint |
+        | 9223372036854775808L     | bigint   |
+        | -9223372036854775809L    | bigint   |
+        | -(9223372036854775808L) | bigint   |
+
+    Scenario: negating a signed minimum bigint literal overflows under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT -(-9223372036854775808L) AS value
+        """
+      Then query error (?i)overflow
+
+    Scenario: negating a signed minimum bigint literal wraps without ANSI
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT -(-9223372036854775808L) AS value
+        """
+      Then query result
+        | value                |
+        | -9223372036854775808 |
+
+    @sail-only
+    Scenario: a signed wide decimal literal preserves Sail's extra precision
+      When query
+        """
+        SELECT CAST(-12345678901234567890123456789012345678.1BD AS STRING) AS value,
+               typeof(-12345678901234567890123456789012345678.1BD) AS type
+        """
+      Then query result
+        | value                                    | type          |
+        | -12345678901234567890123456789012345678.1 | decimal(39,1) |
+
+  Rule: Math functions coerce signed numeric strings
+
+    Scenario Outline: Signed numeric strings retain each math function's result type
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT <expr> AS result, typeof(<expr>) AS type
+        """
+      Then query result
+        | result   | type   |
+        | <result> | <type> |
+
+      Examples:
+        | ansi  | expr                                   | result | type          |
+        | true  | bround(-1.25::STRING, 1)                | -1.2   | double        |
+        | false | bround(-1.25::STRING, 1)                | -1.2   | double        |
+        | true  | ceil(-1.25::STRING)                     | -1     | bigint        |
+        | false | ceil(-1.25::STRING)                     | -1     | bigint        |
+        | true  | floor(-1.25::STRING)                    | -2     | bigint        |
+        | false | floor(-1.25::STRING)                    | -2     | bigint        |
+        | true  | ceil(-1.25::STRING, 1)                  | -1.2   | decimal(22,1) |
+        | false | ceil(-1.25::STRING, 1)                  | -1.2   | decimal(22,1) |
+        | true  | floor(-1.25::STRING, 1)                 | -1.3   | decimal(22,1) |
+        | false | floor(-1.25::STRING, 1)                 | -1.3   | decimal(22,1) |
+        | true  | rint(-1.25::STRING)                     | -1.0   | double        |
+        | false | rint(-1.25::STRING)                     | -1.0   | double        |
+        | true  | hypot(-3::STRING, 4)                    | 5.0    | double        |
+        | false | hypot(-3::STRING, 4)                    | 5.0    | double        |
+        | true  | width_bucket(-1::STRING, -2, 2, 4)     | 2      | bigint        |
+        | false | width_bucket(-1::STRING, -2, 2, 4)     | 2      | bigint        |
+        | true  | width_bucket(1, 0, 2, -2::STRING)      | NULL   | bigint        |
+        | false | width_bucket(1, 0, 2, -2::STRING)      | NULL   | bigint        |
+
+    Scenario Outline: Unary plus coerces a signed string before concatenation
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT (+ -7::STRING) || 'x' AS result
+        """
+      Then query result
+        | result |
+        | -7.0x  |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario Outline: Math coercion applies to negative positive and NULL string columns
+      When query
+        """
+        SELECT id, <expr> AS result
+        FROM VALUES (0, '-1.25'), (1, '1.25'), (2, CAST(NULL AS STRING)) AS t(id, v)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | result     |
+        | 0  | <negative> |
+        | 1  | <positive> |
+        | 2  | NULL       |
+
+      Examples:
+        | expr                        | negative | positive |
+        | bround(v, 1)                | -1.2     | 1.2      |
+        | ceil(v)                     | -1       | 2        |
+        | floor(v)                    | -2       | 1        |
+        | ceil(v, 1)                  | -1.2     | 1.3      |
+        | floor(v, 1)                 | -1.3     | 1.2      |
+        | rint(v)                     | -1.0     | 1.0      |
+        | hypot(v, 0)                 | 1.25     | 1.25     |
+        | width_bucket(v, -2, 2, 4)   | 1        | 4        |
+        | +v                          | -1.25    | 1.25     |
+        | positive(v)                 | -1.25    | 1.25     |
+
+    Scenario Outline: ANSI DIV promotes signed strings alongside integral operands
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <dividend> DIV <divisor> AS result,
+               typeof(<dividend> DIV <divisor>) AS type
+        """
+      Then query result
+        | result | type   |
+        | -3     | bigint |
+
+      Examples:
+        | dividend   | divisor    |
+        | -7::STRING | 2          |
+        | 7          | -2::STRING |
+
+    Scenario: ANSI DIV coerces string columns on either side
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT id, v DIV 2 AS dividend, 7 DIV v AS divisor
+        FROM VALUES (0, '-7'), (1, '7'), (2, CAST(NULL AS STRING)) AS t(id, v)
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | dividend | divisor |
+        | 0  | -3       | -1      |
+        | 1  | 3        | 1       |
+        | 2  | NULL     | NULL    |
+
+    Scenario: ANSI DIV rejects a fractional string when BIGINT is required
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT -7.5::STRING DIV 2 AS result
+        """
+      Then query error (?i)(cast|parse|convert)
+
+    Scenario Outline: Malformed numeric strings become NULL outside ANSI mode
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <expr> AS result FROM VALUES ('bad') AS t(v)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | expr          |
+        | positive(v)   |
+        | ceil(v, 1)    |
+        | bround(v, 1)  |
+
+    Scenario Outline: Malformed numeric strings still fail under ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT <expr> AS result FROM VALUES ('bad') AS t(v)
+        """
+      Then query error (?i)(cast|parse|convert)
+
+      Examples:
+        | expr          |
+        | positive(v)   |
+        | ceil(v, 1)    |
+        | bround(v, 1)  |
+
+    Scenario: bround skips a malformed string when its scale is NULL
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT bround('bad', CAST(NULL AS INT)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   @function(nullability)
   Rule: Output schema
 

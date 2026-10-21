@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone, Utc};
-use chrono_tz::{GapInfo, Tz};
+use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array, new_null_array};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
@@ -16,6 +16,10 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
+use jiff::tz::AmbiguousOffset;
+use sail_common_datafusion::utils::datetime::{
+    local_timezone_offsets, localize_with_fallback, timezone_offset, to_local_datetime,
+};
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
 
@@ -31,6 +35,8 @@ pub struct ConvertTz {
     classic: bool,
     /// Whether NULL rows short-circuit before parsing their time zones.
     null_short_circuit: bool,
+    /// Whether this conversion implements an LTZ-to-NTZ cast.
+    ltz_to_ntz: bool,
     signature: Signature,
 }
 
@@ -40,11 +46,17 @@ impl ConvertTz {
             signature: Signature::any(3, Volatility::Immutable),
             classic,
             null_short_circuit: false,
+            ltz_to_ntz: false,
         }
     }
 
     pub fn with_null_short_circuit(mut self) -> Self {
         self.null_short_circuit = true;
+        self
+    }
+
+    pub fn with_ltz_to_ntz(mut self) -> Self {
+        self.ltz_to_ntz = true;
         self
     }
 
@@ -54,6 +66,10 @@ impl ConvertTz {
 
     pub fn null_short_circuit(&self) -> bool {
         self.null_short_circuit
+    }
+
+    pub fn ltz_to_ntz(&self) -> bool {
+        self.ltz_to_ntz
     }
 }
 
@@ -78,6 +94,10 @@ impl ConvertTzLazy {
 
     pub fn null_short_circuit(&self) -> bool {
         self.convert_tz.null_short_circuit()
+    }
+
+    pub fn ltz_to_ntz(&self) -> bool {
+        self.convert_tz.ltz_to_ntz()
     }
 }
 
@@ -122,10 +142,6 @@ impl HigherOrderUDFImpl for ConvertTzLazy {
                 scalar_arguments: args.scalar_arguments,
             },
         )
-    }
-
-    fn short_circuits(&self) -> bool {
-        true
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
@@ -180,6 +196,10 @@ impl HigherOrderUDFImpl for ConvertTzLazy {
             args.number_rows,
         )?))
     }
+
+    fn short_circuits(&self) -> bool {
+        true
+    }
 }
 
 fn check_lazy_convert_tz_args<V, L>(args: &[ValueOrLambda<V, L>]) -> Result<()> {
@@ -207,14 +227,10 @@ impl ScalarUDFImpl for ConvertTz {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [_, _, ts] = arg_types else {
-            return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
-        };
-        match ts {
-            DataType::Timestamp(unit, None) => Ok(DataType::Timestamp(*unit, None)),
-            _ => plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
-        }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -223,14 +239,24 @@ impl ScalarUDFImpl for ConvertTz {
             .iter()
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
-        let data_type = self.return_type(&arg_types)?;
+        let [_, _, ts] = arg_types.as_slice() else {
+            return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
+        };
+        let data_type = match ts {
+            DataType::Timestamp(unit, None) => DataType::Timestamp(*unit, None),
+            _ => return plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
+        };
         let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(
-            |args| convert_tz_inner(args, self.classic, self.null_short_circuit),
+            |args| convert_tz_inner(args, self.classic, self.null_short_circuit, self.ltz_to_ntz),
             [Hint::AcceptsSingular].repeat(args.args.len()),
         )(args.args.as_slice())
     }
@@ -240,6 +266,7 @@ fn convert_tz_inner(
     args: &[ArrayRef],
     classic: bool,
     null_short_circuit: bool,
+    ltz_to_ntz: bool,
 ) -> Result<ArrayRef> {
     let legacy_timezones = HashMap::from([
         ("ACT", "Australia/Darwin"),
@@ -301,16 +328,39 @@ fn convert_tz_inner(
             .map(|opt| opt.flatten())
     };
 
-    let convert = if classic {
-        convert_tz_classic
-    } else {
-        convert_tz_non_classic
+    let convert = |ts_micros, from_zone: &Tz, to_zone: &Tz| {
+        if ltz_to_ntz && !classic && *from_zone == Tz::UTC {
+            let Some(utc) = DateTime::<Utc>::from_timestamp_micros(ts_micros) else {
+                // shortcut: retain pre-PR wide cast values until full-range regional offsets are supported.
+                return Some(ts_micros);
+            };
+            let offset = timezone_offset(to_zone, utc.timestamp())
+                .ok()?
+                .local_minus_utc();
+            // Integer shifting avoids overflowing Chrono's local calendar at its bounds.
+            ts_micros.checked_add(i64::from(offset) * 1_000_000)
+        } else if classic {
+            convert_tz_classic(ts_micros, from_zone, to_zone)
+        } else {
+            convert_tz_non_classic(ts_micros, from_zone, to_zone)
+        }
     };
 
-    let from_to_utc_timestamp_func =
+    let mut singular_timezones = [None, None];
+    let mut parse_row_zone = |index: usize, name: &str| {
+        if args[index].len() == 1 {
+            if singular_timezones[index].is_none() {
+                singular_timezones[index] = parse_tz(Some(name))?;
+            }
+            Ok(singular_timezones[index])
+        } else {
+            parse_tz(Some(name))
+        }
+    };
+    let mut from_to_utc_timestamp_func =
         |inputs: (Option<i64>, Option<&str>, Option<&str>)| match inputs {
             (Some(ts_micros), Some(from_tz), Some(to_tz)) => {
-                match (parse_tz(Some(from_tz))?, parse_tz(Some(to_tz))?) {
+                match (parse_row_zone(0, from_tz)?, parse_row_zone(1, to_tz)?) {
                     (Some(from_tz), Some(to_tz)) => Ok(convert(ts_micros, &from_tz, &to_tz)),
                     _ => Ok(None),
                 }
@@ -458,25 +508,6 @@ fn convert_tz_inner(
     microseconds_to_timestamp(results, time_unit)
 }
 
-// TODO: Support Spark's full i64 microsecond range for conversions between
-// different zones. Chrono cannot represent every Spark timestamp, so this needs
-// wide-range zone-offset and DST arithmetic outside Chrono.
-fn disambiguate_local_datetime(local: NaiveDateTime, tz: &Tz) -> Option<DateTime<Tz>> {
-    // Handle ambiguous or non-existent local date time
-    // in the same way as `java.time.ZonedDateTime#atZone`.
-    match local.and_local_timezone(*tz) {
-        MappedLocalTime::Single(x) => Some(x),
-        MappedLocalTime::Ambiguous(earliest, _latest) => Some(earliest),
-        MappedLocalTime::None => GapInfo::new(&local, tz).and_then(|gap| {
-            if let (Some((start, _)), Some(end)) = (gap.begin, gap.end) {
-                end.checked_add_signed(local - start)
-            } else {
-                None
-            }
-        }),
-    }
-}
-
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.DateTimeUtils#convertTimestampNtzToAnotherTz`
 fn convert_tz_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i64> {
@@ -485,9 +516,10 @@ fn convert_tz_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i6
         None if from_zone == to_zone => return Some(ts_micros),
         None => return None,
     };
-    let dt = disambiguate_local_datetime(local, from_zone)?;
+    let dt = localize_with_fallback(from_zone, &local).ok()?;
     Some(
-        dt.with_timezone(to_zone)
+        to_local_datetime(to_zone, &dt)
+            .ok()?
             .naive_local()
             .and_utc()
             .timestamp_micros(),
@@ -497,13 +529,20 @@ fn convert_tz_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i6
 /// Reference:
 ///   `org.apache.spark.sql.catalyst.util.SparkDateTimeUtils#convertTz`
 fn convert_tz_non_classic(ts_micros: i64, from_zone: &Tz, to_zone: &Tz) -> Option<i64> {
-    let local = match to_zone.timestamp_micros(ts_micros).single() {
-        Some(datetime) => datetime.naive_local(),
+    let local = match DateTime::from_timestamp_micros(ts_micros) {
+        Some(datetime) => to_local_datetime(to_zone, &datetime).ok()?.naive_local(),
         None if from_zone == to_zone => return Some(ts_micros),
         None => return None,
     };
-    let dt = disambiguate_local_datetime(local, from_zone)?;
-    Some(dt.timestamp_micros())
+    let offset = match local_timezone_offsets(from_zone, &local).ok()? {
+        AmbiguousOffset::Unambiguous { offset } => offset,
+        AmbiguousOffset::Fold { before, .. } | AmbiguousOffset::Gap { before, .. } => before,
+    };
+    // A valid local calendar can map to an instant outside Chrono's UTC range.
+    local
+        .and_utc()
+        .timestamp_micros()
+        .checked_sub(i64::from(offset.seconds()) * 1_000_000)
 }
 
 fn timestamp_to_microseconds(array: &dyn Array) -> Result<Int64Array> {

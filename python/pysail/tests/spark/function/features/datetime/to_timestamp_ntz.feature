@@ -27,8 +27,7 @@ Feature: to_timestamp_ntz
   Rule: Output schema (migrated from test_to_timestamp_ntz.txt printSchema doctests)
 
     # The inline-table TIMESTAMP column is non-nullable and the conversion cannot fail, so
-    # Spark keeps the result non-nullable. Sail widens it.
-    @sail-bug
+    # Spark keeps the result non-nullable.
     @function(nullability)
     Scenario: to_timestamp_ntz doctest #3 (schema)
       Given config spark.sql.session.timeZone = Europe/Amsterdam
@@ -53,10 +52,6 @@ Feature: to_timestamp_ntz
     # Measured on Spark JVM 4.2.0.
 
     Scenario: to_timestamp accepts a number, as seconds since the epoch
-      # The contrasting half of the pair. That Sail reads the number as MICROseconds is
-      # covered by its own scenarios in to_timestamp.feature; the value 0 is used here
-      # precisely because it is identical under both readings, so this half stays green
-      # and only the to_timestamp_ntz half below carries the divergence.
       Given config spark.sql.ansi.enabled = false
       When query
         """
@@ -84,7 +79,6 @@ Feature: to_timestamp_ntz
         | boolean | true                       |
         | binary  | X'48656C6C6F'              |
 
-    @sail-bug
     Scenario Outline: to_timestamp_ntz turns the same input into NULL without ANSI: <case>
       Given config spark.sql.ansi.enabled = false
       When query

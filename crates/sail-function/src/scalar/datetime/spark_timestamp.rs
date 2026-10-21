@@ -4,14 +4,16 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{Datelike, FixedOffset, NaiveDate, Utc};
-use datafusion::arrow::array::Array;
 use datafusion::arrow::array::timezone::Tz;
-use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
+use datafusion::arrow::array::{Array, new_null_array};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use sail_common::utils::datetime::timezone_alias_to_timezone;
-use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::{localize_with_fallback, to_local_datetime};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::datetime::format::DateTimeFormat;
@@ -20,7 +22,7 @@ use crate::scalar::datetime::utils::string_array_iter;
 
 /// Truncates a DateTime's nanoseconds to microseconds.
 /// This preserves fractional seconds when converting from nanosecond precision to microsecond precision.
-fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<chrono::Utc>) -> i64 {
+fn truncate_datetime_to_microseconds(datetime: &chrono::DateTime<Utc>) -> i64 {
     use chrono::Timelike;
 
     let timestamp_secs = datetime.timestamp();
@@ -92,13 +94,13 @@ impl SparkZone {
             .ok_or_else(|| exec_datafusion_err!("invalid time-zone offset: {seconds}"))
     }
 
-    fn current_date(&self) -> (i64, u32, u32) {
+    fn current_date(&self) -> Result<(i64, u32, u32)> {
         let now = Utc::now();
         let date = match self {
             Self::Fixed(zone) => now.with_timezone(zone).date_naive(),
-            Self::Named(zone) => now.with_timezone(zone).date_naive(),
+            Self::Named(zone) => to_local_datetime(zone, &now)?.date_naive(),
         };
-        (i64::from(date.year()), date.month(), date.day())
+        Ok((i64::from(date.year()), date.month(), date.day()))
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -324,7 +326,7 @@ impl TimestampParser {
             match self {
                 TimestampParser::Ltz { .. } => effective_zone
                     .ok_or_else(|| exec_datafusion_err!("missing LTZ time zone"))?
-                    .current_date(),
+                    .current_date()?,
                 TimestampParser::Ntz => {
                     return exec_err!("time-only input is not a TIMESTAMP_NTZ");
                 }
@@ -432,45 +434,25 @@ impl ScalarUDFImpl for SparkTimestamp {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Timestamp(
-            TimeUnit::Microsecond,
-            self.timezone.clone(),
-        ))
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if !matches!(arg_types.len(), 1 | 2) {
-            return Err(invalid_arg_count_exec_err(
-                self.name(),
-                (1, 2),
-                arg_types.len(),
-            ));
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        if let [value, format] = args.arg_fields
+            && value.data_type()
+                == &DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone())
+        {
+            return Ok(Arc::new(value.as_ref().clone().with_nullable(
+                self.safe() || value.is_nullable() || format.is_nullable(),
+            )));
         }
-        match &arg_types[0] {
-            // String-only, matching the kernel (which parses strings) and the
-            // sibling parsers `SparkDate`/`SparkTime`. The planner casts/handles
-            // DATE/TIMESTAMP inputs directly, so they never reach this UDF.
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
-            other => {
-                return Err(unsupported_data_type_exec_err(
-                    self.name(),
-                    "STRING or NULL",
-                    other,
-                ));
-            }
-        }
-        let mut coerced = arg_types.to_vec();
-        if let Some(format) = arg_types.get(1) {
-            match format {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {}
-                // A NULL format yields a NULL result; coerce it to a Utf8 null.
-                DataType::Null => coerced[1] = DataType::Utf8,
-                other => {
-                    return Err(unsupported_data_type_exec_err(self.name(), "STRING", other));
-                }
-            }
-        }
-        Ok(coerced)
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone()),
+            true,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -483,6 +465,14 @@ impl ScalarUDFImpl for SparkTimestamp {
             }
             _ => return exec_err!("spark_timestamp requires 1 or 2 arguments"),
         };
+        if format.is_some()
+            && arg.data_type() == DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone())
+        {
+            // The planner has already converted temporal inputs. Spark also ignores their
+            // pattern value, including NULL or 'QQQ'. Sail deliberately lets the format
+            // expression follow ordinary evaluation before this call, including its errors.
+            return Ok(arg);
+        }
         let safe = self.safe();
         match (arg, format) {
             (ColumnarValue::Array(array), Some(ColumnarValue::Array(format_array))) => {
@@ -498,6 +488,22 @@ impl ScalarUDFImpl for SparkTimestamp {
                 self.parse_array_with_format_array(&array, &format_array, safe)
             }
             (ColumnarValue::Array(array), format) => {
+                // Intentionally return NULL before pattern validation in both ANSI modes.
+                // Spark folds to_timestamp(CAST(NULL AS STRING), 'QQQ') to NULL, but
+                // to_timestamp(CASE WHEN id < 0 THEN '2024-01-01' ELSE CAST(NULL AS STRING)
+                // END, 'QQQ') over range(2) errors with wholeStage=true/factoryMode=FALLBACK:
+                // code generation initializes its constant formatter before row NULL checks.
+                // The same query returns NULL with factoryMode=NO_CODEGEN. Keep NULL handling
+                // independent of Spark's execution strategy; non-NULL inputs still validate
+                // patterns. The type guard prevents invalid input types from taking this path.
+                if (array.data_type().is_string() || array.data_type() == &DataType::Null)
+                    && array.null_count() == array.len()
+                {
+                    return Ok(ColumnarValue::Array(new_null_array(
+                        &DataType::Timestamp(TimeUnit::Microsecond, self.timezone.clone()),
+                        array.len(),
+                    )));
+                }
                 let format = parse_scalar_format(format)?;
                 let array: PrimitiveArray<TimestampMicrosecondType> =
                     string_array_iter(array.as_ref())?
@@ -520,6 +526,15 @@ impl ScalarUDFImpl for SparkTimestamp {
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ColumnarValue::Scalar(scalar), format) => {
+                // Preserve the same NULL-first contract for scalar inputs.
+                if (scalar.data_type().is_string() || scalar.data_type() == DataType::Null)
+                    && scalar.is_null()
+                {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                        None,
+                        self.timezone.clone(),
+                    )));
+                }
                 let format = parse_scalar_format(format)?;
                 if matches!(format, ScalarFormat::Null) {
                     return Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
@@ -550,6 +565,40 @@ impl ScalarUDFImpl for SparkTimestamp {
             }
         }
     }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if !matches!(arg_types.len(), 1 | 2) {
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (1, 2),
+                arg_types.len(),
+            ));
+        }
+        match &arg_types[0] {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+            DataType::Timestamp(TimeUnit::Microsecond, timezone)
+                if arg_types.len() == 2 && timezone == &self.timezone => {}
+            other => {
+                return Err(unsupported_data_type_exec_err(
+                    self.name(),
+                    "STRING, converted TIMESTAMP, or NULL",
+                    other,
+                ));
+            }
+        }
+        let mut coerced = arg_types.to_vec();
+        if let Some(format) = arg_types.get(1) {
+            match format {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {}
+                // A NULL format yields NULL only for string input; temporal input ignores it.
+                DataType::Null => coerced[1] = DataType::Utf8,
+                other => {
+                    return Err(unsupported_data_type_exec_err(self.name(), "STRING", other));
+                }
+            }
+        }
+        Ok(coerced)
+    }
 }
 
 fn parse_scalar_format(format: Option<ColumnarValue>) -> Result<ScalarFormat> {
@@ -567,8 +616,8 @@ fn parse_scalar_format(format: Option<ColumnarValue>) -> Result<ScalarFormat> {
 impl SparkTimestamp {
     fn parse_array_with_format_array(
         &self,
-        array: &Arc<dyn datafusion::arrow::array::Array>,
-        format_array: &Arc<dyn datafusion::arrow::array::Array>,
+        array: &Arc<dyn Array>,
+        format_array: &Arc<dyn Array>,
         safe: bool,
     ) -> Result<ColumnarValue> {
         if array.len() != format_array.len() {
@@ -584,7 +633,7 @@ impl SparkTimestamp {
 
     fn parse_array_with_formats<'f>(
         &self,
-        array: &Arc<dyn datafusion::arrow::array::Array>,
+        array: &Arc<dyn Array>,
         formats: impl Iterator<Item = Option<&'f str>>,
         cache: &mut HashMap<String, DateTimeFormat>,
         safe: bool,

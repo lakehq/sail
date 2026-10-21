@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, FieldRef, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -12,6 +13,7 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{cast_temporal, coerce_temporal_arguments};
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -68,7 +70,92 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
-    Ok(expr_fn::coalesce(arguments))
+    let fields = arguments
+        .iter()
+        .map(|arg| {
+            arg.to_field(function_context.schema)
+                .map(|(_, field)| field)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    with_interval_qualifier(expr_fn::coalesce(arguments), &fields, &function_context)
+}
+
+fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (condition, then_value, else_value) = input.arguments.three()?;
+    let context = FunctionContextInput {
+        ..input.function_context
+    };
+    let fields = [&then_value, &else_value]
+        .into_iter()
+        .map(|arg| arg.to_field(context.schema).map(|(_, field)| field))
+        .collect::<Result<Vec<_>, _>>()?;
+    let result = if_expr(ScalarFunctionInput {
+        arguments: vec![condition.is_not_null(), then_value, else_value],
+        function_context: input.function_context,
+    })?;
+    with_interval_qualifier(result, &fields, &context)
+}
+
+fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (left, right) = input.arguments.two()?;
+    let field = left.to_field(input.function_context.schema)?.1;
+    with_interval_qualifier(
+        expr_fn::nullif(left, right),
+        &[field],
+        &input.function_context,
+    )
+}
+
+// NULLIF keeps its first argument's type; COALESCE and NVL2 widen their result arguments.
+// Restore only known qualifiers, leaving native evaluation and nullability intact.
+fn with_interval_qualifier(
+    result: expr::Expr,
+    fields: &[FieldRef],
+    context: &FunctionContextInput<'_>,
+) -> PlanResult<expr::Expr> {
+    let mut interval = None::<spec::SparkIntervalMetadata>;
+    for field in fields {
+        if field.data_type().is_null() {
+            continue;
+        }
+        if !matches!(
+            field.data_type(),
+            DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::YearMonth)
+        ) {
+            return Ok(result);
+        }
+        let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY) else {
+            return Ok(result);
+        };
+        let candidate = spec::SparkIntervalMetadata::from_json(metadata)?;
+        interval = match interval {
+            Some(current) => current.wider(candidate),
+            None => Some(candidate),
+        };
+        if interval.is_none() {
+            return Ok(result);
+        }
+    }
+    let Some(interval) = interval else {
+        return Ok(result);
+    };
+    let field = result.to_field(context.schema)?.1;
+    if fields
+        .iter()
+        .any(|source| !source.data_type().is_null() && source.data_type() != field.data_type())
+    {
+        return Ok(result);
+    }
+    let mut field = field.as_ref().clone();
+    field.metadata_mut().insert(
+        spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+        interval.to_json()?,
+    );
+    // A field-aware cast retains the qualifier through folding and projection.
+    Ok(expr::Expr::Cast(expr::Cast::new_from_field(
+        Box::new(result),
+        Arc::new(field),
+    )))
 }
 
 fn coerce_string_temporal_values(
@@ -88,7 +175,14 @@ fn coerce_string_temporal_values(
                 arguments
                     .into_iter()
                     .zip(data_types.iter())
-                    .map(|(arg, data_type)| coerce_to_temporal(arg, data_type, &temporal_type))
+                    .map(|(arg, data_type)| {
+                        coerce_to_temporal(
+                            arg,
+                            data_type,
+                            &temporal_type,
+                            &function_context.plan_config.session_timezone,
+                        )
+                    })
                     .collect::<PlanResult<Vec<_>>>()?
             } else {
                 arguments
@@ -107,7 +201,7 @@ fn coerce_string_temporal_values(
             arguments
         }
     } else {
-        arguments
+        coerce_temporal_arguments(arguments, function_context)?
     };
     Ok(arguments)
 }
@@ -116,6 +210,7 @@ fn coerce_to_temporal(
     arg: expr::Expr,
     data_type: &DataType,
     target_type: &DataType,
+    timezone: &Arc<str>,
 ) -> PlanResult<expr::Expr> {
     if data_type == target_type {
         return Ok(arg);
@@ -133,7 +228,14 @@ fn coerce_to_temporal(
             _ => Ok(cast(arg, target_type.clone())),
         }
     } else if is_temporal_type(data_type) {
-        Ok(cast(arg, target_type.clone()))
+        Ok(cast_temporal(
+            arg,
+            data_type,
+            target_type.clone(),
+            timezone,
+            false,
+            None,
+        )?)
     } else {
         Ok(arg)
     }
@@ -184,10 +286,10 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("if", F::custom(if_expr)),
         ("ifnull", F::binary(expr_fn::nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
-        ("nullif", F::binary(expr_fn::nullif)),
+        ("nullif", F::custom(nullif)),
         ("nullifzero", F::custom(nullifzero)),
         ("nvl", F::binary(expr_fn::nvl)),
-        ("nvl2", F::ternary(expr_fn::nvl2)),
+        ("nvl2", F::custom(nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),
