@@ -51,8 +51,8 @@ importers:
         specifier: ^5.4.3
         version: 5.4.3
       markdown-it:
-        specifier: ^15.0.2
-        version: 15.0.2
+        specifier: ^15.0.3
+        version: 15.0.3
       markdown-it-deflist:
         specifier: ^4.0.0
         version: 4.0.0
@@ -1399,8 +1399,8 @@ packages:
   markdown-it-deflist@4.0.0:
     resolution: {integrity: sha512-06186ZWDwNLg638THD70MxBeFrDMF0+nL7IWU/qwCGHGOcUIm4MTYXbfjpv0ooWnVjkSnAjW8msKaOQmNRfY6Q==}
 
-  markdown-it@15.0.2:
-    resolution: {integrity: sha512-q4IGxMv56jCqT4OCRCADBoDP3LO4MhmTXjFbphHPXs4g3j9Xg5RDnxqN8IF/3vIWEU+VCnUq+7JUg/cfy2E6Qw==}
+  markdown-it@15.0.3:
+    resolution: {integrity: sha512-+Az7Ojz3iRGu8KYMvJ6xVhvrxP3eE+vEtJX75Ow88XBpcQNV/0lGX5ZynIIBftREo4DC2jsveAMDaeltmm8QvQ==}
     hasBin: true
 
   mdast-util-to-hast@13.2.1:
@@ -3210,7 +3210,7 @@ snapshots:
 
   markdown-it-deflist@4.0.0: {}
 
-  markdown-it@15.0.2:
+  markdown-it@15.0.3:
     dependencies:
       argparse: 3.0.3
       entities: 8.1.0
