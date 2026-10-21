@@ -2,7 +2,7 @@ import datetime
 from decimal import Decimal
 
 import pytest
-from pyspark.sql import functions as F
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -104,15 +104,20 @@ def test_signed_zero_divisors(spark, data_type, zero):
     spark.conf.set("spark.sql.ansi.enabled", "false")
     try:
         divisor = F.lit(zero).cast(data_type)
-        rows = spark.range(2).select(
-            (F.lit(1) / divisor).alias("literal_division"),
-            (F.lit(1) % divisor).alias("literal_remainder"),
-            (F.col("id") / divisor).alias("column_division"),
-            (F.col("id") % divisor).alias("column_remainder"),
-        ).collect()
-        assert rows == [
-            Row(literal_division=None, literal_remainder=None, column_division=None, column_remainder=None)
-        ] * 2
+        rows = (
+            spark.range(2)
+            .select(
+                (F.lit(1) / divisor).alias("literal_division"),
+                (F.lit(1) % divisor).alias("literal_remainder"),
+                (F.col("id") / divisor).alias("column_division"),
+                (F.col("id") % divisor).alias("column_remainder"),
+            )
+            .collect()
+        )
+        assert (
+            rows
+            == [Row(literal_division=None, literal_remainder=None, column_division=None, column_remainder=None)] * 2
+        )
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
@@ -123,8 +128,8 @@ def test_div_after_projected_case(spark, ansi):
     spark.conf.set("spark.sql.ansi.enabled", ansi)
     try:
         projected = spark.range(2).select(
-            F.when(F.col("id") == 0, F.lit(0)).otherwise(F.lit(1.5)).alias("numerator"),
-            F.when(F.col("id") == 0, F.lit(1)).otherwise(F.lit(0.5)).alias("denominator"),
+            F.when(F.col("id") == 0, F.lit(0)).otherwise(F.expr("1.5")).alias("numerator"),
+            F.when(F.col("id") == 0, F.lit(1)).otherwise(F.expr("0.5")).alias("denominator"),
         )
         rows = projected.select(
             F.expr("numerator DIV 0.5").alias("dividend_case"),
@@ -150,10 +155,10 @@ def test_unsigned_complement_after_case_coercion(spark, small_type, wide_type, w
         Row(result=str((1 << wide_bits) - 2), same_type=True),
     ]
     # Cover both the CASE itself and the stale field type of an intervening projection.
-    for source, argument in [("range(2)", value), (f"(SELECT {value} AS v FROM range(2)) t", "v")]:
+    for source, argument in [("range(2)", value), (f"(SELECT {value} AS v FROM range(2)) t", "v")]:  # noqa: S608
         for complement in [f"~({argument})", f"bitwise_not({argument})"]:
             rows = spark.sql(
-                f"SELECT CAST({complement} AS STRING) AS result, "
+                f"SELECT CAST({complement} AS STRING) AS result, "  # noqa: S608
                 f"typeof({complement}) = typeof(CAST(NULL AS {wide_type})) AS same_type "
                 f"FROM {source}"
             ).collect()
@@ -167,10 +172,10 @@ def test_complement_preserves_resolved_case_type(spark, first_branch):
         Row(result=None if first_branch == "NULL" else -1, same_type=True),
         Row(result=-2147483649, same_type=True),
     ]
-    for source, argument in [("range(2)", value), (f"(SELECT {value} AS v FROM range(2)) t", "v")]:
+    for source, argument in [("range(2)", value), (f"(SELECT {value} AS v FROM range(2)) t", "v")]:  # noqa: S608
         for complement in [f"~({argument})", f"bitwise_not({argument})"]:
             rows = spark.sql(
-                f"SELECT CAST({complement} AS BIGINT) AS result, "
+                f"SELECT CAST({complement} AS BIGINT) AS result, "  # noqa: S608
                 f"typeof({complement}) = 'bigint' AS same_type FROM {source} ORDER BY result"
             ).collect()
             assert rows == sorted(expected, key=lambda row: (row.result is not None, row.result))
