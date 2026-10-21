@@ -370,7 +370,10 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         && is_zero_literal(&divisor)
         && matches!(
             (&dividend_type, &divisor_type),
-            (Ok(DataType::Decimal128(_, _)), Ok(DataType::Decimal128(_, _)))
+            (
+                Ok(DataType::Decimal128(_, _)),
+                Ok(DataType::Decimal128(_, _))
+            )
         ))
     .then(|| dividend.clone());
 
