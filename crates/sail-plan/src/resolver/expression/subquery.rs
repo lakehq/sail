@@ -17,6 +17,7 @@ use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 use sail_logical_plan::row_bounds::{integer_literal, row_bounds};
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::common::is_outer_only;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::coerce_timestamp_in_subquery_pair;
@@ -242,10 +243,11 @@ fn peel_scalar_subquery(plan: &LogicalPlan) -> Option<ScalarSubqueryShape<'_>> {
     }
 }
 
-/// Expresses a sort key of the peeled bounds through the projection's input. A key that only
-/// depends on the outer row is constant for that row and is dropped (`None`); a key that mixes
-/// outer and inner columns cannot be evaluated below the projection (`outer + inner` does not
-/// order like `inner` once the addition overflows), so the rewrite is declined.
+/// Expresses a sort key of the peeled bounds through the projection's input. A deterministic
+/// key that only depends on the outer row is constant for that row and is dropped (`None`); a
+/// key that mixes outer and inner columns, or a volatile outer-only one, cannot be evaluated
+/// below the projection (`outer + inner` does not order like `inner` once the addition
+/// overflows), so the rewrite is declined.
 fn input_sort_key(
     sort: SortExpr,
     outputs: &[(String, Expr)],
@@ -263,7 +265,9 @@ fn input_sort_key(
     if !key.contains_outer() {
         return Ok(Some(Some(SortExpr { expr: key, ..sort })));
     }
-    if is_outer_only(&key) {
+    // A deterministic outer-only key is constant for one outer row; a volatile one such as
+    // `rand() + o.id` takes a different value for every inner row and cannot be dropped.
+    if is_outer_only(&key) && !key.is_volatile() {
         return Ok(Some(None));
     }
     Ok(None)
@@ -511,11 +515,6 @@ fn rewrite_bounded_scalar_subquery(
     Ok(Some(case.otherwise(result)?))
 }
 
-/// An expression that refers to the outer query only, with no inner column.
-fn is_outer_only(expr: &Expr) -> bool {
-    expr.contains_outer() && !expr.any_column_refs()
-}
-
 /// Splits a filter predicate at its first conjunct that has outer-only disjuncts, returning
 /// the guard (those disjuncts), the predicate when the guard holds (the conjunct dropped) and
 /// the predicate when it does not (the conjunct reduced to its remaining disjuncts).
@@ -639,6 +638,27 @@ fn split_outer_guard(plan: &LogicalPlan) -> PlanResult<Option<(Expr, LogicalPlan
 }
 
 /// The expression evaluating a resolved scalar subquery plan.
+/// Hoists the outer-only guards of the plan's topmost filter one conjunct at a time, so that
+/// `WHERE (p1 OR r1) AND (p2 OR r2)` becomes nested CASE expressions over subqueries that
+/// DataFusion can decorrelate.
+fn guarded_scalar_subquery(plan: LogicalPlan, state: &mut PlanResolverState) -> PlanResult<Expr> {
+    match split_outer_guard(&plan)? {
+        Some((guard, when_true, when_false)) => {
+            let guard = guard
+                .transform(|expr| match expr {
+                    Expr::OuterReferenceColumn(_, column) => {
+                        Ok(Transformed::yes(Expr::Column(column)))
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })?
+                .data;
+            Ok(when(guard, guarded_scalar_subquery(when_true, state)?)
+                .otherwise(guarded_scalar_subquery(when_false, state)?)?)
+        }
+        None => scalar_subquery_expr(plan, state),
+    }
+}
+
 fn scalar_subquery_expr(plan: LogicalPlan, state: &mut PlanResolverState) -> PlanResult<Expr> {
     Ok(match rewrite_bounded_scalar_subquery(&plan, state)? {
         Some(rewritten) => rewritten,
@@ -742,21 +762,7 @@ impl PlanResolver<'_> {
         } else {
             project_correlated_keys(subquery, state)?
         };
-        let subquery = match split_outer_guard(&subquery)? {
-            Some((guard, when_true, when_false)) => {
-                let guard = guard
-                    .transform(|expr| match expr {
-                        Expr::OuterReferenceColumn(_, column) => {
-                            Ok(Transformed::yes(Expr::Column(column)))
-                        }
-                        expr => Ok(Transformed::no(expr)),
-                    })?
-                    .data;
-                when(guard, scalar_subquery_expr(when_true, state)?)
-                    .otherwise(scalar_subquery_expr(when_false, state)?)?
-            }
-            None => scalar_subquery_expr(subquery, state)?,
-        };
+        let subquery = guarded_scalar_subquery(subquery, state)?;
         Ok(NamedExpr::new(vec!["subquery".to_string()], subquery))
     }
 

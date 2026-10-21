@@ -1339,3 +1339,90 @@ Feature: Scalar subquery nullability
         | id | high |
         | 0  | true |
         | 1  | true |
+
+  Rule: A subquery DataFusion can decorrelate is evaluated, so its errors surface
+
+    # Only a subquery that DataFusion cannot plan (a non-equality correlation) keeps the
+    # pre-nullability shortcut of never being evaluated; every other one runs.
+
+    Scenario Outline: a null check on a correlated aggregate whose predicate needs a failing implicit cast raises
+      When query
+        """
+        SELECT <expression> AS result FROM range(2) o
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|cannot (be )?cast|invalid|NumberFormat|parse)
+
+      Examples:
+        | expression                                                                        |
+        | (SELECT count(*) FROM range(1) i WHERE i.id = o.id AND i.id = 'bad') IS NULL      |
+        | (SELECT count(*) FROM range(1) i WHERE i.id = o.id AND i.id = 'bad') IS NOT NULL  |
+        | (SELECT count(*) = 'bad' FROM range(1) i WHERE i.id = o.id) IS NULL               |
+
+    # COUNT never evaluates a provably non-null single-row argument (as before this fix), so an
+    # error inside that subquery is not raised.
+    @sail-bug
+    Scenario: count of a correlated aggregate whose correlation key fails to cast raises
+      When query
+        """
+        SELECT count((SELECT count(*) FROM range(2) i WHERE CAST(concat('bad', i.id) AS BIGINT) = o.id)) AS n FROM range(2) o
+        """
+      Then query error (?i)(CAST_INVALID_INPUT|cannot (be )?cast|invalid|NumberFormat|parse)
+
+    # COUNT never evaluates a provably non-null single-row argument (as before this fix), so an
+    # error inside that subquery is not raised.
+    @sail-bug
+    Scenario: count of a correlated aggregate whose correlation key divides by zero raises
+      When query
+        """
+        SELECT count((SELECT count(*) FROM range(2) i WHERE 1 / (i.id - i.id) = o.id)) AS n FROM range(2) o
+        """
+      Then query error (?i)(DIVIDE_BY_ZERO|division by zero)
+
+    Scenario: two conjuncts with outer-only disjuncts are both hoisted
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM range(2) i WHERE (o.id = 0 OR i.id = 1) AND (o.id = 1 OR i.id = 0)) AS n
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 1 |
+        | 1  | 1 |
+
+    Scenario Outline: a null check on a non-equality correlated aggregate folds as it did before
+      When query
+        """
+        SELECT <expression> AS result FROM range(2) o
+        """
+      Then query result collected
+        | result |
+        | false  |
+        | false  |
+
+      Examples:
+        | expression                                                                 |
+        | (SELECT count(*) + 1 FROM range(2) i WHERE i.id < o.id) IS NULL            |
+        | (SELECT CAST(count(*) AS STRING) FROM range(2) i WHERE i.id < o.id) IS NULL |
+
+    # A volatile sort key that also references the outer row cannot be evaluated below the row
+    # selection and is not constant per outer row either, so Sail declines the rewrite and errors.
+    @sail-bug
+    Scenario: the minimum of a volatile key shifted by an outer reference
+      When query
+        """
+        SELECT (SELECT rand() + o.id AS v FROM range(1000) i ORDER BY v LIMIT 1) - o.id < 0.05 AS low FROM range(1) o
+        """
+      Then query result collected
+        | low  |
+        | true |
+
+    @sail-bug
+    Scenario: the maximum of a volatile key shifted by an outer reference
+      When query
+        """
+        SELECT (SELECT rand() + o.id AS v FROM range(1000) i ORDER BY v DESC LIMIT 1) - o.id > 0.95 AS high FROM range(1) o
+        """
+      Then query result collected
+        | high |
+        | true |

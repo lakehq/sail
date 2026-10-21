@@ -6,6 +6,7 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{
     AggregateUDF, BinaryExpr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
     Subquery, WindowFrame, WindowFunctionDefinition, WindowUDF, cast, expr, lit,
@@ -28,76 +29,58 @@ pub(crate) fn single_row_scalar_subquery(expr: &expr::Expr) -> Option<&Subquery>
         .filter(|subquery| row_bounds(&subquery.subquery) == (1, Some(1)))
 }
 
-/// Whether evaluating `plan` can raise an error. Only column references, literals,
-/// comparisons, boolean connectives, null checks and `count` are known not to; anything else
-/// (casts, arithmetic, other functions) is assumed to be able to, so this is conservative.
-fn plan_cannot_fail(plan: &LogicalPlan) -> bool {
-    matches!(
-        plan,
-        LogicalPlan::Projection(_)
-            | LogicalPlan::Filter(_)
-            | LogicalPlan::Aggregate(_)
-            | LogicalPlan::SubqueryAlias(_)
-            | LogicalPlan::Limit(_)
-            | LogicalPlan::Sort(_)
-            | LogicalPlan::Values(_)
-            | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::TableScan(_)
-            | LogicalPlan::Extension(_)
-    ) && plan.expressions().iter().all(expr_cannot_fail)
-        && plan.inputs().into_iter().all(plan_cannot_fail)
+/// An expression that refers to the outer query only, with no inner column.
+pub(crate) fn is_outer_only(expr: &expr::Expr) -> bool {
+    expr.contains_outer() && !expr.any_column_refs()
 }
 
-fn expr_cannot_fail(expr: &expr::Expr) -> bool {
-    let mut cannot_fail = true;
-    let _ = expr.apply(|expr| {
-        let allowed = match expr {
-            expr::Expr::Column(_)
-            | expr::Expr::OuterReferenceColumn(..)
-            | expr::Expr::Literal(..)
-            | expr::Expr::Alias(_)
-            | expr::Expr::Not(_)
-            | expr::Expr::IsNull(_)
-            | expr::Expr::IsNotNull(_) => true,
-            #[expect(deprecated)]
-            expr::Expr::Wildcard { .. } => true,
-            expr::Expr::BinaryExpr(expr::BinaryExpr { op, .. }) => matches!(
-                op,
-                Operator::Eq
-                    | Operator::NotEq
-                    | Operator::Lt
-                    | Operator::LtEq
-                    | Operator::Gt
-                    | Operator::GtEq
-                    | Operator::And
-                    | Operator::Or
-                    | Operator::IsDistinctFrom
-                    | Operator::IsNotDistinctFrom
-            ),
-            expr::Expr::AggregateFunction(function) => function.func.name() == "count",
-            _ => false,
+/// Whether DataFusion can decorrelate the subquery plan: every outer reference sits in a
+/// filter conjunct that compares an inner expression with an outer one for equality. A
+/// non-equality comparison, an OR, or an outer reference in any other node makes
+/// `ScalarSubqueryToJoin` fail to plan the subquery.
+fn decorrelates(plan: &LogicalPlan) -> bool {
+    let mut decorrelates = true;
+    let _ = plan.apply(|node| {
+        decorrelates = match node {
+            LogicalPlan::Filter(filter) => split_conjunction(&filter.predicate)
+                .into_iter()
+                .all(|conjunct| !conjunct.contains_outer() || is_correlated_equality(conjunct)),
+            node => !node.contains_outer_reference(),
         };
-        cannot_fail &= allowed;
-        Ok(if allowed {
+        Ok(if decorrelates {
             TreeNodeRecursion::Continue
         } else {
             TreeNodeRecursion::Stop
         })
     });
-    cannot_fail
+    decorrelates
 }
 
-/// A correlated scalar subquery that provably returns exactly one non-null row and whose
-/// evaluation cannot raise an error can never be NULL, so the null check folds. Spark declares
-/// the subquery nullable all the same, but keeping the check would also keep the subquery in a
-/// plan that may need a decorrelation DataFusion does not support. Any other subquery is left
-/// alone: it executes as it is, and that execution must still raise any error its expressions
-/// produce.
+fn is_correlated_equality(expr: &expr::Expr) -> bool {
+    match expr {
+        expr::Expr::BinaryExpr(expr::BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        }) => {
+            (is_outer_only(left) && !right.contains_outer())
+                || (is_outer_only(right) && !left.contains_outer())
+        }
+        _ => false,
+    }
+}
+
+/// A correlated scalar subquery that provably returns exactly one non-null row can never be
+/// NULL, so the null check folds, but only when DataFusion cannot decorrelate the subquery:
+/// keeping the check would then fail planning, whereas folding keeps such a query working as
+/// it did before scalar subqueries were nullable (the subquery is not evaluated, so an error
+/// it would raise is not surfaced, as before). Any subquery DataFusion can plan is evaluated,
+/// so that its errors surface and Spark's nullable result is honored.
 fn is_single_non_null_row(expr: &expr::Expr) -> bool {
     single_row_scalar_subquery(expr).is_some_and(|subquery| {
         !subquery.outer_ref_columns.is_empty()
             && !subquery.subquery.schema().field(0).is_nullable()
-            && plan_cannot_fail(&subquery.subquery)
+            && !decorrelates(&subquery.subquery)
     })
 }
 
