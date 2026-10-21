@@ -18,6 +18,7 @@ use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::cast::cast_timestamp_ntz_to_ltz;
 use crate::resolver::state::PlanResolverState;
 
 static SPARK_IN_ARRAY_TRANSFORM_UDF: LazyLock<Arc<HigherOrderUDF>> =
@@ -469,6 +470,24 @@ fn coerce_timestamp_pair(
 ) -> DataFusionResult<(expr::Expr, expr::Expr)> {
     let left_type = left.get_type(schema.as_ref())?;
     let right_type = right.get_type(schema.as_ref())?;
+
+    // Spark compares NTZ wall times and LTZ instants in the session time zone.
+    // Keep that conversion explicit instead of relying on generic timestamp coercion.
+    match (&left_type, &right_type) {
+        (DataType::Timestamp(_, None), DataType::Timestamp(_, Some(_))) => {
+            return Ok((
+                cast_timestamp_ntz_to_ltz(left, Arc::clone(&config.session_timezone), false)?,
+                right,
+            ));
+        }
+        (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
+            return Ok((
+                left,
+                cast_timestamp_ntz_to_ltz(right, Arc::clone(&config.session_timezone), false)?,
+            ));
+        }
+        _ => {}
+    }
 
     if !config.ansi_mode
         && config.legacy_type_coercion_datetime_to_string
