@@ -2940,7 +2940,7 @@ data:
             RepartitionExec: partitioning=Hash([#45@0], 4), input_partitions=4
               AggregateExec: mode=Partial, gby=[#45@0 as #45], aggr=[], lim=[100]
                 ProjectionExec: expr=[#21@0 as #45]
-                  FilterExec: spark_scalar_subquery(CASE WHEN __always_true@2 IS NULL THEN 0 ELSE #44@1 END) > 0, projection=[#21@0]
+                  FilterExec: CASE WHEN __always_true@2 IS NULL THEN 0 ELSE #44@1 END > 0, projection=[#21@0]
                     HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#36@1, #14@0)], projection=[#21@4, #44@0, __always_true@2]
                       CoalescePartitionsExec
                         ProjectionExec: expr=[count(Int64(1))@1 as #44, #36@0 as #36, true as __always_true]

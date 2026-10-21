@@ -13,6 +13,7 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
+use sail_logical_plan::correlation::decorrelates;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -428,10 +429,18 @@ impl PlanResolver<'_> {
         } else if let Some(inlined) = inline_outer_projection(&subquery, state)? {
             inlined
         } else {
-            nullable_scalar_subquery(enforce_single_row(
-                project_correlated_keys(subquery, state)?,
-                state,
-            )?)
+            // DataFusion's `ScalarSubqueryToJoin` can only plan a correlated subquery whose
+            // outer references all sit in equality filter conjuncts. Any other correlated
+            // subquery keeps the plan it had before scalar subqueries were nullable, so it
+            // behaves exactly as before: a null check on it folds, COUNT drops it, and any
+            // other position fails to plan.
+            let rewritten =
+                enforce_single_row(project_correlated_keys(subquery.clone(), state)?, state)?;
+            if decorrelates(&rewritten) {
+                nullable_scalar_subquery(rewritten)
+            } else {
+                expr_fn::scalar_subquery(Arc::new(subquery))
+            }
         };
         Ok(NamedExpr::new(vec!["subquery".to_string()], subquery))
     }

@@ -70,6 +70,26 @@ fn is_correlated_scalar_subquery(expr: &Expr) -> bool {
     })
 }
 
+/// Removes the nullability wrapper from every correlated scalar subquery in the expression.
+fn unwrap_correlated_scalar_subqueries(expr: Expr) -> PlanResult<Expr> {
+    Ok(expr
+        .transform_up(|expr| {
+            if !is_correlated_scalar_subquery(&expr) {
+                return Ok(Transformed::no(expr));
+            }
+            let Some(subquery) = SparkScalarSubquery::subquery(&expr).cloned() else {
+                return Ok(Transformed::no(expr));
+            };
+            Ok(Transformed::yes(Expr::ScalarSubquery(subquery)))
+        })?
+        .data)
+}
+
+fn contains_correlated_scalar_subquery(expr: &Expr) -> bool {
+    expr.exists(|expr| Ok(is_correlated_scalar_subquery(expr)))
+        .unwrap_or(false)
+}
+
 /// Replaces correlated scalar subqueries inside aggregate function arguments with
 /// columns that are projected below the aggregate.
 struct AggregateSubqueryExtractor<'s> {
@@ -300,6 +320,36 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
+        // DataFusion cannot plan a correlated scalar subquery in a grouping key (its
+        // `ScalarSubqueryToJoin` rewrites filters and projections only), so an aggregate
+        // grouped by one keeps the plan it had before scalar subqueries were nullable: null
+        // checks on the key fold and COUNT drops it, exactly as before.
+        let (grouping, projections, having) = if grouping
+            .iter()
+            .any(|x| contains_correlated_scalar_subquery(&x.expr))
+        {
+            let unwrap = |named: NamedExpr| -> PlanResult<NamedExpr> {
+                Ok(NamedExpr {
+                    expr: unwrap_correlated_scalar_subqueries(named.expr)?,
+                    ..named
+                })
+            };
+            (
+                grouping
+                    .into_iter()
+                    .map(unwrap)
+                    .collect::<PlanResult<Vec<_>>>()?,
+                projections
+                    .into_iter()
+                    .map(unwrap)
+                    .collect::<PlanResult<Vec<_>>>()?,
+                having
+                    .map(unwrap_correlated_scalar_subqueries)
+                    .transpose()?,
+            )
+        } else {
+            (grouping, projections, having)
+        };
         let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let has_grouping_set = Self::has_grouping_set(&group_exprs);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
