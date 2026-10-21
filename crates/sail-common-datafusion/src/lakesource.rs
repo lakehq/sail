@@ -87,6 +87,9 @@ pub enum RowLevelOperation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LakeSourceAlterTableOperation {
+    AlterSnapshotReference {
+        operation: sail_common::spec::SnapshotReferenceOperation,
+    },
     AlterIdentifierFields {
         names: Vec<Vec<String>>,
         drop: bool,
@@ -225,7 +228,8 @@ pub trait LakeSource: DataSource {
         let _ = lakehouse_table;
         let runtime_env = ctx.runtime_env();
         match operation {
-            LakeSourceAlterTableOperation::AlterIdentifierFields { .. }
+            LakeSourceAlterTableOperation::AlterSnapshotReference { .. }
+            | LakeSourceAlterTableOperation::AlterIdentifierFields { .. }
             | LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
             | LakeSourceAlterTableOperation::SetPartitioning { .. }
             | LakeSourceAlterTableOperation::SetWriteOrder { .. }

@@ -483,6 +483,9 @@ impl LakeSource for DeltaLakeSource {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         let runtime_env = ctx.runtime_env();
         match operation {
+            LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
+                not_impl_err!("Snapshot references require an Iceberg table")
+            }
             LakeSourceAlterTableOperation::AlterIdentifierFields { .. } => {
                 not_impl_err!("Identifier fields require an Iceberg table")
             }
@@ -601,6 +604,9 @@ fn reject_catalog_managed_delta_alter(
 
 fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'static str {
     match operation {
+        LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
+            "ALTER TABLE SNAPSHOT REFERENCE"
+        }
         LakeSourceAlterTableOperation::AlterIdentifierFields { .. } => {
             "ALTER TABLE IDENTIFIER FIELDS"
         }

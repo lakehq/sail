@@ -485,6 +485,16 @@ impl CatalogCommand {
                     }
                     _ => (None, None),
                 };
+                if matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
+                    && (location.is_none()
+                        || !format
+                            .as_deref()
+                            .is_some_and(|format| format.eq_ignore_ascii_case("iceberg")))
+                {
+                    return Err(CatalogError::NotSupported(
+                        "Snapshot references require an Iceberg table with a location".into(),
+                    ));
+                }
                 if format
                     .as_deref()
                     .is_some_and(|format| !is_lakehouse_format(format))
@@ -563,7 +573,8 @@ impl CatalogCommand {
                         )
                         .await?
                         .execution;
-                    if matches!(lakehouse_table.commit,
+                    if !matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
+                        && matches!(lakehouse_table.commit,
                         sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
                         | sail_common_datafusion::catalog::CommitAuthority::VersionedCatalogCommit)
                     {
