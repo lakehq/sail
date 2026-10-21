@@ -35,3 +35,30 @@ Feature: div output schema
         | ansi  |
         | true  |
         | false |
+
+    Scenario Outline: DIV coerces every CASE branch before widening with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT (CASE WHEN false THEN 0 ELSE 1.5 END) DIV 0.5 AS dividend_case,
+               3 DIV (CASE WHEN false THEN 1 ELSE 0.5 END) AS divisor_case
+        """
+      Then query result
+        | dividend_case | divisor_case |
+        | 3             | 6            |
+      When query
+        """
+        SELECT id,
+               (CASE WHEN id = 0 THEN 0 ELSE 1.5 END) DIV 0.5 AS dividend_case,
+               3 DIV (CASE WHEN id = 0 THEN 1 ELSE 0.5 END) AS divisor_case
+        FROM range(2) ORDER BY id
+        """
+      Then query result ordered
+        | id | dividend_case | divisor_case |
+        | 0  | 0             | 3            |
+        | 1  | 3             | 6            |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |

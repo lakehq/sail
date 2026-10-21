@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
@@ -350,16 +352,26 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (dividend, divisor) = arguments.two()?;
 
     let ansi_mode = function_context.plan_config.ansi_mode;
+    // CASE reports its first branch's type before coercion. Resolve all branches
+    // before widening integers, or a decimal result can be truncated to BIGINT.
+    let widen = |value: Expr| {
+        let mut coercion = TypeCoercionRewriter::new(function_context.schema);
+        let Ok(coerced) = value.clone().rewrite(&mut coercion) else {
+            // Unbound lambda variables still need the enclosing analyzer pass.
+            return value;
+        };
+        let value = coerced.data;
+        match value.get_type(function_context.schema) {
+            Ok(DataType::Int8 | DataType::Int16 | DataType::Int32) => {
+                cast(value, DataType::Int64)
+            }
+            _ => value,
+        }
+    };
+    let dividend = widen(dividend);
+    let divisor = widen(divisor);
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
-
-    // Spark widens small integers before DIV, so INT_MIN / -1 fits in BIGINT.
-    let widen = |value, data_type: Option<&DataType>| match data_type {
-        Some(DataType::Int8 | DataType::Int16 | DataType::Int32) => cast(value, DataType::Int64),
-        _ => value,
-    };
-    let dividend = widen(dividend, dividend_type.as_ref().ok());
-    let divisor = widen(divisor, divisor_type.as_ref().ok());
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
     let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
