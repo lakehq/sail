@@ -271,6 +271,38 @@ def test_bound_schema_and_result_are_consistent(flight_uri, binding):
         assert sorted(table.column("value").to_pylist()) == values
 
 
+@pytest.mark.parametrize("batches", [[[11, None]], [[11], [None]], [[None, 11]]])
+@pytest.mark.parametrize(
+    ("sql", "nullable"),
+    [
+        ("SELECT ? AS value", True),
+        ("SELECT CAST(? AS BIGINT) AS value", True),
+        ("SELECT coalesce(?, 1) AS value", False),
+    ],
+)
+def test_bound_schema_accounts_for_all_parameter_rows(flight_uri, batches, sql, nullable):
+    with flight.connect(flight_uri) as client:
+        options = flight.FlightCallOptions(headers=[client.authenticate_basic_token("", "")])
+        handle = prepare(client, sql, options)
+        command = descriptor(PreparedQuery(prepared_statement_handle=handle))
+        schema = pa.schema([pa.field("value", pa.int64())])
+        writer, reader = client.do_put(command, schema, options)
+        with writer:
+            for values in batches:
+                writer.write_batch(pa.record_batch([pa.array(values, type=pa.int64())], schema=schema))
+            writer.done_writing()
+            reader.read()
+        schema = client.get_schema(command, options).schema
+        info = client.get_flight_info(command, options)
+        table = client.do_get(info.endpoints[0].ticket, options).read_all()
+        assert schema == info.schema == table.schema
+        assert schema.field("value").nullable == nullable
+        expected = [11, None] if nullable else [11, 1]
+        assert sorted(table.column("value").to_pylist(), key=lambda value: (value is None, value)) == sorted(
+            expected, key=lambda value: (value is None, value)
+        )
+
+
 @pytest.mark.parametrize("prepared", [False, True])
 @pytest.mark.parametrize(
     "sql",

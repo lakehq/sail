@@ -272,6 +272,46 @@ def test_prepared_update_and_reuse(flight_connection, tmp_path, file_format):
     assert query(flight_connection, "SELECT * FROM flight_updates ORDER BY value") == [(11,), (22,)]
 
 
+@pytest.mark.parametrize("file_format", ["delta", "iceberg"])
+@pytest.mark.parametrize("placeholder", ["?", "$1"])
+def test_prepared_delete_and_reuse(flight_connection, tmp_path, file_format, placeholder):
+    query(
+        flight_connection,
+        f"CREATE TABLE flight_deletes (value BIGINT) USING {file_format} LOCATION '{tmp_path.as_posix()}'",
+    )
+    query(flight_connection, "INSERT INTO flight_deletes VALUES (1), (2), (3)")
+    with adbc_driver_manager.AdbcStatement(flight_connection.adbc_connection) as statement:
+        statement.set_sql_query(f"DELETE FROM flight_deletes WHERE value = {placeholder}")  # noqa: S608
+        statement.prepare()
+        assert query(flight_connection, "SELECT value FROM flight_deletes ORDER BY value") == [(1,), (2,), (3,)]
+        for value, expected in ((2, [(1,), (3,)]), (1, [(3,)])):
+            statement.bind(pa.record_batch([pa.array([value], type=pa.int64())], names=["value"]))
+            assert statement.execute_update() == -1
+            assert query(flight_connection, "SELECT value FROM flight_deletes ORDER BY value") == expected
+
+
+@pytest.mark.parametrize("placeholder", ["?", "$1"])
+def test_prepared_temporary_view_binds_definition(flight_connection, placeholder):
+    with adbc_driver_manager.AdbcStatement(flight_connection.adbc_connection) as statement:
+        statement.set_sql_query(
+            f"CREATE OR REPLACE TEMP VIEW flight_bound_view AS SELECT CAST({placeholder} AS BIGINT) AS value"
+        )
+        statement.prepare()
+        assert tables(flight_connection, table_name_filter="flight_bound_view") == []
+        for value in (17, None):
+            statement.bind(pa.record_batch([pa.array([value], type=pa.int64())], names=["value"]))
+            assert statement.execute_update() == -1
+            assert query(flight_connection, "SELECT value FROM flight_bound_view") == [(value,)]
+
+
+def test_prepared_persistent_view_rejects_parameters(flight_connection):
+    with adbc_driver_manager.AdbcStatement(flight_connection.adbc_connection) as statement:
+        statement.set_sql_query("CREATE VIEW flight_unbound_view AS SELECT CAST(? AS BIGINT) AS value")
+        with pytest.raises(adbc_driver_manager.NotSupportedError, match="persistent view"):
+            statement.prepare()
+    assert tables(flight_connection, table_name_filter="flight_unbound_view") == []
+
+
 def test_direct_update(flight_connection):
     with adbc_driver_manager.AdbcStatement(flight_connection.adbc_connection) as statement:
         statement.set_sql_query("CREATE TEMP VIEW flight_direct_update AS SELECT 1 AS value")

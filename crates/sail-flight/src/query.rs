@@ -41,31 +41,27 @@ pub fn dataset_schema(statement: &PreparedStatement) -> Result<SchemaRef, Status
     }
     match &statement.fields {
         Some(fields) => {
-            // Bind a row to infer the schema without executing it. Typed nulls
-            // preserve parameter types for schema-only and zero-row uploads.
+            // Use the same union as execution so later parameter rows can widen
+            // nullability. Typed nulls preserve types for zero-row uploads.
             let plan = if let Some(parameters) = &statement.parameters {
-                let values = if let Some(batch) =
-                    parameters.batches.iter().find(|batch| batch.num_rows() > 0)
+                if let Some(plan) =
+                    union_plans(SailFlightSqlService::bound_query_plans(statement)?)?
                 {
-                    batch
-                        .columns()
-                        .iter()
-                        .map(|array| ScalarValue::try_from_array(array, 0))
-                        .collect::<Result<Vec<_>, _>>()
+                    plan
                 } else {
-                    parameters
+                    let values = parameters
                         .schema
                         .fields()
                         .iter()
                         .map(|field| ScalarValue::try_from(field.data_type()))
                         .collect::<Result<Vec<_>, _>>()
+                        .map_err(invalid)?;
+                    statement
+                        .plan
+                        .clone()
+                        .with_param_values(values)
+                        .map_err(invalid)?
                 }
-                .map_err(invalid)?;
-                statement
-                    .plan
-                    .clone()
-                    .with_param_values(values)
-                    .map_err(invalid)?
             } else {
                 statement.plan.clone()
             };
@@ -73,6 +69,44 @@ pub fn dataset_schema(statement: &PreparedStatement) -> Result<SchemaRef, Status
         }
         None => Ok(Arc::new(Schema::empty())),
     }
+}
+
+fn union_plans(plans: Vec<LogicalPlan>) -> Result<Option<LogicalPlan>, Status> {
+    let mut plans = plans.into_iter();
+    let Some(first) = plans.next() else {
+        return Ok(None);
+    };
+    let mut plan = LogicalPlanBuilder::from(first);
+    for input in plans {
+        plan = plan.union(input).map_err(invalid)?;
+    }
+    Ok(Some(plan.build().map_err(invalid)?))
+}
+
+fn parameter_values(statement: &PreparedStatement) -> Result<Vec<Vec<ScalarValue>>, Status> {
+    let parameters = statement.parameters.as_ref().ok_or_else(|| {
+        Status::invalid_argument("prepared statement parameters have not been bound")
+    })?;
+    let count = statement.parameter_schema.fields().len();
+    let mut values = Vec::new();
+    for batch in &parameters.batches {
+        if batch.num_columns() != count {
+            return Err(Status::invalid_argument(
+                "incorrect number of prepared statement parameters",
+            ));
+        }
+        for row in 0..batch.num_rows() {
+            values.push(
+                batch
+                    .columns()
+                    .iter()
+                    .map(|array| ScalarValue::try_from_array(array, row))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(invalid)?,
+            );
+        }
+    }
+    Ok(values)
 }
 
 impl SailFlightSqlService {
@@ -152,10 +186,22 @@ impl SailFlightSqlService {
                 plan => break plan,
             }
         };
-        let mut named = PlanResolver::new(&session.context, self.config.clone())
-            .resolve_named_plan(plan)
+        let (mut named, placeholders) = PlanResolver::new(&session.context, self.config.clone())
+            .resolve_prepared_plan(plan.clone())
             .await
             .map_err(invalid)?;
+        // Persistent views retain SQL text rather than the bound logical plan.
+        if !placeholders.is_empty()
+            && matches!(
+                &plan,
+                spec::Plan::Command(command)
+                    if matches!(&command.node, spec::CommandNode::CreateView { .. })
+            )
+        {
+            return Err(Status::unimplemented(
+                "parameters in persistent view definitions are not supported",
+            ));
+        }
         // SHOW/DESCRIBE are command plans in Sail, but have user-facing result
         // sets. DDL success flags are internal and must not become result sets.
         let mut explain = Vec::new();
@@ -176,7 +222,10 @@ impl SailFlightSqlService {
                     .collect(),
             );
         }
-        let types = named.plan.get_parameter_types().map_err(invalid)?;
+        let mut types = named.plan.get_parameter_types().map_err(invalid)?;
+        for placeholder in placeholders {
+            types.entry(placeholder).or_insert(None);
+        }
         let mut parameters = Vec::new();
         for (id, data_type) in types {
             let index = id
@@ -205,6 +254,7 @@ impl SailFlightSqlService {
             sql,
             catalog,
             plan: named.plan,
+            unresolved_plan: plan,
             is_query,
             mutates_session,
             explain,
@@ -229,36 +279,49 @@ impl SailFlightSqlService {
         Ok(refreshed)
     }
 
-    pub(super) fn bound_plans(statement: &PreparedStatement) -> Result<Vec<LogicalPlan>, Status> {
+    fn bound_query_plans(statement: &PreparedStatement) -> Result<Vec<LogicalPlan>, Status> {
         let count = statement.parameter_schema.fields().len();
         if count == 0 {
             return Ok(vec![statement.plan.clone()]);
         }
-        let parameters = statement.parameters.as_ref().ok_or_else(|| {
-            Status::invalid_argument("prepared statement parameters have not been bound")
-        })?;
+        parameter_values(statement)?
+            .into_iter()
+            .map(|values| {
+                statement
+                    .plan
+                    .clone()
+                    .with_param_values(values)
+                    .map_err(invalid)
+            })
+            .collect()
+    }
+
+    async fn bound_plans(
+        &self,
+        session: &FlightSession,
+        statement: &PreparedStatement,
+    ) -> Result<Vec<LogicalPlan>, Status> {
+        if statement.is_query || statement.parameter_schema.fields().is_empty() {
+            return Self::bound_query_plans(statement);
+        }
+        let values = parameter_values(statement)?;
+        if values.len() > 1 {
+            // No backend transaction spans separate command executions.
+            return Err(Status::unimplemented(
+                "atomic execution of multiple parameter sets for commands is not supported",
+            ));
+        }
+        let session = session.with_catalog(statement.catalog.clone());
+        let resolver = PlanResolver::new(&session.context, self.config.clone());
         let mut plans = Vec::new();
-        for batch in &parameters.batches {
-            if batch.num_columns() != count {
-                return Err(Status::invalid_argument(
-                    "incorrect number of prepared statement parameters",
-                ));
-            }
-            for row in 0..batch.num_rows() {
-                let values = batch
-                    .columns()
-                    .iter()
-                    .map(|array| ScalarValue::try_from_array(array, row))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(invalid)?;
-                plans.push(
-                    statement
-                        .plan
-                        .clone()
-                        .with_param_values(values)
-                        .map_err(invalid)?,
-                );
-            }
+        for values in values {
+            plans.push(
+                resolver
+                    .resolve_named_plan_with_parameters(statement.unresolved_plan.clone(), values)
+                    .await
+                    .map_err(invalid)?
+                    .plan,
+            );
         }
         Ok(plans)
     }
@@ -328,35 +391,20 @@ impl SailFlightSqlService {
         session: &FlightSession,
         statement: &PreparedStatement,
     ) -> Result<SendableRecordBatchStream, Status> {
-        let plans = Self::bound_plans(statement)?;
+        let plans = self.bound_plans(session, statement).await?;
         if plans.is_empty() {
             return Ok(Box::pin(RecordBatchStreamAdapter::new(
                 dataset_schema(statement)?,
                 stream::empty(),
             )));
         }
-        if plans.len() > 1 && !statement.is_query {
-            // Separate command executions would commit earlier parameter sets
-            // before a later failure. No backend transaction spans these plans.
-            return Err(Status::unimplemented(
-                "atomic execution of multiple parameter sets for commands is not supported",
-            ));
-        }
-        let mut plans = plans.into_iter();
-        let first = plans
-            .next()
-            .ok_or_else(|| Status::internal("missing bound plan"))?;
-        let mut plan = LogicalPlanBuilder::from(first);
-        for input in plans {
-            plan = plan.union(input).map_err(invalid)?;
-        }
+        let mut plan = union_plans(plans)?.ok_or_else(|| Status::internal("missing bound plan"))?;
         // SET/RESET/USE operate on the live session rather than its preparation scope.
         let session = if statement.mutates_session {
             session.clone()
         } else {
             session.with_catalog(statement.catalog.clone())
         };
-        let mut plan = plan.build().map_err(invalid)?;
         for explain in &statement.explain {
             let explain = explain_string_from_logical_plan(
                 &session.context,

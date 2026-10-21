@@ -7,6 +7,7 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::SessionContext;
 use sail_catalog::manager::CatalogManager;
+use sail_common::spec;
 use sail_plan::explain::ExplainOptions;
 use uuid::Uuid;
 
@@ -35,6 +36,8 @@ pub struct PreparedStatement {
     /// Keep preparation-time name resolution while refreshing live table metadata.
     pub catalog: Arc<CatalogManager>,
     pub plan: LogicalPlan,
+    /// Bind command parameters before resolution can hide their expressions.
+    pub unresolved_plan: spec::Plan,
     pub is_query: bool,
     pub mutates_session: bool,
     /// Explain the input plan from the innermost EXPLAIN outwards, at execution.
