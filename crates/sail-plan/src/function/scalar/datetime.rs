@@ -114,10 +114,12 @@ fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> 
 
     let interval = match unit.to_lowercase().as_str() {
         "years" | "year" => match interval {
-            Expr::Literal(ScalarValue::Int32(Some(years)), metadata) => Expr::Literal(
-                ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(years, 0))),
-                metadata,
-            ),
+            Expr::Literal(ScalarValue::Int32(Some(years)), metadata) => {
+                let months = years
+                    .checked_mul(12)
+                    .ok_or_else(|| PlanError::invalid("year-month interval overflow"))?;
+                Expr::Literal(ScalarValue::IntervalYearMonth(Some(months)), metadata)
+            }
             _ => cast(
                 format_interval(interval, "years"),
                 DataType::Interval(IntervalUnit::YearMonth),

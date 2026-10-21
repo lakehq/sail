@@ -129,3 +129,32 @@ Feature: Sort reference resolution
       | columns | keys |
       | a       | t.b  |
       | a AS x  | t.a  |
+
+  Scenario Outline: Disabling sort ordinals keeps INT literals as constants in <sort>
+    Given config spark.sql.orderByOrdinal = false
+    When query
+      """
+      SELECT id FROM range(0, 3, 1, 1) <sort> -1, id DESC
+      """
+    Then query result ordered
+      | id |
+      | 2  |
+      | 1  |
+      | 0  |
+
+    Examples:
+      | sort     |
+      | ORDER BY |
+      | SORT BY  |
+
+  Scenario: BIGINT sort constants remain constants when ordinals are enabled
+    Given config spark.sql.orderByOrdinal = true
+    When query
+      """
+      SELECT id FROM range(3) ORDER BY -1L, id DESC
+      """
+    Then query result ordered
+      | id |
+      | 2  |
+      | 1  |
+      | 0  |

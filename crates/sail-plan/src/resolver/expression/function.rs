@@ -185,7 +185,7 @@ impl PlanResolver<'_> {
                                 };
                                 let order_by = match order_by {
                                     Some(x) => {
-                                        self.resolve_sort_orders(x, true, schema, state).await?
+                                        self.resolve_sort_orders(x, false, schema, state).await?
                                     }
                                     None => vec![],
                                 };

@@ -44,6 +44,8 @@ pub struct PlanConfig {
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
+    /// Whether INT literals in ORDER BY/SORT BY refer to output positions.
+    pub order_by_ordinal: bool,
     /// Whether legacy non-ANSI ordering comparisons cast date/timestamp values to strings.
     pub legacy_type_coercion_datetime_to_string: bool,
     /// Whether size/cardinality return -1 for null input when ANSI mode is disabled.
@@ -97,6 +99,7 @@ impl Default for PlanConfig {
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
             ansi_mode: true,
+            order_by_ordinal: true,
             legacy_type_coercion_datetime_to_string: false,
             legacy_size_of_null: true,
             store_assignment_policy: StoreAssignmentPolicy::Ansi,

@@ -362,6 +362,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_ORDER_BY_ORDINAL)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.order_by_ordinal = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_CASE_SENSITIVE)
             .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?

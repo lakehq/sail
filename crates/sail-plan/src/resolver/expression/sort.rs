@@ -31,7 +31,7 @@ impl PlanResolver<'_> {
             null_ordering,
         } = sort;
         let expression = match child.as_ref() {
-            spec::Expr::Literal(literal) if resolve_literals => {
+            spec::Expr::Literal(literal) if resolve_literals && self.config.order_by_ordinal => {
                 // Ordinals refer only to the visible output, even when other sort
                 // keys are resolved against a combined descendant schema.
                 let schema = Self::local_schema(schema, state);

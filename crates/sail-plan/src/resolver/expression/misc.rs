@@ -395,6 +395,13 @@ impl PlanResolver<'_> {
             | DataType::FixedSizeList(field, _)
             | DataType::ListView(field)
             | DataType::LargeListView(field) => {
+                // Spark requires an integral subscript; casting fractions would truncate them.
+                if !extraction.data_type().is_integer() && extraction.data_type() != DataType::Null {
+                    return Err(PlanError::AnalysisError(format!(
+                        "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Array index requires an integral type, got {}",
+                        extraction.data_type()
+                    )));
+                }
                 let ScalarValue::Int64(index) = extraction.cast_to(&DataType::Int64)? else {
                     return Err(PlanError::AnalysisError(format!(
                         "invalid extraction value for array: {extraction}"
