@@ -278,6 +278,56 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     .end()?)
 }
 
+/// Returns whether the element of a list type is nullable.
+fn list_value_nullability(data_type: &DataType) -> Option<bool> {
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+            Some(field.is_nullable())
+        }
+        _ => None,
+    }
+}
+
+/// Spark set operations on arrays accept arrays whose elements differ only in nullability.
+/// Both arrays are cast to nullable elements in that case, since DataFusion requires
+/// the same element field. The result keeps the element nullability of Spark.
+fn array_set_operation(
+    input: ScalarFunctionInput,
+    func: fn(expr::Expr, expr::Expr) -> expr::Expr,
+    keep_left_nullability: bool,
+) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let schema = &function_context.schema;
+    let (left, right) = arguments.two()?;
+    let left_nullability = list_value_nullability(&left.get_type(schema.as_ref())?);
+    let right_nullability = list_value_nullability(&right.get_type(schema.as_ref())?);
+    match (left_nullability, right_nullability) {
+        (Some(l), Some(r)) if l != r => {
+            let left = cast_list_value_nullability(left, schema, true)?;
+            let right = cast_list_value_nullability(right, schema, true)?;
+            let result = func(left, right);
+            if keep_left_nullability && !l {
+                // The elements of the result come from the left array.
+                cast_list_value_nullability(result, schema, false)
+            } else {
+                Ok(result)
+            }
+        }
+        _ => Ok(func(left, right)),
+    }
+}
+
+fn array_except(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    array_set_operation(input, expr_fn::array_except, true)
+}
+
+fn array_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    array_set_operation(input, expr_fn::array_union, false)
+}
+
 fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -509,7 +559,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_contains", F::binary(array_contains)),
         ("array_contains_all", F::binary(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
-        ("array_except", F::binary(expr_fn::array_except)),
+        ("array_except", F::custom(array_except)),
         ("array_insert", F::custom(array_insert)),
         ("array_intersect", F::udf(ArrayIntersect::new())),
         ("array_join", F::udf(ArrayToString::new())),
@@ -523,7 +573,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
             "array_size",
             F::unary(|array| cast(expr_fn::array_length(array), DataType::Int32)),
         ),
-        ("array_union", F::binary(expr_fn::array_union)),
+        ("array_union", F::custom(array_union)),
         ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
