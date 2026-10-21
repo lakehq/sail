@@ -61,7 +61,12 @@ impl SparkSequence {
     }
 
     fn parse_session_timezone(&self) -> Result<Tz> {
-        self.session_timezone.parse().map_err(|error| {
+        let timezone = match self.session_timezone.as_ref() {
+            "Z" | "UT" => "UTC",
+            "PST" => "America/Los_Angeles",
+            timezone => timezone,
+        };
+        timezone.parse().map_err(|error| {
             exec_datafusion_err!(
                 "Spark `sequence` function: failed to parse timezone {}: {error}",
                 self.session_timezone
