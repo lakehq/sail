@@ -1,13 +1,20 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/16c0755b51d040ebd1ca87acb7f1908d63936b74/datafusion/spark/src/function/bitwise/bitwise_not.rs
 
+use std::sync::Arc;
+
 use arrow::array::*;
 use arrow::compute::kernels::bitwise;
-use arrow::datatypes::{DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type};
+use arrow::datatypes::{
+    DataType, Field, FieldRef, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
+};
 use datafusion_common::{Result, internal_err, plan_err};
-use datafusion_expr::{ColumnarValue, TypeSignature, Volatility};
-use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::{
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility, lit,
+};
 use datafusion_functions::utils::make_scalar_function;
-use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBitwiseNot {
@@ -25,10 +32,15 @@ impl SparkBitwiseNot {
         Self {
             signature: Signature::one_of(
                 vec![
+                    // Untyped NULL must resolve to Spark's default integral type, INT.
+                    TypeSignature::Exact(vec![DataType::Int32]),
                     TypeSignature::Exact(vec![DataType::Int8]),
                     TypeSignature::Exact(vec![DataType::Int16]),
-                    TypeSignature::Exact(vec![DataType::Int32]),
                     TypeSignature::Exact(vec![DataType::Int64]),
+                    TypeSignature::Exact(vec![DataType::UInt8]),
+                    TypeSignature::Exact(vec![DataType::UInt16]),
+                    TypeSignature::Exact(vec![DataType::UInt32]),
+                    TypeSignature::Exact(vec![DataType::UInt64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -59,6 +71,26 @@ impl ScalarUDFImpl for SparkBitwiseNot {
         )))
     }
 
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let [arg] = args.as_slice() else {
+            return plan_err!("bitwise_not expects exactly 1 argument");
+        };
+        // Select the mask after CASE/projection coercion, when the operand's width is final.
+        let mask = match info.get_data_type(arg)? {
+            DataType::Int8 => lit(-1_i8),
+            DataType::Int16 => lit(-1_i16),
+            DataType::Int32 => lit(-1_i32),
+            DataType::Int64 => lit(-1_i64),
+            DataType::UInt8 => lit(u8::MAX),
+            DataType::UInt16 => lit(u16::MAX),
+            DataType::UInt32 => lit(u32::MAX),
+            DataType::UInt64 => lit(u64::MAX),
+            _ => return Ok(ExprSimplifyResult::Original(args)),
+        };
+        // XOR evaluates the operand once and follows repaired scalar-subquery nullability.
+        Ok(ExprSimplifyResult::Simplified(arg.clone() ^ mask))
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
             return plan_err!("bitwise_not expects exactly 1 argument");
@@ -86,6 +118,22 @@ pub fn spark_bitwise_not(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result: Int64Array = bitwise::bitwise_not(array.as_primitive::<Int64Type>())?;
             Ok(Arc::new(result))
         }
+        DataType::UInt8 => {
+            let result: UInt8Array = bitwise::bitwise_not(array.as_primitive::<UInt8Type>())?;
+            Ok(Arc::new(result))
+        }
+        DataType::UInt16 => {
+            let result: UInt16Array = bitwise::bitwise_not(array.as_primitive::<UInt16Type>())?;
+            Ok(Arc::new(result))
+        }
+        DataType::UInt32 => {
+            let result: UInt32Array = bitwise::bitwise_not(array.as_primitive::<UInt32Type>())?;
+            Ok(Arc::new(result))
+        }
+        DataType::UInt64 => {
+            let result: UInt64Array = bitwise::bitwise_not(array.as_primitive::<UInt64Type>())?;
+            Ok(Arc::new(result))
+        }
         _ => {
             plan_err!(
                 "bitwise_not function does not support data type: {}",
@@ -98,8 +146,9 @@ pub fn spark_bitwise_not(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn test_bitwise_not_nullability() {

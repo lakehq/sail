@@ -86,7 +86,11 @@ impl ScalarUDFImpl for SparkNegative {
         // incorrectly mark an empty scalar subquery non-nullable.
         // FIXME: After DataFusion's scalar-subquery fix, use arg.is_nullable() here.
         let nullable = args.scalar_arguments[0].is_none_or(ScalarValue::is_null);
-        Ok(Arc::new(Field::new(self.name(), arg.data_type().clone(), nullable)))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            arg.data_type().clone(),
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

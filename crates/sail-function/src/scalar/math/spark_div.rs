@@ -11,8 +11,8 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_expr::{
-    ColumnarValue, Expr, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, Volatility, cast,
+    ColumnarValue, Expr, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility, cast,
 };
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
@@ -63,7 +63,11 @@ impl ScalarUDFImpl for SparkDiv {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(|values| {
             let [left, right] = values else {
-                return Err(invalid_arg_count_exec_err(self.name(), (2, 2), values.len()));
+                return Err(invalid_arg_count_exec_err(
+                    self.name(),
+                    (2, 2),
+                    values.len(),
+                ));
             };
             if matches!(left.data_type(), DataType::Interval(_)) {
                 return interval_div_inner(values);
@@ -97,9 +101,8 @@ impl ScalarUDFImpl for SparkDiv {
         }
 
         // Resolve the common type first; decimal operands must not be truncated to BIGINT.
-        let (left, right) =
-            BinaryTypeCoercer::new(&arg_types[0], &Operator::Divide, &arg_types[1])
-                .get_input_types()?;
+        let (left, right) = BinaryTypeCoercer::new(&arg_types[0], &Operator::Divide, &arg_types[1])
+            .get_input_types()?;
         Ok([left, right]
             .into_iter()
             .map(|data_type| match data_type {
@@ -126,11 +129,7 @@ impl ScalarUDFImpl for SparkDiv {
 
 fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
-        return Err(invalid_arg_count_exec_err(
-            "spark_div",
-            (2, 2),
-            args.len(),
-        ));
+        return Err(invalid_arg_count_exec_err("spark_div", (2, 2), args.len()));
     }
 
     let dividend = &args[0];
