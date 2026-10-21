@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field};
 use datafusion::functions::expr_fn::coalesce;
 use datafusion::functions_aggregate::{
     approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
@@ -56,15 +56,32 @@ lazy_static! {
 fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
-    if args
+    let arg_type = args
         .first()
         .map(|arg| arg.get_type(input.function_context.schema))
-        .transpose()?
-        == Some(DataType::Null)
-    {
+        .transpose()?;
+    if arg_type == Some(DataType::Null) {
         return Ok(lit(ScalarValue::Null));
     }
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    // The decimal average of DataFusion truncates the result, while Spark rounds it half up.
+    // The average is computed with one more digit and then cast to the result type, which
+    // rounds half up. This is only done when the result type has room for the extra digit.
+    let rounding = match arg_type {
+        Some(DataType::Decimal128(precision, scale))
+            if precision <= DECIMAL128_MAX_PRECISION - 5 && scale <= DECIMAL128_MAX_SCALE - 5 =>
+        {
+            Some((precision, scale))
+        }
+        _ => None,
+    };
+    let args = match rounding {
+        Some((precision, scale)) => args
+            .into_iter()
+            .map(|arg| cast(arg, DataType::Decimal128(precision + 1, scale + 1)))
+            .collect(),
+        None => args,
+    };
+    let avg = expr::Expr::AggregateFunction(AggregateFunction {
         func: average::avg_udaf(),
         params: AggregateFunctionParams {
             args,
@@ -73,7 +90,11 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             order_by: input.order_by,
             null_treatment,
         },
-    }))
+    });
+    Ok(match rounding {
+        Some((precision, scale)) => cast(avg, DataType::Decimal128(precision + 4, scale + 4)),
+        None => avg,
+    })
 }
 
 fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -1015,7 +1036,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("listagg", F::custom(listagg)),
         ("max", F::custom(max_value)),
         ("max_by", F::custom(max_by)),
-        ("mean", F::default(average::avg_udaf)),
+        ("mean", F::custom(avg)),
         ("measure", F::unknown("measure")),
         ("median", F::custom(median)),
         ("min", F::custom(min_value)),

@@ -2804,7 +2804,7 @@ name: "test_derived_tpcds_query_result[09]"
 data:
   |-
     | bucket1     | bucket2    | bucket3    | bucket4      | bucket5      |
-    | -162.240578 | 105.717630 | 198.330830 | -1178.708246 | -1467.157090 |
+    | -162.240579 | 105.717631 | 198.330831 | -1178.708247 | -1467.157090 |
 ---
 name: "test_derived_tpcds_query_result[10]"
 data:
@@ -3010,7 +3010,7 @@ name: "test_derived_tpcds_query_result[18]"
 data:
   |-
     | i_item_id        | ca_country    | ca_state | ca_county       | agg1      | agg2       | agg3       | agg4       | agg5         | agg6        | agg7     |
-    | NULL             | NULL          | NULL     | NULL            | 59.260869 | 86.442173  | 53.683478  | 46.365217  | 171.216086   | 1936.521739 | 0.608695 |
+    | NULL             | NULL          | NULL     | NULL            | 59.260870 | 86.442174  | 53.683478  | 46.365217  | 171.216087   | 1936.521739 | 0.608696 |
     | AAAAAAAAAHAAAAAA | NULL          | NULL     | NULL            | 61.000000 | 78.270000  | 0.000000   | 17.210000  | -2070.950000 | 1942.000000 | 1.000000 |
     | AAAAAAAAALAAAAAA | NULL          | NULL     | NULL            | 60.000000 | 39.160000  | 670.750000 | 21.920000  | -418.750000  | 1928.000000 | 0.000000 |
     | AAAAAAAABAAAAAAA | NULL          | NULL     | NULL            | 30.000000 | 185.900000 | 0.000000   | 9.290000   | -1917.000000 | 1928.000000 | 0.000000 |
@@ -3293,7 +3293,7 @@ data:
     | AAAAAAAAHGAAAAAA | 48.0      | 119.430000 | 0.000000    | 61.950000  |
     | AAAAAAAAHJAAAAAA | 66.0      | 59.490000  | 0.000000    | 39.260000  |
     | AAAAAAAAIAAAAAAA | 69.5      | 103.905000 | 0.000000    | 47.960000  |
-    | AAAAAAAAICAAAAAA | 42.666667 | 103.836666 | 0.000000    | 69.956666  |
+    | AAAAAAAAICAAAAAA | 42.666667 | 103.836667 | 0.000000    | 69.956667  |
     | AAAAAAAAIDAAAAAA | 77.0      | 12.000000  | 157.540000  | 3.720000   |
     | AAAAAAAAIGAAAAAA | 31.5      | 33.670000  | 397.425000  | 24.500000  |
     | AAAAAAAAIIAAAAAA | 54.0      | 168.920000 | 0.000000    | 92.900000  |
@@ -3330,7 +3330,7 @@ name: "test_derived_tpcds_query_result[27]"
 data:
   |-
     | i_item_id        | s_state | g_state | agg1      | agg2       | agg3        | agg4       |
-    | NULL             | NULL    | 1       | 50.202381 | 80.912976  | 195.773176  | 44.271764  |
+    | NULL             | NULL    | 1       | 50.202381 | 80.912976  | 195.773176  | 44.271765  |
     | AAAAAAAAABAAAAAA | NULL    | 1       | 4.0       | 33.100000  | 28.790000   | 24.820000  |
     | AAAAAAAAABAAAAAA | TN      | 0       | 4.0       | 33.100000  | 28.790000   | 24.820000  |
     | AAAAAAAAAEAAAAAA | NULL    | 1       | 69.5      | 31.390000  | 424.735000  | 21.515000  |
@@ -3435,7 +3435,7 @@ name: "test_derived_tpcds_query_result[28]"
 data:
   |-
     | B1_LP     | B1_CNT | B1_CNTD | B2_LP     | B2_CNT | B2_CNTD | B3_LP     | B3_CNT | B3_CNTD | B4_LP     | B4_CNT | B4_CNTD | B5_LP     | B5_CNT | B5_CNTD | B6_LP      | B6_CNT | B6_CNTD |
-    | 54.676526 | 357    | 346     | 89.351976 | 344    | 340     | 58.990555 | 288    | 280     | 70.273530 | 371    | 360     | 89.852031 | 315    | 311     | 108.428782 | 271    | 268     |
+    | 54.676527 | 357    | 346     | 89.351977 | 344    | 340     | 58.990556 | 288    | 280     | 70.273531 | 371    | 360     | 89.852032 | 315    | 311     | 108.428782 | 271    | 268     |
 ---
 name: "test_derived_tpcds_query_result[29]"
 data:

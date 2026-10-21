@@ -247,6 +247,13 @@ The accuracy argument is not the problem, since `approx_percentile_cont` takes a
 
 **Fix (in this pull request).** `percentile_approx` and `approx_percentile` are computed with `percentile_disc`, which returns values of the column, as Spark does, and the exact percentile is within any accuracy. An array of percentages returns an array of the column type without null elements. `approx_count_distinct` counts floating-point values by their string representation after normalizing `-0.0` to `0.0`. The `percentile_approx` and `approx_count_distinct` doctests pass.
 
+`test_aggregation_functions` then failed on the average of a decimal column, `2.16666` in Sail and `2.16667` in Spark.
+DataFusion truncates the decimal average to the result scale, while Spark rounds it half up.
+
+**Fix (in this pull request).** `avg` and `mean` of a decimal column are computed with one more digit of scale and then cast to the result type (`decimal(p + 4, s + 4)`), and the cast rounds half up.
+This is done when the result type has room for the extra digit, which is the case for a precision of up to 33.
+The TPC-H and TPC-DS snapshots are updated for the rounded averages.
+
 ### Higher-Order Functions
 
 | Test                                              | Error                                          |

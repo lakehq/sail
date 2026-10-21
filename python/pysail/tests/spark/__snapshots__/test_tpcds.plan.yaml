@@ -31,7 +31,7 @@ data:
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[_0@0 as #80, _1@1 as #81, CAST(_0@0 AS Float64) as CAST(customer.#80 AS Float64)]
                   DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[avg(ctr2.#100)@1 * 1.2 as #101, #99@0 as #99]
+              ProjectionExec: expr=[CAST(avg(ctr2.#100)@1 AS Decimal128(21, 6)) * 1.2 as #101, #99@0 as #99]
                 AggregateExec: mode=FinalPartitioned, gby=[#99@0 as #99], aggr=[avg(ctr2.#100)]
                   RepartitionExec: partitioning=Hash([#99@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#99@0 as #99], aggr=[avg(ctr2.#100)]
@@ -367,7 +367,7 @@ data:
                                   FilterExec: _3@1 = scalar_subquery(<pending>), projection=[_0@0]
                                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                       DataSourceExec: partitions=1, partition_sizes=[1]
-                          ProjectionExec: expr=[avg(j.#138)@1 as #155, #145@0 as #145]
+                          ProjectionExec: expr=[CAST(avg(j.#138)@1 AS Decimal128(8, 6)) as #155, #145@0 as #145]
                             AggregateExec: mode=FinalPartitioned, gby=[#145@0 as #145], aggr=[avg(j.#138)]
                               RepartitionExec: partitioning=Hash([#145@0], 4), input_partitions=1
                                 AggregateExec: mode=Partial, gby=[#145@1 as #145], aggr=[avg(j.#138)]
@@ -387,8 +387,8 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#101@0 as i_item_id, #102@1 as agg1, #103@2 as agg2, #104@3 as agg3, #105@4 as agg4]
       SortPreservingMergeExec: [#101@0 ASC], fetch=100
-        ProjectionExec: expr=[#61@0 as #101, avg(store_sales.#10)@1 as #102, avg(store_sales.#12)@2 as #103, avg(store_sales.#19)@3 as #104, avg(store_sales.#13)@4 as #105]
-          SortExec: TopK(fetch=100), expr=[#61@0 ASC], preserve_partitioning=[true]
+        SortExec: TopK(fetch=100), expr=[#101@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[#61@0 as #101, avg(store_sales.#10)@1 as #102, CAST(avg(store_sales.#12)@2 AS Decimal128(9, 6)) as #103, CAST(avg(store_sales.#19)@3 AS Decimal128(11, 6)) as #104, CAST(avg(store_sales.#13)@4 AS Decimal128(9, 6)) as #105]
             AggregateExec: mode=FinalPartitioned, gby=[#61@0 as #61], aggr=[avg(store_sales.#10), avg(store_sales.#12), avg(store_sales.#19), avg(store_sales.#13)]
               RepartitionExec: partitioning=Hash([#61@0], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[#61@4 as #61], aggr=[avg(store_sales.#10), avg(store_sales.#12), avg(store_sales.#19), avg(store_sales.#13)]
@@ -483,7 +483,7 @@ data:
                 FilterExec: _10@0 >= 1 AND _10@0 <= 20, projection=[]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(store_sales.#41)@0 as #50]
+        ProjectionExec: expr=[CAST(avg(store_sales.#41)@0 AS Decimal128(11, 6)) as #50]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#41)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#41)]
@@ -491,7 +491,7 @@ data:
                   FilterExec: _10@0 >= 1 AND _10@0 <= 20, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#73)@0 AS Decimal128(11, 6)) as #74]
+        ProjectionExec: expr=[CAST(CAST(avg(store_sales.#73)@0 AS Decimal128(10, 6)) AS Decimal128(11, 6)) as #74]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#73)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#73)]
@@ -506,7 +506,7 @@ data:
                 FilterExec: _10@0 >= 21 AND _10@0 <= 40, projection=[]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(store_sales.#113)@0 as #122]
+        ProjectionExec: expr=[CAST(avg(store_sales.#113)@0 AS Decimal128(11, 6)) as #122]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#113)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#113)]
@@ -514,7 +514,7 @@ data:
                   FilterExec: _10@0 >= 21 AND _10@0 <= 40, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#145)@0 AS Decimal128(11, 6)) as #146]
+        ProjectionExec: expr=[CAST(CAST(avg(store_sales.#145)@0 AS Decimal128(10, 6)) AS Decimal128(11, 6)) as #146]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#145)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#145)]
@@ -529,7 +529,7 @@ data:
                 FilterExec: _10@0 >= 41 AND _10@0 <= 60, projection=[]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(store_sales.#185)@0 as #194]
+        ProjectionExec: expr=[CAST(avg(store_sales.#185)@0 AS Decimal128(11, 6)) as #194]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#185)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#185)]
@@ -537,7 +537,7 @@ data:
                   FilterExec: _10@0 >= 41 AND _10@0 <= 60, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#217)@0 AS Decimal128(11, 6)) as #218]
+        ProjectionExec: expr=[CAST(CAST(avg(store_sales.#217)@0 AS Decimal128(10, 6)) AS Decimal128(11, 6)) as #218]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#217)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#217)]
@@ -552,7 +552,7 @@ data:
                 FilterExec: _10@0 >= 61 AND _10@0 <= 80, projection=[]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(store_sales.#257)@0 as #266]
+        ProjectionExec: expr=[CAST(avg(store_sales.#257)@0 AS Decimal128(11, 6)) as #266]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#257)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#257)]
@@ -560,7 +560,7 @@ data:
                   FilterExec: _10@0 >= 61 AND _10@0 <= 80, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#289)@0 AS Decimal128(11, 6)) as #290]
+        ProjectionExec: expr=[CAST(CAST(avg(store_sales.#289)@0 AS Decimal128(10, 6)) AS Decimal128(11, 6)) as #290]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#289)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#289)]
@@ -575,7 +575,7 @@ data:
                 FilterExec: _10@0 >= 81 AND _10@0 <= 100, projection=[]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(store_sales.#329)@0 as #338]
+        ProjectionExec: expr=[CAST(avg(store_sales.#329)@0 AS Decimal128(11, 6)) as #338]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#329)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#329)]
@@ -583,7 +583,7 @@ data:
                   FilterExec: _10@0 >= 81 AND _10@0 <= 100, projection=[_14@1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(avg(store_sales.#361)@0 AS Decimal128(11, 6)) as #362]
+        ProjectionExec: expr=[CAST(CAST(avg(store_sales.#361)@0 AS Decimal128(10, 6)) AS Decimal128(11, 6)) as #362]
           AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#361)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#361)]
@@ -758,7 +758,7 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#107@0 as avg(ss_quantity), #108@1 as avg(ss_ext_sales_price), #109@2 as avg(ss_ext_wholesale_cost), #110@3 as sum(ss_ext_wholesale_cost)]
-      ProjectionExec: expr=[avg(store_sales.#10)@0 as #107, avg(store_sales.#15)@1 as #108, avg(store_sales.#16)@2 as #109, sum(store_sales.#16)@3 as #110]
+      ProjectionExec: expr=[avg(store_sales.#10)@0 as #107, CAST(avg(store_sales.#15)@1 AS Decimal128(11, 6)) as #108, CAST(avg(store_sales.#16)@2 AS Decimal128(10, 6)) as #109, sum(store_sales.#16)@3 as #110]
         AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#10), avg(store_sales.#15), avg(store_sales.#16), sum(store_sales.#16)]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#10), avg(store_sales.#15), avg(store_sales.#16), sum(store_sales.#16)]
@@ -1453,7 +1453,7 @@ data:
     ProjectionExec: expr=[#133@0 as i_item_id, #134@1 as ca_country, #135@2 as ca_state, #136@3 as ca_county, #137@4 as agg1, #138@5 as agg2, #139@6 as agg3, #140@7 as agg4, #141@8 as agg5, #142@9 as agg6, #143@10 as agg7]
       SortPreservingMergeExec: [#134@1 ASC, #135@2 ASC, #136@3 ASC, #133@0 ASC], fetch=100
         SortExec: TopK(fetch=100), expr=[#134@1 ASC, #135@2 ASC, #136@3 ASC, #133@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#112@0 as #133, #80@1 as #134, #78@2 as #135, #77@3 as #136, avg(catalog_sales.#18)@5 as #137, avg(catalog_sales.#20)@6 as #138, avg(catalog_sales.#27)@7 as #139, avg(catalog_sales.#21)@8 as #140, avg(catalog_sales.#33)@9 as #141, avg(customer.#65)@10 as #142, avg(cd1.#40)@11 as #143]
+          ProjectionExec: expr=[#112@0 as #133, #80@1 as #134, #78@2 as #135, #77@3 as #136, CAST(avg(catalog_sales.#18)@5 AS Decimal128(16, 6)) as #137, CAST(avg(catalog_sales.#20)@6 AS Decimal128(16, 6)) as #138, CAST(avg(catalog_sales.#27)@7 AS Decimal128(16, 6)) as #139, CAST(avg(catalog_sales.#21)@8 AS Decimal128(16, 6)) as #140, CAST(avg(catalog_sales.#33)@9 AS Decimal128(16, 6)) as #141, CAST(avg(customer.#65)@10 AS Decimal128(16, 6)) as #142, CAST(avg(cd1.#40)@11 AS Decimal128(16, 6)) as #143]
             AggregateExec: mode=FinalPartitioned, gby=[#112@0 as #112, #80@1 as #80, #78@2 as #78, #77@3 as #77, __grouping_id@4 as __grouping_id], aggr=[avg(catalog_sales.#18), avg(catalog_sales.#20), avg(catalog_sales.#27), avg(catalog_sales.#21), avg(catalog_sales.#33), avg(customer.#65), avg(cd1.#40)]
               RepartitionExec: partitioning=Hash([#112@0, #80@1, #78@2, #77@3, __grouping_id@4], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[(NULL as #112, NULL as #80, NULL as #78, NULL as #77), (#112@10 as #112, NULL as #80, NULL as #78, NULL as #77), (#112@10 as #112, #80@9 as #80, NULL as #78, NULL as #77), (#112@10 as #112, #80@9 as #80, #78@8 as #78, NULL as #77), (#112@10 as #112, #80@9 as #80, #78@8 as #78, #77@7 as #77)], aggr=[avg(catalog_sales.#18), avg(catalog_sales.#20), avg(catalog_sales.#27), avg(catalog_sales.#21), avg(catalog_sales.#33), avg(customer.#65), avg(cd1.#40)]
@@ -1910,7 +1910,7 @@ data:
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[_0@0 as #112, _8@1 as #120, _9@2 as #121, _10@3 as #122]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(0.05 * avg(ssales.#146)@0 AS Decimal128(32, 8)) as #147]
+        ProjectionExec: expr=[CAST(0.05 * CAST(avg(ssales.#146)@0 AS Decimal128(20, 6)) AS Decimal128(32, 8)) as #147]
           AggregateExec: mode=Final, gby=[], aggr=[avg(ssales.#146)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(ssales.#146)]
@@ -1987,7 +1987,7 @@ data:
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[_0@0 as #112, _8@1 as #120, _9@2 as #121, _10@3 as #122]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[CAST(0.05 * avg(ssales.#146)@0 AS Decimal128(32, 8)) as #147]
+        ProjectionExec: expr=[CAST(0.05 * CAST(avg(ssales.#146)@0 AS Decimal128(20, 6)) AS Decimal128(32, 8)) as #147]
           AggregateExec: mode=Final, gby=[], aggr=[avg(ssales.#146)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(ssales.#146)]
@@ -2075,8 +2075,8 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#112@0 as i_item_id, #113@1 as agg1, #114@2 as agg2, #115@3 as agg3, #116@4 as agg4]
       SortPreservingMergeExec: [#112@0 ASC], fetch=100
-        ProjectionExec: expr=[#72@0 as #112, avg(catalog_sales.#18)@1 as #113, avg(catalog_sales.#20)@2 as #114, avg(catalog_sales.#27)@3 as #115, avg(catalog_sales.#21)@4 as #116]
-          SortExec: TopK(fetch=100), expr=[#72@0 ASC], preserve_partitioning=[true]
+        SortExec: TopK(fetch=100), expr=[#112@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[#72@0 as #112, avg(catalog_sales.#18)@1 as #113, CAST(avg(catalog_sales.#20)@2 AS Decimal128(9, 6)) as #114, CAST(avg(catalog_sales.#27)@3 AS Decimal128(11, 6)) as #115, CAST(avg(catalog_sales.#21)@4 AS Decimal128(9, 6)) as #116]
             AggregateExec: mode=FinalPartitioned, gby=[#72@0 as #72], aggr=[avg(catalog_sales.#18), avg(catalog_sales.#20), avg(catalog_sales.#27), avg(catalog_sales.#21)]
               RepartitionExec: partitioning=Hash([#72@0], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[#72@4 as #72], aggr=[avg(catalog_sales.#18), avg(catalog_sales.#20), avg(catalog_sales.#27), avg(catalog_sales.#21)]
@@ -2113,7 +2113,7 @@ data:
     ProjectionExec: expr=[#111@0 as i_item_id, #112@1 as s_state, #113@2 as g_state, #114@3 as agg1, #115@4 as agg2, #116@5 as agg3, #117@6 as agg4]
       SortPreservingMergeExec: [#111@0 ASC, #112@1 ASC], fetch=100
         SortExec: TopK(fetch=100), expr=[#111@0 ASC, #112@1 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#90@0 as #111, #84@1 as #112, CAST(__grouping_id@2 & 1 AS Int8) as #113, avg(store_sales.#10)@3 as #114, avg(store_sales.#12)@4 as #115, avg(store_sales.#19)@5 as #116, avg(store_sales.#13)@6 as #117]
+          ProjectionExec: expr=[#90@0 as #111, #84@1 as #112, CAST(__grouping_id@2 & 1 AS Int8) as #113, avg(store_sales.#10)@3 as #114, CAST(avg(store_sales.#12)@4 AS Decimal128(9, 6)) as #115, CAST(avg(store_sales.#19)@5 AS Decimal128(11, 6)) as #116, CAST(avg(store_sales.#13)@6 AS Decimal128(9, 6)) as #117]
             AggregateExec: mode=FinalPartitioned, gby=[#90@0 as #90, #84@1 as #84, __grouping_id@2 as __grouping_id], aggr=[avg(store_sales.#10), avg(store_sales.#12), avg(store_sales.#19), avg(store_sales.#13)]
               RepartitionExec: partitioning=Hash([#90@0, #84@1, __grouping_id@2], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[(NULL as #90, NULL as #84), (#90@5 as #90, NULL as #84), (#90@5 as #90, #84@4 as #84)], aggr=[avg(store_sales.#10), avg(store_sales.#12), avg(store_sales.#19), avg(store_sales.#13)]
@@ -2153,7 +2153,7 @@ data:
       ProjectionExec: expr=[#23@3 as #156, #24@4 as #157, #25@5 as #158, #49@6 as #159, #50@7 as #160, #51@8 as #161, #75@9 as #162, #76@10 as #163, #77@11 as #164, #101@12 as #165, #102@13 as #166, #103@14 as #167, #127@15 as #168, #128@16 as #169, #129@17 as #170, #153@0 as #171, #154@1 as #172, #155@2 as #173]
         GlobalLimitExec: skip=0, fetch=100
           CrossJoinExec
-            ProjectionExec: expr=[avg(store_sales.#142)@0 as #153, count(store_sales.#142)@1 as #154, count(DISTINCT store_sales.#142)@2 as #155]
+            ProjectionExec: expr=[CAST(avg(store_sales.#142)@0 AS Decimal128(9, 6)) as #153, count(store_sales.#142)@1 as #154, count(DISTINCT store_sales.#142)@2 as #155]
               GlobalLimitExec: skip=0, fetch=100
                 AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#142), count(store_sales.#142), count(DISTINCT store_sales.#142)]
                   CoalescePartitionsExec
@@ -2165,7 +2165,7 @@ data:
             ProjectionExec: expr=[#23@3 as #23, #24@4 as #24, #25@5 as #25, #49@6 as #49, #50@7 as #50, #51@8 as #51, #75@9 as #75, #76@10 as #76, #77@11 as #77, #101@12 as #101, #102@13 as #102, #103@14 as #103, #127@0 as #127, #128@1 as #128, #129@2 as #129]
               GlobalLimitExec: skip=0, fetch=100
                 CrossJoinExec
-                  ProjectionExec: expr=[avg(store_sales.#116)@0 as #127, count(store_sales.#116)@1 as #128, count(DISTINCT store_sales.#116)@2 as #129]
+                  ProjectionExec: expr=[CAST(avg(store_sales.#116)@0 AS Decimal128(9, 6)) as #127, count(store_sales.#116)@1 as #128, count(DISTINCT store_sales.#116)@2 as #129]
                     GlobalLimitExec: skip=0, fetch=100
                       AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#116), count(store_sales.#116), count(DISTINCT store_sales.#116)]
                         CoalescePartitionsExec
@@ -2177,7 +2177,7 @@ data:
                   ProjectionExec: expr=[#23@3 as #23, #24@4 as #24, #25@5 as #25, #49@6 as #49, #50@7 as #50, #51@8 as #51, #75@9 as #75, #76@10 as #76, #77@11 as #77, #101@0 as #101, #102@1 as #102, #103@2 as #103]
                     GlobalLimitExec: skip=0, fetch=100
                       CrossJoinExec
-                        ProjectionExec: expr=[avg(store_sales.#90)@0 as #101, count(store_sales.#90)@1 as #102, count(DISTINCT store_sales.#90)@2 as #103]
+                        ProjectionExec: expr=[CAST(avg(store_sales.#90)@0 AS Decimal128(9, 6)) as #101, count(store_sales.#90)@1 as #102, count(DISTINCT store_sales.#90)@2 as #103]
                           GlobalLimitExec: skip=0, fetch=100
                             AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#90), count(store_sales.#90), count(DISTINCT store_sales.#90)]
                               CoalescePartitionsExec
@@ -2189,7 +2189,7 @@ data:
                         ProjectionExec: expr=[#23@3 as #23, #24@4 as #24, #25@5 as #25, #49@6 as #49, #50@7 as #50, #51@8 as #51, #75@0 as #75, #76@1 as #76, #77@2 as #77]
                           GlobalLimitExec: skip=0, fetch=100
                             CrossJoinExec
-                              ProjectionExec: expr=[avg(store_sales.#64)@0 as #75, count(store_sales.#64)@1 as #76, count(DISTINCT store_sales.#64)@2 as #77]
+                              ProjectionExec: expr=[CAST(avg(store_sales.#64)@0 AS Decimal128(9, 6)) as #75, count(store_sales.#64)@1 as #76, count(DISTINCT store_sales.#64)@2 as #77]
                                 GlobalLimitExec: skip=0, fetch=100
                                   AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#64), count(store_sales.#64), count(DISTINCT store_sales.#64)]
                                     CoalescePartitionsExec
@@ -2200,7 +2200,7 @@ data:
                                               DataSourceExec: partitions=1, partition_sizes=[1]
                               GlobalLimitExec: skip=0, fetch=100
                                 CrossJoinExec
-                                  ProjectionExec: expr=[avg(store_sales.#12)@0 as #23, count(store_sales.#12)@1 as #24, count(DISTINCT store_sales.#12)@2 as #25]
+                                  ProjectionExec: expr=[CAST(avg(store_sales.#12)@0 AS Decimal128(9, 6)) as #23, count(store_sales.#12)@1 as #24, count(DISTINCT store_sales.#12)@2 as #25]
                                     GlobalLimitExec: skip=0, fetch=100
                                       AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#12), count(store_sales.#12), count(DISTINCT store_sales.#12)]
                                         CoalescePartitionsExec
@@ -2209,7 +2209,7 @@ data:
                                               FilterExec: _10@0 >= 0 AND _10@0 <= 5 AND (_12@2 >= 28.00 AND _12@2 <= 38.00 OR _19@3 >= 12573.00 AND _19@3 <= 13573.00 OR _11@1 >= 33.00 AND _11@1 <= 53.00), projection=[_12@2]
                                                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                                  ProjectionExec: expr=[avg(store_sales.#38)@0 as #49, count(store_sales.#38)@1 as #50, count(DISTINCT store_sales.#38)@2 as #51]
+                                  ProjectionExec: expr=[CAST(avg(store_sales.#38)@0 AS Decimal128(9, 6)) as #49, count(store_sales.#38)@1 as #50, count(DISTINCT store_sales.#38)@2 as #51]
                                     GlobalLimitExec: skip=0, fetch=100
                                       AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#38), count(store_sales.#38), count(DISTINCT store_sales.#38)]
                                         CoalescePartitionsExec
@@ -2303,7 +2303,7 @@ data:
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                       ProjectionExec: expr=[_0@0 as #81, _1@1 as #82, _4@2 as #85, _7@3 as #88, _8@4 as #89, _9@5 as #90, _10@6 as #91, _11@7 as #92, _12@8 as #93, _13@9 as #94, _14@10 as #95, _15@11 as #96, _16@12 as #97, _17@13 as #98, CAST(_0@0 AS Float64) as CAST(customer.#81 AS Float64)]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[avg(ctr2.#101)@1 * 1.2 as #102, #100@0 as #100]
+              ProjectionExec: expr=[CAST(avg(ctr2.#101)@1 AS Decimal128(21, 6)) * 1.2 as #102, #100@0 as #100]
                 AggregateExec: mode=FinalPartitioned, gby=[#100@0 as #100], aggr=[avg(ctr2.#101)]
                   RepartitionExec: partitioning=Hash([#100@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#100@0 as #100], aggr=[avg(ctr2.#101)]
@@ -2458,7 +2458,7 @@ data:
                         FilterExec: _2@1 >= 1999-02-22 AND _2@1 <= 1999-05-23, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[1.3 * avg(catalog_sales.#106)@1 as #146, #99@0 as #99]
+                  ProjectionExec: expr=[1.3 * CAST(avg(catalog_sales.#106)@1 AS Decimal128(11, 6)) as #146, #99@0 as #99]
                     AggregateExec: mode=FinalPartitioned, gby=[#99@0 as #99], aggr=[avg(catalog_sales.#106)]
                       RepartitionExec: partitioning=Hash([#99@0], 4), input_partitions=4
                         AggregateExec: mode=Partial, gby=[#99@0 as #99], aggr=[avg(catalog_sales.#106)]
@@ -3027,9 +3027,9 @@ data:
                             ProjectionExec: expr=[#47@0 as #47, rank() ORDER BY [V1.#48 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank() ORDER BY [V1.#48 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
                               BoundedWindowAggExec: wdw=[rank() ORDER BY [V1.#48 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [V1.#48 ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                 SortPreservingMergeExec: [#48@1 ASC]
-                                  ProjectionExec: expr=[#2@0 as #47, avg(ss1.#22)@1 as #48]
-                                    SortExec: expr=[avg(ss1.#22)@1 ASC], preserve_partitioning=[true]
-                                      FilterExec: CAST(avg(ss1.#22)@1 AS Decimal128(12, 7)) > 0.9 * scalar_subquery(<pending>)
+                                  SortExec: expr=[#48@1 ASC], preserve_partitioning=[true]
+                                    ProjectionExec: expr=[#2@0 as #47, CAST(avg(ss1.#22)@1 AS Decimal128(10, 6)) as #48]
+                                      FilterExec: CAST(CAST(avg(ss1.#22)@1 AS Decimal128(10, 6)) AS Decimal128(12, 7)) > 0.9 * scalar_subquery(<pending>)
                                         AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[avg(ss1.#22)]
                                           RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
                                             AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[avg(ss1.#22)]
@@ -3043,9 +3043,9 @@ data:
                           ProjectionExec: expr=[#101@0 as #101, rank() ORDER BY [V2.#102 DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rank() ORDER BY [V2.#102 DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
                             BoundedWindowAggExec: wdw=[rank() ORDER BY [V2.#102 DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [V2.#102 DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                               SortPreservingMergeExec: [#102@1 DESC NULLS LAST]
-                                ProjectionExec: expr=[#56@0 as #101, avg(ss1.#76)@1 as #102]
-                                  SortExec: expr=[avg(ss1.#76)@1 DESC NULLS LAST], preserve_partitioning=[true]
-                                    FilterExec: CAST(avg(ss1.#76)@1 AS Decimal128(12, 7)) > 0.9 * scalar_subquery(<pending>)
+                                SortExec: expr=[#102@1 DESC NULLS LAST], preserve_partitioning=[true]
+                                  ProjectionExec: expr=[#56@0 as #101, CAST(avg(ss1.#76)@1 AS Decimal128(10, 6)) as #102]
+                                    FilterExec: CAST(CAST(avg(ss1.#76)@1 AS Decimal128(10, 6)) AS Decimal128(12, 7)) > 0.9 * scalar_subquery(<pending>)
                                       AggregateExec: mode=FinalPartitioned, gby=[#56@0 as #56], aggr=[avg(ss1.#76)]
                                         RepartitionExec: partitioning=Hash([#56@0], 4), input_partitions=4
                                           AggregateExec: mode=Partial, gby=[#56@0 as #56], aggr=[avg(ss1.#76)]
@@ -3055,7 +3055,7 @@ data:
                                                   DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[_0@0 as #130, _21@1 as #151]
                 DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(store_sales.#45)@1 as #46]
+        ProjectionExec: expr=[CAST(avg(store_sales.#45)@1 AS Decimal128(10, 6)) as #46]
           AggregateExec: mode=FinalPartitioned, gby=[#30@0 as #30], aggr=[avg(store_sales.#45)], ordering_mode=Sorted
             RepartitionExec: partitioning=Hash([#30@0], 4), input_partitions=4
               AggregateExec: mode=Partial, gby=[#30@0 as #30], aggr=[avg(store_sales.#45)], ordering_mode=Sorted
@@ -3063,7 +3063,7 @@ data:
                   FilterExec: _7@1 = 6 AND _5@0 IS NULL, projection=[_7@1, _22@2]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(store_sales.#99)@1 as #100]
+        ProjectionExec: expr=[CAST(avg(store_sales.#99)@1 AS Decimal128(10, 6)) as #100]
           AggregateExec: mode=FinalPartitioned, gby=[#84@0 as #84], aggr=[avg(store_sales.#99)], ordering_mode=Sorted
             RepartitionExec: partitioning=Hash([#84@0], 4), input_partitions=4
               AggregateExec: mode=Partial, gby=[#84@0 as #84], aggr=[avg(store_sales.#99)], ordering_mode=Sorted
@@ -4391,7 +4391,7 @@ data:
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[_0@0 as #29, _4@1 as #33, _5@2 as #34, _6@3 as #35, _8@4 as #37]
                   DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[#102@0 as #105, avg(sa.#104)@1 as #106]
+              ProjectionExec: expr=[#102@0 as #105, CAST(avg(sa.#104)@1 AS Decimal128(19, 6)) as #106]
                 AggregateExec: mode=FinalPartitioned, gby=[#102@0 as #102], aggr=[avg(sa.#104)]
                   RepartitionExec: partitioning=Hash([#102@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#102@0 as #102], aggr=[avg(sa.#104)]
@@ -5439,7 +5439,7 @@ data:
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                       ProjectionExec: expr=[_0@0 as #84, _1@1 as #85, _4@2 as #88, _7@3 as #91, _8@4 as #92, _9@5 as #93, CAST(_0@0 AS Float64) as CAST(customer.#84 AS Float64)]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[avg(ctr2.#104)@1 * 1.2 as #105, #103@0 as #103]
+              ProjectionExec: expr=[CAST(avg(ctr2.#104)@1 AS Decimal128(21, 6)) * 1.2 as #105, #103@0 as #103]
                 AggregateExec: mode=FinalPartitioned, gby=[#103@0 as #103], aggr=[avg(ctr2.#104)]
                   RepartitionExec: partitioning=Hash([#103@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#103@0 as #103], aggr=[avg(ctr2.#104)]
@@ -5626,7 +5626,7 @@ data:
     ProjectionExec: expr=[#134@0 as substr(r_reason_desc, 1, 20), #135@1 as avg(ws_quantity), #136@2 as avg(wr_refunded_cash), #137@3 as avg(wr_fee)]
       SortPreservingMergeExec: [#134@0 ASC, #135@1 ASC, #136@2 ASC, #137@3 ASC], fetch=100
         SortExec: TopK(fetch=100), expr=[#134@0 ASC, #135@1 ASC, #136@2 ASC, #137@3 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[substr(#133@0, 1, 20) as #134, avg(web_sales.#18)@1 as #135, avg(web_returns.#54)@2 as #136, avg(web_returns.#52)@3 as #137]
+          ProjectionExec: expr=[substr(#133@0, 1, 20) as #134, avg(web_sales.#18)@1 as #135, CAST(avg(web_returns.#54)@2 AS Decimal128(11, 6)) as #136, CAST(avg(web_returns.#52)@3 AS Decimal128(8, 6)) as #137]
             AggregateExec: mode=FinalPartitioned, gby=[#133@0 as #133], aggr=[avg(web_sales.#18), avg(web_returns.#54), avg(web_returns.#52)]
               RepartitionExec: partitioning=Hash([#133@0], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[#133@3 as #133], aggr=[avg(web_sales.#18), avg(web_returns.#54), avg(web_returns.#52)]
@@ -6156,7 +6156,7 @@ data:
                         FilterExec: _2@1 >= 2001-01-25 AND _2@1 <= 2001-04-25, projection=[_0@0]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[1.3 * avg(web_sales.#106)@1 as #146, #87@0 as #87]
+                  ProjectionExec: expr=[1.3 * CAST(avg(web_sales.#106)@1 AS Decimal128(11, 6)) as #146, #87@0 as #87]
                     AggregateExec: mode=FinalPartitioned, gby=[#87@0 as #87], aggr=[avg(web_sales.#106)]
                       RepartitionExec: partitioning=Hash([#87@0], 4), input_partitions=4
                         AggregateExec: mode=Partial, gby=[#87@0 as #87], aggr=[avg(web_sales.#106)]

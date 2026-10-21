@@ -6,8 +6,8 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#16@0 as l_returnflag, #17@1 as l_linestatus, #18@2 as sum_qty, #19@3 as sum_base_price, #20@4 as sum_disc_price, #21@5 as sum_charge, #22@6 as avg_qty, #23@7 as avg_price, #24@8 as avg_disc, #25@9 as count_order]
       SortPreservingMergeExec: [#16@0 ASC, #17@1 ASC]
-        ProjectionExec: expr=[#8@0 as #16, #9@1 as #17, sum(lineitem.#4)@2 as #18, sum(lineitem.#5)@3 as #19, sum(lineitem.#5 * Int32(1) - lineitem.#6)@4 as #20, sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7)@5 as #21, avg(lineitem.#4)@6 as #22, avg(lineitem.#5)@7 as #23, avg(lineitem.#6)@8 as #24, count(Int64(1))@9 as #25]
-          SortExec: expr=[#8@0 ASC, #9@1 ASC], preserve_partitioning=[true]
+        SortExec: expr=[#16@0 ASC, #17@1 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[#8@0 as #16, #9@1 as #17, sum(lineitem.#4)@2 as #18, sum(lineitem.#5)@3 as #19, sum(lineitem.#5 * Int32(1) - lineitem.#6)@4 as #20, sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7)@5 as #21, CAST(avg(lineitem.#4)@6 AS Decimal128(8, 6)) as #22, CAST(avg(lineitem.#5)@7 AS Decimal128(11, 6)) as #23, CAST(avg(lineitem.#6)@8 AS Decimal128(6, 6)) as #24, count(Int64(1))@9 as #25]
             AggregateExec: mode=FinalPartitioned, gby=[#8@0 as #8, #9@1 as #9], aggr=[sum(lineitem.#4), sum(lineitem.#5), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6), sum(__common_expr_1 * 1 + lineitem.#7) as sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7), avg(lineitem.#4), avg(lineitem.#5), avg(lineitem.#6), count(Int64(1))]
               RepartitionExec: partitioning=Hash([#8@0, #9@1], 4), input_partitions=4
                 AggregateExec: mode=Partial, gby=[#8@5 as #8, #9@6 as #9], aggr=[sum(lineitem.#4), sum(lineitem.#5), sum(__common_expr_1) as sum(lineitem.#5 * Int32(1) - lineitem.#6), sum(__common_expr_1 * 1 + lineitem.#7) as sum(lineitem.#5 * Int32(1) - lineitem.#6 * Int32(1) + lineitem.#7), avg(lineitem.#4), avg(lineitem.#5), avg(lineitem.#6), count(Int64(1))]
@@ -496,7 +496,7 @@ data:
                       DataSourceExec: partitions=1, partition_sizes=[1]
                   ProjectionExec: expr=[_1@0 as #1, _4@1 as #4, _5@2 as #5]
                     DataSourceExec: partitions=1, partition_sizes=[1]
-                ProjectionExec: expr=[0.2 * avg(lineitem.#29)@1 as #41, #26@0 as #26]
+                ProjectionExec: expr=[0.2 * CAST(avg(lineitem.#29)@1 AS Decimal128(8, 6)) as #41, #26@0 as #26]
                   AggregateExec: mode=FinalPartitioned, gby=[#26@0 as #26], aggr=[avg(lineitem.#29)]
                     RepartitionExec: partitioning=Hash([#26@0], 4), input_partitions=1
                       AggregateExec: mode=Partial, gby=[#26@0 as #26], aggr=[avg(lineitem.#29)]
@@ -639,7 +639,7 @@ data:
                           ProjectionExec: expr=[_0@0 as #0, _4@1 as #4, _5@2 as #5]
                             FilterExec: substr(_4@1, 1, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]) AND CAST(_5@2 AS Decimal128(10, 6)) > scalar_subquery(<pending>)
                               DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[avg(customer.#13)@0 as #16]
+        ProjectionExec: expr=[CAST(avg(customer.#13)@0 AS Decimal128(10, 6)) as #16]
           AggregateExec: mode=Final, gby=[], aggr=[avg(customer.#13)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[avg(customer.#13)]
