@@ -63,6 +63,8 @@ Feature: array output schema
          |    |-- element: integer (containsNull = true)
         """
 
+  # Existing array-index bugs retained after reverting the PR implementation.
+  @sail-bug
   Rule: Array subscripts require integral types
 
     Scenario Outline: Non-integral array subscript <index> is rejected with ANSI <ansi>

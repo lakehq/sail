@@ -5,15 +5,14 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{
-    ExprSchemable, ScalarUDF, bitwise_shift_left, bitwise_shift_right, cast, expr, lit, when,
-};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions::expr_fn as datafusion_fn;
 use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
-use datafusion_spark::function::bitwise::expr_fn::{shiftleft, shiftright};
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -344,15 +343,12 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 
+        // For other types (List, Struct), extraction must be a literal.
         // SQL dot selectors are represented as literals; an attribute selector
         // is a column expression and cannot select a struct field.
-        let NamedExpr {
-            name: extraction_name,
-            expr: extraction,
-            ..
-        } = match extraction {
-            spec::Expr::Literal(lit) => self.resolve_expression_literal(lit, state)?,
-            spec::Expr::UnresolvedAttribute { .. } => {
+        let extraction = match extraction {
+            spec::Expr::Literal(lit) => lit,
+            spec::Expr::UnresolvedAttribute { name, .. } => {
                 if matches!(data_type, DataType::Struct(_)) {
                     // A column cannot select a struct field, even if it is named like one.
                     discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
@@ -360,8 +356,10 @@ impl PlanResolver<'_> {
                         "extraction must be a literal".to_string(),
                     ));
                 }
-                self.resolve_named_expression(extraction, schema, state)
-                    .await?
+                let name: Vec<String> = name.into();
+                spec::Literal::Utf8 {
+                    value: Some(name.one()?),
+                }
             }
             _ => {
                 // Array-index validation preserves the resolved array binding in Spark.
@@ -378,7 +376,11 @@ impl PlanResolver<'_> {
                 return Err(PlanError::invalid("extraction must be a literal"));
             }
         };
-        let extraction_name = extraction_name.one()?;
+        let extraction = self.resolve_literal(extraction, state)?;
+        let service = self.ctx.extension::<PlanService>()?;
+        let extraction_name = service
+            .plan_formatter()
+            .literal_to_string(&extraction, &self.config.session_timezone)?;
         let name = match data_type {
             DataType::Struct(_) => {
                 format!("{}.{}", name.one()?, extraction_name)
@@ -393,39 +395,21 @@ impl PlanResolver<'_> {
             | DataType::FixedSizeList(field, _)
             | DataType::ListView(field)
             | DataType::LargeListView(field) => {
-                // Spark requires an integral subscript; casting fractions would truncate them.
-                let extraction_type = extraction.get_type(schema)?;
-                if !extraction_type.is_integer() && extraction_type != DataType::Null {
+                let ScalarValue::Int64(index) = extraction.cast_to(&DataType::Int64)? else {
                     return Err(PlanError::AnalysisError(format!(
-                        "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Array index requires an integral type, got {}",
-                        extraction_type
+                        "invalid extraction value for array: {extraction}"
                     )));
-                }
-                // Preserve the integral restriction through coercion of projected columns.
-                let extraction = shiftright(shiftleft(extraction, lit(32_i32)), lit(32_i32));
-                // Spark wraps subscripts to signed INT; retain BIGINT for the one-based offset.
-                // Signed shifts also narrow unsigned inputs accepted by Sail.
-                let index = bitwise_shift_right(
-                    bitwise_shift_left(cast(extraction, DataType::Int64), lit(32_i64)),
-                    lit(32_i64),
-                );
+                };
+                let index_expr = lit(ScalarValue::Int64(index));
                 let element = array_element(
                     expr.clone(),
-                    // Avoid reverse indexing and overflowing DataFusion's one-based INT offset.
-                    when(
-                        index
-                            .clone()
-                            .lt(lit(0_i64))
-                            .or(index.clone().eq(lit(i64::from(i32::MAX)))),
-                        lit(0_i64),
-                    )
-                    .otherwise(index.clone() + lit(1_i64))?,
+                    lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
                 );
                 if self.config.ansi_mode {
                     let length = cast(array_length(expr.clone()), DataType::Int64);
                     let message = datafusion_fn::concat(vec![
                         lit("[INVALID_ARRAY_INDEX] The index "),
-                        cast(index.clone(), DataType::Utf8),
+                        cast(index_expr, DataType::Utf8),
                         lit(" is out of bounds. The array has "),
                         cast(length.clone(), DataType::Utf8),
                         lit(
@@ -436,16 +420,18 @@ impl PlanResolver<'_> {
                         ScalarUDF::from(RaiseError::new()).call(vec![message]),
                         field.data_type().clone(),
                     );
-                    let out_of_bounds = expr
-                        .is_not_null()
-                        .and(index.clone().lt(lit(0_i64)).or(index.gt_eq(length)));
+                    let out_of_bounds = match index {
+                        Some(index) if index < 0 => expr.is_not_null(),
+                        Some(index) => expr.is_not_null().and(length.lt_eq(lit(index))),
+                        None => lit(false),
+                    };
                     when(out_of_bounds, error).otherwise(element)?
                 } else {
                     element
                 }
             }
             DataType::Struct(fields) => {
-                let expr::Expr::Literal(ScalarValue::Utf8(Some(name)), _) = extraction else {
+                let ScalarValue::Utf8(Some(name)) = extraction else {
                     discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                     return Err(PlanError::AnalysisError(format!(
                         "invalid extraction value for struct: {extraction}"

@@ -75,7 +75,6 @@ use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
-use datafusion_spark::function::bitwise::bit_shift::SparkBitShift;
 use datafusion_spark::function::bitwise::bitwise_not::SparkBitwiseNot;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
@@ -3704,9 +3703,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_bitwise_not" | "bitwise_not" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitwiseNot::new())))
             }
-            "shiftleft" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::left()))),
-            "shiftright" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::right()))),
-            "shiftrightunsigned" => Ok(Arc::new(ScalarUDF::from(SparkBitShift::right_unsigned()))),
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
@@ -3850,7 +3846,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBase64>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
-            || node_inner.is::<SparkBitShift>()
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()

@@ -10,6 +10,9 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import any_of
 
 
+@pytest.mark.xfail(
+    not is_jvm_spark(), reason="Pre-existing projected array-index type validation bug", strict=True
+)
 @pytest.mark.parametrize("ansi", [True, False])
 @pytest.mark.parametrize("value", ["0.5", "0.5D"])
 @pytest.mark.parametrize("operation", ["schema", "collect"])
