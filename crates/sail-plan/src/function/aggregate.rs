@@ -658,7 +658,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Spark's collect_set ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
-    arg.get_type(schema)?;
+    let element_type = arg.get_type(schema)?;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
@@ -684,7 +684,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg))
+    Ok(coalesce_to_empty_array(agg, &element_type))
 }
 
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -692,7 +692,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     // Spark's collect_list ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
-    arg.get_type(schema)?;
+    let element_type = arg.get_type(schema)?;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
@@ -718,14 +718,14 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg))
+    Ok(coalesce_to_empty_array(agg, &element_type))
 }
 
 /// Spark's `collect_list`/`collect_set` return an empty array for a group with no (non-NULL)
 /// values to collect, but DataFusion's `array_agg` returns NULL over zero rows. Coalesce the
-/// aggregate to an empty array; native coercion gives it the aggregate's element type.
-fn coalesce_to_empty_array(agg: expr::Expr) -> expr::Expr {
-    let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Null));
+/// aggregate to a typed empty array so the empty case matches Spark instead of yielding NULL.
+fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
+    let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
     coalesce(vec![agg, lit(empty)])
 }
 

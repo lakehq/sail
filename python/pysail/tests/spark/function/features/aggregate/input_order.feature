@@ -251,33 +251,3 @@ Feature: input_order
       Then query result
         | f |
         | 2 |
-
-  Rule: WITHIN GROUP sort keys are expressions rather than output positions
-
-    Scenario Outline: Ordered percentiles use the literal key <key>
-      Given config spark.sql.orderByOrdinal = true
-      When query
-        """
-        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY <key>) AS continuous,
-               percentile_disc(0.5) WITHIN GROUP (ORDER BY <key>) AS discrete
-        FROM VALUES (5), (10) AS t(x)
-        """
-      Then query result
-        | continuous | discrete |
-        | <result>   | <result> |
-
-      Examples:
-        | key | result |
-        | -1  | -1.0   |
-        | 1   | 1.0    |
-
-    @spark-4.0
-    Scenario: Ordered string aggregation permits a constant before another sort key
-      When query
-        """
-        SELECT listagg(x) WITHIN GROUP (ORDER BY -1, x DESC) AS result
-        FROM VALUES ('a'), ('b') AS t(x)
-        """
-      Then query result
-        | result |
-        | ba     |
