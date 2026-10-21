@@ -30,6 +30,10 @@ pub(in crate::resolver) struct CteInfo {
 }
 
 impl CteInfo {
+    pub(super) fn is_definition(&self) -> bool {
+        self.kind == CteKind::Definition
+    }
+
     pub(in crate::resolver) fn try_new(
         plan: LogicalPlan,
         kind: CteKind,
@@ -57,23 +61,33 @@ impl CteInfo {
     /// separately. Identity projections preserve the original attribute IDs.
     pub(super) fn renew_reference(
         &self,
+        renew_first_reference: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<Vec<String>>> {
         let origins = match self.kind {
             CteKind::Definition => state.cte_reference_origins_mut(),
             CteKind::ParameterView => state.parameter_view_origins_mut(),
         };
-        if !self.origins.iter().any(|origin| origins.contains(origin)) {
+        if renew_first_reference {
+            origins.extend(self.origins.iter().copied());
+        }
+        if !renew_first_reference && !self.origins.iter().any(|origin| origins.contains(origin)) {
             // SQL outputs may acquire a DataFrame plan ID only after this query
             // finishes. Their repeated CTE references already need fresh identities.
             origins.extend(self.origins.iter().copied());
             return Ok(None);
         }
         let mut renewed = datafusion_common::HashMap::with_capacity(self.origins.len());
+        // Two fields that already shared a root (one column selected twice) must keep sharing
+        // one after renewal too, or a plain reference to the name becomes ambiguous on its own.
+        // Sharing is local to this renewal: `a` and `b` never point at each other's roots.
+        let mut renewed_roots: datafusion_common::HashMap<String, String> =
+            datafusion_common::HashMap::with_capacity(self.origins.len());
         let mut names = Vec::with_capacity(self.origins.len());
         for (field, &original) in self.plan.schema().fields().iter().zip(&self.origins) {
             let info = state.get_field_info(field.name())?;
             let (name, hidden) = (info.name().to_string(), info.is_hidden());
+            let original_root = state.get_field_root(field.name())?.to_string();
             // Spark's CTERelationRef.newInstance preserves duplicate attributes
             // within one output while giving the reference fresh identities.
             let origin = *renewed
@@ -83,7 +97,23 @@ impl CteInfo {
                 CteKind::Definition => datafusion_common::HashSet::new(),
                 CteKind::ParameterView => self.bindings.get(&original).cloned().unwrap_or_default(),
             };
-            names.push(state.register_field_with_origin(name, hidden, origin, plan_ids));
+            let field_id = state.register_field_with_origin(name, hidden, origin, plan_ids);
+            // A parameter view keeps its plan ID, so its root must trace back to the frozen
+            // schema. A CTE definition carries no plan ID, so it stays its own root relative to
+            // the original instance, or a self-join of the CTE would collapse into one attribute.
+            if self.kind == CteKind::ParameterView {
+                state.register_root_for_field(&field_id, field.name())?;
+            } else {
+                match renewed_roots.entry(original_root) {
+                    datafusion_common::hash_map::Entry::Occupied(entry) => {
+                        state.register_root_for_field(&field_id, entry.get())?;
+                    }
+                    datafusion_common::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(field_id.clone());
+                    }
+                }
+            }
+            names.push(field_id);
             if self.kind == CteKind::ParameterView {
                 state.parameter_view_origins_mut().insert(origin);
             }
@@ -115,10 +145,15 @@ impl PlanResolver<'_> {
         let state = scope.state();
         for (name, query) in ctes.into_iter() {
             let reference = self.resolve_table_reference(&spec::ObjectName::bare(name.clone()))?;
-            let plan = if recursive {
-                self.resolve_recursive_query_plan(query, state).await?
-            } else {
-                self.resolve_query_plan(query, state).await?
+            let plan = {
+                let mut definition_scope = state.enter_cte_definition_scope();
+                if recursive {
+                    self.resolve_recursive_query_plan(query, definition_scope.state())
+                        .await?
+                } else {
+                    self.resolve_query_plan(query, definition_scope.state())
+                        .await?
+                }
             };
             let plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
                 Arc::new(plan),

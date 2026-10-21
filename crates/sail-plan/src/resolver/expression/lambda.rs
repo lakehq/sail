@@ -125,12 +125,12 @@ impl PlanResolver<'_> {
                     .map_err(|_| PlanError::invalid("multi-part lambda function parameter name"))
             })
             .collect::<PlanResult<_>>()?;
-        // Spark rejects duplicate lambda parameter names case-insensitively
-        // (DUPLICATE_ARG_NAMES). DataFusion's `all_unique` is case-sensitive and
-        // lambda parameter lookup here is case-insensitive, so check explicitly.
+        // Spark rejects duplicate lambda parameter names (DUPLICATE_ARG_NAMES) using the same
+        // canonicalization that resolves a reference to a parameter. DataFusion's `all_unique` is
+        // case-sensitive, so check explicitly.
         let mut seen = std::collections::HashSet::new();
         for param in &params {
-            if !seen.insert(param.to_ascii_lowercase()) {
+            if !seen.insert(self.fold_identifier(param)) {
                 return Err(PlanError::AnalysisError(format!(
                     "the lambda function has duplicate arguments `{param}`"
                 )));
@@ -185,7 +185,7 @@ impl PlanResolver<'_> {
             .one()
             .map_err(|_| PlanError::invalid("multi-part lambda variable name"))?;
         let (declared, field) = state
-            .resolve_lambda_parameter(&name)
+            .resolve_lambda_parameter(&name, |a, b| self.match_lambda_parameter(a, b))
             .map(|(param, field)| (param.to_string(), field.cloned()))
             .ok_or_else(|| {
                 if state.in_lambda_scope() {

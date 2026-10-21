@@ -243,64 +243,7 @@
       "input": "select * from a natural cross join b",
       "exception": "\n[INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible. SQLSTATE: 42613\n== SQL (line 1, position 17) ==\nselect * from a natural cross join b\n                ^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "success": {
-          "query": {
-            "project": {
-              "input": {
-                "join": {
-                  "left": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "a"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "right": {
-                    "read": {
-                      "namedTable": {
-                        "name": [
-                          "b"
-                        ],
-                        "temporal": null,
-                        "sample": null,
-                        "options": []
-                      },
-                      "isStreaming": false
-                    },
-                    "planId": null
-                  },
-                  "joinType": "cross",
-                  "joinCriteria": "natural",
-                  "joinDataType": null
-                },
-                "planId": null
-              },
-              "expressions": [
-                {
-                  "unresolvedStar": {
-                    "target": null,
-                    "planId": null,
-                    "wildcardOptions": {
-                      "ilikePattern": null,
-                      "excludeColumns": null,
-                      "exceptColumns": null,
-                      "replaceColumns": null,
-                      "renameColumns": null
-                    }
-                  }
-                }
-              ]
-            },
-            "planId": null
-          }
-        }
+        "failure": "analysis error: [INCOMPATIBLE_JOIN_TYPES] The join types NATURAL and CROSS are incompatible."
       }
     },
     {

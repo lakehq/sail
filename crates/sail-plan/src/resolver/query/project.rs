@@ -42,19 +42,11 @@ impl PlanResolver<'_> {
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
-        let has_aggregate = expr.iter().any(|e| {
-            e.expr
-                .exists(|e| match e {
-                    Expr::AggregateFunction(_) => Ok(true),
-                    _ => Ok(false),
-                })
-                .unwrap_or(false)
-        });
-        if has_aggregate {
+        if Self::contains_aggregate(&expr) {
             self.rewrite_aggregate(input, expr, vec![], None, false, state)
         } else {
             let (input, expr) = self.rewrite_projection::<ExistsRewriter>(input, expr, state)?;
-            let expr = self.rewrite_named_expressions(expr, state)?;
+            let expr = self.rewrite_named_expressions(expr, input.schema(), state)?;
             Ok(LogicalPlan::Projection(Projection::try_new(
                 expr,
                 Arc::new(input),
@@ -238,6 +230,39 @@ impl PlanResolver<'_> {
         Ok(out)
     }
 
+    /// The metadata that hides what an expression carries, since Spark reports none for it.
+    pub(crate) fn empty_spark_metadata() -> Option<FieldMetadata> {
+        Some(FieldMetadata::from(HashMap::from([(
+            spec::SPARK_METADATA_JSON_KEY.to_string(),
+            "{}".to_string(),
+        )])))
+    }
+
+    /// Whether an alias of the expression reports the metadata of what is below it. Spark
+    /// inherits it from a named expression -- an attribute or another alias -- and from a struct
+    /// field, and reports no metadata for anything else (`Alias.metadata`).
+    pub(crate) fn inherits_metadata(expr: &Expr) -> bool {
+        match expr {
+            Expr::Column(_) | Expr::OuterReferenceColumn(..) => true,
+            // An alias that was given metadata reports that metadata whatever it reads, so there
+            // is nothing to hide; one without reports what its child does (`Alias.metadata`).
+            Expr::Alias(alias) if alias.metadata.is_some() => true,
+            Expr::Alias(alias) => Self::inherits_metadata(&alias.expr),
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => func.name() == "get_field",
+            _ => false,
+        }
+    }
+
+    /// Whether the expression carries Spark metadata that an alias of it would report.
+    pub(crate) fn has_spark_metadata(expr: &Expr, schema: &DFSchemaRef) -> bool {
+        expr.metadata(schema).is_ok_and(|metadata| {
+            metadata
+                .inner()
+                .get(spec::SPARK_METADATA_JSON_KEY)
+                .is_some_and(|x| x != "{}")
+        })
+    }
+
     /// Rewrite named expressions to DataFusion expressions.
     /// A field is registered for each name.
     /// If the expression is a column expression, all plan IDs for the column are registered for the field.
@@ -245,6 +270,7 @@ impl PlanResolver<'_> {
     pub(super) fn rewrite_named_expressions(
         &self,
         expr: Vec<NamedExpr>,
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<Expr>> {
         expr.into_iter()
@@ -262,18 +288,43 @@ impl PlanResolver<'_> {
                         "one name expected for expression, got: {names}"
                     )));
                 };
-                let field_id = if let Expr::Column(Column { name: field_id, .. }) = &expr {
-                    state.register_identity_field(name, field_id)?
+                // A projection that only passes a column on gives another output of the same
+                // attribute, which is what selecting one column twice does, so the source is kept
+                // along with the plan IDs. Giving it another name does not: Spark builds an
+                // `Alias` there, which is an attribute of its own with an identity of its own
+                // (`UnresolvedStarWithColumnsRenames.expandStar`), so only a name that stays the
+                // same leads back to the field it reads.
+                let source = if let Expr::Column(Column { name: field_id, .. }) = &expr {
+                    let info = state.get_field_info(field_id)?;
+                    let plan_ids = info.plan_ids().collect::<Vec<_>>();
+                    Some((field_id.clone(), plan_ids, info.name() == name))
                 } else {
-                    state.register_field_name(name)
+                    None
                 };
+                let field_id = state.register_field_name(name);
+                if let Some((source, plan_ids, same_name)) = source {
+                    for plan_id in plan_ids {
+                        state.register_plan_id_for_field(&field_id, plan_id)?;
+                    }
+                    if same_name {
+                        state.register_root_for_field(&field_id, &source)?;
+                    }
+                }
                 if !metadata.is_empty() {
                     let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                     let field_metadata = Some(FieldMetadata::from(metadata_map));
-                    Ok(expr.alias_with_metadata(field_id, field_metadata))
-                } else {
-                    Ok(expr.alias(field_id))
+                    return Ok(expr.alias_with_metadata(field_id, field_metadata));
                 }
+                // An alias reports the metadata of its child only when that child is a named
+                // expression, which an attribute is and an expression that computes a value is
+                // not (`Alias.metadata`). DataFusion carries the metadata of the input field
+                // through a cast or an aggregate instead, so it is hidden with an empty override,
+                // and only where there is something to hide: an override of its own keeps a
+                // projection from being merged into the one below it.
+                if !Self::inherits_metadata(&expr) && Self::has_spark_metadata(&expr, schema) {
+                    return Ok(expr.alias_with_metadata(field_id, Self::empty_spark_metadata()));
+                }
+                Ok(expr.alias(field_id))
             })
             .collect()
     }

@@ -920,7 +920,7 @@ Feature: Iceberg MERGE
         WHEN NOT MATCHED AND t.value = 'target' THEN
           INSERT (id, value) VALUES (s.id, t.value)
         """
-      Then query error (?i)t.*value.*(missing|cannot resolve)
+      Then query error (?i)`t`.`value` cannot be resolved
 
     Scenario: NOT MATCHED BY SOURCE clauses cannot reference source columns
       When query
@@ -931,7 +931,7 @@ Feature: Iceberg MERGE
         WHEN NOT MATCHED BY SOURCE AND s.value = 'source' THEN
           UPDATE SET value = s.value
         """
-      Then query error (?i)s.*value.*(missing|cannot resolve)
+      Then query error (?i)`s`.`value` cannot be resolved
 
   Rule: Only the final clause in each MERGE family may omit its condition
 

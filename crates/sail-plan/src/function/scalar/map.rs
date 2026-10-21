@@ -44,9 +44,74 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let array = ScalarUDF::from(SparkArray::new());
-    let keys = array.call(keys);
-    let values = array.call(values);
+    // A map literal cannot be NULL (`CreateMap.nullable`), and it takes that from the arrays of
+    // its keys and values, which `SparkArray` builds as not nullable.
+    //
+    // `SparkArray` widens a string against another type the way Spark does without ANSI mode,
+    // where the string wins (`TypeCoercion.stringPromotion`). With ANSI mode the other type wins
+    // instead (`AnsiStringPromotionTypeCoercion`), which is what `make_array` comes closer to.
+    //
+    // TODO: neither is Spark's rule exactly: with ANSI mode an integral type and a string widen
+    //   to BIGINT, and `make_array` keeps the narrower integral type. `array(...)` reads the
+    //   same string-wins rule whatever the mode, so this is the shape of the gap there too.
+    let build = |arguments: Vec<expr::Expr>, what: &str| -> PlanResult<expr::Expr> {
+        if !input.function_context.plan_config.ansi_mode {
+            // Without ANSI mode the string wins over any other atomic type but a boolean or a
+            // binary one, which it has no type in common with (`TypeCoercion.stringPromotion`).
+            // `SparkArray` widens those to a string as well, so they are refused here, the way
+            // `CreateMap` does once its keys or its values have no one type.
+            //
+            // TODO: Spark names the types it found and renders the call as SQL
+            //   (`Cannot resolve "map(true, 1, x, 2)" ... but they are ["BOOLEAN", "STRING"]`),
+            //   which needs the type renderer of the resolver.
+            let types = arguments
+                .iter()
+                .map(|argument| argument.get_type(schema.as_ref()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let is_string = |t: &DataType| {
+                matches!(t, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+            };
+            let is_alone = |t: &DataType| {
+                matches!(
+                    t,
+                    DataType::Boolean
+                        | DataType::Binary
+                        | DataType::LargeBinary
+                        | DataType::BinaryView
+                        | DataType::FixedSizeBinary(_)
+                )
+            };
+            if types.iter().any(is_string) && types.iter().any(is_alone) {
+                return Err(PlanError::AnalysisError(format!(
+                    "[DATATYPE_MISMATCH.CREATE_MAP_{what}_DIFF_TYPES] Cannot resolve \"map\" due \
+                     to data type mismatch: The given {} of function `map` should all be the \
+                     same type.",
+                    what.to_lowercase()
+                )));
+            }
+            return Ok(ScalarUDF::from(SparkArray::new()).call(arguments));
+        }
+        // The type the arguments widen to with ANSI mode is the one DataFusion picks, which
+        // takes the other type over the string. They are then built as an array that cannot
+        // hold NULL, which is what the nullability of the map is read from.
+        let element = match expr_fn::make_array(arguments.clone()).get_type(schema.as_ref())? {
+            DataType::List(field) | DataType::LargeList(field) => field.data_type().clone(),
+            other => other,
+        };
+        let arguments = arguments
+            .into_iter()
+            .map(|argument| {
+                Ok(if argument.get_type(schema.as_ref())? == element {
+                    argument
+                } else {
+                    cast(argument, element.clone())
+                })
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok(ScalarUDF::from(SparkArray::new()).call(arguments))
+    };
+    let keys = build(keys, "KEY")?;
+    let values = build(values, "VALUE")?;
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;

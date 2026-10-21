@@ -205,7 +205,7 @@ Feature: map output schema
          |    |-- value: string (valueContainsNull = false)
         """
 
-    Scenario: nullable keys do not make the map itself nullable
+    Scenario: a nullable column input to map stays nullable
       When query
         """
         SELECT map(c, '2', 3.0, '4') AS result FROM VALUES (1.0), (CAST(NULL AS DECIMAL(2,1))) AS t(c)
@@ -217,6 +217,56 @@ Feature: map output schema
          |    |-- key: decimal(2,1)
          |    |-- value: string (valueContainsNull = false)
         """
+
+  Rule: A key that mixes a string with another type widens the way the mode says
+
+    Scenario: without ANSI mode the string wins, so the two keys stay apart
+      # `TypeCoercion.stringPromotion`: the string is the wider type, and `'01'` and `'1'` are
+      # two keys.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT size(map('01', 2, 1, 4)) AS result
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: with ANSI mode the number wins, so the two keys are one
+      # `AnsiStringPromotionTypeCoercion.findWiderTypeForString`: the string is cast to the other
+      # type, and `'01'` and `1` are then the same key, which the dedup policy keeps once.
+      Given config spark.sql.ansi.enabled = true
+      And config spark.sql.mapKeyDedupPolicy = LAST_WIN
+      When query
+        """
+        SELECT size(map('01', 2, 1, 4)) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario Outline: a string has no type in common with a <type> key
+      # `TypeCoercion.stringPromotion` leaves a boolean and a binary value out, so the keys have
+      # no one type and `CreateMap` refuses them.
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT map(<value>, 1, 'x', 2) AS result
+        """
+      Then query error DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES
+
+      Examples:
+        | type    | value |
+        | boolean | true  |
+        | binary  | X'01' |
+
+    Scenario: a string has no type in common with a boolean value either
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT map(1, true, 2, 'x') AS result
+        """
+      Then query error DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES
 
     Scenario: NULL values preserve a non-null map with nullable values
       When query
