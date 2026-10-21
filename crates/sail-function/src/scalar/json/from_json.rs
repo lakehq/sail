@@ -1041,6 +1041,9 @@ fn json_value_to_data_type(value: &Value, session_timezone: &str) -> Result<Data
                         let dt = json_value_to_data_type(field_type, session_timezone)?;
                         let metadata = field
                             .get("metadata")
+                            .filter(|metadata| {
+                                metadata.as_object().is_none_or(|object| !object.is_empty())
+                            })
                             .map(|metadata| {
                                 (
                                     spec::SPARK_METADATA_JSON_KEY.to_string(),

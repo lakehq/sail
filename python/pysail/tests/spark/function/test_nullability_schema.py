@@ -74,8 +74,8 @@ def test_input_schema_is_honored(spark):
     ],
 )
 def test_nullable_array_conversion_preserves_interval_type(spark, expression, expected_type):
-    result = spark.sql(
-        f"SELECT {expression} AS result FROM (SELECT CAST(array(INTERVAL '1' DAY) AS ARRAY<INTERVAL DAY>) AS a)"
+    result = spark.sql("SELECT CAST(array(INTERVAL '1' DAY) AS ARRAY<INTERVAL DAY>) AS a").selectExpr(
+        f"{expression} AS result"
     )
     assert result.schema["result"].dataType.simpleString() == expected_type
     assert len(result.collect()) == 1
