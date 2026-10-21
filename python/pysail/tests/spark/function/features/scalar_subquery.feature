@@ -507,3 +507,79 @@ Feature: Scalar subquery nullability
          |-- a: integer (nullable = false)
          |-- n: long (nullable = false)
         """
+
+  Rule: Correlated scalar subqueries inside aggregate arguments
+
+    Scenario: count of a correlated count subquery counts every outer row
+      When query
+        """
+        SELECT count((SELECT count(*) FROM range(2) i WHERE i.id = o.id)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: count of a correlated max subquery skips outer rows without a match
+      When query
+        """
+        SELECT count((SELECT max(i.id) FROM range(1) i WHERE i.id = o.id)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 1 |
+
+    Scenario: sum of a correlated max subquery adds the matched values
+      When query
+        """
+        SELECT sum((SELECT max(i.id) FROM range(3) i WHERE i.id = o.id)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 1 |
+
+    Scenario: grouped count of a correlated max subquery counts matches per group
+      When query
+        """
+        SELECT o.id % 2 AS k, count((SELECT max(i.id) FROM range(1) i WHERE i.id = o.id)) AS n
+        FROM range(4) o
+        GROUP BY o.id % 2
+        ORDER BY k
+        """
+      Then query result collected ordered
+        | k | n |
+        | 0 | 1 |
+        | 1 | 0 |
+
+    Scenario: HAVING over a count of a correlated max subquery keeps groups with matches
+      When query
+        """
+        SELECT o.id % 2 AS k
+        FROM range(4) o
+        GROUP BY o.id % 2
+        HAVING count((SELECT max(i.id) FROM range(1) i WHERE i.id = o.id)) > 0
+        """
+      Then query result collected
+        | k |
+        | 0 |
+
+    # Sail rejects unaggregated correlated scalar subqueries during planning (DataFusion invariant); Spark evaluates them.
+    @sail-bug
+    Scenario: count of an unaggregated correlated subquery with no matches is zero
+      When query
+        """
+        SELECT count((SELECT i.id FROM range(1) i WHERE i.id = o.id + 5)) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 0 |
+
+    # Sail rejects unaggregated correlated scalar subqueries during planning (DataFusion invariant); Spark evaluates them.
+    @sail-bug
+    Scenario: count of an outer reference projected through a single-row subquery counts every outer row
+      When query
+        """
+        SELECT count((SELECT o.id FROM range(1))) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
