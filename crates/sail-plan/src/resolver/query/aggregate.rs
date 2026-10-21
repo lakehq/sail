@@ -186,7 +186,6 @@ impl PlanResolver<'_> {
                     Expr::Literal(scalar_value, _metadata) => {
                         let position = match scalar_value {
                             ScalarValue::Int32(Some(position)) => *position as i64,
-                            ScalarValue::Int64(Some(position)) => *position,
                             _ => return Ok(named_expr),
                         };
                         if position > 0_i64 && position <= num_projections {
