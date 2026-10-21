@@ -1261,3 +1261,22 @@ Feature: Scalar subqueries in distributed execution
       SELECT ~(SELECT id FROM range(2)) AS result
       """
     Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+  Scenario: Bitwise complement preserves grouped and shared aggregate arguments
+    When query
+      """
+      SELECT ~(id + 0) AS result FROM range(4) GROUP BY id + 0 ORDER BY result
+      """
+    Then query result ordered
+      | result |
+      | -4     |
+      | -3     |
+      | -2     |
+      | -1     |
+    When query
+      """
+      SELECT sum(id + 0) AS s, ~sum(id + 0) AS result FROM range(4)
+      """
+    Then query result
+      | s | result |
+      | 6 | -7     |

@@ -115,3 +115,62 @@ def test_signed_zero_divisors(spark, data_type, zero):
         ] * 2
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("ansi", ["true", "false"])
+def test_div_after_projected_case(spark, ansi):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    try:
+        projected = spark.range(2).select(
+            F.when(F.col("id") == 0, F.lit(0)).otherwise(F.lit(1.5)).alias("numerator"),
+            F.when(F.col("id") == 0, F.lit(1)).otherwise(F.lit(0.5)).alias("denominator"),
+        )
+        rows = projected.select(
+            F.expr("numerator DIV 0.5").alias("dividend_case"),
+            F.expr("3 DIV denominator").alias("divisor_case"),
+        ).collect()
+        assert sorted(rows) == [
+            Row(dividend_case=0, divisor_case=3),
+            Row(dividend_case=3, divisor_case=6),
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Unsigned integer types are a Sail extension")
+@pytest.mark.parametrize(
+    ("small_type", "wide_type", "wide_bits"),
+    [("UINT8", "UINT16", 16), ("UINT16", "UINT32", 32), ("UINT32", "UINT64", 64)],
+)
+def test_unsigned_complement_after_case_coercion(spark, small_type, wide_type, wide_bits):
+    value = f"CASE WHEN id = 0 THEN CAST(0 AS {small_type}) ELSE CAST(1 AS {wide_type}) END"
+    expected = [
+        Row(result=str((1 << wide_bits) - 1), same_type=True),
+        Row(result=str((1 << wide_bits) - 2), same_type=True),
+    ]
+    # Cover both the CASE itself and the stale field type of an intervening projection.
+    for source, argument in [("range(2)", value), (f"(SELECT {value} AS v FROM range(2)) t", "v")]:
+        for complement in [f"~({argument})", f"bitwise_not({argument})"]:
+            rows = spark.sql(
+                f"SELECT CAST({complement} AS STRING) AS result, "
+                f"typeof({complement}) = typeof(CAST(NULL AS {wide_type})) AS same_type "
+                f"FROM {source}"
+            ).collect()
+            assert sorted(rows) == sorted(expected)
+
+
+@pytest.mark.parametrize("first_branch", ["NULL", "CAST(0 AS TINYINT)"])
+def test_complement_preserves_resolved_case_type(spark, first_branch):
+    value = f"CASE WHEN id = 0 THEN {first_branch} ELSE 2147483648L END"
+    expected = [
+        Row(result=None if first_branch == "NULL" else -1, same_type=True),
+        Row(result=-2147483649, same_type=True),
+    ]
+    for source, argument in [("range(2)", value), (f"(SELECT {value} AS v FROM range(2)) t", "v")]:
+        for complement in [f"~({argument})", f"bitwise_not({argument})"]:
+            rows = spark.sql(
+                f"SELECT CAST({complement} AS BIGINT) AS result, "
+                f"typeof({complement}) = 'bigint' AS same_type FROM {source} ORDER BY result"
+            ).collect()
+            assert rows == sorted(expected, key=lambda row: (row.result is not None, row.result))

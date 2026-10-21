@@ -3,8 +3,6 @@ use std::sync::Arc;
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::functions::expr_fn;
-use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
-use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchema, DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
@@ -23,7 +21,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::SparkDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -446,24 +444,6 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         && is_zero_literal(&divisor)
         && literal_cast_type(&dividend)
             .is_some_and(|data_type| data_type.is_numeric() || data_type.is_null());
-    // CASE reports its first branch's type before coercion. Resolve all branches
-    // before widening integers, or a decimal result can be truncated to BIGINT.
-    let widen = |value: Expr| {
-        let mut coercion = TypeCoercionRewriter::new(function_context.schema);
-        let Ok(coerced) = value.clone().rewrite(&mut coercion) else {
-            // Unbound lambda variables still need the enclosing analyzer pass.
-            return value;
-        };
-        let value = coerced.data;
-        match value.get_type(function_context.schema) {
-            Ok(DataType::Int8 | DataType::Int16 | DataType::Int32) => {
-                cast(value, DataType::Int64)
-            }
-            _ => value,
-        }
-    };
-    let dividend = widen(dividend);
-    let divisor = widen(divisor);
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -483,17 +463,9 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // Match duration because we cast Spark's DayTime interval to Duration.
             cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
         }
-        // Handle Interval / Interval division using custom UDF
-        (Ok(DataType::Interval(_)), Ok(DataType::Interval(_))) => {
-            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new()));
-            Expr::ScalarFunction(expr::ScalarFunction {
-                func: interval_div,
-                args: vec![dividend, divisor],
-            })
-        }
-        // TODO: In case getting the type fails, we don't want to fail the query.
-        //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
-        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => dividend / divisor,
+        // Keep the original operands intact through grouping and aggregate extraction.
+        // SparkDiv's normal argument coercion handles resolved numeric and interval types.
+        _ => ScalarUDF::from(SparkDiv::new()).call(vec![dividend, divisor]),
     };
 
     if constant_zero {

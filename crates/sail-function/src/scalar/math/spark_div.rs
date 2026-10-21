@@ -1,32 +1,36 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use datafusion::arrow::compute::kernels::numeric::div;
+use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType,
 };
 use datafusion_common::{Result, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility, cast,
 };
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
 use crate::functions_nested_utils::make_scalar_function;
 
-/// Spark's div operator for intervals.
-/// Performs integer division between two intervals of the same type.
+/// Spark's integral division for numeric values and matching interval types.
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkIntervalDiv {
+pub struct SparkDiv {
     signature: Signature,
 }
 
-impl Default for SparkIntervalDiv {
+impl Default for SparkDiv {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkIntervalDiv {
+impl SparkDiv {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
@@ -34,9 +38,9 @@ impl SparkIntervalDiv {
     }
 }
 
-impl ScalarUDFImpl for SparkIntervalDiv {
+impl ScalarUDFImpl for SparkDiv {
     fn name(&self) -> &str {
-        "spark_interval_div"
+        "spark_div"
     }
 
     fn signature(&self) -> &Signature {
@@ -49,7 +53,7 @@ impl ScalarUDFImpl for SparkIntervalDiv {
         )
     }
 
-    /// Spark: `div` on intervals is `IntegralDivide`, which extends `DivModLike`:
+    /// Spark: `div` is `IntegralDivide`, which extends `DivModLike`:
     /// `nullable = true`, unconditional (ANSI does not narrow it).
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L658>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -57,26 +61,73 @@ impl ScalarUDFImpl for SparkIntervalDiv {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(interval_div_inner)(&args.args)
+        make_scalar_function(|values| {
+            let [left, right] = values else {
+                return Err(invalid_arg_count_exec_err(self.name(), (2, 2), values.len()));
+            };
+            if matches!(left.data_type(), DataType::Interval(_)) {
+                return interval_div_inner(values);
+            }
+            let quotient = div(left, right)?;
+            Ok(cast_with_options(
+                &quotient,
+                &DataType::Int64,
+                &CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            )?)
+        })(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 2 {
             return Err(invalid_arg_count_exec_err(
-                "spark_interval_div",
+                "spark_div",
                 (2, 2),
                 arg_types.len(),
             ));
         }
 
-        Ok(arg_types.to_vec())
+        if matches!(
+            (&arg_types[0], &arg_types[1]),
+            (DataType::Interval(_), DataType::Interval(_))
+        ) {
+            return Ok(arg_types.to_vec());
+        }
+
+        // Resolve the common type first; decimal operands must not be truncated to BIGINT.
+        let (left, right) =
+            BinaryTypeCoercer::new(&arg_types[0], &Operator::Divide, &arg_types[1])
+                .get_input_types()?;
+        Ok([left, right]
+            .into_iter()
+            .map(|data_type| match data_type {
+                DataType::Int8 | DataType::Int16 | DataType::Int32 => DataType::Int64,
+                data_type => data_type,
+            })
+            .collect())
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let [left, right] = args.as_slice() else {
+            return Err(invalid_arg_count_exec_err(self.name(), (2, 2), args.len()));
+        };
+        if matches!(info.get_data_type(left)?, DataType::Interval(_)) {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
+        // Native coercion has resolved child plans and widened small integers by this point.
+        Ok(ExprSimplifyResult::Simplified(cast(
+            left.clone() / right.clone(),
+            DataType::Int64,
+        )))
     }
 }
 
 fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 2 {
         return Err(invalid_arg_count_exec_err(
-            "spark_interval_div",
+            "spark_div",
             (2, 2),
             args.len(),
         ));
@@ -155,7 +206,7 @@ fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         _ => {
             return Err(generic_exec_err(
-                "spark_interval_div",
+                "spark_div",
                 "unsupported interval types for division",
             ));
         }
