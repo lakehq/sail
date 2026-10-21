@@ -188,3 +188,12 @@ def test_nested_with_field_propagates_non_null_literal(spark):
         Row(result=Row(id=1, details=Row(score=9, label="x"))),
         Row(result=None),
     ]
+
+
+@pytest.mark.parametrize(("unit", "expected"), [("MONTH", [2, 12]), ("YEAR", [1, 2])])
+def test_with_field_merges_interval_units(spark, unit, expected):
+    left = F.struct(F.lit(0).alias("i")).withField("i", F.expr("INTERVAL '1' YEAR"))
+    right = F.struct(F.lit(0).alias("i")).withField("i", F.expr(f"INTERVAL '2' {unit}"))
+    result = spark.range(2).select(F.when(F.col("id") == 0, left).otherwise(right).alias("s"))
+    rows = result.select(F.col("s.i").cast("int").alias("result")).orderBy("result").collect()
+    assert [row.result for row in rows] == expected

@@ -7374,6 +7374,68 @@ mod tests {
         try_decode_physical_expr(&ctx, &codec, &bytes, schema)
     }
 
+    #[test]
+    fn test_round_trip_literal_preserves_field_metadata_and_identity() -> Result<()> {
+        use datafusion::common::metadata::FieldMetadata;
+        use datafusion::physical_expr::expressions::Literal;
+        use sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY;
+
+        let schema = Schema::empty();
+        let metadata = HashMap::from([(
+            SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+            r#"{"unit":"yearMonth","startField":"year","endField":"year"}"#.to_string(),
+        )]);
+        for value in [Some(12), None] {
+            let value = ScalarValue::IntervalYearMonth(value);
+            let expression: Arc<dyn PhysicalExpr> = Arc::new(Literal::new_with_metadata(
+                value.clone(),
+                Some(FieldMetadata::from(metadata.clone())),
+            ));
+            let decoded = round_trip_expr(&expression, &schema)?;
+            let literal = decoded
+                .downcast_ref::<Literal>()
+                .ok_or_else(|| plan_datafusion_err!("decoded expression is not a Literal"))?;
+            assert_eq!(literal.value(), &value);
+            assert_eq!(
+                decoded.return_field(&schema)?,
+                expression.return_field(&schema)?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_field_cast_keeps_field_changes() -> Result<()> {
+        use datafusion::arrow::compute::CastOptions;
+        use datafusion::physical_expr::expressions::{CastExpr, Literal};
+
+        let schema = Schema::empty();
+        for field in [
+            Field::new("lit", DataType::Int64, false),
+            Field::new("lit", DataType::Int32, true),
+            Field::new("renamed", DataType::Int32, false),
+        ] {
+            let field = Arc::new(
+                field.with_metadata(HashMap::from([("source".to_string(), "cast".to_string())])),
+            );
+            let expression: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new_with_target_field(
+                Arc::new(Literal::new(ScalarValue::Int32(Some(7)))),
+                field,
+                Some(CastOptions {
+                    safe: true,
+                    ..Default::default()
+                }),
+            ));
+            let decoded = round_trip_expr(&expression, &schema)?;
+            assert!(decoded.is::<CastExpr>());
+            assert_eq!(
+                decoded.return_field(&schema)?,
+                expression.return_field(&schema)?
+            );
+        }
+        Ok(())
+    }
+
     fn as_hof(expr: &Arc<dyn PhysicalExpr>) -> Result<&HigherOrderFunctionExpr> {
         expr.downcast_ref::<HigherOrderFunctionExpr>()
             .ok_or_else(|| plan_datafusion_err!("expression is not HigherOrderFunctionExpr"))

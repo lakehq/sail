@@ -219,3 +219,34 @@ Feature: array_intersect() returns common array elements without duplicates
          |-- result: array (nullable = false)
          |    |-- element: integer (containsNull = false)
         """
+
+
+  Rule: Struct annotations do not affect equality
+
+    Scenario Outline: Intersect parsed structs with different <format> comments
+      When query
+        """
+        SELECT array_intersect(array(<left>), array(<right>))[0].x AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+      Examples:
+        | format | left                                          | right                              |
+        | CSV    | from_csv('1', 'x INT COMMENT "a"')            | from_csv('1', 'x INT')             |
+        | JSON   | from_json('{"x":1}', 'x INT COMMENT "a"')     | from_json('{"x":1}', 'x INT')      |
+
+    Scenario Outline: Intersect merges comments when the <side> array contains nulls
+      When query
+        """
+        SELECT array_intersect(<left>, <right>) AS result
+        """
+      Then query result
+        | result |
+        | [{1}]  |
+
+      Examples:
+        | side  | left                                                   | right                                                  |
+        | left  | array(from_json('{"x":1}', 'x INT COMMENT "a"'), NULL) | array(from_json('{"x":1}', 'x INT COMMENT "b"'))       |
+        | right | array(from_json('{"x":1}', 'x INT COMMENT "a"'))       | array(from_json('{"x":1}', 'x INT COMMENT "b"'), NULL) |

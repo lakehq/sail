@@ -10,11 +10,11 @@ use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, internal_err, plan_datafusion_err, plan_err};
-use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
 };
+use sail_common_datafusion::metadata::common_type_with_metadata;
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -132,7 +132,7 @@ impl ScalarUDFImpl for SparkArray {
                 // coercible for the arguments. `comparison_coercion` returns more loose
                 // types that can be coerced to both `acc` and `x` for comparison purpose.
                 // See `maybe_data_types` for the actual coercion.
-                let coerced_type = comparison_coercion(&acc, x);
+                let coerced_type = common_type_with_metadata(&acc, x)?;
                 if let Some(coerced_type) = coerced_type {
                     Ok(coerced_type)
                 } else {

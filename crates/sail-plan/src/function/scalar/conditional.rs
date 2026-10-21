@@ -4,6 +4,7 @@ use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
+use sail_common_datafusion::metadata::coerce_common_metadata;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -48,8 +49,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    // FIXME: DataFusion CASE inference must retain the common logical type metadata
-    // (e.g. interval qualifiers), without copying a branch's unrelated user metadata.
+    // FIXME: Also preserve common top-level interval metadata, beyond nested fields.
     let ScalarFunctionInput {
         arguments,
         function_context,
@@ -113,7 +113,10 @@ fn coerce_string_temporal_values(
     } else {
         arguments
     };
-    Ok(arguments)
+    Ok(coerce_common_metadata(
+        arguments,
+        function_context.schema.as_ref(),
+    )?)
 }
 
 fn coerce_to_temporal(
@@ -191,7 +194,18 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("nullif", F::binary(expr_fn::nullif)),
         ("nullifzero", F::custom(nullifzero)),
         ("nvl", F::binary(expr_fn::nvl)),
-        ("nvl2", F::ternary(expr_fn::nvl2)),
+        (
+            "nvl2",
+            F::custom(|input| {
+                let (test, non_null, null) = input.arguments.three()?;
+                let (non_null, null) = coerce_common_metadata(
+                    vec![non_null, null],
+                    input.function_context.schema.as_ref(),
+                )?
+                .two()?;
+                Ok(when(test.is_not_null(), non_null).otherwise(null)?)
+            }),
+        ),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),

@@ -549,6 +549,18 @@ pub(in crate::resolver) fn spark_interval_metadata_for_expression(
     let mut combined = None::<spec::SparkIntervalMetadata>;
     expression.apply(|candidate| {
         let field = candidate.to_field(schema.as_ref())?.1;
+        // DataFusion's array_element returns only a DataType, losing the element's qualifier.
+        let field = if let expr::Expr::ScalarFunction(function) = candidate
+            && function.name() == "array_element"
+            && let Some(array) = function.args.first()
+            && let DataType::List(element)
+            | DataType::LargeList(element)
+            | DataType::FixedSizeList(element, _) = array.get_type(schema.as_ref())?
+        {
+            element
+        } else {
+            field
+        };
         if field.data_type() != &interval_type {
             return Ok(TreeNodeRecursion::Jump);
         }

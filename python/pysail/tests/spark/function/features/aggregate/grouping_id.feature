@@ -2,6 +2,24 @@ Feature: grouping_id returns Spark-compatible grouping-set bit masks
 
   Rule: grouping_id over grouping analytics
 
+    Scenario Outline: <function> preserves an interval-array grouping key
+      When query
+        """
+        SELECT <function>(a) AS g, count(*) AS n
+        FROM (SELECT array_repeat(INTERVAL '1' YEAR, 1) AS a FROM range(2))
+        GROUP BY ROLLUP(a)
+        ORDER BY g
+        """
+      Then query result ordered
+        | g | n |
+        | 0 | 2 |
+        | 1 | 2 |
+
+      Examples:
+        | function    |
+        | grouping    |
+        | grouping_id |
+
     Scenario: grouping_id and grouping over cube
       When query
         """

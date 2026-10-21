@@ -23,7 +23,9 @@ use sail_python_udf::udf::pyspark_udaf::{
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{FunctionContextInput, WinFunctionInput, get_null_treatment};
+use crate::function::common::{
+    FunctionContextInput, WinFunctionInput, get_null_treatment, preserve_aggregate_window_fields,
+};
 use crate::function::get_built_in_window_function;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -163,7 +165,7 @@ impl PlanResolver<'_> {
                         },
                     };
                     (
-                        function(input)?,
+                        preserve_aggregate_window_fields(function(input)?, schema)?,
                         function_name,
                         argument_display_names,
                         is_distinct,

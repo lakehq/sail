@@ -9,6 +9,7 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
+use sail_common_datafusion::metadata::coerce_common_metadata;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -787,10 +788,26 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::var_arg(expr_fn::greatest)),
+        (
+            "greatest",
+            F::custom(|input| {
+                Ok(expr_fn::greatest(coerce_common_metadata(
+                    input.arguments,
+                    input.function_context.schema.as_ref(),
+                )?))
+            }),
+        ),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::var_arg(expr_fn::least)),
+        (
+            "least",
+            F::custom(|input| {
+                Ok(expr_fn::least(coerce_common_metadata(
+                    input.arguments,
+                    input.function_context.schema.as_ref(),
+                )?))
+            }),
+        ),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),

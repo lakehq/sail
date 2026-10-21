@@ -205,6 +205,22 @@ impl PlanResolver<'_> {
                 };
                 cast(expr.mul(lit(multiplier)), cast_to_type)
             }
+            (DataType::Duration(TimeUnit::Microsecond), to, is_try) if to.is_integer() => {
+                let interval_metadata = spark_interval_metadata_for_expression(&expr, schema)?;
+                // Spark truncates to the trailing interval field before checking integer overflow.
+                let divisor = match interval_metadata {
+                    Some(spec::SparkIntervalMetadata::DayTime { end_field, .. }) => {
+                        day_time_field_to_microseconds(end_field.into())
+                    }
+                    _ => 1_000_000,
+                };
+                let value = cast(expr, DataType::Int64) / lit(divisor);
+                if is_try {
+                    try_cast(value, to)
+                } else {
+                    cast(value, to)
+                }
+            }
             (DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), to, _)
                 if to.is_numeric() =>
             {

@@ -4,9 +4,10 @@ use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, expr,
+    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, cast, expr,
 };
 use sail_common::spec;
+use sail_common_datafusion::metadata::{common_type_with_metadata, same_physical_type};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -104,6 +105,52 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                // Merge nested interval qualifiers before downstream expressions resolve their units.
+                let common_types = if left.schema().fields().len() != right.schema().fields().len()
+                {
+                    // Leave mismatched column counts for the union builder to reject.
+                    Vec::new()
+                } else {
+                    left.schema()
+                        .fields()
+                        .iter()
+                        .zip(right.schema().fields())
+                        .map(|(left, right)| {
+                            if same_physical_type(left.data_type(), right.data_type()) {
+                                common_type_with_metadata(left.data_type(), right.data_type())
+                            } else {
+                                Ok(None)
+                            }
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                let align =
+                    |plan: LogicalPlan| -> PlanResult<LogicalPlan> {
+                        let needs_cast = plan.schema().fields().iter().zip(&common_types).any(
+                            |(field, common)| {
+                                common.as_ref().is_some_and(|dt| dt != field.data_type())
+                            },
+                        );
+                        if !needs_cast {
+                            return Ok(plan);
+                        }
+                        let expressions = plan
+                            .schema()
+                            .iter()
+                            .zip(&common_types)
+                            .map(|((qualifier, field), common)| {
+                                let column = Expr::Column(Column::from((qualifier, field)));
+                                match common {
+                                    Some(data_type) if data_type != field.data_type() => {
+                                        cast(column, data_type.clone()).alias(field.name())
+                                    }
+                                    _ => column,
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        Ok(project(plan, expressions)?)
+                    };
+                let (left, right) = (align(left)?, align(right)?);
                 // Spark Connect treats Union as a leaf for DataFrame plan IDs.
                 // WithCTE restores separately reachable definition bindings.
                 for field in left.schema().fields() {

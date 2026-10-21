@@ -14,13 +14,17 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
+use crate::function::common::{
+    AggFunctionInput, FunctionContextInput, ScalarFunctionInput, preserve_aggregate_window_fields,
+};
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
 };
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::lambda::is_spec_lambda_argument;
+use crate::resolver::expression::lambda::{
+    is_spec_lambda_argument, preserve_transform_lambda_fields,
+};
 use crate::resolver::expression::predicate::coerce_timestamp_string_predicate;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
@@ -231,7 +235,7 @@ impl PlanResolver<'_> {
                                         schema,
                                     },
                                 };
-                                func(input)?
+                                preserve_aggregate_window_fields(func(input)?, schema)?
                             }
                             _ => {
                                 return Err(PlanError::unsupported(format!(
@@ -255,6 +259,8 @@ impl PlanResolver<'_> {
         } else {
             func
         };
+        // Nested calls need their result fields before enclosing expressions infer their types.
+        let func = preserve_transform_lambda_fields(func, schema)?;
 
         // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
         // to individual column names so the output header matches Spark JVM behavior

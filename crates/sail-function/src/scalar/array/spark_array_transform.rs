@@ -117,12 +117,12 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
         // The element type of the result is the lambda body's return type, not
         // the input element type — this is what distinguishes `transform` (map)
         // from `filter` (which keeps the input element type).
-        // FIXME: Preserve lambda metadata once DataFusion logical inference retains it too.
-        let field = Arc::new(Field::new(
-            Field::LIST_FIELD_DEFAULT_NAME,
-            lambda.data_type().clone(),
-            lambda.is_nullable(),
-        ));
+        let field = Arc::new(
+            lambda
+                .as_ref()
+                .clone()
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME),
+        );
 
         let return_type = match list.data_type() {
             DataType::List(_) => DataType::List(field),

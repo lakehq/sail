@@ -19,6 +19,7 @@ use datafusion_common::{
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common_datafusion::metadata::{common_type_with_metadata, same_physical_type};
 
 use crate::functions_nested_utils::make_scalar_function;
 
@@ -137,17 +138,36 @@ impl ScalarUDFImpl for ArrayIntersect {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        match arg_types.as_slice() {
-            [DataType::List(field), DataType::LargeList(_)] => Ok(vec![
-                DataType::LargeList(field.clone()),
-                arg_types[1].clone(),
-            ]),
-            [DataType::LargeList(_), DataType::List(field)] => Ok(vec![
-                arg_types[0].clone(),
-                DataType::LargeList(field.clone()),
-            ]),
-            _ => Ok(arg_types),
+        let arg_types = match arg_types.as_slice() {
+            [DataType::List(field), DataType::LargeList(_)] => {
+                vec![DataType::LargeList(field.clone()), arg_types[1].clone()]
+            }
+            [DataType::LargeList(_), DataType::List(field)] => {
+                vec![arg_types[0].clone(), DataType::LargeList(field.clone())]
+            }
+            _ => arg_types,
+        };
+        if arg_types[0] != arg_types[1]
+            && same_physical_type(&arg_types[0], &arg_types[1])
+            && let Some(common) = common_type_with_metadata(&arg_types[0], &arg_types[1])?
+        {
+            // Merge the value fields without changing either input's containsNull contract.
+            return Ok(arg_types
+                .iter()
+                .map(|original| match (&common, original) {
+                    (DataType::List(field), DataType::List(original)) => DataType::List(Arc::new(
+                        field.as_ref().clone().with_nullable(original.is_nullable()),
+                    )),
+                    (DataType::LargeList(field), DataType::LargeList(original)) => {
+                        DataType::LargeList(Arc::new(
+                            field.as_ref().clone().with_nullable(original.is_nullable()),
+                        ))
+                    }
+                    _ => common.clone(),
+                })
+                .collect());
         }
+        Ok(arg_types)
     }
 }
 

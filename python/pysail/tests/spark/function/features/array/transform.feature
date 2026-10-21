@@ -1,6 +1,38 @@
 @function(lambda)
 Feature: transform higher-order function
 
+  Rule: Nested lambda results retain interval qualifiers
+
+    # Upstream element_at inference still drops the selected child field's metadata.
+    @sail-bug
+    Scenario: A parent cast observes a nested transform's YEAR qualifier
+      When query
+        """
+        SELECT transform(array(1), x -> CAST(element_at(
+          transform(array(1), y -> CAST(make_ym_interval(CAST(id AS INT), 0) AS INTERVAL YEAR)),
+          1) AS INT)) AS result
+        FROM range(3)
+        """
+      Then query result
+        | result |
+        | [0]    |
+        | [1]    |
+        | [2]    |
+
+    Scenario: Array max retains a nested transform's YEAR qualifier for its parent cast
+      When query
+        """
+        SELECT transform(array(1), x -> CAST(array_max(
+          transform(array(1), y -> CAST(make_ym_interval(CAST(id AS INT), 0) AS INTERVAL YEAR))
+        ) AS INT)) AS result
+        FROM range(3)
+        """
+      Then query result
+        | result |
+        | [0]    |
+        | [1]    |
+        | [2]    |
+
   Rule: Basic 1-param transform — integer arithmetic
 
     Scenario Outline: 1-param: <case>

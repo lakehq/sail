@@ -93,3 +93,20 @@ Feature: coalesce returns the first non-null argument
         root
          |-- result: integer (nullable = true)
         """
+
+
+  Rule: Struct field comments do not distinguish values
+
+    Scenario Outline: Coalesce parsed structs with different <format> comments
+      When query
+        """
+        SELECT coalesce(<left>, <right>).x AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+      Examples:
+        | format | left                                          | right                              |
+        | CSV    | from_csv('1', 'x INT COMMENT "a"')            | from_csv('2', 'x INT')             |
+        | JSON   | from_json('{"x":1}', 'x INT COMMENT "a"')     | from_json('{"x":2}', 'x INT')      |

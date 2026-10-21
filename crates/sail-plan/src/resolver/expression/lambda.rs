@@ -2,15 +2,83 @@ use datafusion_common::DFSchemaRef;
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::datatype::FieldExt;
 use datafusion_expr::expr::{Lambda, LambdaVariable};
-use datafusion_expr::{ExprSchemable, ValueOrLambda, expr};
+use datafusion_expr::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
+use datafusion_expr::{ExprSchemable, HigherOrderReturnFieldArgs, ScalarUDF, ValueOrLambda, expr};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::get_lambda_parameters;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
+
+pub(super) fn preserve_transform_lambda_fields(
+    expression: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<expr::Expr> {
+    let expr::Expr::HigherOrderFunction(function) = &expression else {
+        return Ok(expression);
+    };
+    if !matches!(
+        function.name(),
+        "transform" | "transform_keys" | "transform_values"
+    ) {
+        return Ok(expression);
+    }
+
+    // DataFusion logical HOF inference rebuilds lambda fields without their metadata.
+    // Leave deferred validation to the original expression when inference fails.
+    let Ok(fields) = function
+        .args
+        .iter()
+        .map(|arg| {
+            Ok(match arg {
+                expr::Expr::Lambda(lambda) => {
+                    ValueOrLambda::Lambda(lambda.body.to_field(schema)?.1)
+                }
+                _ => ValueOrLambda::Value(arg.to_field(schema)?.1),
+            })
+        })
+        .collect::<PlanResult<Vec<_>>>()
+    else {
+        return Ok(expression);
+    };
+    if !fields
+        .iter()
+        .any(|field| matches!(field, ValueOrLambda::Lambda(field) if !field.metadata().is_empty()))
+    {
+        return Ok(expression);
+    }
+    let Ok(fields) = value_fields_with_higher_order_udf_and_lambdas(&fields, &function.func) else {
+        return Ok(expression);
+    };
+    let scalar_arguments = function
+        .args
+        .iter()
+        .map(|arg| match arg {
+            expr::Expr::Literal(value, _) => Some(value),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let Ok(output) = function
+        .func
+        .return_field_from_args(HigherOrderReturnFieldArgs {
+            arg_fields: &fields,
+            scalar_arguments: &scalar_arguments,
+        })
+    else {
+        return Ok(expression);
+    };
+    let Ok(data_type) = expression.get_type(schema) else {
+        return Ok(expression);
+    };
+    if data_type == *output.data_type() {
+        return Ok(expression);
+    }
+    Ok(ScalarUDF::from(SparkStructRename::new(output.data_type().clone())).call(vec![expression]))
+}
 
 pub(super) fn is_spec_lambda_argument(argument: &spec::Expr) -> bool {
     match argument {

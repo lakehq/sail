@@ -5,10 +5,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::datatypes::{FieldRef, Schema};
+use datafusion::common::metadata::FieldMetadata;
 use datafusion::common::{Result, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
-use datafusion::physical_expr::expressions::{CastExpr, LambdaExpr, LambdaVariable, TryCastExpr};
+use datafusion::physical_expr::expressions::{
+    CastExpr, LambdaExpr, LambdaVariable, Literal, TryCastExpr,
+};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
@@ -81,7 +84,21 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                 };
                 let input = self.proto_to_physical_expr(input, input_schema, ctx)?;
                 let field = try_decode_field_ref(&node.field)?;
-                if node.is_try {
+                let literal = input
+                    .downcast_ref::<Literal>()
+                    .filter(|_| !node.is_try && node.safe)
+                    .map(|literal| {
+                        Literal::new_with_metadata(
+                            literal.value().clone(),
+                            Some(FieldMetadata::from(field.as_ref())),
+                        )
+                    });
+                // Metadata-only literal transport must retain Literal identity for UDF arguments.
+                if let Some(literal) = literal
+                    && literal.return_field(input_schema)? == field
+                {
+                    Ok(Arc::new(literal) as Arc<dyn PhysicalExpr>)
+                } else if node.is_try {
                     Ok(Arc::new(TryCastExpr::new_with_target_field(input, field))
                         as Arc<dyn PhysicalExpr>)
                 } else {
@@ -169,6 +186,21 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalExprNode> {
+        if let Some(literal) = expr.downcast_ref::<Literal>() {
+            let field = literal.return_field(&Schema::empty())?;
+            if !field.metadata().is_empty() {
+                // DataFusion's literal protobuf stores the value without its enclosing metadata.
+                return extension_expr_to_proto(
+                    expr,
+                    ExprKind::FieldCast(FieldCastExprNode {
+                        field: try_encode_field_ref(&field)?,
+                        is_try: false,
+                        safe: true,
+                    }),
+                    vec![serialize_physical_expr_with_converter(expr, codec, self)?],
+                );
+            }
+        }
         // DataFusion's cast protobuf stores only the type, losing explicit interval metadata.
         let cast = if let Some(cast) = expr.downcast_ref::<CastExpr>().filter(|cast| {
             cast.target_metadata()
