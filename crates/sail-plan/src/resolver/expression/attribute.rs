@@ -583,9 +583,7 @@ impl PlanResolver<'_> {
         // attribute has matched, a part that names no field of what it reached is a missing field
         // rather than a name that did not resolve.
         for (qualifier_name, field_name, inner) in
-            Self::generate_qualified_nested_field_candidates(name.parts())
-                .into_iter()
-                .rev()
+            Self::generate_qualified_nested_field_candidates(name.parts()).rev()
         {
             let matched = schema
                 .iter()
@@ -1123,17 +1121,15 @@ impl PlanResolver<'_> {
     /// register a namespace of more parts than the three a `TableReference` holds.
     fn generate_qualified_nested_field_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> Vec<(Option<Vec<String>>, &T, &[T])> {
-        (0..name.len())
-            .map(|index| {
-                let qualifier = (index > 0).then(|| {
-                    name[..index]
-                        .iter()
-                        .map(|part| part.as_ref().to_string())
-                        .collect()
-                });
-                (qualifier, &name[index], &name[index + 1..])
-            })
-            .collect()
+    ) -> impl DoubleEndedIterator<Item = (Option<Vec<String>>, &T, &[T])> {
+        (0..name.len()).map(|index| {
+            let qualifier = (index > 0).then(|| {
+                name[..index]
+                    .iter()
+                    .map(|part| part.as_ref().to_string())
+                    .collect()
+            });
+            (qualifier, &name[index], &name[index + 1..])
+        })
     }
 }
