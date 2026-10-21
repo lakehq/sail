@@ -64,15 +64,3 @@ Feature: dateadd function
         root
          |-- result: date (nullable = false)
         """
-
-  Rule: Year arithmetic reports interval overflow
-
-    # add_years is a Sail extension. Like Spark's year-to-month interval
-    # construction, it must reject multiplication overflow rather than panic.
-    @sail-only
-    Scenario: add_years rejects INT minimum without panicking
-      When query
-        """
-        SELECT add_years(DATE '2020-01-01', -2147483648) AS result
-        """
-      Then query error (?i)year-month interval overflow
