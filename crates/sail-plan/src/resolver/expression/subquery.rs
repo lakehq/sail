@@ -1,10 +1,16 @@
 use std::sync::Arc;
 
-use datafusion_common::DFSchemaRef;
+use datafusion::functions_aggregate::expr_fn::{count, first_value};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::logical_plan::{Filter, Projection};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, ScalarUDF, expr_fn};
+use datafusion_expr::{
+    BinaryExpr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator, ScalarUDF, expr_fn,
+    ident, lit, when,
+};
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 
 use crate::error::{PlanError, PlanResult};
@@ -12,6 +18,191 @@ use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::coerce_timestamp_in_subquery_pair;
 use crate::resolver::state::PlanResolverState;
+
+/// Projects the computed inner side of a correlated equality (e.g. `CAST(i.k AS BIGINT) = o.id`)
+/// below the filter so that the correlation key is a plain column. DataFusion groups the
+/// decorrelated subquery by the inner columns of the predicate, so inner values that are only
+/// equal after the computation would otherwise form separate groups and duplicate the outer row.
+fn project_correlated_keys(
+    plan: LogicalPlan,
+    state: &mut PlanResolverState,
+) -> PlanResult<LogicalPlan> {
+    let output = plan
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::Column)
+        .collect::<Vec<_>>();
+    let keep_output = !matches!(plan, LogicalPlan::Projection(_));
+    let plan = plan.transform_up(|plan| {
+        let LogicalPlan::Filter(filter) = plan else {
+            return Ok(Transformed::no(plan));
+        };
+        if !filter.predicate.contains_outer() {
+            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+        }
+        let mut keys = vec![];
+        let predicate = filter
+            .predicate
+            .clone()
+            .transform_up(|expr| {
+                let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                }) = &expr
+                else {
+                    return Ok(Transformed::no(expr));
+                };
+                let inner_is_left = match (left.contains_outer(), right.contains_outer()) {
+                    (false, true) => true,
+                    (true, false) => false,
+                    _ => return Ok(Transformed::no(expr)),
+                };
+                let inner = if inner_is_left { left } else { right };
+                if matches!(inner.as_ref(), Expr::Column(_)) || !inner.any_column_refs() {
+                    return Ok(Transformed::no(expr));
+                }
+                let name = state.register_field_name("");
+                keys.push(inner.as_ref().clone().alias(&name));
+                let key = Box::new(Expr::Column(Column::from_name(name)));
+                let (left, right) = if inner_is_left {
+                    (key, right.clone())
+                } else {
+                    (left.clone(), key)
+                };
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                })))
+            })?
+            .data;
+        if keys.is_empty() {
+            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+        }
+        let columns = filter
+            .input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        let input = LogicalPlanBuilder::from(Arc::unwrap_or_clone(filter.input))
+            .project(columns.into_iter().chain(keys))?
+            .build()?;
+        Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
+            predicate,
+            Arc::new(input),
+        )?)))
+    })?;
+    if plan.transformed && keep_output {
+        Ok(LogicalPlanBuilder::from(plan.data)
+            .project(output)?
+            .build()?)
+    } else {
+        Ok(plan.data)
+    }
+}
+
+/// Wraps a resolved scalar subquery so that it reports Spark's nullability.
+fn nullable_scalar_subquery(plan: LogicalPlan) -> Expr {
+    ScalarUDF::from(SparkScalarSubquery::new()).call(vec![expr_fn::scalar_subquery(Arc::new(plan))])
+}
+
+fn scalar_subquery_error() -> Expr {
+    ScalarUDF::from(RaiseError::new()).call(vec![lit("Scalar subquery returned more than one row")])
+}
+
+/// Inlines a subquery whose only outer references sit in its final projection over an
+/// uncorrelated input (e.g. `(SELECT o.id FROM range(1))`), which DataFusion cannot
+/// decorrelate. The row count and the referenced inner columns become uncorrelated
+/// scalar subqueries, and the projected expression is evaluated in the outer scope.
+fn inline_outer_projection(
+    plan: &LogicalPlan,
+    state: &mut PlanResolverState,
+) -> PlanResult<Option<Expr>> {
+    let LogicalPlan::Projection(projection) = plan else {
+        return Ok(None);
+    };
+    let [expr] = projection.expr.as_slice() else {
+        return Ok(None);
+    };
+    if !expr.contains_outer() || !projection.input.all_out_ref_exprs().is_empty() {
+        return Ok(None);
+    }
+    let input = projection.input.as_ref();
+    let expr = match expr {
+        Expr::Alias(alias) => alias.expr.as_ref().clone(),
+        expr => expr.clone(),
+    };
+    let expr = expr
+        .transform(|expr| match expr {
+            Expr::OuterReferenceColumn(_, column) => Ok(Transformed::yes(Expr::Column(column))),
+            Expr::Column(column) => {
+                let value = LogicalPlanBuilder::from(input.clone())
+                    .aggregate(
+                        Vec::<Expr>::new(),
+                        vec![
+                            first_value(Expr::Column(column), vec![])
+                                .alias(state.register_field_name("")),
+                        ],
+                    )?
+                    .build()?;
+                Ok(Transformed::yes(nullable_scalar_subquery(value)))
+            }
+            expr => Ok(Transformed::no(expr)),
+        })?
+        .data;
+    let rows = LogicalPlanBuilder::from(input.clone())
+        .aggregate(
+            Vec::<Expr>::new(),
+            vec![count(lit(1_i64)).alias(state.register_field_name(""))],
+        )?
+        .build()?;
+    let rows = expr_fn::scalar_subquery(Arc::new(rows));
+    Ok(Some(
+        when(rows.clone().eq(lit(0_i64)), lit(ScalarValue::Null))
+            .when(rows.gt(lit(1_i64)), scalar_subquery_error())
+            .otherwise(expr)?,
+    ))
+}
+
+fn is_aggregated(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Projection(projection) => is_aggregated(&projection.input),
+        LogicalPlan::SubqueryAlias(alias) => is_aggregated(&alias.input),
+        LogicalPlan::Aggregate(_) => true,
+        LogicalPlan::Filter(filter) => matches!(filter.input.as_ref(), LogicalPlan::Aggregate(_)),
+        _ => false,
+    }
+}
+
+/// Spark lets a correlated scalar subquery return at most one row and fails at runtime when it
+/// returns more, while DataFusion only decorrelates aggregated correlated subqueries. Aggregate
+/// the rows into the single value and raise Spark's error when more than one row is produced.
+fn enforce_single_row(plan: LogicalPlan, state: &mut PlanResolverState) -> PlanResult<LogicalPlan> {
+    if is_aggregated(&plan) || plan.max_rows().is_some_and(|rows| rows <= 1) {
+        return Ok(plan);
+    }
+    let column = plan.schema().columns().one()?;
+    let value = state.register_field_name("");
+    let rows = state.register_field_name("");
+    Ok(LogicalPlanBuilder::from(plan)
+        .aggregate(
+            Vec::<Expr>::new(),
+            vec![
+                first_value(Expr::Column(column.clone()), vec![]).alias(&value),
+                count(lit(1_i64)).alias(&rows),
+            ],
+        )?
+        .project(vec![
+            when(ident(&rows).gt(lit(1_i64)), scalar_subquery_error())
+                .otherwise(ident(&value))?
+                .alias(column.name()),
+        ])?
+        .build()?)
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_in_subquery(
@@ -94,8 +285,16 @@ impl PlanResolver<'_> {
         };
         // Spark reports every scalar subquery as nullable since an empty result is NULL.
         // DataFusion 55 derives nullability from the projected field, so wrap the expression.
-        let subquery = ScalarUDF::from(SparkScalarSubquery::new())
-            .call(vec![expr_fn::scalar_subquery(Arc::new(subquery))]);
+        let subquery = if subquery.all_out_ref_exprs().is_empty() {
+            nullable_scalar_subquery(subquery)
+        } else if let Some(inlined) = inline_outer_projection(&subquery, state)? {
+            inlined
+        } else {
+            nullable_scalar_subquery(enforce_single_row(
+                project_correlated_keys(subquery, state)?,
+                state,
+            )?)
+        };
         Ok(NamedExpr::new(vec!["subquery".to_string()], subquery))
     }
 

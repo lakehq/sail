@@ -562,8 +562,63 @@ Feature: Scalar subquery nullability
         | k |
         | 0 |
 
-    # Sail rejects unaggregated correlated scalar subqueries during planning (DataFusion invariant); Spark evaluates them.
-    @sail-bug
+  Rule: Correlated scalar subqueries keyed by a computed inner value
+
+    Scenario: count of a correlated count subquery keyed by a cast inner value counts every outer row
+      When query
+        """
+        SELECT count((SELECT count(*) FROM VALUES ('1'), ('01') AS i(k) WHERE CAST(i.k AS BIGINT) = o.id)) AS n
+        FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
+    Scenario: a correlated count subquery keyed by a cast inner value counts matches per outer row
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM VALUES ('1'), ('01') AS i(k) WHERE CAST(i.k AS BIGINT) = o.id) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 0 |
+        | 1  | 2 |
+
+    Scenario: a filter on a correlated count subquery keyed by a cast inner value keeps matching outer rows
+      When query
+        """
+        SELECT o.id FROM range(2) o
+        WHERE (SELECT count(*) FROM VALUES ('1'), ('01') AS i(k) WHERE CAST(i.k AS BIGINT) = o.id) = 2
+        """
+      Then query result collected
+        | id |
+        | 1  |
+
+    Scenario: a correlated max subquery keyed by a cast inner value on the right side yields NULL without a match
+      When query
+        """
+        SELECT o.id, (SELECT max(i.k) FROM VALUES ('1'), ('01') AS i(k) WHERE o.id = CAST(i.k AS BIGINT)) AS c
+        FROM range(2) o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c    |
+        | 0  | NULL |
+        | 1  | 1    |
+
+  Rule: Correlated scalar subqueries without aggregation
+
+    Scenario: count of an outer reference projected through a single-row subquery counts every outer row
+      When query
+        """
+        SELECT count((SELECT o.id FROM range(1))) AS n FROM range(2) o
+        """
+      Then query result collected
+        | n |
+        | 2 |
+
     Scenario: count of an unaggregated correlated subquery with no matches is zero
       When query
         """
@@ -573,13 +628,55 @@ Feature: Scalar subquery nullability
         | n |
         | 0 |
 
-    # Sail rejects unaggregated correlated scalar subqueries during planning (DataFusion invariant); Spark evaluates them.
-    @sail-bug
-    Scenario: count of an outer reference projected through a single-row subquery counts every outer row
+    Scenario: an unaggregated correlated subquery with one match per outer row is nullable
       When query
         """
-        SELECT count((SELECT o.id FROM range(1))) AS n FROM range(2) o
+        SELECT o.id, (SELECT i.id FROM range(3) i WHERE i.id = o.id) AS c FROM range(2) o ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 0 |
+        | 1  | 1 |
+      Then query schema
+        """
+        root
+         |-- id: long (nullable = false)
+         |-- c: long (nullable = true)
+        """
+
+    Scenario: a filter on an unaggregated correlated subquery being NULL keeps unmatched outer rows
+      When query
+        """
+        SELECT o.id FROM range(3) o WHERE (SELECT i.id FROM range(2) i WHERE i.id = o.id) IS NULL
         """
       Then query result collected
-        | n |
-        | 2 |
+        | id |
+        | 2  |
+
+    # DataFusion cannot decorrelate a correlated scalar subquery through LIMIT.
+
+    @sail-bug
+
+    Scenario: an unaggregated correlated subquery with LIMIT yields the matched row
+      When query
+        """
+        SELECT o.id, (SELECT i.id FROM range(3) i WHERE i.id = o.id LIMIT 1) AS c FROM range(2) o ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | c |
+        | 0  | 0 |
+        | 1  | 1 |
+
+    Scenario: an unaggregated correlated subquery with multiple matches errors
+      When query
+        """
+        SELECT (SELECT i.k FROM VALUES (1, 4), (1, 2) AS i(k, x) WHERE i.k = o.k) AS c FROM VALUES (1) AS o(k)
+        """
+      Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+    Scenario: count of an unaggregated correlated subquery with multiple matches errors
+      When query
+        """
+        SELECT count((SELECT i.k FROM VALUES (1, 4), (1, 2) AS i(k, x) WHERE i.k = o.k)) AS n FROM VALUES (1) AS o(k)
+        """
+      Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
