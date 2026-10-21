@@ -68,7 +68,7 @@ def spark_working_dir(tmp_path_factory):
 
 
 @pytest.fixture(scope="class", autouse=_is_spark_testing())
-def spark_env_var(tmp_path_factory):
+def spark_env_var(request, tmp_path_factory):
     """This fixture sets up the environment for each PySpark test class
     in a similar way to the `python/run-tests.py` script, so that we can
     use pytest to run the tests.
@@ -89,14 +89,15 @@ def spark_env_var(tmp_path_factory):
         f"spark.executor.extraJavaOptions={shlex.quote(java_options)}",
         "--conf",
         f"spark.sql.warehouse.dir={shlex.quote(warehouse_dir.as_posix())}",
-        # The tests compare `toPandas()` results of the Spark Connect session with those of
-        # the classic session. Spark Connect always uses Arrow, so Arrow is enabled for the
-        # classic session as well. Otherwise, array columns are returned as lists instead of
-        # NumPy arrays, which pandas does not consider equal.
-        "--conf",
-        "spark.sql.execution.arrow.pyspark.enabled=true",
         "pyspark-shell",
     ]
+    if request.cls is not None and request.cls.__name__ == "SparkConnectFunctionTests":
+        # These tests compare `toPandas()` results of the Spark Connect session with those of
+        # the classic session. Spark Connect always uses Arrow, so Arrow is enabled for the
+        # classic session as well. Otherwise, array columns are returned as lists instead of
+        # NumPy arrays, which pandas does not consider equal. This is not done for all tests
+        # since `createDataFrame()` with Arrow turns NaN in the local data into NULL.
+        spark_args[-1:-1] = ["--conf", "spark.sql.execution.arrow.pyspark.enabled=true"]
     os.environ["TMPDIR"] = tmp_dir.as_posix()
     os.environ["PYSPARK_SUBMIT_ARGS"] = " ".join(spark_args)
 
