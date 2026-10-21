@@ -20,11 +20,11 @@ use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
-use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy, SparkToLocalTime};
+use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
-use sail_function::scalar::datetime::spark_date_trunc::{SparkDateTrunc, SparkStartOfDay};
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_dt_interval::SparkMakeDtInterval;
 use sail_function::scalar::datetime::spark_make_interval::SparkMakeInterval;
@@ -32,6 +32,7 @@ use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_start_of_day::SparkStartOfDay;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -40,6 +41,7 @@ use sail_function::scalar::datetime::spark_timestamp_add::SparkTimestampAdd;
 use sail_function::scalar::datetime::spark_timestamp_from_number::{
     SparkTimestampFromNumber, TimestampNumberMode,
 };
+use sail_function::scalar::datetime::spark_to_local_time::SparkToLocalTime;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -824,7 +826,7 @@ fn datetime_timestamp(
             TimestampNumberMode::CastLegacy
         };
         Ok(cast(
-            ScalarUDF::from(SparkTimestampFromNumber::new(mode)).call(vec![expression]),
+            SparkTimestampFromNumber::new(mode).expression(expression, context.schema)?,
             DataType::Timestamp(TimeUnit::Microsecond, timezone),
         ))
     } else if from.is_string()

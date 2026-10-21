@@ -122,7 +122,7 @@ impl SparkDatePart {
 
 impl ScalarUDFImpl for SparkDatePart {
     fn name(&self) -> &str {
-        "spark_date_part"
+        "date_part"
     }
 
     fn aliases(&self) -> &[String] {

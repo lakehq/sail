@@ -11,7 +11,7 @@ use sail_common::spec;
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
-use sail_function::scalar::datetime::spark_date_trunc::SparkStartOfDay;
+use sail_function::scalar::datetime::spark_start_of_day::SparkStartOfDay;
 use sail_function::scalar::datetime::spark_timestamp_to_number::SparkTimestampToNumber;
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::SparkMapFromEntries;

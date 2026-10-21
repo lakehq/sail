@@ -28,7 +28,6 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::input_file_name::InputFileNameFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
-use datafusion::functions::datetime::date_part::DatePartFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
@@ -170,12 +169,12 @@ use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
-use sail_function::scalar::datetime::convert_tz::{ConvertTz, SparkToLocalTime};
+use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
-use sail_function::scalar::datetime::spark_date_trunc::{SparkDateTrunc, SparkStartOfDay};
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
     SparkYearMonthInterval, YearMonthIntervalMonths,
@@ -187,6 +186,7 @@ use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_start_of_day::SparkStartOfDay;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -196,6 +196,7 @@ use sail_function::scalar::datetime::spark_timestamp_from_number::{
     SparkTimestampFromNumber, TimestampNumberMode,
 };
 use sail_function::scalar::datetime::spark_timestamp_to_number::SparkTimestampToNumber;
+use sail_function::scalar::datetime::spark_to_local_time::SparkToLocalTime;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -3750,9 +3751,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
-            "spark_date_part" => Ok(Arc::new(ScalarUDF::from(SparkDatePart::new()))),
-            "date_part" | "datepart" | "extract" => {
-                Ok(Arc::new(ScalarUDF::from(DatePartFunc::new())))
+            "spark_date_part" | "date_part" | "datepart" | "extract" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
             }
             "spark_year" | "year" => Ok(Arc::new(ScalarUDF::from(SparkYear::new()))),
             "spark_luhn_check" | "luhn_check" => {
@@ -3921,7 +3921,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
-            || node_inner.is::<DatePartFunc>()
             || node_inner.is::<SparkToLocalTime>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkStartOfDay>()
@@ -6063,6 +6062,8 @@ mod tests {
     use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
     use datafusion::arrow::datatypes::{Schema, SchemaRef};
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::functions::datetime::date_part::DatePartFunc;
+    use datafusion::functions::datetime::date_trunc::DateTruncFunc;
     use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion::physical_expr::HigherOrderFunctionExpr;
     use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
@@ -7416,10 +7417,12 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_spark_date_part_udf() -> Result<()> {
+    fn test_round_trip_datetime_udfs_preserves_implementation() -> Result<()> {
         for udf in [
             ScalarUDF::from(SparkDatePart::new()),
             ScalarUDF::from(DatePartFunc::new()),
+            ScalarUDF::from(SparkDateTrunc::new()),
+            ScalarUDF::from(DateTruncFunc::new()),
         ] {
             let decoded = round_trip_udf(udf.clone())?;
             assert_eq!(decoded.name(), udf.name());
@@ -7430,6 +7433,14 @@ mod tests {
             assert_eq!(
                 decoded.inner().is::<DatePartFunc>(),
                 udf.inner().is::<DatePartFunc>()
+            );
+            assert_eq!(
+                decoded.inner().is::<SparkDateTrunc>(),
+                udf.inner().is::<SparkDateTrunc>()
+            );
+            assert_eq!(
+                decoded.inner().is::<DateTruncFunc>(),
+                udf.inner().is::<DateTruncFunc>()
             );
         }
 
@@ -9068,7 +9079,7 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
 
         assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
-        assert_eq!(decoded.name(), "spark_date_part");
+        assert_eq!(decoded.name(), "date_part");
 
         Ok(())
     }

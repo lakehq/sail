@@ -8,7 +8,7 @@ use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::simplify::SimplifyContextBuilder;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext, SimplifyContextBuilder};
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, Volatility, cast, col, lit, try_cast, when,
@@ -29,7 +29,7 @@ pub enum TimestampNumberMode {
     TryCast,
 }
 
-// Bind the input once before native range and precision checks reuse its value.
+// Bind computed inputs once before native range and precision checks reuse their values.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestampFromNumber {
     signature: Signature,
@@ -44,8 +44,21 @@ impl SparkTimestampFromNumber {
         }
     }
 
+    /// Expand safe native casts before the planner assigns expression names.
+    pub fn expression(&self, value: Expr, schema: &DFSchemaRef) -> Result<Expr> {
+        let info = SimplifyContextBuilder::default()
+            .with_schema(Arc::clone(schema))
+            .build();
+        match self.simplify(vec![value], &info)? {
+            ExprSimplifyResult::Simplified(expression) => Ok(expression),
+            ExprSimplifyResult::Original(args) => {
+                Ok(ScalarUDF::from(Self::new(self.mode)).call(args))
+            }
+        }
+    }
+
     /// Build the conversion for an already-evaluated input column.
-    fn expression(&self, value: Expr, schema: &DFSchemaRef) -> Result<Expr> {
+    fn native_expression(&self, value: Expr, schema: &DFSchemaRef) -> Result<Expr> {
         let info = SimplifyContextBuilder::default()
             .with_schema(Arc::clone(schema))
             .build();
@@ -268,7 +281,7 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
                 vec![Field::new("value", value.data_type().clone(), true)].into(),
                 Default::default(),
             )?);
-            let expression = self.expression(col("value"), &schema)?;
+            let expression = self.native_expression(col("value"), &schema)?;
             create_physical_expr(
                 &expression,
                 &schema,
@@ -281,6 +294,28 @@ impl ScalarUDFImpl for SparkTimestampFromNumber {
             )?)?
             .into_array(value.len())
         })(&args.args)
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let [value] = args.as_slice() else {
+            return exec_err!("numeric timestamp conversion requires one argument");
+        };
+        // Bound signed integers cast losslessly to Int64 and preserve result nullability.
+        // Literal calls already fold through the evaluator, which defers unused errors.
+        if !matches!(value, Expr::Column(_))
+            || !matches!(
+                self.mode,
+                TimestampNumberMode::CastAnsi
+                    | TimestampNumberMode::CastLegacy
+                    | TimestampNumberMode::TryCast
+            )
+            || !info.get_data_type(value)?.is_signed_integer()
+        {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
+        Ok(ExprSimplifyResult::Simplified(
+            self.native_expression(value.clone(), info.schema())?,
+        ))
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {

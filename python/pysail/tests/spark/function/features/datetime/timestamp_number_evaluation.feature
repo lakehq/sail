@@ -112,3 +112,66 @@ Feature: Numeric timestamp conversions preserve their input
       | result  |
       | NULL    |
       | 1000000 |
+
+  Scenario Outline: Integer timestamp casts saturate column values with ANSI <ansi>
+    Given config spark.sql.session.timeZone = UTC
+    And config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT id, unix_micros(CAST(v AS TIMESTAMP)) AS strict_cast,
+             unix_micros(TRY_CAST(v AS TIMESTAMP)) AS safe_cast,
+             unix_micros(to_timestamp(v)) AS timestamp_function
+      FROM VALUES (0, -9223372036854775808L), (1, -9223372036855L),
+                  (2, -9223372036854L), (3, 9223372036854L),
+                  (4, 9223372036855L), (5, 9223372036854775807L),
+                  (6, CAST(NULL AS BIGINT)) AS t(id, v)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | strict_cast          | safe_cast            | timestamp_function   |
+      | 0  | -9223372036854775808 | -9223372036854775808 | -9223372036854775808 |
+      | 1  | -9223372036854775808 | -9223372036854775808 | -9223372036854775808 |
+      | 2  | -9223372036854000000 | -9223372036854000000 | -9223372036854000000 |
+      | 3  | 9223372036854000000  | 9223372036854000000  | 9223372036854000000  |
+      | 4  | 9223372036854775807  | 9223372036854775807  | 9223372036854775807  |
+      | 5  | 9223372036854775807  | 9223372036854775807  | 9223372036854775807  |
+      | 6  | NULL                 | NULL                 | NULL                 |
+    When query
+      """
+      SELECT CAST(id AS TIMESTAMP) AS strict_cast, TRY_CAST(id AS TIMESTAMP) AS safe_cast,
+             to_timestamp(id) AS timestamp_function FROM range(1)
+      """
+    Then query schema
+      """
+      root
+       |-- strict_cast: timestamp (nullable = false)
+       |-- safe_cast: timestamp (nullable = false)
+       |-- timestamp_function: timestamp (nullable = false)
+      """
+    Then query result
+      | strict_cast         | safe_cast           | timestamp_function  |
+      | 1970-01-01 00:00:00 | 1970-01-01 00:00:00 | 1970-01-01 00:00:00 |
+
+    Examples:
+      | ansi  |
+      | true  |
+      | false |
+
+  Scenario Outline: Integer timestamp checks reuse a computed column for <producer>
+    # Native range checks may read a bound column more than once. Projection
+    # simplification must not duplicate its volatile or scalar-subquery producer.
+    When query
+      """
+      SELECT count(*) AS impossible_values FROM (
+        SELECT <producer> AS v FROM range(1000)
+      ) t
+      WHERE unix_micros(CAST(v AS TIMESTAMP)) NOT IN (1000000L, 9223372036854775807L)
+      """
+    Then query result
+      | impossible_values |
+      | 0                 |
+
+    Examples:
+      | producer                                                                         |
+      | CASE WHEN rand(1) < 0.5 THEN 1L ELSE 9223372036854775807L END                       |
+      | (SELECT CASE WHEN rand(1) < 0.5 THEN 1L ELSE 9223372036854775807L END)              |
