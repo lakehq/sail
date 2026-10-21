@@ -444,6 +444,19 @@ fn declare_nullable_result(expr: Expr, nullable: bool, schema: &DFSchemaRef) -> 
     }
 }
 
+/// A string argument is implicitly cast to a date as in Spark,
+/// which returns `NULL` for an invalid date outside ANSI mode.
+fn last_day(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let null_on_error = !input.function_context.plan_config.ansi_mode;
+    let expr = input.arguments.one()?;
+    let expr = if expr.get_type(input.function_context.schema)?.is_string() {
+        ScalarUDF::from(SparkDate::new(null_on_error)).call(vec![expr])
+    } else {
+        expr
+    };
+    Ok(ScalarUDF::from(SparkLastDay::new()).call(vec![expr]))
+}
+
 fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let null_on_error = !input.function_context.plan_config.ansi_mode;
     if input.arguments.len() == 1 {
@@ -1305,7 +1318,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::custom(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),
-        ("last_day", F::udf(SparkLastDay::new())),
+        ("last_day", F::custom(last_day)),
         (
             "localtimestamp",
             F::custom(current_localtimestamp_microseconds),

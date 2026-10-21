@@ -291,8 +291,9 @@ For `VALUES`, find the common type of each column over all the rows before casti
 - Type coercion: Spark coerces a decimal and a double to `double`, and a decimal and a string to `string`. Sail keeps the decimal in both cases.
 - Decimal division: Spark's result type has `scale = max(6, s1 + p2 + 1)` and `precision = p1 - s1 + s2 + scale`, reduced to at most 38 digits.
   For `decimal(10,1) / decimal(10,0) / 3`, this gives `decimal(23,14)` and `0.38888888888900`. Sail gives `decimal(18,9)` and `0.388886666`, so precision is lost in the intermediate result.
-- `factorial` only has an `Int64` signature, and decimals are not implicitly cast to it.
-- An explicit `CAST('1997/02/28 10:30:00' AS DATE)` returns `NULL` in Sail as in Spark, but the implicit cast for the `date` argument of `last_day` raises an error instead.
+- `factorial` only had an `Int64` signature, and decimals were not implicitly cast to it. The argument is now cast to `int` as in Spark.
+- An explicit `CAST('1997/02/28 10:30:00' AS DATE)` returns `NULL` in Sail as in Spark, but the implicit cast for the `date` argument of `last_day` raised an error instead.
+  `last_day` now casts a string argument as an explicit cast does. The other date functions in the test (`year`, `quarter`, `month`, `dayofweek`, and so on) still use a cast that raises an error.
 - Window expressions are named without their window specification.
 - The array columns that print identically differ in their Python types, not in their values.
   The classic session of these tests has Arrow disabled, so its `toPandas()` returns array columns as Python lists,
