@@ -53,6 +53,13 @@ pub fn normalize_record_batch(batch: &RecordBatch, large_var_types: bool) -> Res
     }
 }
 
+pub fn normalize_array(array: &ArrayRef, large_var_types: bool) -> Result<ArrayRef> {
+    cast_array_positionally_recursively(
+        array,
+        &normalize_data_type(array.data_type(), large_var_types),
+    )
+}
+
 pub fn normalize_schema(schema: &Schema, large_var_types: bool) -> Schema {
     Schema::new_with_metadata(
         schema
@@ -70,13 +77,6 @@ pub fn normalize_field_with_options(field: &FieldRef, large_var_types: bool) -> 
             .as_ref()
             .clone()
             .with_data_type(normalize_data_type(field.data_type(), large_var_types)),
-    )
-}
-
-pub fn normalize_array(array: &ArrayRef, large_var_types: bool) -> Result<ArrayRef> {
-    cast_array_positionally_recursively(
-        array,
-        &normalize_data_type(array.data_type(), large_var_types),
     )
 }
 
