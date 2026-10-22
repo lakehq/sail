@@ -1384,6 +1384,9 @@ pub enum ExplainMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
+    AlterSnapshotReference {
+        operation: super::SnapshotReferenceOperation,
+    },
     AlterIdentifierFields {
         names: Vec<ObjectName>,
         drop: bool,

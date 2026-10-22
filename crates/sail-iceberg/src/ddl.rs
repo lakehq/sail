@@ -97,6 +97,11 @@ fn catalog_alter_options(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<Vec<AlterTableOptions>> {
     Ok(match operation {
+        LakeSourceAlterTableOperation::AlterSnapshotReference { operation } => {
+            vec![AlterTableOptions::AlterSnapshotReference {
+                operation: operation.clone(),
+            }]
+        }
         LakeSourceAlterTableOperation::AlterIdentifierFields { names, drop } => {
             vec![AlterTableOptions::AlterIdentifierFields {
                 names: names.clone(),
@@ -196,6 +201,9 @@ pub(crate) fn apply_operation(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<()> {
     match operation {
+        LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
+            datafusion_common::internal_err!("Snapshot references require the snapshot commit path")
+        }
         LakeSourceAlterTableOperation::AlterIdentifierFields { names, drop } => {
             alter_identifier_fields(metadata, names, *drop)
         }
