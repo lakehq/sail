@@ -211,7 +211,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::SparkDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -3679,7 +3679,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "xpath" => Ok(Arc::new(ScalarUDF::from(Xpath::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
-            "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
+            "spark_div" => Ok(Arc::new(ScalarUDF::from(SparkDiv::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
@@ -3864,7 +3864,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkExpm1>()
             || node_inner.is::<SparkFactorial>()
             || node_inner.is::<SparkHex>()
-            || node_inner.is::<SparkIntervalDiv>()
+            || node_inner.is::<SparkDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkVariantExplodeUdf>()

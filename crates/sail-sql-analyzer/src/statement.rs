@@ -2451,6 +2451,77 @@ fn from_ast_alter_table_operation(
     operation: AlterTableOperation,
 ) -> SqlResult<spec::AlterTableOperation> {
     match operation {
+        AlterTableOperation::CreateSnapshotReference {
+            action,
+            kind,
+            if_not_exists,
+            name,
+            version,
+            retain,
+            retention,
+        } => {
+            use sail_sql_parser::ast::statement::{
+                ReferenceSnapshotRetention, SnapshotReferenceCreateAction,
+            };
+            use spec::SnapshotReferenceCreateMode as Mode;
+            let mode = match (action, if_not_exists.is_some()) {
+                (SnapshotReferenceCreateAction::Create(_, None), false) => Mode::Create,
+                (SnapshotReferenceCreateAction::Create(_, None), true) => Mode::CreateIfNotExists,
+                (SnapshotReferenceCreateAction::Create(_, Some(_)), false) => Mode::CreateOrReplace,
+                (SnapshotReferenceCreateAction::Replace(_), false) => Mode::Replace,
+                _ => {
+                    return Err(SqlError::invalid(
+                        "IF NOT EXISTS cannot be combined with REPLACE",
+                    ));
+                }
+            };
+            let kind = from_ast_snapshot_reference_kind(kind);
+            if kind == spec::SnapshotReferenceType::Tag && retention.is_some() {
+                return Err(SqlError::invalid(
+                    "Snapshot retention is only supported for branches",
+                ));
+            }
+            let (min_snapshots_to_keep, max_snapshot_age_ms) = match retention
+                .map(|(_, _, _, value)| value)
+            {
+                Some(ReferenceSnapshotRetention::Count(value, _, age)) => (
+                    Some(
+                        i32::try_from(value.value)
+                            .map_err(|_| SqlError::invalid("Invalid snapshot retention count"))?,
+                    ),
+                    age.map(from_ast_reference_duration).transpose()?,
+                ),
+                Some(ReferenceSnapshotRetention::Age(age)) => {
+                    (None, Some(from_ast_reference_duration(age)?))
+                }
+                None => (None, None),
+            };
+            Ok(spec::AlterTableOperation::AlterSnapshotReference {
+                operation: spec::SnapshotReferenceOperation::Create {
+                    name: name.value,
+                    kind,
+                    mode,
+                    snapshot_id: version.map(|(_, _, _, value)| value.value),
+                    max_ref_age_ms: retain
+                        .map(|(_, age)| from_ast_reference_duration(age))
+                        .transpose()?,
+                    min_snapshots_to_keep,
+                    max_snapshot_age_ms,
+                },
+            })
+        }
+        AlterTableOperation::DropSnapshotReference {
+            kind,
+            if_exists,
+            name,
+            ..
+        } => Ok(spec::AlterTableOperation::AlterSnapshotReference {
+            operation: spec::SnapshotReferenceOperation::Drop {
+                name: name.value,
+                kind: from_ast_snapshot_reference_kind(kind),
+                if_exists: if_exists.is_some(),
+            },
+        }),
         AlterTableOperation::SetIdentifierFields { names, .. } => {
             Ok(spec::AlterTableOperation::AlterIdentifierFields {
                 names: names
@@ -2690,6 +2761,32 @@ fn from_ast_alter_table_operation(
             })
         }
     }
+}
+
+fn from_ast_snapshot_reference_kind(
+    kind: sail_sql_parser::ast::statement::SnapshotReferenceKind,
+) -> spec::SnapshotReferenceType {
+    use sail_sql_parser::ast::statement::SnapshotReferenceKind;
+    match kind {
+        SnapshotReferenceKind::Branch(_) => spec::SnapshotReferenceType::Branch,
+        SnapshotReferenceKind::Tag(_) => spec::SnapshotReferenceType::Tag,
+    }
+}
+
+fn from_ast_reference_duration(
+    duration: sail_sql_parser::ast::statement::ReferenceDuration,
+) -> SqlResult<i64> {
+    use sail_sql_parser::ast::statement::ReferenceTimeUnit;
+    let multiplier = match duration.unit {
+        ReferenceTimeUnit::Days(_) => 86_400_000,
+        ReferenceTimeUnit::Hours(_) => 3_600_000,
+        ReferenceTimeUnit::Minutes(_) => 60_000,
+    };
+    duration
+        .value
+        .value
+        .checked_mul(multiplier)
+        .ok_or_else(|| SqlError::invalid("Snapshot retention duration is out of range"))
 }
 
 fn from_ast_alter_view_operation(
