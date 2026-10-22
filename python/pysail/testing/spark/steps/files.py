@@ -339,7 +339,8 @@ def location_is_empty_directory(location_var: str, variables: dict) -> None:
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
     path = Path(location.path)
-    assert path.is_dir() and not path.is_symlink(), f"{path} is not a plain directory"
+    assert path.is_dir(), f"{path} is not a directory"
+    assert not path.is_symlink(), f"{path} is a symlink"
     assert not any(path.iterdir()), f"{path} is not empty: {list(path.iterdir())}"
 
 

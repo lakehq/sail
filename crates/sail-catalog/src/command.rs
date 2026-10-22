@@ -1336,7 +1336,8 @@ fn replace_with_empty_dir(dir: &std::path::Path) -> std::io::Result<()> {
         dir.with_file_name(format!(".{name}.truncate-{}-{nanos}", std::process::id()))
     };
     std::fs::rename(dir, &backup)?;
-    let created = std::fs::create_dir(dir).and_then(|()| std::fs::set_permissions(dir, permissions));
+    let created =
+        std::fs::create_dir(dir).and_then(|()| std::fs::set_permissions(dir, permissions));
     if let Err(e) = created {
         let _ = std::fs::remove_dir(dir);
         std::fs::rename(&backup, dir)?;
