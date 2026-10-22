@@ -8,6 +8,42 @@ use crate::array::record_batch::{
     cast_array_positionally_recursively, cast_record_batch_positionally,
 };
 
+pub fn record_batch_has_views(batch: &RecordBatch) -> bool {
+    batch
+        .schema()
+        .fields()
+        .iter()
+        .any(|field| data_type_has_views(field.data_type()))
+}
+
+fn data_type_has_views(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Utf8View
+        | DataType::BinaryView
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => true,
+
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => data_type_has_views(field.data_type()),
+
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| data_type_has_views(field.data_type())),
+
+        DataType::Union(fields, _) => fields
+            .iter()
+            .any(|(_, field)| data_type_has_views(field.data_type())),
+
+        DataType::Dictionary(_, value_type) => data_type_has_views(value_type),
+
+        DataType::RunEndEncoded(_, values) => data_type_has_views(values.data_type()),
+
+        _ => false,
+    }
+}
+
 pub fn normalize_record_batch(batch: &RecordBatch, large_var_types: bool) -> Result<RecordBatch> {
     let schema = Arc::new(normalize_schema(batch.schema().as_ref(), large_var_types));
     if schema.as_ref() == batch.schema().as_ref() {

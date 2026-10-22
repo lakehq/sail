@@ -6,13 +6,6 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::error::{SparkError, SparkResult};
-use crate::schema::to_spark_schema;
-use crate::spark::connect::execute_plan_response::{ArrowBatch, SqlCommandResult};
-use crate::spark::connect::{
-    CheckpointCommandResult, DataType, StreamingQueryCommandResult,
-    StreamingQueryManagerCommandResult, WriteStreamOperationStartResult,
-};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::ipc::writer::StreamWriter;
@@ -21,11 +14,19 @@ use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::Stream;
 use futures::stream::StreamExt;
-use sail_common_datafusion::schema::normalize_record_batch;
+use sail_common_datafusion::schema::{normalize_record_batch, record_batch_has_views};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
+
+use crate::error::{SparkError, SparkResult};
+use crate::schema::to_spark_schema;
+use crate::spark::connect::execute_plan_response::{ArrowBatch, SqlCommandResult};
+use crate::spark::connect::{
+    CheckpointCommandResult, DataType, StreamingQueryCommandResult,
+    StreamingQueryManagerCommandResult, WriteStreamOperationStartResult,
+};
 
 #[derive(Clone, Debug)]
 pub enum ExecutorBatch {
@@ -468,10 +469,14 @@ pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     {
         // TODO: Look into passing the session's `spark.sql.execution.arrow.useLargeVarTypes` value.
         //  For now, enable large variable-width types because narrowing offsets requires careful overflow handling.
-        let batch = normalize_record_batch(batch, true)?;
+        let batch = if record_batch_has_views(batch) {
+            &normalize_record_batch(batch, true)?
+        } else {
+            batch
+        };
         let cursor = Cursor::new(&mut output.data);
         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(&batch)?;
+        writer.write(batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }
