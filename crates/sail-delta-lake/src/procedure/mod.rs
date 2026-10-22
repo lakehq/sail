@@ -61,11 +61,13 @@ impl LakeProcedureProvider for DeltaLakeSource {
             if optional_bool(&call.invocation, "full")?.unwrap_or(false)
                 || optional_string(&call.invocation, "zorder")?.is_some()
             {
+                // TODO: Plan OPTIMIZE FULL and ZORDER rewrites before accepting these options.
                 return not_impl_err!("OPTIMIZE FULL and ZORDER are not implemented");
             }
             if optional_string(&call.invocation, "mode")?
                 .is_some_and(|mode| !mode.eq_ignore_ascii_case("FULL"))
             {
+                // TODO: Add log-based VACUUM LITE discovery with retained-history validation.
                 return not_impl_err!("VACUUM currently supports FULL mode only");
             }
             return Ok(LakeProcedurePlan::coordinator(LogicalPlan::Extension(

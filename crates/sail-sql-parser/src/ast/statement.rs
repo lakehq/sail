@@ -1391,6 +1391,7 @@ pub enum CommentValue {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum VacuumClause {
+    // TODO: Parse USING INVENTORY table/subquery inputs and pass them to VACUUM planning.
     Retain(Retain, NumberLiteral, Hours),
     DryRun(Dry, Run),
     Mode(Either<Full, Lite>),

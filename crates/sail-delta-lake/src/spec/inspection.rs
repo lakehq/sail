@@ -33,18 +33,25 @@ pub enum DeltaMetadataRelationType {
     /// Latest live domainMetadata per domain; removed domains are absent.
     DomainMetadata,
     /// File statistics grouped by logical partition values.
+    // TODO: Aggregate active-file statistics by logical partition for this relation.
     Partitions,
     /// Row-level change data over a version/timestamp range (including inferred changes).
+    // TODO: Expose the change-data reader through a relation with version/timestamp bounds.
     Changes,
     /// Retained JSON commit actions, with their commit versions.
+    // TODO: Expose retained commit actions without losing their original versions.
     LogEntries,
     /// Complete classic, multipart, or v2 checkpoints and the last-checkpoint hint.
+    // TODO: Expose complete checkpoint metadata and the last-checkpoint hint.
     Checkpoints,
     /// Sidecars referenced by retained v2 checkpoints, not arbitrary directory contents.
+    // TODO: Resolve sidecar references from retained v2 checkpoints for this relation.
     Sidecars,
     /// Per-version .crc statistics; these are optional and are not commit authority.
+    // TODO: Expose optional checksum artifacts with their source versions.
     Checksums,
     /// Compacted JSON log ranges, which do not preserve commit provenance.
+    // TODO: Expose retained log-compaction ranges without synthesizing commit history.
     LogCompactions,
 }
 
@@ -137,25 +144,35 @@ impl DeltaMetadataRelationType {
 pub enum DeltaProcedureType {
     DescribeDetail,
     DescribeHistory,
-    /// FULL/LITE/inventory candidate discovery, retention checks, dry run, and deletion.
+    /// FULL candidate discovery, retention checks, dry run, and deletion.
     Vacuum,
-    /// Bin packing, predicate selection, Z-order, and liquid clustering.
+    /// Bin packing and partition-predicate selection.
     Optimize,
     /// Restore a version or timestamp by committing new add/remove actions.
+    // TODO: Implement RESTORE SQL and procedure planning, validation, and commits.
     Restore,
     /// Convert a supported external format in place.
+    // TODO: Implement CONVERT TO DELTA SQL and the conversion procedure.
     ConvertToDelta,
     /// Generate symlink-format manifests for external readers.
+    // TODO: Implement GENERATE SQL and the manifest-generation procedure.
     Generate,
     /// Clone a source snapshot into a separate target table.
+    // TODO: Implement SHALLOW CLONE SQL and procedure planning with source time travel.
     Clone,
     /// PURGE rewrites and UniForm compatibility upgrades.
+    // TODO: Implement REORG SQL and procedure execution for PURGE and UniForm upgrades.
     Reorg,
+    // TODO: Expose validated protocol upgrades through delta.upgrade_table_protocol.
     UpgradeTableProtocol,
+    // TODO: Expose feature enablement through delta.add_feature_support.
     AddFeatureSupport,
     /// Feature removal, checkpoint protection, and optional history truncation.
+    // TODO: Implement feature removal and history protection through delta.drop_feature.
     DropFeature,
+    // TODO: Expose explicit checkpoint creation through delta.checkpoint.
     Checkpoint,
+    // TODO: Expose validated log-compaction ranges through delta.compact_log.
     CompactLog,
 }
 

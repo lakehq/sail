@@ -335,6 +335,7 @@ pub(super) fn validate_snapshot(
         .protocol()
         .has_writer_feature(&TableFeature::CatalogManaged)
     {
+        // TODO: Integrate catalog-managed maintenance commits and file-lifecycle authorization.
         return not_impl_err!(
             "Delta {} is not supported for catalog-managed tables",
             invocation.procedure.name

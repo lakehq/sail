@@ -161,6 +161,7 @@ pub(super) async fn execute(
         session.config().target_partitions(),
     )
     .await?;
+    // TODO: Discover and remove eligible empty directories, including their result paths and metrics.
     let end_metrics = HashMap::from([
         ("numDeletedFiles".to_string(), json!(deleted)),
         ("numVacuumedDirectories".to_string(), json!(0)),

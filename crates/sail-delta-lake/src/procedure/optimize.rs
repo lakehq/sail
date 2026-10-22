@@ -70,12 +70,14 @@ pub(crate) async fn plan(
         .protocol()
         .has_writer_feature(&TableFeature::Clustering)
     {
+        // TODO: Implement liquid-clustering rewrites and maintain their domain metadata.
         return not_impl_err!("OPTIMIZE liquid-clustered tables is not implemented");
     }
     if snapshot
         .protocol()
         .has_writer_feature(&TableFeature::RowTracking)
     {
+        // TODO: Preserve row IDs and row commit versions across OPTIMIZE rewrites.
         return not_impl_err!("OPTIMIZE row-tracking preservation is not implemented");
     }
     let min_size = positive_size(

@@ -47,6 +47,7 @@ impl LakeRelationProvider for DeltaLakeSource {
         LakeRelationResolution::Supported(LakeRelation::new(
             kind.name(),
             LakeRelationAccess::MetadataRead,
+            // TODO: Carry metadata-relation time travel through snapshot loading.
             LakeRelationTimeTravel::Unsupported,
         ))
     }
