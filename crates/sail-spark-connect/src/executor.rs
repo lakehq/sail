@@ -467,9 +467,10 @@ impl Executor {
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
-        // TODO: Look into passing the session's `spark.sql.execution.arrow.useLargeVarTypes` value.
-        //  For now, enable large variable-width types because narrowing offsets requires careful overflow handling.
         let batch = if record_batch_has_views(batch) {
+            // Fallback incase view types weren't handled in planning/execution.
+            // TODO: Look into passing the session's `spark.sql.execution.arrow.useLargeVarTypes` value.
+            //  For now, enable large variable-width types because narrowing offsets requires careful overflow handling.
             &normalize_record_batch(batch, true)?
         } else {
             batch
