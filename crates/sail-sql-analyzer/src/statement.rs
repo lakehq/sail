@@ -336,10 +336,17 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             name,
             operation,
         } => {
-            let node = spec::CommandNode::AlterTable {
-                table: from_ast_object_name(name)?,
-                if_exists: false,
-                operation: from_ast_alter_table_operation(operation)?,
+            let node = match operation {
+                AlterTableOperation::RecoverPartitions { .. } => {
+                    spec::CommandNode::RecoverPartitions {
+                        table: from_ast_object_name(name)?,
+                    }
+                }
+                operation => spec::CommandNode::AlterTable {
+                    table: from_ast_object_name(name)?,
+                    if_exists: false,
+                    operation: from_ast_alter_table_operation(operation)?,
+                },
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }

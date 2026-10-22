@@ -202,8 +202,8 @@ impl PlanResolver<'_> {
                 table: table.into(),
                 options: DropTableOptions { if_exists, purge },
             }),
-            CommandNode::RecoverPartitions { .. } => {
-                Err(PlanError::todo("PlanNode::RecoverPartitions"))
+            CommandNode::RecoverPartitions { table } => {
+                self.resolve_catalog_recover_partitions(table).await
             }
             CommandNode::IsCached { table } => {
                 self.resolve_catalog_command(CatalogCommand::IsCached {
