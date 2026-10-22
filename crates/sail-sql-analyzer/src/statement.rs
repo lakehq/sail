@@ -162,7 +162,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             if let Some(zorder) = zorder {
                 arguments.push(("zorder".into(), lakehouse_string(zorder.text())));
             }
-            lakehouse_command("optimize", target, arguments)
+            delta_table_procedure("optimize", target, arguments)
         }
         Statement::Vacuum {
             target, clauses, ..
@@ -185,7 +185,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 };
                 arguments.push((key.into(), value));
             }
-            lakehouse_command("vacuum", target, arguments)
+            delta_table_procedure("vacuum", target, arguments)
         }
         Statement::SetCatalog {
             set: _,
@@ -1294,7 +1294,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::Describe { describe: _, item } => {
             let node = match item {
                 DescribeItem::DeltaDetail { target, .. } => {
-                    return lakehouse_command("describe_detail", target, vec![]);
+                    return delta_table_procedure("describe_detail", target, vec![]);
                 }
                 DescribeItem::DeltaHistory { target, limit, .. } => {
                     let arguments = limit
@@ -1306,7 +1306,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         })
                         .into_iter()
                         .collect();
-                    return lakehouse_command("describe_history", target, arguments);
+                    return delta_table_procedure("describe_history", target, arguments);
                 }
                 DescribeItem::Query { query: _, item } => {
                     let query = from_ast_query(item)?;
@@ -2862,7 +2862,7 @@ fn lakehouse_string(value: String) -> spec::Expr {
     spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) })
 }
 
-fn lakehouse_command(
+fn delta_table_procedure(
     procedure: &str,
     target: Either<
         sail_sql_parser::ast::literal::StringLiteral,
@@ -2875,7 +2875,7 @@ fn lakehouse_command(
         Either::Right(table) => from_ast_object_name(table)?,
     };
     Ok(spec::Plan::Command(spec::CommandPlan::new(
-        spec::CommandNode::LakehouseCommand {
+        spec::CommandNode::CallTableProcedure {
             format: "delta".to_string(),
             procedure: procedure.to_string(),
             table,

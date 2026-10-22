@@ -39,6 +39,10 @@ impl LakeProcedureProvider for IcebergLakeSource {
         if namespace.len() != 1 || !namespace[0].eq_ignore_ascii_case("system") {
             return LakeProcedureResolution::Unrecognized;
         }
+        self.get_procedure(name)
+    }
+
+    fn get_procedure(&self, name: &str) -> LakeProcedureResolution {
         let Some(procedure_type) = IcebergProcedureType::parse(name) else {
             return LakeProcedureResolution::Unrecognized;
         };

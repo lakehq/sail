@@ -19,7 +19,8 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureDataType,
     LakeProcedureInvocation, LakeProcedureInvocationId, LakeProcedurePlanningTarget,
-    LakeProcedureResolution, LakeProcedureTableTarget, LakeProcedureTarget, LakeProcedureValue,
+    LakeProcedureProvider, LakeProcedureResolution, LakeProcedureTableTarget, LakeProcedureTarget,
+    LakeProcedureValue,
 };
 use sail_common_datafusion::literal::LiteralEvaluator;
 use uuid::Uuid;
@@ -29,10 +30,12 @@ use crate::procedure::LakeProcedureNode;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
-#[derive(Clone, Copy)]
-enum ProcedureSyntax {
-    Call,
-    NativeCommand,
+struct ResolvedLakeProcedure {
+    catalog: String,
+    namespace: Vec<String>,
+    lake_source: String,
+    provider: Arc<dyn LakeProcedureProvider>,
+    procedure: LakeProcedure,
 }
 
 impl PlanResolver<'_> {
@@ -41,24 +44,6 @@ impl PlanResolver<'_> {
         procedure_name: spec::ObjectName,
         arguments: Vec<spec::Expr>,
         named_arguments: Vec<(spec::Identifier, spec::Expr)>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        self.resolve_lake_procedure(
-            procedure_name,
-            arguments,
-            named_arguments,
-            ProcedureSyntax::Call,
-            state,
-        )
-        .await
-    }
-
-    async fn resolve_lake_procedure(
-        &self,
-        procedure_name: spec::ObjectName,
-        arguments: Vec<spec::Expr>,
-        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
-        syntax: ProcedureSyntax,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let procedure_parts = procedure_name
@@ -85,17 +70,9 @@ impl PlanResolver<'_> {
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let mut resolved_procedure = None;
         for (lake_source_name, lake_source) in registry.lake_sources()? {
-            if matches!(syntax, ProcedureSyntax::NativeCommand)
-                && !lake_source_name.eq_ignore_ascii_case(procedure_namespace[0].as_str())
-            {
-                continue;
-            }
             let Some(provider) = lake_source.procedure_provider() else {
                 continue;
             };
-            if matches!(syntax, ProcedureSyntax::Call) && !provider.supports_sql_call() {
-                continue;
-            }
             match provider.resolve_procedure(&procedure_namespace, procedure_leaf) {
                 LakeProcedureResolution::Supported(procedure) => {
                     resolved_procedure = Some((lake_source_name, provider, procedure));
@@ -113,6 +90,101 @@ impl PlanResolver<'_> {
                 procedure_parts.join(".")
             )));
         };
+        self.plan_lake_procedure(
+            ResolvedLakeProcedure {
+                catalog: procedure_catalog.to_string(),
+                namespace: procedure_namespace,
+                lake_source: lake_source_name,
+                provider,
+                procedure,
+            },
+            arguments,
+            named_arguments,
+            state,
+        )
+        .await
+    }
+
+    pub(super) async fn resolve_command_call_table_procedure(
+        &self,
+        format: String,
+        procedure_name: String,
+        table: spec::ObjectName,
+        arguments: Vec<(spec::Identifier, spec::Expr)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let parts: Vec<String> = table.into();
+        let is_path = matches!(parts.as_slice(), [source, path] if source.eq_ignore_ascii_case(&format) && (path.starts_with('/') || path.contains(":/")));
+        let catalog = if is_path {
+            manager.resolve_catalog_reference(None)?.to_string()
+        } else {
+            manager
+                .resolve_table_reference_with_default_catalog(
+                    &manager.resolve_catalog_reference(None)?,
+                    &parts,
+                )?
+                .catalog()
+                .to_string()
+        };
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let provider = registry
+            .get_lake_source(&format)?
+            .procedure_provider()
+            .ok_or_else(|| {
+                PlanError::unsupported(format!(
+                    "Lake source '{format}' does not provide procedures"
+                ))
+            })?;
+        let procedure = match provider.get_procedure(&procedure_name) {
+            LakeProcedureResolution::Supported(procedure) => procedure,
+            LakeProcedureResolution::Unsupported { reason } => {
+                return Err(PlanError::unsupported(reason));
+            }
+            LakeProcedureResolution::Unrecognized => {
+                return Err(PlanError::analysis(format!(
+                    "Procedure not found: {format}.{procedure_name}"
+                )));
+            }
+        };
+        let table = parts
+            .iter()
+            .map(|part| format!("`{}`", part.replace('`', "``")))
+            .collect::<Vec<_>>()
+            .join(".");
+        self.plan_lake_procedure(
+            ResolvedLakeProcedure {
+                catalog,
+                namespace: vec![format.clone()],
+                lake_source: format,
+                provider,
+                procedure,
+            },
+            vec![spec::Expr::Literal(spec::Literal::Utf8 {
+                value: Some(table),
+            })],
+            arguments,
+            state,
+        )
+        .await
+    }
+
+    async fn plan_lake_procedure(
+        &self,
+        resolved: ResolvedLakeProcedure,
+        arguments: Vec<spec::Expr>,
+        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let ResolvedLakeProcedure {
+            catalog: procedure_catalog,
+            namespace: procedure_namespace,
+            lake_source: lake_source_name,
+            provider,
+            procedure,
+        } = resolved;
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         procedure.validate()?;
 
         let bound = bind_procedure_arguments(
@@ -340,45 +412,6 @@ impl PlanResolver<'_> {
                 plan.root_placement,
             )?),
         }))
-    }
-
-    pub(super) async fn resolve_lakehouse_command(
-        &self,
-        format: String,
-        procedure: String,
-        table: spec::ObjectName,
-        arguments: Vec<(spec::Identifier, spec::Expr)>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let manager = self.ctx.extension::<CatalogManager>()?;
-        let parts: Vec<String> = table.clone().into();
-        let is_path = matches!(parts.as_slice(), [source, path] if source.eq_ignore_ascii_case(&format) && (path.starts_with('/') || path.contains(":/")));
-        let catalog = if is_path {
-            manager.resolve_catalog_reference(None)?.to_string()
-        } else {
-            manager
-                .resolve_table_reference_with_default_catalog(
-                    &manager.resolve_catalog_reference(None)?,
-                    &parts,
-                )?
-                .catalog()
-                .to_string()
-        };
-        let table = parts
-            .iter()
-            .map(|part| format!("`{}`", part.replace('`', "``")))
-            .collect::<Vec<_>>()
-            .join(".");
-        self.resolve_lake_procedure(
-            spec::ObjectName::from([catalog, format, procedure]),
-            vec![spec::Expr::Literal(spec::Literal::Utf8 {
-                value: Some(table),
-            })],
-            arguments,
-            ProcedureSyntax::NativeCommand,
-            state,
-        )
-        .await
     }
 
     async fn evaluate_procedure_argument(

@@ -41,15 +41,7 @@ pub use rewrite_exec::DeltaOptimizeRewriteExec;
 
 #[async_trait]
 impl LakeProcedureProvider for DeltaLakeSource {
-    fn supports_sql_call(&self) -> bool {
-        false
-    }
-
-    fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution {
-        // A format-owned namespace keeps overlapping utility names independent of provider order.
-        if namespace.len() != 1 || !namespace[0].eq_ignore_ascii_case("delta") {
-            return LakeProcedureResolution::Unrecognized;
-        }
+    fn get_procedure(&self, name: &str) -> LakeProcedureResolution {
         let Some(kind) = DeltaCommandType::parse(name) else {
             return LakeProcedureResolution::Unrecognized;
         };

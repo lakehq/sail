@@ -166,7 +166,7 @@ pub async fn prepare_lake_procedure_execution(
             call.lake_source
         )))
     })?;
-    match provider.resolve_procedure(&call.namespace, &call.invocation.procedure.name) {
+    match provider.get_procedure(&call.invocation.procedure.name) {
         LakeProcedureResolution::Supported(procedure) if procedure == call.invocation.procedure => {
         }
         LakeProcedureResolution::Supported(_) => {

@@ -302,8 +302,8 @@ pub enum CommandNode {
         arguments: Vec<Expr>,
         named_arguments: Vec<(Identifier, Expr)>,
     },
-    /// Native lakehouse SQL lowered through the shared procedure boundary.
-    LakehouseCommand {
+    /// A native SQL statement lowered to a format-owned procedure with a table target.
+    CallTableProcedure {
         format: String,
         procedure: String,
         table: ObjectName,
