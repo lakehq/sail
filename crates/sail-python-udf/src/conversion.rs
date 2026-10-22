@@ -31,7 +31,8 @@ impl<'py> TryToPy<'py> for &DataType {
         py: Python<'py>,
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
-        normalize_data_type(self, large_var_types)
+        // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+        normalize_data_type(self, large_var_types, false)
             .to_pyarrow(py)
             .map(|obj| obj.into_bound())
     }
@@ -48,7 +49,8 @@ impl<'py> TryToPy<'py> for &[DataType] {
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
         self.iter()
-            .map(|x| normalize_data_type(x, large_var_types).to_pyarrow(py))
+            // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+            .map(|x| normalize_data_type(x, large_var_types, false).to_pyarrow(py))
             .collect::<PyResult<Vec<_>>>()
             .map(|x| x.into_pyobject(py))?
     }
@@ -64,7 +66,8 @@ impl<'py> TryToPy<'py> for ArrayRef {
         py: Python<'py>,
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
-        normalize_array(self, large_var_types)
+        // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+        normalize_array(self, large_var_types, false)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
             .into_data()
             .to_pyarrow(py)
@@ -113,7 +116,8 @@ impl<'py> TryToPy<'py> for &Schema {
         py: Python<'py>,
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
-        normalize_schema(self, large_var_types)
+        // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+        normalize_schema(self, large_var_types, false)
             .to_pyarrow(py)
             .map(|obj| obj.into_bound())
     }
@@ -129,7 +133,8 @@ impl<'py> TryToPy<'py> for SchemaRef {
         py: Python<'py>,
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
-        normalize_schema(self.as_ref(), large_var_types)
+        // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+        normalize_schema(self.as_ref(), large_var_types, false)
             .to_pyarrow(py)
             .map(|obj| obj.into_bound())
     }
@@ -145,7 +150,8 @@ impl<'py> TryToPy<'py> for RecordBatch {
         py: Python<'py>,
         large_var_types: bool,
     ) -> Result<Self::Output, Self::Error> {
-        normalize_record_batch(self, large_var_types)
+        // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+        normalize_record_batch(self, large_var_types, false)
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
             .to_pyarrow(py)
             .map(|obj| obj.into_bound())

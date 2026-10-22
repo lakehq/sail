@@ -47,10 +47,12 @@ fn data_type_has_views(data_type: &DataType) -> bool {
 pub fn normalize_record_batch(
     batch: &RecordBatch,
     utf8_and_binary_to_large: bool,
+    large_to_utf8_and_binary: bool,
 ) -> Result<RecordBatch> {
     let schema = Arc::new(normalize_schema(
         batch.schema().as_ref(),
         utf8_and_binary_to_large,
+        large_to_utf8_and_binary,
     ));
     if schema.as_ref() == batch.schema().as_ref() {
         Ok(batch.clone())
@@ -59,77 +61,114 @@ pub fn normalize_record_batch(
     }
 }
 
-pub fn normalize_array(array: &ArrayRef, utf8_and_binary_to_large: bool) -> Result<ArrayRef> {
+pub fn normalize_array(
+    array: &ArrayRef,
+    utf8_and_binary_to_large: bool,
+    large_to_utf8_and_binary: bool,
+) -> Result<ArrayRef> {
     cast_array_positionally_recursively(
         array,
-        &normalize_data_type(array.data_type(), utf8_and_binary_to_large),
+        &normalize_data_type(
+            array.data_type(),
+            utf8_and_binary_to_large,
+            large_to_utf8_and_binary,
+        ),
     )
 }
 
-pub fn normalize_schema(schema: &Schema, utf8_and_binary_to_large: bool) -> Schema {
+pub fn normalize_schema(
+    schema: &Schema,
+    utf8_and_binary_to_large: bool,
+    large_to_utf8_and_binary: bool,
+) -> Schema {
     Schema::new_with_metadata(
         schema
             .fields()
             .iter()
-            .map(|field| normalize_field_with_options(field, utf8_and_binary_to_large))
+            .map(|field| {
+                normalize_field_with_options(
+                    field,
+                    utf8_and_binary_to_large,
+                    large_to_utf8_and_binary,
+                )
+            })
             .collect::<Vec<_>>(),
         schema.metadata().clone(),
     )
 }
 
-pub fn normalize_field_with_options(field: &FieldRef, utf8_and_binary_to_large: bool) -> FieldRef {
+pub fn normalize_field_with_options(
+    field: &FieldRef,
+    utf8_and_binary_to_large: bool,
+    large_to_utf8_and_binary: bool,
+) -> FieldRef {
     Arc::new(field.as_ref().clone().with_data_type(normalize_data_type(
         field.data_type(),
         utf8_and_binary_to_large,
+        large_to_utf8_and_binary,
     )))
 }
 
-pub fn normalize_data_type(data_type: &DataType, utf8_and_binary_to_large: bool) -> DataType {
+pub fn normalize_data_type(
+    data_type: &DataType,
+    utf8_and_binary_to_large: bool,
+    large_to_utf8_and_binary: bool,
+) -> DataType {
     match data_type {
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-            if utf8_and_binary_to_large =>
-        {
-            DataType::LargeBinary
-        }
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => DataType::Binary,
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View if utf8_and_binary_to_large => {
-            DataType::LargeUtf8
-        }
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8,
+        DataType::Binary if utf8_and_binary_to_large => DataType::LargeBinary,
+        DataType::Utf8 if utf8_and_binary_to_large => DataType::LargeUtf8,
+        DataType::LargeBinary if large_to_utf8_and_binary => DataType::Binary,
+        DataType::LargeUtf8 if large_to_utf8_and_binary => DataType::Utf8,
+        DataType::BinaryView => DataType::Binary,
+        DataType::Utf8View => DataType::Utf8,
         DataType::List(field) => DataType::List(normalize_field_with_options(
             field,
             utf8_and_binary_to_large,
+            large_to_utf8_and_binary,
         )),
         DataType::ListView(field) => DataType::List(normalize_field_with_options(
             field,
             utf8_and_binary_to_large,
+            large_to_utf8_and_binary,
         )),
         DataType::FixedSizeList(field, size) => DataType::FixedSizeList(
-            normalize_field_with_options(field, utf8_and_binary_to_large),
+            normalize_field_with_options(field, utf8_and_binary_to_large, large_to_utf8_and_binary),
             *size,
         ),
         DataType::LargeList(field) => DataType::LargeList(normalize_field_with_options(
             field,
             utf8_and_binary_to_large,
+            large_to_utf8_and_binary,
         )),
         DataType::LargeListView(field) => DataType::LargeList(normalize_field_with_options(
             field,
             utf8_and_binary_to_large,
+            large_to_utf8_and_binary,
         )),
         DataType::Struct(fields) => DataType::Struct(
             fields
                 .iter()
-                .map(|field| normalize_field_with_options(field, utf8_and_binary_to_large))
+                .map(|field| {
+                    normalize_field_with_options(
+                        field,
+                        utf8_and_binary_to_large,
+                        large_to_utf8_and_binary,
+                    )
+                })
                 .collect(),
         ),
-        DataType::Dictionary(_, value) => normalize_data_type(value, utf8_and_binary_to_large),
+        DataType::Dictionary(_, value) => {
+            normalize_data_type(value, utf8_and_binary_to_large, large_to_utf8_and_binary)
+        }
         DataType::Map(field, sorted) => DataType::Map(
-            normalize_field_with_options(field, utf8_and_binary_to_large),
+            normalize_field_with_options(field, utf8_and_binary_to_large, large_to_utf8_and_binary),
             *sorted,
         ),
-        DataType::RunEndEncoded(_, values) => {
-            normalize_data_type(values.data_type(), utf8_and_binary_to_large)
-        }
+        DataType::RunEndEncoded(_, values) => normalize_data_type(
+            values.data_type(),
+            utf8_and_binary_to_large,
+            large_to_utf8_and_binary,
+        ),
         _ => data_type.clone(),
     }
 }
