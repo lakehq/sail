@@ -40,6 +40,7 @@ class HmsService:
 
     host: str
     port: int
+    transport: str
 
     @property
     def endpoint(self) -> str:
@@ -56,6 +57,7 @@ class KerberosHmsService:
     client_keytab: Path
     client_principal: str
     service_principal: str
+    min_sasl_qop: str
 
 
 def _wait_for_port(host: str, port: int, timeout: float) -> None:
@@ -122,7 +124,7 @@ def _host_krb5_config(kdc_host: str, kdc_tcp_port: int, kdc_udp_port: int) -> st
 """
 
 
-def _hive_site_config(service_principal: str) -> str:
+def _hive_site_config(service_principal: str, rpc_protection: str) -> str:
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <configuration>
   <property>
@@ -167,7 +169,7 @@ def _hive_site_config(service_principal: str) -> str:
   </property>
   <property>
     <name>hadoop.rpc.protection</name>
-    <value>authentication</value>
+    <value>{rpc_protection}</value>
   </property>
   <property>
     <name>hive.metastore.warehouse.dir</name>
@@ -177,8 +179,8 @@ def _hive_site_config(service_principal: str) -> str:
 """
 
 
-def _core_site_config() -> str:
-    return """<?xml version="1.0" encoding="UTF-8"?>
+def _core_site_config(rpc_protection: str) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
 <configuration>
   <property>
     <name>hadoop.security.authentication</name>
@@ -188,17 +190,23 @@ def _core_site_config() -> str:
     <name>hadoop.security.authorization</name>
     <value>true</value>
   </property>
+  <property>
+    <name>hadoop.rpc.protection</name>
+    <value>{rpc_protection}</value>
+  </property>
 </configuration>
 """
 
 
-@pytest.fixture(scope="session")
-def hms_service() -> Generator[HmsService, None, None]:
-    """Start an unauthenticated Hive Metastore for native provider tests."""
+@pytest.fixture(scope="session", params=["buffered", "framed"])
+def hms_service(request: pytest.FixtureRequest) -> Generator[HmsService, None, None]:
+    """Exercise the native provider against both server transport modes."""
+    transport = str(request.param)
     hms = (
         DockerContainer(_HMS_IMAGE)
         .with_env("SERVICE_NAME", "metastore")
         .with_env("VERBOSE", "true")
+        .with_env("SERVICE_OPTS", f"-Dmetastore.thrift.framed.transport.enabled={str(transport == 'framed').lower()}")
         .with_exposed_ports(_HMS_PORT)
     )
     with hms:
@@ -206,22 +214,35 @@ def hms_service() -> Generator[HmsService, None, None]:
         port = int(hms.get_exposed_port(_HMS_PORT))
         _wait_for_port(host, port, timeout=180)
         time.sleep(10)
-        yield HmsService(host=host, port=port)
+        yield HmsService(host=host, port=port, transport=transport)
 
 
 @pytest.fixture(scope="session")
+def kerberos_kdc_image() -> Generator[str, None, None]:
+    """Build once and remove only this run's tag, preserving concurrent users."""
+    image_tag = f"pysail-kerberos-kdc:test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    with DockerImage(path=_FIXTURE_PATH, tag=image_tag, clean_up=False) as image:
+        try:
+            yield str(image)
+        finally:
+            image.get_docker_client().client.images.remove(image_tag, noprune=True)
+
+
+@pytest.fixture(scope="session", params=["authentication", "integrity", "privacy"])
 def kerberos_hms_service(
+    request: pytest.FixtureRequest,
     tmp_path_factory: pytest.TempPathFactory,
+    kerberos_kdc_image: str,
 ) -> Generator[KerberosHmsService, None, None]:
     """Start a KDC and a Kerberos-protected Hive Metastore."""
+    rpc_protection = str(request.param)
     fixture_dir = tmp_path_factory.mktemp("kerberos_hms")
-    image_tag = f"pysail-kerberos-kdc:test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     service_principal = f"hive-metastore/localhost@{_KERBEROS_REALM}"
     client_principal = f"sail-test-client@{_KERBEROS_REALM}"
 
-    with DockerImage(path=_FIXTURE_PATH, tag=image_tag) as kdc_image, Network() as network:
+    with Network() as network:
         kdc = (
-            DockerContainer(str(kdc_image))
+            DockerContainer(kerberos_kdc_image)
             .with_kwargs(hostname=_KDC_HOSTNAME)
             .with_env("KERBEROS_REALM", _KERBEROS_REALM)
             .with_env("KDC_HOSTNAME", _KDC_HOSTNAME)
@@ -269,9 +290,9 @@ def kerberos_hms_service(
                 encoding="utf-8",
             )
             hive_site = fixture_dir / "hive-site.xml"
-            hive_site.write_text(_hive_site_config(service_principal), encoding="utf-8")
+            hive_site.write_text(_hive_site_config(service_principal, rpc_protection), encoding="utf-8")
             core_site = fixture_dir / "core-site.xml"
-            core_site.write_text(_core_site_config(), encoding="utf-8")
+            core_site.write_text(_core_site_config(rpc_protection), encoding="utf-8")
 
             hms = (
                 DockerContainer(_HMS_IMAGE)
@@ -305,4 +326,7 @@ def kerberos_hms_service(
                     client_keytab=client_keytab,
                     client_principal=client_principal,
                     service_principal=service_principal,
+                    min_sasl_qop={"authentication": "auth", "integrity": "auth_int", "privacy": "auth_conf"}[
+                        rpc_protection
+                    ],
                 )

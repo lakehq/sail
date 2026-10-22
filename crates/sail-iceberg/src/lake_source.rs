@@ -34,6 +34,7 @@ use sail_common_datafusion::datasource::{
     BucketBy, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
     create_sort_order, find_path_in_options,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::LakeProcedureProvider;
 use sail_common_datafusion::lakerelation::{
     LakeRelation, LakeRelationAccess, LakeRelationProvider, LakeRelationResolution,
@@ -431,6 +432,41 @@ impl LakeSource for IcebergLakeSource {
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+        if let LakeSourceAlterTableOperation::AlterSnapshotReference { operation } = operation {
+            let properties = if let Some(context) = lakehouse_table.as_ref() {
+                let manager = ctx.extension::<sail_catalog::manager::CatalogManager>()?;
+                let status = manager
+                    .get_table(context.catalog_table())
+                    .await
+                    .map_err(|error| {
+                        datafusion_common::DataFusionError::External(Box::new(error))
+                    })?;
+                match status.kind {
+                    sail_common_datafusion::catalog::TableKind::Table { properties, .. } => {
+                        properties
+                    }
+                    _ => return plan_err!("Snapshot references require an Iceberg table"),
+                }
+            } else {
+                vec![]
+            };
+            let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
+            crate::procedure::snapshot::commit_snapshot_operation(
+                ctx,
+                &table_url,
+                &properties,
+                lakehouse_table.as_ref(),
+                crate::procedure::snapshot::SnapshotOperation::AlterReference(operation),
+                Arc::new(datafusion::arrow::datatypes::Schema::empty()),
+            )
+            .await?;
+            return Ok(
+                sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+                    catalog_updated: true,
+                    ..Default::default()
+                },
+            );
+        }
         if let Some(context) = lakehouse_table.as_ref()
             && context.commit != CommitAuthority::Filesystem
         {

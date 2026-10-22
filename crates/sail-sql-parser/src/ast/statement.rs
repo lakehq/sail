@@ -846,8 +846,68 @@ pub enum TableWriteOrderList {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum SnapshotReferenceCreateAction {
+    Create(Create, Option<(Or, Replace)>),
+    Replace(Replace),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum SnapshotReferenceKind {
+    Branch(crate::ast::keywords::Branch),
+    Tag(crate::ast::keywords::Tag),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ReferenceTimeUnit {
+    Days(crate::ast::keywords::Days),
+    Hours(crate::ast::keywords::Hours),
+    Minutes(crate::ast::keywords::Minutes),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ReferenceDuration {
+    pub value: IntegerLiteral,
+    pub unit: ReferenceTimeUnit,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ReferenceSnapshotRetention {
+    Count(
+        IntegerLiteral,
+        crate::ast::keywords::Snapshots,
+        Option<ReferenceDuration>,
+    ),
+    Age(ReferenceDuration),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum AlterTableOperation {
+    CreateSnapshotReference {
+        action: SnapshotReferenceCreateAction,
+        kind: SnapshotReferenceKind,
+        if_not_exists: Option<(If, Not, Exists)>,
+        name: Ident,
+        version: Option<(
+            As,
+            crate::ast::keywords::Of,
+            crate::ast::keywords::Version,
+            IntegerLiteral,
+        )>,
+        retain: Option<(crate::ast::keywords::Retain, ReferenceDuration)>,
+        retention: Option<(
+            With,
+            crate::ast::keywords::Snapshot,
+            crate::ast::keywords::Retention,
+            ReferenceSnapshotRetention,
+        )>,
+    },
+    DropSnapshotReference {
+        drop: Drop,
+        kind: SnapshotReferenceKind,
+        if_exists: Option<(If, Exists)>,
+        name: Ident,
+    },
     SetIdentifierFields {
         set: Set,
         identifier: crate::ast::keywords::Identifier,
