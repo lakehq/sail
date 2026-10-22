@@ -81,6 +81,8 @@ pub(super) struct PlanResolverState {
     next_origin: usize,
     /// Multipart relation names represented by opaque DataFusion qualifiers.
     relation_names: HashMap<TableReference, Vec<String>>,
+    /// Original relation boundaries, including temporary views without a SubqueryAlias.
+    hint_relations: Vec<(DFSchemaRef, Option<DFSchemaRef>, TableReference)>,
     /// A map from the generated opaque field ID to field information.
     fields: HashMap<String, FieldInfo>,
     /// An output schema of each DataFrame plan ID, for checking references against it.
@@ -129,6 +131,7 @@ impl PlanResolverState {
             next_id: 0,
             next_origin: 0,
             relation_names: HashMap::new(),
+            hint_relations: vec![],
             fields: HashMap::new(),
             plan_schemas: HashMap::new(),
             outer_query_schema: None,
@@ -151,6 +154,30 @@ impl PlanResolverState {
         let reference = TableReference::bare(format!("#relation:{}", uuid::Uuid::new_v4()));
         self.relation_names.insert(reference.clone(), name);
         reference
+    }
+
+    pub fn register_hint_relation(&mut self, plan: &LogicalPlan, name: TableReference) {
+        let input = plan
+            .inputs()
+            .first()
+            .map(|input| Arc::clone(input.schema()));
+        self.hint_relations
+            .push((Arc::clone(plan.schema()), input, name));
+    }
+
+    pub fn hint_relation(&self, plan: &LogicalPlan) -> Option<&TableReference> {
+        let inputs = plan.inputs();
+        self.hint_relations
+            .iter()
+            .rev()
+            .find_map(|(schema, input, name)| {
+                let same_input = match (input, inputs.first()) {
+                    (None, None) => true,
+                    (Some(expected), Some(actual)) => Arc::ptr_eq(expected, actual.schema()),
+                    _ => false,
+                };
+                (Arc::ptr_eq(schema, plan.schema()) && same_input).then_some(name)
+            })
     }
 
     pub fn relation_name<'a>(&'a self, reference: &'a TableReference) -> Vec<&'a str> {

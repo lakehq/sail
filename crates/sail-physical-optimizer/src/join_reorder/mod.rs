@@ -136,6 +136,13 @@ impl PhysicalOptimizerRule for JoinReorder {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Hint markers belong to their nearest join. Reordering before consuming them
+        // can attach a requested strategy to a different pair of relations.
+        if datafusion::common::tree_node::TreeNode::exists(&plan, |node| {
+            Ok(node.is::<sail_physical_plan::join_hint::JoinHintExec>())
+        })? {
+            return Ok(plan);
+        }
         trace!("JoinReorder: Entering optimization rule.");
         trace!(
             "JoinReorder: Input plan:\n{}",

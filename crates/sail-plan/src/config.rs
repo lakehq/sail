@@ -67,6 +67,11 @@ pub struct PlanConfig {
     pub pivot_max_values: usize,
     /// Default partition count for partitioning hints (`spark.sql.shuffle.partitions`).
     pub shuffle_partitions: usize,
+    /// Whether to ignore all query hints (`spark.sql.optimizer.disableHints`).
+    pub disable_hints: bool,
+    /// Whether to resolve REBALANCE hints (`spark.sql.adaptive.enabled`).
+    /// This does not enable Spark's adaptive execution engine.
+    pub adaptive_enabled: bool,
     /// Whether a table-valued function may receive more than one `TABLE (...)` argument
     /// (`spark.sql.tvf.allowMultipleTableArguments.enabled`, default false). Multiple table
     /// arguments produce the cartesian product of their rows.
@@ -108,6 +113,8 @@ impl Default for PlanConfig {
             redaction_regex: "(?i)secret|password|token|access[.]?key".to_string(),
             pivot_max_values: 10000,
             shuffle_partitions: 200,
+            disable_hints: false,
+            adaptive_enabled: true,
             tvf_allow_multiple_table_arguments: false,
             legacy_allow_parameterless_count: false,
         }
