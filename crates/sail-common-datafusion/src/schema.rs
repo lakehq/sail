@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
-use crate::array::record_batch::{cast_array_recursively, cast_record_batch_positionally};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::Result;
+
+use crate::array::record_batch::{
+    cast_array_positionally_recursively, cast_record_batch_positionally,
+};
 
 pub fn normalize_field_with_options(field: &FieldRef, large_var_types: bool) -> FieldRef {
     Arc::new(
@@ -26,7 +29,7 @@ pub fn normalize_schema(schema: &Schema, large_var_types: bool) -> Schema {
 }
 
 pub fn normalize_array(array: &ArrayRef, large_var_types: bool) -> Result<ArrayRef> {
-    cast_array_recursively(
+    cast_array_positionally_recursively(
         array,
         &normalize_data_type(array.data_type(), large_var_types),
     )
