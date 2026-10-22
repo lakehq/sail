@@ -711,6 +711,28 @@ def test_jev_direct_order_by(spark, jev, query, expected):
     assert jev.request_count > 0
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param(
+            "SELECT id, row_number() OVER (ORDER BY jev_noul(CAST(id AS STRING),'q').noul DESC) AS rank FROM "
+            "range(0,3,1,1) ORDER BY id",
+            [{"id": 0, "rank": 3}, {"id": 1, "rank": 2}, {"id": 2, "rank": 1}],
+            id="window_order",
+        ),
+        pytest.param(
+            "SELECT id, sum(id) OVER (PARTITION BY jev_noul(CAST(id % 2 AS STRING),'q').noul) AS total FROM "
+            "range(0,4,1,1) ORDER BY id",
+            [{"id": 0, "total": 2}, {"id": 1, "total": 4}, {"id": 2, "total": 2}, {"id": 3, "total": 4}],
+            id="window_partition",
+        ),
+    ],
+)
+def test_jev_window_keys(spark, jev, query, expected):
+    assert [row.asDict(recursive=True) for row in spark.sql(query).collect()] == expected
+    assert jev.request_count > 0
+
+
 @pytest.mark.parametrize("order", ["ORDER BY", "SORT BY"])
 def test_jev_required_sort_for_order_sensitive_aggregate(spark, jev, order):
     query = (
@@ -1378,30 +1400,6 @@ def test_shredded_variant_arguments_keep_object_content(spark, jev, tmp_path, ex
             id="window_argument",
             marks=pytest.mark.xfail(
                 reason="Window aggregate arguments do not extract async calls.",
-                strict=True,
-                raises=SparkConnectGrpcException,
-            ),
-        ),
-        pytest.param(
-            "SELECT id, row_number() OVER (ORDER BY jev_noul(CAST(id AS STRING),'q').noul DESC) AS rank FROM "
-            "range(0,3,1,1) ORDER BY id",
-            [{"id": 0, "rank": 3}, {"id": 1, "rank": 2}, {"id": 2, "rank": 1}],
-            "async functions should not be called directly",
-            id="window_order",
-            marks=pytest.mark.xfail(
-                reason="Window order expressions do not extract async calls.",
-                strict=True,
-                raises=SparkConnectGrpcException,
-            ),
-        ),
-        pytest.param(
-            "SELECT id, sum(id) OVER (PARTITION BY jev_noul(CAST(id % 2 AS STRING),'q').noul) AS total FROM "
-            "range(0,4,1,1) ORDER BY id",
-            [{"id": 0, "total": 2}, {"id": 1, "total": 4}, {"id": 2, "total": 2}, {"id": 3, "total": 4}],
-            "All partition by columns should have an ordering",
-            id="window_partition",
-            marks=pytest.mark.xfail(
-                reason="Window partition expressions do not extract async calls.",
                 strict=True,
                 raises=SparkConnectGrpcException,
             ),
