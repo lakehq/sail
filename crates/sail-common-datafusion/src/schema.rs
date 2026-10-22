@@ -115,8 +115,10 @@ pub fn normalize_data_type(
     large_to_utf8_and_binary: bool,
 ) -> DataType {
     match data_type {
-        DataType::Binary if utf8_and_binary_to_large => DataType::LargeBinary,
-        DataType::Utf8 if utf8_and_binary_to_large => DataType::LargeUtf8,
+        DataType::Binary | DataType::BinaryView if utf8_and_binary_to_large => {
+            DataType::LargeBinary
+        }
+        DataType::Utf8 | DataType::Utf8View if utf8_and_binary_to_large => DataType::LargeUtf8,
         DataType::LargeBinary if large_to_utf8_and_binary => DataType::Binary,
         DataType::LargeUtf8 if large_to_utf8_and_binary => DataType::Utf8,
         DataType::BinaryView => DataType::Binary,
