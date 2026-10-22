@@ -1234,3 +1234,65 @@ Feature: Scalar subqueries in distributed execution
         | 1  | true    |
         | 2  | false   |
         | 3  | false   |
+
+  Rule: Scalar aggregate correlation groups the compared cast value
+    Scenario: Lossy casts combine matching inner keys and preserve duplicate outer rows
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM VALUES ('0'), ('00'), ('1'), (CAST(NULL AS STRING)) AS i(k)
+           WHERE CAST(i.k AS BIGINT) = o.id) AS n
+        FROM VALUES (0L), (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 2 |
+        | 0  | 2 |
+        | 1  | 1 |
+        | 2  | 0 |
+
+    Scenario: Cast correlation preserves raw aggregate inputs
+      When query
+        """
+        SELECT o.id,
+          (SELECT max(i.k) FROM VALUES ('0'), ('00'), ('1') AS i(k)
+           WHERE CAST(i.k AS BIGINT) = o.id) AS v
+        FROM range(3) AS o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | v    |
+        | 0  | 00   |
+        | 1  | 1    |
+        | 2  | NULL |
+
+    Scenario: Each cast correlation contributes its compared key
+      When query
+        """
+        SELECT o.a, o.b,
+          (SELECT count(*) FROM VALUES ('01', '1'), ('1', '01'), ('1', '2') AS i(a, b)
+           WHERE CAST(i.a AS BIGINT) = o.a AND CAST(i.b AS BIGINT) = o.b) AS n
+        FROM VALUES (1L, 1L), (1L, 2L), (2L, 1L) AS o(a, b)
+        ORDER BY o.a, o.b
+        """
+      Then query result collected ordered
+        | a | b | n |
+        | 1 | 1 | 2 |
+        | 1 | 2 | 1 |
+        | 2 | 1 | 0 |
+
+    Scenario: Local filters reject invalid values before cast correlation
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM VALUES ('01'), ('1'), ('bad') AS i(k)
+           WHERE i.k <> 'bad' AND CAST(i.k AS BIGINT) = o.id) AS n
+        FROM range(3) AS o
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 0 |
+        | 1  | 2 |
+        | 2  | 0 |
