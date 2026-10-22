@@ -4,9 +4,9 @@ use std::collections::HashSet;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::logical_expr::{LogicalPlan, TableScan};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 use futures::TryStreamExt;
-use url::Url;
+use sail_object_store::qualify_object_store_path;
 
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::list_all_files;
@@ -44,22 +44,15 @@ pub async fn input_files(ctx: &SessionContext, plan: LogicalPlan) -> Result<Vec<
                 continue;
             }
             let store = ctx.runtime_env().object_store(table_path)?;
-            let base = Url::parse(table_path.object_store().as_str())
-                .map_err(|e| DataFusionError::Internal(format!("invalid object store URL: {e}")))?;
             let metas = list_all_files(table_path, &state, store.as_ref(), path_glob_filter)
                 .await?
                 .try_collect::<Vec<_>>()
                 .await?;
             for meta in metas {
-                // Percent-encode the path, as Spark returns encoded URIs.
-                let mut uri = base.clone();
-                uri.path_segments_mut()
-                    .map_err(|()| {
-                        DataFusionError::Internal("object store URL cannot be a base".to_string())
-                    })?
-                    .clear()
-                    .extend(meta.location.parts().map(|part| part.as_ref().to_string()));
-                files.push(uri.to_string());
+                files.push(qualify_object_store_path(
+                    &table_path.object_store(),
+                    &meta.location,
+                )?);
             }
         }
     }
