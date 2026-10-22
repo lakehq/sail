@@ -14,7 +14,6 @@ from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 from pysail.tests.spark.catalog.hms.conftest import (
     _assert_schema_matrix_rows,
     _assert_schema_matrix_shape,
-    _describe_column_comments,
     _describe_extended_properties,
     _reference_catalog_table,
     _scala_option_to_string,
@@ -40,49 +39,6 @@ def _assert_reference_spark_table(
 # ---------------------------------------------------------------------------
 # S3 / MinIO-backed tests
 # ---------------------------------------------------------------------------
-
-
-def test_sail_creates_spark_reads_parquet(
-    spark: SparkSession,
-    jvm_spark: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Sail creates an external Parquet table; reference Spark reads it back."""
-    table = "roundtrip_parquet"
-    table_fqn = f"{hms_s3_database}.{table}"
-
-    spark.sql(
-        f"""
-        CREATE TABLE {table_fqn} (
-          id INT COMMENT 'identifier',
-          name STRING
-        )
-        USING PARQUET
-        TBLPROPERTIES ('interop.owner' = 'sail')
-        """
-    )
-    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
-
-    sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
-
-    _assert_reference_spark_table(
-        jvm_spark,
-        hms_s3_database,
-        table,
-        table_type="EXTERNAL",
-    )
-    ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
-    assert ref_rows[0].id == 1 and ref_rows[0].name == "alice"
-    assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
-    ref_properties = _describe_extended_properties(jvm_spark, table_fqn)
-    assert ref_properties.get("Type") == "EXTERNAL"
-    assert ref_properties.get("Provider", "").lower() == "parquet"
-    assert "interop.owner=sail" in ref_properties.get("Table Properties", "")
-    assert "spark.sql." not in ref_properties.get("Table Properties", "")
-    assert _describe_column_comments(jvm_spark, table_fqn)["id"] == "identifier"
 
 
 @pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)

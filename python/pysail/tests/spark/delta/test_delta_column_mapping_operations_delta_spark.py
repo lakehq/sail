@@ -1,8 +1,7 @@
-"""Sail queries over Delta tables written by Delta Spark, compared with Delta Spark.
+"""Sail queries over Delta Spark tables using recorded Spark expectations.
 
-Delta Spark writes column-mapped tables, and both Sail and Delta Spark run the same
-queries against them. The results must match exactly. Spark writes timestamps as INT96
-by default, which also covers reading nested fields next to INT96 columns in ID mode.
+Spark writes timestamps as INT96 by default, which also covers reading nested
+fields next to INT96 columns in ID mode.
 """
 
 # ruff: noqa: S608
@@ -12,8 +11,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from pyspark.sql import Row
 
 from pysail.tests.spark.delta.test_delta_column_mapping_operations import (
+    _KNOWN_QUERY_FAILURES,
     _QUERIES,
     _ROWS_FIRST,
     _ROWS_SECOND,
@@ -35,22 +36,9 @@ _VARIANTS = [
     for partitioned in (False, True)
 ]
 
-# Queries that fail for reasons unrelated to column mapping. The value is the reason,
-# and whether the failure only happens on partitioned tables.
-_KNOWN_QUERY_FAILURES = {
-    "nvl_array_struct": ("type coercion fails on nested fields carrying field metadata", False),
-    "filter_array_struct": (
-        "a higher-order function over an array of structs in a filter cannot resolve the column",
-        False,
-    ),
-    "semi_join": ("a correlated reference to a nested field cannot be resolved", False),
-    "intersect": ("INTERSECT on array of struct columns fails to compare list values", False),
-    "select_casts": ("casting arrays and maps with null elements to STRING prints NULL instead of null", False),
-}
-
 
 @pytest.fixture(scope="module", params=_VARIANTS)
-def delta_spark_table(request, delta_jvm_spark: SparkSession, tmp_path_factory) -> dict:
+def delta_spark_table(request, spark: SparkSession, delta_jvm_spark: SparkSession, tmp_path_factory) -> dict:
     """Write a Delta table with Delta Spark in two commits and return its location."""
     column_mapping_mode, partitioned = request.param
     path = tmp_path_factory.mktemp(f"delta_spark_{column_mapping_mode}") / "table"
@@ -61,52 +49,34 @@ def delta_spark_table(request, delta_jvm_spark: SparkSession, tmp_path_factory) 
         if partitioned:
             writer = writer.partitionBy("grp")
         writer.save(str(path))
-    return {"path": str(path), "mode": column_mapping_mode, "partitioned": partitioned}
+    view = f"delta_spark_{column_mapping_mode}_{int(partitioned)}"
+    spark.read.format("delta").load(str(path)).createOrReplaceTempView(view)
+    try:
+        yield {"path": str(path), "view": view, "partitioned": partitioned}
+    finally:
+        spark.catalog.dropTempView(view)
 
 
-@pytest.fixture
-def utc(spark: SparkSession, delta_jvm_spark: SparkSession):
-    sessions = (spark, delta_jvm_spark)
-    previous = [session.conf.get("spark.sql.session.timeZone") for session in sessions]
-    for session in sessions:
-        session.conf.set("spark.sql.session.timeZone", "UTC")
-    yield
-    for session, timezone in zip(sessions, previous, strict=True):
-        session.conf.set("spark.sql.session.timeZone", timezone)
+def test_delta_spark_table_roundtrip(spark: SparkSession, delta_spark_table: dict) -> None:
+    df = spark.read.format("delta").load(delta_spark_table["path"])
+    assert [(f.name, f.dataType) for f in df.schema.fields] == [(f.name, f.dataType) for f in _SCHEMA.fields]
+    assert [tuple(row) for row in df.orderBy("id").collect()] == _ROWS_FIRST + _ROWS_SECOND
 
 
-def test_delta_spark_table_schema_matches(
-    spark: SparkSession, delta_jvm_spark: SparkSession, delta_spark_table: dict
-) -> None:
-    sail = spark.read.format("delta").load(delta_spark_table["path"]).schema
-    reference = delta_jvm_spark.read.format("delta").load(delta_spark_table["path"]).schema
-    assert [(f.name, f.dataType) for f in sail.fields] == [(f.name, f.dataType) for f in reference.fields]
-
-
-@pytest.mark.usefixtures("utc")
-@pytest.mark.parametrize(("name", "query"), list(_QUERIES.items()), ids=list(_QUERIES))
-def test_delta_spark_table_query_matches(
+@pytest.mark.parametrize("name", list(_QUERIES))
+def test_delta_spark_table_query(
     request,
     spark: SparkSession,
-    delta_jvm_spark: SparkSession,
     delta_spark_table: dict,
     name: str,
-    query: str,
 ) -> None:
     if name in _KNOWN_QUERY_FAILURES:
         reason, partitioned_only = _KNOWN_QUERY_FAILURES[name]
         if delta_spark_table["partitioned"] or not partitioned_only:
             request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
-    view = f"delta_spark_{delta_spark_table['mode']}_{int(delta_spark_table['partitioned'])}"
-    spark.read.format("delta").load(delta_spark_table["path"]).createOrReplaceTempView(view)
-    delta_jvm_spark.read.format("delta").load(delta_spark_table["path"]).createOrReplaceTempView(view)
-    try:
-        actual = spark.sql(query.format(t=view)).collect()
-        expected = delta_jvm_spark.sql(query.format(t=view)).collect()
-    finally:
-        spark.catalog.dropTempView(view)
-        delta_jvm_spark.catalog.dropTempView(view)
-    assert actual == expected
+    query, expected = _QUERIES[name]
+    actual = spark.sql(query.format(t=delta_spark_table["view"])).collect()
+    assert [tuple(row) for row in actual] == expected
 
 
 @pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
@@ -190,4 +160,4 @@ def test_sail_coalesces_struct_from_delta_spark_table(
         actual = spark.sql(query.format(t="coalesce_view")).collect()
     finally:
         spark.catalog.dropTempView("coalesce_view")
-    assert actual == delta_jvm_spark.sql(query.format(t=table)).collect()
+    assert [tuple(row) for row in actual] == [(1, Row(a=1, b="x")), (2, Row(a=2, b="y")), (3, Row(a=0, b=""))]

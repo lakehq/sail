@@ -1,6 +1,7 @@
 import pyspark.sql.connect.functions as F  # noqa: N812
 import pytest
 from pyspark.errors.exceptions.connect import SparkConnectGrpcException
+from pyspark.sql.types import LongType
 
 from pysail.testing.spark.session import spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -10,7 +11,7 @@ pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
 
 @pytest.fixture(scope="module")
 def fail():
-    @F.udf("long")
+    @F.udf(LongType())
     def _fail(_value):
         msg = "expected failure"
         raise RuntimeError(msg)

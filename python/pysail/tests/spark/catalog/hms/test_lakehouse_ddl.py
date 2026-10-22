@@ -2,6 +2,7 @@
 """DDL interoperability for Delta and Iceberg tables registered in HMS."""
 
 import json
+from datetime import date, datetime
 from decimal import Decimal
 from urllib.parse import urlparse
 
@@ -292,11 +293,7 @@ def test_iceberg_typed_default_interoperability(spark, jvm_spark, hms_s3_databas
         spark.sql(f"ALTER TABLE {name} ALTER COLUMN amount SET DEFAULT 100000")
     assert _metadata_location(jvm_spark, hms_s3_database, table) == before
     spark.sql(f"INSERT INTO {name} (id) VALUES (1)")
-    expected = tuple(
-        jvm_spark.sql(
-            "SELECT CAST(1.235 AS DECIMAL(5, 2)), DATE '2026-01-02', TIMESTAMP_NTZ '2026-01-02 03:04:05.123456'"
-        ).first()
-    )
+    expected = (Decimal("1.24"), date(2026, 1, 2), datetime(2026, 1, 2, 3, 4, 5, 123456))  # noqa: DTZ001
     jvm_spark.sql(f"REFRESH TABLE {reference}")
     assert [tuple(r) for r in jvm_spark.sql(f"SELECT amount, d, ts FROM {reference}").collect()] == [expected]
 

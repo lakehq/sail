@@ -1,4 +1,4 @@
-# ruff: noqa: PLR2004, S608
+# ruff: noqa: S608
 """Spark -> Sail roundtrip tests for Spark datasource v2 (DSV2) formats and Iceberg.
 
 The JVM reference Spark creates a table in HMS using a datasource format; Sail
@@ -59,11 +59,12 @@ def _assert_sail_describes_datasource_table(
     table_fqn: str,
     *,
     provider: str,
-) -> None:
+) -> dict[str, str]:
     properties = _describe_extended_properties(spark, table_fqn)
     assert properties.get("Type") == "EXTERNAL", properties
     assert properties.get("Provider", "").lower() == provider, properties
     assert properties.get("Location"), f"no location resolved for {table_fqn}"
+    return properties
 
 
 @pytest.mark.parametrize("fmt", _DSV2_FORMATS)
@@ -85,20 +86,36 @@ def test_spark_creates_sail_reads_dsv2(
     jvm_spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
-          id INT,
-          name STRING
+          id INT COMMENT 'identifier',
+          name STRING,
+          amount DECIMAL(10, 2),
+          ts TIMESTAMP
         )
         USING {fmt.upper()}
+        TBLPROPERTIES ('interop.owner' = 'spark')
         """
     )
-    jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
-
-    ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
-
-    _assert_sail_describes_datasource_table(spark, table_fqn, provider=fmt)
-    sail_rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
-    assert [(r.id, r.name) for r in sail_rows] == [(1, "alice"), (2, "bob")]
+    properties = _assert_sail_describes_datasource_table(spark, table_fqn, provider=fmt)
+    assert properties["Location"].startswith(f"s3://hms-warehouse/{hms_s3_database}/")
+    if fmt in _HMS_METADATA_FORMATS:
+        assert "interop.owner=spark" in properties.get("Table Properties", "")
+        assert "spark.sql." not in properties.get("Table Properties", "")
+        assert _describe_column_comments(spark, table_fqn)["id"] == "identifier"
+    fields = {field.name: field for field in spark.table(table_fqn).schema.fields}
+    assert fields["amount"].dataType.simpleString() == "decimal(10,2)"
+    assert fields["ts"].dataType.simpleString() == "timestamp"
+    jvm_spark.sql(
+        f"INSERT INTO {table_fqn} VALUES "
+        "(1, 'alice', 12.34, TIMESTAMP '2024-01-02 03:04:05'), "
+        "(2, 'bob', 0.10, TIMESTAMP '2024-01-02 03:04:06')"
+    )
+    rows = spark.sql(
+        f"SELECT id, name, CAST(amount AS STRING) AS amount, CAST(ts AS STRING) AS ts FROM {table_fqn} ORDER BY id"
+    ).collect()
+    assert [tuple(row) for row in rows] == [
+        (1, "alice", "12.34", "2024-01-02 03:04:05"),
+        (2, "bob", "0.10", "2024-01-02 03:04:06"),
+    ]
 
 
 def _assert_jvm_spark_sees_datasource_provider(
@@ -173,27 +190,34 @@ def test_sail_creates_spark_reads_dsv2(
     spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
-          id INT,
+          id INT COMMENT 'identifier',
           name STRING
         )
         USING {fmt.upper()}
+        TBLPROPERTIES ('interop.owner' = 'sail')
         """
     )
     spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
 
-    sail_rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
-    assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
-
-    # Verify Sail's own read of the metadata it wrote: this is the write-side
-    # assertion that directly exercises build_generic_table's provider + SerDe path
-    # handling (the change in this PR), not just row parity.
+    # Check the provider and SerDe path metadata written by Sail.
     _assert_sail_describes_datasource_table(spark, table_fqn, provider=fmt)
 
     # Independent cross-engine validation: JVM Spark reads HMS metadata directly.
     _assert_jvm_spark_sees_datasource_provider(jvm_spark, hms_s3_database, f"reverse_{fmt}", provider=fmt)
+    if fmt == "parquet":
+        table = _reference_catalog_table(jvm_spark, hms_s3_database, f"reverse_{fmt}")
+        assert table.tableType().name() == "EXTERNAL"
+        location = _scala_option_to_string(table.storage().locationUri())
+        assert location is not None
+        assert location.startswith(f"s3://hms-warehouse/{hms_s3_database}/")
 
     ref_rows = jvm_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in ref_rows] == [(1, "alice"), (2, "bob")]
+    if fmt in _HMS_METADATA_FORMATS:
+        properties = _describe_extended_properties(jvm_spark, table_fqn)
+        assert "interop.owner=sail" in properties.get("Table Properties", "")
+        assert "spark.sql." not in properties.get("Table Properties", "")
+        assert _describe_column_comments(jvm_spark, table_fqn)["id"] == "identifier"
 
 
 def test_spark_creates_sail_reads_iceberg(
@@ -224,9 +248,6 @@ def test_spark_creates_sail_reads_iceberg(
         """
     )
     jvm_spark.sql(f"INSERT INTO {spark_iceberg_fqn} VALUES (1, 'alice'), (2, 'bob')")
-
-    ref_rows = jvm_spark.sql(f"SELECT id, name FROM {spark_iceberg_fqn} ORDER BY id").collect()
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
 
     properties = _describe_extended_properties(spark, sail_fqn)
     assert properties.get("Provider", "").lower() == "iceberg", properties
@@ -376,7 +397,7 @@ def test_spark_creates_sail_reads_partitioned_iceberg(
     spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
-    """Spark writes an identity-partitioned HMS Iceberg table; Sail reads and prunes."""
+    """Spark writes an identity-partitioned HMS Iceberg table; Sail filters its rows."""
     table = "iceberg_part"
     spark_iceberg_fqn = f"iceberg.{hms_s3_database}.{table}"
     sail_fqn = f"{hms_s3_database}.{table}"
@@ -515,67 +536,8 @@ def test_unsupported_datasource_provider_does_not_poison_database_listing(
 
 
 # ---------------------------------------------------------------------------
-# Metadata and type fidelity for DSV2 formats (spark -> sail read path).
-#
-# These catch format-specific interop breaks that the basic (INT, STRING)
-# round-trip cannot surface: decimal scale/precision, timestamp serialisation,
-# SerDe-path updates on ALTER TABLE, foreign property visibility, and column
-# comments. All are spark->sail because that is the direction where Sail's reader
-# must interpret Spark's written files/metadata, and it is the direction that
-# works for every DSV2 format including avro.
+# Datasource location updates.
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("fmt", _DSV2_FORMATS)
-def test_spark_creates_sail_reads_dsv2_type_fidelity(
-    jvm_spark: SparkSession,
-    spark: SparkSession,
-    hms_s3_database: str,
-    fmt: str,
-) -> None:
-    """Reference Spark writes DECIMAL and TIMESTAMP; Sail restores exact types and values."""
-    table_fqn = f"{hms_s3_database}.types_{fmt}"
-
-    jvm_spark.sql(
-        f"""
-        CREATE TABLE {table_fqn} (
-          id INT,
-          amount DECIMAL(10, 2),
-          ts TIMESTAMP
-        )
-        USING {fmt.upper()}
-        """
-    )
-    jvm_spark.sql(
-        f"""
-        INSERT INTO {table_fqn} VALUES
-          (1, CAST(12.34 AS DECIMAL(10, 2)), TIMESTAMP '2024-01-02 03:04:05'),
-          (2, CAST(0.10 AS DECIMAL(10, 2)), TIMESTAMP '2024-01-02 03:04:06')
-        """
-    )
-
-    # Schema is preserved: decimal precision/scale and timestamp type survive.
-    schema = spark.table(table_fqn).schema
-    fields = {field.name: field for field in schema.fields}
-    assert fields["amount"].dataType.simpleString() == "decimal(10,2)", fields
-    assert fields["ts"].dataType.simpleString() == "timestamp", fields
-
-    # Values are restored exactly. Cast to string to avoid decimal/timezone
-    # comparison noise (mirrors the existing parquet timestamp test).
-    rows = spark.sql(
-        f"""
-        SELECT
-          id,
-          CAST(amount AS STRING) AS amount,
-          CAST(ts AS STRING) AS ts
-        FROM {table_fqn}
-        ORDER BY id
-        """
-    ).collect()
-    assert [(r.id, r.amount, r.ts) for r in rows] == [
-        (1, "12.34", "2024-01-02 03:04:05"),
-        (2, "0.10", "2024-01-02 03:04:06"),
-    ]
 
 
 @pytest.mark.parametrize("fmt", _HMS_METADATA_FORMATS)
@@ -600,62 +562,10 @@ def test_spark_alters_dsv2_table_location_sail_reads_new_path(
     jvm_spark.sql(f"ALTER TABLE {table_fqn} SET LOCATION '{new_location}'")
     jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'new')")
 
-    _assert_sail_describes_datasource_table(spark, table_fqn, provider=fmt)
-    properties = _describe_extended_properties(spark, table_fqn)
+    properties = _assert_sail_describes_datasource_table(spark, table_fqn, provider=fmt)
     assert properties.get("Location") == new_location, properties
     sail_rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in sail_rows] == [(2, "new")]
-
-
-@pytest.mark.parametrize("fmt", _HMS_METADATA_FORMATS)
-def test_spark_dsv2_table_properties_round_trip_spark_sql_hidden(
-    jvm_spark: SparkSession,
-    spark: SparkSession,
-    hms_s3_database: str,
-    fmt: str,
-) -> None:
-    """Foreign TBLPROPERTIES survive; spark.sql.* internal keys are hidden by Sail.
-
-    Datasource tables auto-carry ``spark.sql.sources.provider`` and
-    ``spark.sql.sources.schema.*`` properties. Sail must expose user properties
-    (e.g. ``interop.owner``) while hiding these ``spark.sql.`` internals.
-    """
-    table_fqn = f"{hms_s3_database}.props_{fmt}"
-
-    jvm_spark.sql(
-        f"""
-        CREATE TABLE {table_fqn} (id INT, name STRING)
-        USING {fmt.upper()}
-        TBLPROPERTIES ('interop.owner' = 'spark')
-        """
-    )
-
-    sail_properties = _describe_extended_properties(spark, table_fqn)
-    assert "interop.owner=spark" in sail_properties.get("Table Properties", ""), sail_properties
-    assert "spark.sql." not in sail_properties.get("Table Properties", ""), sail_properties
-
-
-@pytest.mark.parametrize("fmt", _HMS_METADATA_FORMATS)
-def test_spark_dsv2_column_comments_preserved(
-    jvm_spark: SparkSession,
-    spark: SparkSession,
-    hms_s3_database: str,
-    fmt: str,
-) -> None:
-    """Column comments set by Spark are preserved when Sail reads the table."""
-    table_fqn = f"{hms_s3_database}.comments_{fmt}"
-
-    jvm_spark.sql(
-        f"""
-        CREATE TABLE {table_fqn} (
-          id INT COMMENT 'identifier',
-          name STRING
-        )
-        USING {fmt.upper()}
-        """
-    )
-
-    assert _describe_column_comments(spark, table_fqn)["id"] == "identifier"
 
 
 # ---------------------------------------------------------------------------
@@ -681,7 +591,7 @@ def test_spark_creates_sail_reads_partitioned(
 
     ``PARTITIONED BY (event_date DATE)`` with simple types, isolated from complex
     types. Covers: Sail preserves the partition column in schema, the reader
-    discovers Hive-style partition directories, partition pruning works, and values
+    discovers Hive-style partition directories, filters by partition columns, and values
     (including the partition column) are restored correctly.
     """
     table_fqn = f"{hms_s3_database}.part_{fmt}"
@@ -706,16 +616,12 @@ def test_spark_creates_sail_reads_partitioned(
         """
     )
 
-    # Reference sanity check.
-    ref_rows = jvm_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
-    assert len(ref_rows) == 3, f"Reference Spark expected 3 rows, got {len(ref_rows)}"
-
     # Sail reads all rows across both partitions.
     sail_rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in sail_rows] == [(1, "alice"), (2, "bob"), (3, "cara")]
 
-    # Partition pruning: Sail pushes the partition filter down (only one partition read).
-    pruned = spark.sql(
+    # Check partition-column values and predicate results.
+    filtered = spark.sql(
         f"""
         SELECT id, name, CAST(event_date AS STRING) AS event_date
         FROM {table_fqn}
@@ -723,7 +629,7 @@ def test_spark_creates_sail_reads_partitioned(
         ORDER BY id
         """
     ).collect()
-    assert [(r.id, r.name, r.event_date) for r in pruned] == [
+    assert [(r.id, r.name, r.event_date) for r in filtered] == [
         (1, "alice", "2024-01-02"),
         (3, "cara", "2024-01-02"),
     ]
