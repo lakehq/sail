@@ -188,6 +188,9 @@ impl<'a> IcebergPlanBuilder<'a> {
         let mut columns = Vec::new();
         if let Some(spec) = &context.writer_partition_spec {
             for field in spec.fields() {
+                if field.transform == crate::spec::Transform::Void {
+                    continue;
+                }
                 let path = context
                     .writer_schema
                     .field_path_by_id(field.source_id)

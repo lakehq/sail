@@ -14,6 +14,7 @@ DELTA_SPARK_COORDINATES: dict[str, str] = {
     "3.5": "io.delta:delta-spark_2.12:3.3.2",
     "4.0": "io.delta:delta-spark_2.13:4.0.1",
     "4.1": "io.delta:delta-spark_4.1_2.13:4.3.1",
+    "4.2": "io.delta:delta-spark_4.2_2.13:4.4.0",
 }
 
 

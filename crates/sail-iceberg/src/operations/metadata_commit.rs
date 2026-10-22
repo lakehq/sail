@@ -148,6 +148,9 @@ pub(crate) fn apply_snapshot_updates(
                 }
                 metadata.refs.insert(ref_name.clone(), reference.clone());
             }
+            TableUpdate::RemoveSnapshotRef { ref_name } => {
+                metadata.refs.remove(ref_name);
+            }
             _ => return internal_err!("Unsupported Iceberg snapshot metadata update"),
         }
     }

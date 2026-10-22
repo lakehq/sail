@@ -92,6 +92,11 @@ pub enum CatalogCommand {
         table: Vec<String>,
         options: DropTableOptions,
     },
+    RenameTable {
+        table: Vec<String>,
+        destination: Vec<String>,
+        if_exists: bool,
+    },
     AlterTable {
         table: Vec<String>,
         if_exists: bool,
@@ -202,6 +207,7 @@ impl CatalogCommand {
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
             CatalogCommand::AlterTable { .. } => "AlterTable",
+            CatalogCommand::RenameTable { .. } => "RenameTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
@@ -278,6 +284,7 @@ impl CatalogCommand {
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::AlterTable { .. }
+            | CatalogCommand::RenameTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. }
@@ -464,6 +471,17 @@ impl CatalogCommand {
                 manager.drop_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::RenameTable {
+                table,
+                destination,
+                if_exists,
+            } => {
+                match manager.rename_table(&table, &destination).await {
+                    Err(CatalogError::NotFound(CatalogObject::Table, _)) if if_exists => {}
+                    result => result?,
+                };
+                display.bools().to_record_batch(vec![true])?
+            }
             CatalogCommand::AlterTable {
                 table,
                 if_exists,
@@ -491,6 +509,50 @@ impl CatalogCommand {
                     }
                     _ => (None, None),
                 };
+                if matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
+                    && (location.is_none()
+                        || !format
+                            .as_deref()
+                            .is_some_and(|format| format.eq_ignore_ascii_case("iceberg")))
+                {
+                    return Err(CatalogError::NotSupported(
+                        "Snapshot references require an Iceberg table with a location".into(),
+                    ));
+                }
+                if format
+                    .as_deref()
+                    .is_some_and(|format| !is_lakehouse_format(format))
+                    && let AlterTableOptions::AlterColumns { changes, .. } = &options
+                    && changes.iter().any(|change| {
+                        matches!(change, sail_common::spec::ColumnChange::Rename { .. })
+                    })
+                {
+                    return Err(CatalogError::NotSupported(
+                        "RENAME COLUMN requires a format that preserves column identities".into(),
+                    ));
+                }
+                if format
+                    .as_deref()
+                    .is_some_and(|format| format.eq_ignore_ascii_case("csv"))
+                    && match &options {
+                        AlterTableOptions::ReplaceColumns { .. } => true,
+                        AlterTableOptions::AlterColumns { changes, .. } => {
+                            changes.iter().any(|change| {
+                                matches!(
+                                    change,
+                                    sail_common::spec::ColumnChange::Add { .. }
+                                        | sail_common::spec::ColumnChange::Drop { .. }
+                                        | sail_common::spec::ColumnChange::Position { .. }
+                                )
+                            })
+                        }
+                        _ => false,
+                    }
+                {
+                    return Err(CatalogError::NotSupported(
+                        "CSV column additions, drops, reordering and replacement require rewriting existing files".into(),
+                    ));
+                }
 
                 // Lake sources commit authoritative format metadata, including catalog
                 // metadata when the provider supports an atomic update.
@@ -500,6 +562,18 @@ impl CatalogCommand {
                     // Skip straight to catalog-only update.
                     // This mirrors Spark+Delta where DeltaCatalog intercepts ALTER TABLE
                     // for Delta tables but plain tables fall through to SessionCatalog.
+                    if matches!(
+                        options,
+                        AlterTableOptions::AlterIdentifierFields { .. }
+                            | AlterTableOptions::SetWriteOrder { .. }
+                            | AlterTableOptions::AlterPartitionSpec { .. }
+                            | AlterTableOptions::SetPartitioning { .. }
+                    ) && !format.eq_ignore_ascii_case("iceberg")
+                    {
+                        return Err(CatalogError::NotSupported(
+                            "Identifier, partition and write order evolution require an Iceberg table".into(),
+                        ));
+                    }
                     if !is_lakehouse_format(&format) {
                         manager.alter_table(&table, options).await?;
                         return Ok(display.bools().to_record_batch(vec![true])?);
@@ -523,7 +597,8 @@ impl CatalogCommand {
                         )
                         .await?
                         .execution;
-                    if matches!(lakehouse_table.commit,
+                    if !matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
+                        && matches!(lakehouse_table.commit,
                         sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
                         | sail_common_datafusion::catalog::CommitAuthority::VersionedCatalogCommit)
                     {
@@ -541,13 +616,47 @@ impl CatalogCommand {
                     // observe successful storage mutation followed by stale
                     // DESCRIBE/SHOW metadata.
                     if !result.catalog_updated {
-                        let catalog_options = catalog_sync_alter_options(&format, &options)?;
+                        let mut catalog_options = catalog_sync_alter_options(&format, &options)?;
                         if let Some(schema) = result.schema {
+                            if let AlterTableOptions::ReplaceColumns { fields, .. } =
+                                &mut catalog_options
+                            {
+                                *fields = schema.fields().clone();
+                            }
                             manager
                                 .alter_table_with_schema(&table, catalog_options, schema)
                                 .await?;
                         } else {
                             manager.alter_table(&table, catalog_options).await?;
+                        }
+                        if let Some(partition_by) = result.partition_by {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::SetPartitioning { partition_by },
+                                )
+                                .await?;
+                        }
+                        if !result.properties.is_empty() {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::SetTableProperties {
+                                        properties: result.properties,
+                                    },
+                                )
+                                .await?;
+                        }
+                        if !result.removed_properties.is_empty() {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::UnsetTableProperties {
+                                        keys: result.removed_properties,
+                                        if_exists: true,
+                                    },
+                                )
+                                .await?;
                         }
                     }
                     return Ok(display.bools().to_record_batch(vec![true])?);
@@ -1085,6 +1194,12 @@ fn catalog_sync_alter_options(
             // Existence was checked against the format metadata before committing.
             Ok(AlterTableOptions::UnsetTableProperties {
                 keys: keys.clone(),
+                if_exists: true,
+            })
+        }
+        AlterTableOptions::DropCheckConstraint { name, .. } => {
+            Ok(AlterTableOptions::UnsetTableProperties {
+                keys: vec![format!("delta.constraints.{}", name.to_lowercase())],
                 if_exists: true,
             })
         }
