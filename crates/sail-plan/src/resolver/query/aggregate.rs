@@ -36,7 +36,7 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::{NamedExpr, take_auto_generated_alias};
 use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
@@ -339,9 +339,14 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata: _,
+                    mut metadata,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let auto_generated_alias = take_auto_generated_alias(&mut metadata);
+                let name = state.register_field_name(name.one()?);
+                if auto_generated_alias {
+                    state.set_auto_generated_alias(&name)?;
+                }
+                Ok(expr.alias(name))
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)
@@ -805,7 +810,8 @@ impl PlanResolver<'_> {
                     name,
                     expr: Self::replace_grouping_expressions(expr, generator_replacements)?,
                     metadata,
-                })
+                }
+                .with_auto_generated_alias(&projections[index]))
             })
             .collect()
     }

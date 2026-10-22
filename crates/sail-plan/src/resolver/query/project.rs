@@ -13,7 +13,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::{NamedExpr, take_auto_generated_alias};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::exists::ExistsRewriter;
@@ -34,7 +34,14 @@ impl PlanResolver<'_> {
             None => self.resolve_query_empty(true)?,
         };
         let schema = input.schema();
-        let expr = self.resolve_named_expressions(expr, schema, state).await?;
+        let projections = expr.clone();
+        let expr = self
+            .resolve_named_expressions(expr, schema, state)
+            .await?
+            .into_iter()
+            .zip(&projections)
+            .map(|(expr, projection)| expr.with_auto_generated_alias(projection))
+            .collect();
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
         let input = Self::drop_rows_without_session_time(input, &expr)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
@@ -253,8 +260,9 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata,
+                    mut metadata,
                 } = e;
+                let auto_generated_alias = take_auto_generated_alias(&mut metadata);
                 let name = if name.len() == 1 {
                     name.one()?
                 } else {
@@ -268,6 +276,9 @@ impl PlanResolver<'_> {
                 } else {
                     state.register_field_name(name)
                 };
+                if auto_generated_alias {
+                    state.set_auto_generated_alias(&field_id)?;
+                }
                 if !metadata.is_empty() {
                     let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                     let field_metadata = Some(FieldMetadata::from(metadata_map));

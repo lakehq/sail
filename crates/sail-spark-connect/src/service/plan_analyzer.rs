@@ -8,7 +8,7 @@ use prost::Message;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::rename::schema::rename_schema;
+use sail_common_datafusion::rename::schema::rename_schema_with_metadata;
 use sail_plan::explain::{ExplainOptions, explain_string};
 use sail_plan::resolver::PlanResolver;
 use sail_plan::resolver::plan::NamedPlan;
@@ -42,11 +42,15 @@ use crate::spark::connect::plan;
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
-    let NamedPlan { plan, fields } = resolver
+    let NamedPlan {
+        plan,
+        fields,
+        field_metadata,
+    } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
     let schema = if let Some(fields) = fields {
-        rename_schema(plan.schema().inner(), fields.as_slice())?
+        rename_schema_with_metadata(plan.schema().inner(), &fields, &field_metadata)?
     } else {
         plan.schema().inner().clone()
     };
