@@ -293,8 +293,8 @@ A `NULL` row of a `VALUES` map column is ignored when the type of the column is 
 
 | Test                                                                                                                  | Difference                                                                               |
 | :-------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------- |
-| `SparkConnectFunctionTests.test_normal_functions`                                                                     | `coalesce(decimal, string, double)` is `decimal(30,15)` in Sail and `string` in Spark    |
-| `SparkConnectColumnTests.test_column_arithmetic_ops`                                                                  | decimal division gives `decimal(18,9)` in Sail and `decimal(23,14)` in Spark             |
+| `SparkConnectFunctionTests.test_normal_functions`                                                                     | `coalesce(int, double, decimal)` is `decimal(30,15)` in Sail and `double` in Spark       |
+| `SparkConnectColumnTests.test_column_arithmetic_ops`                                                                  | `d / b / 3` gives `decimal(10,9)` in Sail and `decimal(15,14)` in Spark                  |
 | `SparkConnectFunctionTests.test_math_functions`                                                                       | `factorial` of a decimal fails to coerce in Sail; Spark casts it to `int`                |
 | `SparkConnectFunctionTests.test_date_ts_functions`                                                                    | `last_day('1997/02/28 10:30:00')` fails with a cast error in Sail and is `NULL` in Spark |
 | `SparkConnectFunctionTests.test_window_functions`                                                                     | the column is named `row_number()`; Spark includes the window in the name                |
@@ -303,9 +303,11 @@ A `NULL` row of a `VALUES` map column is ignored when the type of the column is 
 
 **Root causes.**
 
-- Type coercion: Spark coerces a decimal and a double to `double`, and a decimal and a string to `string`. Sail keeps the decimal in both cases.
-- Decimal division: Spark's result type has `scale = max(6, s1 + p2 + 1)` and `precision = p1 - s1 + s2 + scale`, reduced to at most 38 digits.
-  For `decimal(10,1) / decimal(10,0) / 3`, this gives `decimal(23,14)` and `0.38888888888900`. Sail gives `decimal(18,9)` and `0.388886666`, so precision is lost in the intermediate result.
+- Type coercion: the wider type of a decimal and a floating-point type is `double` in Spark, while Sail kept a decimal, so `coalesce` and `greatest` of an integer, a double, and a decimal failed to cast `NaN` to the decimal.
+  The wider type of a decimal and an integer is the decimal with the most integral digits and the largest scale, where an integer has as many digits as its type can hold (10 for `int`), so `CASE WHEN ... THEN d ELSE 0 END` has more integral digits than `d`.
+- Decimal arithmetic: Spark gives an integer literal in arithmetic with a decimal the type with as many digits as its value (`decimal(1,0)` for `1`), while Sail used the digits of its type (`decimal(10,0)`), so `1 - d` had 9 more integral digits than in Spark.
+- Decimal division: Spark's result type has `scale = max(6, s1 + p2 + 1)` and `precision = p1 - s1 + s2 + scale`, reduced to at most 38 digits by giving up scale beyond 6 digits, and the quotient is rounded half up.
+  DataFusion uses `scale = s1 + 4` and truncates. For `d / b / 3` with a `decimal(2,1)` column `d` and an `int` column `b`, Spark gives `decimal(15,14)` and `0.38888888888900`, and Sail gave `decimal(10,9)` and `0.388886666`, so precision was lost in the intermediate result.
 - `factorial` only had an `Int64` signature, and decimals were not implicitly cast to it. Fixed in this pull request: the argument is cast to `int` as in Spark.
 - An explicit `CAST('1997/02/28 10:30:00' AS DATE)` returns `NULL` in Sail as in Spark, but the implicit cast for the `date` argument of `last_day` raised an error instead.
   The other date functions in the test (`year`, `quarter`, `month`, `dayofweek`, and so on) used the same implicit cast.
@@ -327,7 +329,11 @@ A `NULL` row of a `VALUES` map column is ignored when the type of the column is 
 With the window names fixed, `test_window_functions` failed in `lag(c, -1, float("nan"))` on a decimal column, where the cast of the `NaN` default to the decimal type raised an error.
 Fixed in this pull request: outside ANSI mode, a literal default of `lag` or `lead` that cannot be cast to the type of the input is `NULL`, as with a Spark cast. `test_window_functions` then passes.
 
-**Proposed fix (for the rest).** Use Spark's rules for decimal coercion and for the result type of decimal division.
+**Fix (in this pull request, for decimals).** `coalesce`, `greatest`, `least`, and `CASE` cast their numeric arguments to Spark's wider type, an integer literal in `+`, `-`, `*`, and `/` with a decimal is a decimal with as many digits as its value, and decimal division has Spark's result type, computed with one more digit of scale and rounded half up.
+The window `avg` of a decimal column is rounded half up like the aggregate `avg`.
+The TPC-H and TPC-DS queries of the PySail tests return the same values as Spark 3.5.9 when the data is loaded through Spark Connect as in the tests, and their snapshots are updated.
+The remaining difference in these queries is the name of an expression with a cast in TPC-DS query 90, where Spark includes the cast and Sail does not. `test_normal_functions` (with `isnan` below), `test_column_arithmetic_ops`, and `test_math_functions` pass.
+`isnan` of `NULL` was `NULL` in Sail and is `false` in Spark, which `test_normal_functions` also compares. It is fixed in this pull request, with a non-nullable result as in Spark.
 
 ### Windows and Streaming
 

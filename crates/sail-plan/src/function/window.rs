@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
     correlation, count, covariance, grouping, median, min_max, stddev, sum, variance,
@@ -103,15 +103,30 @@ fn avg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
-    if args
+    let arg_type = args
         .first()
         .map(|arg| arg.get_type(input.function_context.schema))
-        .transpose()?
-        == Some(DataType::Null)
-    {
+        .transpose()?;
+    if arg_type == Some(DataType::Null) {
         return Ok(lit(ScalarValue::Null));
     }
-    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+    // The decimal average is rounded half up as in Spark, as for the aggregate `avg`.
+    let rounding = match arg_type {
+        Some(DataType::Decimal128(precision, scale))
+            if precision <= DECIMAL128_MAX_PRECISION - 5 && scale <= DECIMAL128_MAX_SCALE - 5 =>
+        {
+            Some((precision, scale))
+        }
+        _ => None,
+    };
+    let args = match rounding {
+        Some((precision, scale)) => args
+            .into_iter()
+            .map(|arg| cast(arg, DataType::Decimal128(precision + 1, scale + 1)))
+            .collect(),
+        None => args,
+    };
+    let avg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(average::avg_udaf()),
         params: WindowFunctionParams {
             args,
@@ -122,7 +137,11 @@ fn avg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
             distinct,
         },
-    })))
+    }));
+    Ok(match rounding {
+        Some((precision, scale)) => cast(avg, DataType::Decimal128(precision + 4, scale + 4)),
+        None => avg,
+    })
 }
 
 fn spark_sum(input: WinFunctionInput) -> PlanResult<expr::Expr> {

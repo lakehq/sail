@@ -39,6 +39,7 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::scalar::conditional::coerce_decimal_to_spark_wider_type;
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -93,6 +94,8 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        let (left, right) =
+            narrow_integer_literal_with_decimal(left, &left_type, right, &right_type);
         Ok(match (left_type, right_type) {
             (
                 Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
@@ -170,6 +173,8 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        let (left, right) =
+            narrow_integer_literal_with_decimal(left, &left_type, right, &right_type);
         Ok(match (left_type, right_type) {
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
                 left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
@@ -210,6 +215,7 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
     );
+    let (left, right) = narrow_integer_literal_with_decimal(left, &left_type, right, &right_type);
     Ok(match (left_type, right_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
@@ -231,6 +237,41 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
         (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => left * right,
     })
+}
+
+/// The number of digits of an integer literal, which is its precision as a decimal in Spark.
+fn integer_literal_digits(expr: &Expr) -> Option<i32> {
+    let Expr::Literal(value, _) = expr else {
+        return None;
+    };
+    let value = match value {
+        ScalarValue::Int8(Some(v)) => i64::from(*v),
+        ScalarValue::Int16(Some(v)) => i64::from(*v),
+        ScalarValue::Int32(Some(v)) => i64::from(*v),
+        ScalarValue::Int64(Some(v)) => *v,
+        _ => return None,
+    };
+    Some(value.unsigned_abs().to_string().len() as i32)
+}
+
+/// In arithmetic with a decimal, Spark gives an integer literal the decimal type with as many
+/// digits as its value, while an integer column gets as many digits as its type can hold.
+/// So `1 - d` for a `decimal(2,2)` is a `decimal(4,2)`, not a `decimal(13,2)`.
+fn narrow_integer_literal_with_decimal<E>(
+    left: Expr,
+    left_type: &Result<DataType, E>,
+    right: Expr,
+    right_type: &Result<DataType, E>,
+) -> (Expr, Expr) {
+    let narrow = |expr: Expr| match integer_literal_digits(&expr) {
+        Some(digits) => cast(expr, DataType::Decimal128(digits as u8, 0)),
+        None => expr,
+    };
+    match (left_type, right_type) {
+        (_, Ok(DataType::Decimal128(..))) => (narrow(left), right),
+        (Ok(DataType::Decimal128(..)), _) => (left, narrow(right)),
+        _ => (left, right),
+    }
 }
 
 /// Check if an expression represents a zero literal value.
@@ -326,6 +367,77 @@ fn make_safe_divisor(
 /// All of the above conditions should be handled by the DataFusion.
 /// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
+/// The decimal type of a division operand when the other operand is a decimal, as in Spark:
+/// a decimal keeps its type, an integer literal has as many digits as its value, and
+/// another integer has as many digits as its type can hold.
+fn spark_decimal_operand(expr: &Expr, data_type: &DataType) -> Option<(i32, i32)> {
+    if let Some(digits) = integer_literal_digits(expr) {
+        return Some((digits, 0));
+    }
+    match data_type {
+        DataType::Decimal128(p, s) => Some((i32::from(*p), i32::from(*s))),
+        DataType::Int8 => Some((3, 0)),
+        DataType::Int16 => Some((5, 0)),
+        DataType::Int32 => Some((10, 0)),
+        DataType::Int64 => Some((20, 0)),
+        _ => None,
+    }
+}
+
+/// Divides decimals with the result type of Spark, where the scale is at least 6 and the
+/// precision is reduced to 38 digits by giving up scale beyond 6 digits.
+/// The quotient is computed with at least one more digit of scale and then cast to the
+/// result type, which rounds half up as in Spark. With a floating-point operand, the
+/// division is in `double`, also as in Spark.
+fn spark_decimal_divide(
+    dividend: &Expr,
+    dividend_type: &DataType,
+    divisor: &Expr,
+    divisor_type: &DataType,
+    divisor_decimal: Option<(i32, i32)>,
+) -> Option<Expr> {
+    let is_decimal = |t: &DataType| matches!(t, DataType::Decimal128(..));
+    if !(is_decimal(dividend_type) || is_decimal(divisor_type)) {
+        return None;
+    }
+    if dividend_type.is_floating() || divisor_type.is_floating() {
+        return Some(
+            cast(dividend.clone(), DataType::Float64) / cast(divisor.clone(), DataType::Float64),
+        );
+    }
+    let (p1, s1) = spark_decimal_operand(dividend, dividend_type)?;
+    let (p2, s2) = divisor_decimal?;
+    let scale = 6.max(s1 + p2 + 1);
+    let precision = p1 - s1 + s2 + scale;
+    let (precision, scale) = if precision <= 38 {
+        (precision, scale)
+    } else {
+        let integral_digits = precision - scale;
+        (38, (38 - integral_digits).max(scale.min(6)))
+    };
+    // The quotient of decimals has the scale of the dividend plus 4.
+    let dividend_scale = s1.max(scale - 3);
+    let dividend = cast(
+        dividend.clone(),
+        DataType::Decimal256((p1 - s1 + dividend_scale) as u8, dividend_scale as i8),
+    );
+    let divisor = cast(divisor.clone(), DataType::Decimal256(p2 as u8, s2 as i8));
+    Some(cast(
+        dividend / divisor,
+        DataType::Decimal128(precision as u8, scale as i8),
+    ))
+}
+
+/// `greatest` and `least`, with Spark's wider type of decimal and floating-point arguments.
+fn extremum(input: ScalarFunctionInput, function: fn(Vec<Expr>) -> Expr) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arguments = coerce_decimal_to_spark_wider_type(arguments, function_context.schema)?;
+    Ok(function(arguments))
+}
+
 fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -348,6 +460,11 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let divisor_type = divisor.get_type(function_context.schema);
 
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
+    // The literal is known before the divisor is guarded against zero.
+    let divisor_decimal = divisor_type
+        .as_ref()
+        .ok()
+        .and_then(|t| spark_decimal_operand(&divisor, t));
     let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
     let divisor = make_safe_divisor(
         divisor,
@@ -356,11 +473,20 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         "Division by zero",
     );
 
+    if let (Ok(dividend_type), Ok(divisor_type)) = (&dividend_type, &divisor_type)
+        && let Some(div_expr) = spark_decimal_divide(
+            &dividend,
+            dividend_type,
+            &divisor,
+            divisor_type,
+            divisor_decimal,
+        )
+    {
+        return Ok(div_expr);
+    }
     let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
-        // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
-        //  See `test_divide` in python/pysail/tests/spark/test_math.py
         (Ok(DataType::Decimal128(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal128(_, _)))
         | (Ok(DataType::Decimal256(_, _)), Ok(_))
@@ -791,10 +917,13 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
             F::unary(|arg| expr_fn::factorial(cast(arg, DataType::Int32))),
         ),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::var_arg(expr_fn::greatest)),
+        (
+            "greatest",
+            F::custom(|input| extremum(input, expr_fn::greatest)),
+        ),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::var_arg(expr_fn::least)),
+        ("least", F::custom(|input| extremum(input, expr_fn::least))),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),
