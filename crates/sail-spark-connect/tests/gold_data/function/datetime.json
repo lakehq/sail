@@ -39,7 +39,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: session_window"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"session_window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {
@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: session_window"
+        "failure": "not supported: session_window with a gap duration that is not a literal"
       }
     },
     {
