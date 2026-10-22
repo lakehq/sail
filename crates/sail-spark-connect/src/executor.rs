@@ -16,6 +16,7 @@ use fastrace::Span;
 use fastrace::future::FutureExt;
 use futures::Stream;
 use futures::stream::StreamExt;
+use sail_common_datafusion::schema::{normalize_record_batch, record_batch_has_views};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -466,12 +467,20 @@ impl Executor {
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
-    let batch = deduplicate_struct_field_names(batch)?;
+    let batch = &deduplicate_struct_field_names(batch)?;
     let mut output = ArrowBatch::default();
     {
+        // Fallback incase view types weren't handled in planning/execution.
+        let batch = if record_batch_has_views(batch) {
+            // TODO: Look into passing the session's `spark.sql.execution.arrow.useLargeVarTypes` value.
+            // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+            &normalize_record_batch(batch, false, false)?
+        } else {
+            batch
+        };
         let cursor = Cursor::new(&mut output.data);
         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
-        writer.write(&batch)?;
+        writer.write(batch)?;
         output.row_count += batch.num_rows() as i64;
         writer.finish()?;
     }
