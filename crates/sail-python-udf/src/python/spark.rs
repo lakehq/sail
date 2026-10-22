@@ -1,6 +1,6 @@
 use std::ffi::CString;
 
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef, SchemaRef};
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::sync::PyOnceLock;
 use pyo3::{Bound, Py, PyAny, PyResult, Python, intern};
@@ -34,6 +34,17 @@ impl PySpark {
             .into_bound(py))
     }
 
+    /// Returns the PySpark data type of an Arrow field, with the user-defined types
+    /// in the field metadata.
+    pub fn data_type_from_arrow_field<'py>(
+        py: Python<'py>,
+        field: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        Self::module(py)?
+            .getattr(intern!(py, "_from_arrow_field"))?
+            .call1((field,))
+    }
+
     /// Sets the PySpark `TaskContext` of the current thread to the given partition.
     pub fn set_task_context(py: Python, partition: usize) -> PyResult<()> {
         Self::module(py)?
@@ -45,7 +56,7 @@ impl PySpark {
     pub fn batch_udf<'py>(
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
-        input_types: &[DataType],
+        input_fields: &[FieldRef],
         output_type: &DataType,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -54,7 +65,7 @@ impl PySpark {
             intern!(py, "PySparkBatchUdf"),
             (
                 udf,
-                input_types.try_to_py(py, config.arrow_use_large_var_types)?,
+                input_fields.try_to_py(py, config.arrow_use_large_var_types)?,
                 output_type.try_to_py(py, config.arrow_use_large_var_types)?,
             ),
         )

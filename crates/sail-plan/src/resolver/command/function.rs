@@ -36,7 +36,8 @@ impl PlanResolver<'_> {
             function.command,
             Some(function.output_type),
             deterministic,
-        );
+        )
+        .with_output_metadata(function.output_metadata);
 
         let manager = self.ctx.extension::<CatalogManager>()?;
         let udf = manager.track_function(datafusion_expr::ScalarUDF::from(udf))?;

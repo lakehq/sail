@@ -131,17 +131,21 @@ impl PlanResolver<'_> {
         let state = scope.state();
         state.config_mut().arrow_allow_large_var_types = true;
 
-        let input_types: Vec<DataType> =
-            arguments
-                .iter()
-                .map(|arg| arg.get_type(schema))
-                .collect::<datafusion_common::Result<Vec<DataType>, DataFusionError>>()?;
-        let payload = PySparkUdfPayload::build(
+        // The fields have the user-defined types of the arguments in their metadata.
+        let input_fields = arguments
+            .iter()
+            .map(|arg| Ok(arg.to_field(schema)?.1))
+            .collect::<datafusion_common::Result<Vec<_>, DataFusionError>>()?;
+        let input_types: Vec<DataType> = input_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect();
+        let payload = PySparkUdfPayload::build_with_input_fields(
             &function.python_version,
             &function.command,
             function.eval_type,
             &((0..arguments.len()).collect::<Vec<_>>()),
-            &input_types,
+            &input_fields,
             kwarg_names,
             &self.config.pyspark_udf_config,
         )?;
@@ -178,7 +182,8 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
-                );
+                )
+                .with_output_metadata(function.output_metadata);
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
                     args: arguments,
@@ -193,7 +198,8 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
-                );
+                )
+                .with_output_metadata(function.output_metadata);
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
                     args: arguments,
@@ -208,7 +214,8 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
-                );
+                )
+                .with_output_metadata(function.output_metadata);
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
                     args: arguments,
@@ -223,7 +230,8 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
-                );
+                )
+                .with_output_metadata(function.output_metadata);
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
                     args: arguments,
@@ -288,7 +296,8 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
-                );
+                )
+                .with_output_metadata(function.output_metadata);
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
                     args: arguments,
@@ -304,7 +313,8 @@ impl PlanResolver<'_> {
                     input_types,
                     function.output_type,
                     self.config.pyspark_udf_config.clone(),
-                );
+                )
+                .with_output_metadata(function.output_metadata);
                 Ok(Expr::ScalarFunction(expr::ScalarFunction {
                     func: Arc::new(ScalarUDF::from(udf)),
                     args: arguments,

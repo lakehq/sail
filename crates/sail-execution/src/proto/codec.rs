@@ -3373,6 +3373,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 config,
+                output_metadata,
             }) => {
                 let kind = self.try_decode_pyspark_udf_kind(kind)?;
                 let input_types = input_types
@@ -3392,7 +3393,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_types,
                     output_type,
                     Arc::new(config),
-                );
+                )
+                .with_output_metadata(output_metadata.into_iter().collect());
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::PySparkCoGroupMap(r#gen::PySparkCoGroupMapUdf {
@@ -3997,6 +3999,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 config: Some(config),
+                output_metadata: func
+                    .output_metadata()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkCoGroupMapUDF>() {
             let left_types = func
@@ -6069,6 +6076,28 @@ mod tests {
             let decoded = downcast_udf::<PySparkUDF>(&decoded, kind.name())?;
             assert_eq!(decoded.payload(), &[1, 2, 3]);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_python_udf_codec_preserves_output_metadata() -> Result<()> {
+        let metadata = std::collections::BTreeMap::from([(
+            "SAIL::spark::udt".to_string(),
+            r#"{"python_class":"example.PointUDT"}"#.to_string(),
+        )]);
+        let udf = PySparkUDF::new(
+            PySparkUdfKind::Batch,
+            "point".to_string(),
+            vec![1, 2, 3],
+            true,
+            vec![DataType::Float64],
+            DataType::Float64,
+            Arc::new(PySparkUdfConfig::default()),
+        )
+        .with_output_metadata(metadata.clone());
+        let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+        let decoded = downcast_udf::<PySparkUDF>(&decoded, "point")?;
+        assert_eq!(decoded.output_metadata(), &metadata);
         Ok(())
     }
 

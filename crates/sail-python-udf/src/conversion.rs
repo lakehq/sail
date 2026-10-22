@@ -137,6 +137,23 @@ impl<'py> TryToPy<'py> for &[DataType] {
     }
 }
 
+impl<'py> TryToPy<'py> for &[FieldRef] {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn try_to_py(
+        &self,
+        py: Python<'py>,
+        large_var_types: bool,
+    ) -> Result<Self::Output, Self::Error> {
+        self.iter()
+            .map(|x| normalize_field_with_options(x, large_var_types).to_pyarrow(py))
+            .collect::<PyResult<Vec<_>>>()
+            .map(|x| x.into_pyobject(py))?
+    }
+}
+
 impl<'py> TryToPy<'py> for ArrayRef {
     type Target = PyAny;
     type Output = Bound<'py, Self::Target>;

@@ -1,4 +1,6 @@
-use datafusion::arrow::datatypes::DataType;
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyList, PyModule};
@@ -7,6 +9,7 @@ use sail_common::spec;
 
 use crate::conversion::TryToPy;
 use crate::error::{PyUdfError, PyUdfResult};
+use crate::python::spark::PySpark;
 
 pub mod pyspark_udf;
 pub mod pyspark_udtf;
@@ -150,20 +153,26 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
 /// Builds a JSON string representing a PySpark StructType schema from Arrow input types.
 /// This is used by PySpark 4.x's `read_udfs` to deserialize input type information
 /// for `SQL_ARROW_BATCHED_UDF`.
-fn build_input_types_json(input_types: &[DataType], large_var_types: bool) -> PyUdfResult<String> {
+/// Returns unnamed input fields for input types without field metadata.
+fn input_types_to_fields(input_types: &[DataType]) -> Vec<FieldRef> {
+    input_types
+        .iter()
+        .map(|t| Arc::new(Field::new("", t.clone(), true)))
+        .collect()
+}
+
+fn build_input_types_json(input_fields: &[FieldRef], large_var_types: bool) -> PyUdfResult<String> {
     Python::attach(|py| -> PyResult<String> {
         let types_module = PyModule::import(py, intern!(py, "pyspark.sql.types"))?;
         let struct_type_cls = types_module.getattr(intern!(py, "StructType"))?;
         let struct_field_cls = types_module.getattr(intern!(py, "StructField"))?;
-        let from_arrow_type = PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
-            .getattr(intern!(py, "from_arrow_type"))?;
 
-        let fields: Vec<_> = input_types
-            .iter()
+        let fields: Vec<_> = input_fields
+            .try_to_py(py, large_var_types)?
+            .try_iter()?
             .enumerate()
-            .map(|(i, dt)| -> PyResult<_> {
-                let arrow_type = dt.try_to_py(py, large_var_types)?;
-                let spark_type = from_arrow_type.call1((arrow_type,))?;
+            .map(|(i, field)| -> PyResult<_> {
+                let spark_type = PySpark::data_type_from_arrow_field(py, &field?)?;
                 struct_field_cls.call1((format!("_{i}"), spark_type, true))
             })
             .collect::<PyResult<_>>()?;

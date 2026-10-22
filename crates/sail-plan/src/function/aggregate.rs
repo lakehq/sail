@@ -16,7 +16,7 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
-use sail_common::spec::SAIL_LIST_FIELD_NAME;
+use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_SPARK_UDT_METADATA_KEY};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
@@ -717,6 +717,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
     let element_type = arg.get_type(schema)?;
+    let element_field = arg.to_field(schema)?.1;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
@@ -742,7 +743,10 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg, &element_type))
+    Ok(with_element_udt(
+        coalesce_to_empty_array(agg, &element_type),
+        &element_field,
+    ))
 }
 
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -751,6 +755,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
     let element_type = arg.get_type(schema)?;
+    let element_field = arg.to_field(schema)?.1;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
@@ -776,7 +781,10 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg, &element_type))
+    Ok(with_element_udt(
+        coalesce_to_empty_array(agg, &element_type),
+        &element_field,
+    ))
 }
 
 /// Spark's `collect_list`/`collect_set` return an empty array for a group with no (non-NULL)
@@ -785,6 +793,22 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
     let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
     coalesce(vec![agg, lit(empty)])
+}
+
+/// Keeps the user-defined type of the collected values, which is only in the metadata of the
+/// field and is lost in the array type that `array_agg` returns.
+fn with_element_udt(agg: expr::Expr, element_field: &Field) -> expr::Expr {
+    match element_field.metadata().get(SAIL_SPARK_UDT_METADATA_KEY) {
+        Some(udt) => cast(
+            agg,
+            DataType::List(Arc::new(
+                Field::new_list_field(element_field.data_type().clone(), true).with_metadata(
+                    HashMap::from([(SAIL_SPARK_UDT_METADATA_KEY.to_string(), udt.clone())]),
+                ),
+            )),
+        ),
+        None => agg,
+    }
 }
 
 fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {

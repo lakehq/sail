@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::plan_err;
 use sail_common::spec;
@@ -11,6 +13,8 @@ pub(super) struct PythonUdf {
     pub eval_type: spec::PySparkUdfType,
     pub command: Vec<u8>,
     pub output_type: DataType,
+    /// The metadata of the output field, such as the user-defined type of the output.
+    pub output_metadata: BTreeMap<String, String>,
 }
 
 pub(super) struct PythonUdtf {
@@ -47,12 +51,26 @@ impl PlanResolver<'_> {
                 return plan_err!("Can not load class {class_name}")?;
             }
         };
-        let output_type = self.resolve_data_type(&output_type, state)?;
+        // A user-defined type is only resolved as a field, which has the type in its metadata.
+        let output = self.resolve_field(
+            &spec::Field {
+                name: String::new(),
+                data_type: output_type,
+                nullable: true,
+                metadata: vec![],
+            },
+            state,
+        )?;
         Ok(PythonUdf {
             python_version,
             eval_type,
             command,
-            output_type,
+            output_type: output.data_type().clone(),
+            output_metadata: output
+                .metadata()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
         })
     }
 

@@ -9,7 +9,7 @@ use sail_common::spec;
 
 use crate::cereal::{
     PySparkVersion, build_input_types_json, check_python_udf_version, get_pyspark_version,
-    should_write_config, supports_kwargs, write_conf, write_kwarg,
+    input_types_to_fields, should_write_config, supports_kwargs, write_conf, write_kwarg,
 };
 use crate::config::PySparkUdfConfig;
 use crate::conversion::TryToPy;
@@ -173,7 +173,10 @@ impl PySparkUdtfPayload {
                         })?;
                     eval_conf.push((
                         "input_type".to_string(),
-                        build_input_types_json(argument_types, config.arrow_use_large_var_types)?,
+                        build_input_types_json(
+                            &input_types_to_fields(argument_types),
+                            config.arrow_use_large_var_types,
+                        )?,
                     ))
                 }
                 write_conf(&mut data, eval_conf);
@@ -196,8 +199,10 @@ impl PySparkUdtfPayload {
                                 input_types.len()
                             ))
                         })?;
-                    let schema_json =
-                        build_input_types_json(argument_types, config.arrow_use_large_var_types)?;
+                    let schema_json = build_input_types_json(
+                        &input_types_to_fields(argument_types),
+                        config.arrow_use_large_var_types,
+                    )?;
                     data.extend((schema_json.len() as i32).to_be_bytes());
                     data.extend(schema_json.as_bytes());
                 }
