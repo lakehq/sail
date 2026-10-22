@@ -25,7 +25,6 @@ def test_struct_field_selector_kind(spark, computed):
         df.select(payload[F.col("selector")]).collect()
 
 
-
 def test_array_item_index_from_a_column_or_an_expression(spark):
     df = spark.createDataFrame([([10, 20, 30], 1), ([40], 0), (None, 0)], "parts array<int>, i int")
 
