@@ -1,11 +1,11 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{DataType, Time64MicrosecondType, TimeUnit};
 use datafusion_common::types::NativeType;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use sail_common::utils::datetime::{MICROS_PER_HOUR, MICROS_PER_MINUTE};
 
 use crate::scalar::datetime::utils::{to_decimal128_array, to_int32_array};
 
@@ -17,9 +17,6 @@ const SECONDS_SCALE: i8 = 6;
 
 // Scale factor: 10^6, the number of microseconds per whole second.
 const SCALE_FACTOR: i128 = 1_000_000;
-
-const MICROS_PER_MINUTE: i64 = 60 * 1_000_000;
-const MICROS_PER_HOUR: i64 = 60 * MICROS_PER_MINUTE;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMakeTime {
@@ -41,10 +38,6 @@ impl SparkMakeTime {
 }
 
 impl ScalarUDFImpl for SparkMakeTime {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_make_time"
     }

@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -50,10 +48,6 @@ impl Explode {
 }
 
 impl ScalarUDFImpl for Explode {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         match self.kind {
             ExplodeKind::Explode => "explode",

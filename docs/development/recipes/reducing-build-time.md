@@ -15,7 +15,7 @@ across environments. Please consider the following items.
 
 1. Please always invoke Maturin via Hatch (e.g. `hatch run maturin develop` and `hatch run maturin build`). In this way,
    Maturin internally sets the `PYO3_PYTHON` environment variable to the absolute path of the Python interpreter of the
-   project's default Hatch environment.
+   default Hatch environment for the project.
 2. The `scripts/spark-tests/run-server.sh` script internally sets the `PYO3_PYTHON` environment variable to the
    same value as above.
 3. The [RustRover debugger configuration](./debugger) sets the `PYO3_PYTHON` environment variable to the

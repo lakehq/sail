@@ -51,12 +51,12 @@ pub fn arrow_to_glue_type(data_type: &DataType) -> CatalogResult<String> {
             Ok(format!("struct<{}>", field_strs?.join(",")))
         }
         DataType::Map(field, _) => {
-            if let DataType::Struct(fields) = field.data_type() {
-                if fields.len() == 2 {
-                    let key_type = arrow_to_glue_type(fields[0].data_type())?;
-                    let value_type = arrow_to_glue_type(fields[1].data_type())?;
-                    return Ok(format!("map<{key_type},{value_type}>"));
-                }
+            if let DataType::Struct(fields) = field.data_type()
+                && fields.len() == 2
+            {
+                let key_type = arrow_to_glue_type(fields[0].data_type())?;
+                let value_type = arrow_to_glue_type(fields[1].data_type())?;
+                return Ok(format!("map<{key_type},{value_type}>"));
             }
             Err(CatalogError::InvalidArgument(
                 "Map type must have key and value fields".to_string(),
@@ -162,32 +162,32 @@ pub fn arrow_to_iceberg_type(data_type: &DataType) -> CatalogResult<Document> {
             ))
         }
         DataType::Map(field, _) => {
-            if let DataType::Struct(fields) = field.data_type() {
-                if fields.len() == 2 {
-                    let key_type = arrow_to_iceberg_type(fields[0].data_type())?;
-                    let value_type = arrow_to_iceberg_type(fields[1].data_type())?;
-                    return Ok(Document::Object(
-                        vec![
-                            ("type".to_string(), Document::String("map".to_string())),
-                            (
-                                "key-id".to_string(),
-                                Document::Number(aws_smithy_types::Number::PosInt(1)),
-                            ),
-                            ("key".to_string(), key_type),
-                            (
-                                "value-id".to_string(),
-                                Document::Number(aws_smithy_types::Number::PosInt(2)),
-                            ),
-                            ("value".to_string(), value_type),
-                            (
-                                "value-required".to_string(),
-                                Document::Bool(!fields[1].is_nullable()),
-                            ),
-                        ]
-                        .into_iter()
-                        .collect(),
-                    ));
-                }
+            if let DataType::Struct(fields) = field.data_type()
+                && fields.len() == 2
+            {
+                let key_type = arrow_to_iceberg_type(fields[0].data_type())?;
+                let value_type = arrow_to_iceberg_type(fields[1].data_type())?;
+                return Ok(Document::Object(
+                    vec![
+                        ("type".to_string(), Document::String("map".to_string())),
+                        (
+                            "key-id".to_string(),
+                            Document::Number(aws_smithy_types::Number::PosInt(1)),
+                        ),
+                        ("key".to_string(), key_type),
+                        (
+                            "value-id".to_string(),
+                            Document::Number(aws_smithy_types::Number::PosInt(2)),
+                        ),
+                        ("value".to_string(), value_type),
+                        (
+                            "value-required".to_string(),
+                            Document::Bool(!fields[1].is_nullable()),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ));
             }
             Err(CatalogError::InvalidArgument(
                 "Map type must have key and value fields".to_string(),
@@ -249,12 +249,9 @@ fn parse_decimal_type(type_str: &str) -> CatalogResult<DataType> {
         return Ok(DataType::Decimal128(38, 18));
     }
 
-    let inner = type_str
-        .strip_prefix("decimal(")
-        .and_then(|s| s.strip_suffix(')'))
-        .ok_or_else(|| {
-            CatalogError::InvalidArgument(format!("Invalid decimal type: {type_str}"))
-        })?;
+    let inner = type_str.strip_circumfix("decimal(", ')').ok_or_else(|| {
+        CatalogError::InvalidArgument(format!("Invalid decimal type: {type_str}"))
+    })?;
 
     let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
     match parts.as_slice() {
@@ -281,8 +278,7 @@ fn parse_decimal_type(type_str: &str) -> CatalogResult<DataType> {
 
 fn parse_array_type(type_str: &str) -> CatalogResult<DataType> {
     let inner = type_str
-        .strip_prefix("array<")
-        .and_then(|s| s.strip_suffix('>'))
+        .strip_circumfix("array<", '>')
         .ok_or_else(|| CatalogError::InvalidArgument(format!("Invalid array type: {type_str}")))?;
 
     let element_type = glue_type_to_arrow(inner)?;
@@ -295,8 +291,7 @@ fn parse_array_type(type_str: &str) -> CatalogResult<DataType> {
 
 fn parse_map_type(type_str: &str) -> CatalogResult<DataType> {
     let inner = type_str
-        .strip_prefix("map<")
-        .and_then(|s| s.strip_suffix('>'))
+        .strip_circumfix("map<", '>')
         .ok_or_else(|| CatalogError::InvalidArgument(format!("Invalid map type: {type_str}")))?;
 
     // Find the comma that separates key and value types (handling nested types)
@@ -321,8 +316,7 @@ fn parse_map_type(type_str: &str) -> CatalogResult<DataType> {
 
 fn parse_struct_type(type_str: &str) -> CatalogResult<DataType> {
     let inner = type_str
-        .strip_prefix("struct<")
-        .and_then(|s| s.strip_suffix('>'))
+        .strip_circumfix("struct<", '>')
         .ok_or_else(|| CatalogError::InvalidArgument(format!("Invalid struct type: {type_str}")))?;
 
     if inner.is_empty() {
@@ -455,12 +449,11 @@ mod tests {
         let map_type = DataType::Map(Arc::new(map_field), false);
         let glue_str = arrow_to_glue_type(&map_type).unwrap();
         let roundtrip = glue_type_to_arrow(&glue_str).unwrap();
-        if let (DataType::Map(orig, _), DataType::Map(rt, _)) = (&map_type, &roundtrip) {
-            if let (DataType::Struct(of), DataType::Struct(rf)) = (orig.data_type(), rt.data_type())
-            {
-                assert_eq!(of[0].data_type(), rf[0].data_type());
-                assert_eq!(of[1].data_type(), rf[1].data_type());
-            }
+        if let (DataType::Map(orig, _), DataType::Map(rt, _)) = (&map_type, &roundtrip)
+            && let (DataType::Struct(of), DataType::Struct(rf)) = (orig.data_type(), rt.data_type())
+        {
+            assert_eq!(of[0].data_type(), rf[0].data_type());
+            assert_eq!(of[1].data_type(), rf[1].data_type());
         }
 
         let nested = DataType::List(Arc::new(Field::new(

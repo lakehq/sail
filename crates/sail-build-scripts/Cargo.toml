@@ -2,14 +2,17 @@
 name = "sail-build-scripts"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
+chumsky = { workspace = true }
 lazy_static = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+thiserror = { workspace = true }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
 syn = { workspace = true }

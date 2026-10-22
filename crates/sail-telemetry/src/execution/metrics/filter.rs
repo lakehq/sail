@@ -1,7 +1,7 @@
-use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::Metric;
+use datafusion::physical_plan::metrics::MetricValue;
+use sail_common::telemetry::KeyValue;
 
-use crate::common::KeyValue;
 use crate::execution::metrics::{MetricEmitter, MetricHandled};
 use crate::metrics::{MetricAttribute, MetricRegistry};
 
@@ -65,6 +65,7 @@ mod tests {
 
         MetricEmitterTester::new()
             .with_plan(plan)
+            .with_baseline_metrics()
             .with_expected_metrics(|registry| {
                 vec![
                     registry.execution_filter_input_row_count.name(),

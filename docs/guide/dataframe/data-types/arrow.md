@@ -6,7 +6,7 @@ rank: 3
 # Arrow Semantics
 
 Sail supports all Arrow data types, including those not supported by JVM Spark.
-This enhances interoperability with other libraries that use Arrow.
+This improves interoperability with other libraries that use Arrow.
 However, since the Spark Connect client is still used,
 you need to consider a few limitations when using these data types.
 

@@ -23,8 +23,8 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use chrono::DateTime;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::statistics::Stats;
@@ -105,6 +105,24 @@ impl DeletionVectorDescriptor {
     }
 }
 
+/// Primary key for a logical file in the Delta log: `(path, deletion_vector_unique_id)`.
+///
+/// The Delta protocol identifies a logical file by the data-file path combined
+/// with the `uniqueId` of its deletion vector, when one is present.
+pub(crate) type LogicalFileKey = (String, Option<String>);
+
+/// Compute the logical file key for an `Add` or `Remove` action.
+#[inline]
+pub(crate) fn logical_file_key(
+    path: &str,
+    deletion_vector: Option<&DeletionVectorDescriptor>,
+) -> LogicalFileKey {
+    (
+        path.to_string(),
+        deletion_vector.map(DeletionVectorDescriptor::unique_id),
+    )
+}
+
 /// Delta Lake action envelope.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -177,6 +195,26 @@ impl Hash for Add {
 }
 
 impl Add {
+    /// Exact live row count, excluding rows removed by a deletion vector.
+    pub(crate) fn num_logical_records(&self) -> Option<usize> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RowCount {
+            num_records: i64,
+        }
+        let count: RowCount = serde_json::from_str(self.stats.as_deref()?).ok()?;
+        let deleted = self
+            .deletion_vector
+            .as_ref()
+            .map(|vector| usize::try_from(vector.cardinality))
+            .transpose()
+            .ok()?
+            .unwrap_or(0);
+        usize::try_from(count.num_records)
+            .ok()?
+            .checked_sub(deleted)
+    }
+
     /// Returns parsed statistics if present.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         Stats::from_json_opt(self.stats.as_deref())
@@ -418,11 +456,9 @@ impl TryFrom<Action> for CommitAction {
             Action::Txn(t) => Ok(Self::Txn(t)),
             Action::CommitInfo(c) => Ok(Self::CommitInfo(c)),
             Action::DomainMetadata(d) => Ok(Self::DomainMetadata(d)),
-            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(
-                DeltaTableError::generic(
-                    "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
-                ),
-            ),
+            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(DeltaTableError::generic(
+                "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
+            )),
         }
     }
 }

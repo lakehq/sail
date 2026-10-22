@@ -7,6 +7,7 @@
 //! - MurmurHash3 seed hashing (matching Scala's scala.util.hashing.MurmurHash3)
 //! - XORShift algorithm with shifts 21, 35, 4
 //! - Java's Random.nextDouble() compatible output
+//! - Java's Random.nextGaussian() polar Box-Muller with cached spare value
 
 /// A Spark-compatible XORShift random number generator.
 ///
@@ -15,6 +16,8 @@
 #[derive(Debug, Clone)]
 pub struct SparkXorShiftRandom {
     seed: i64,
+    next_next_gaussian: f64,
+    have_next_next_gaussian: bool,
 }
 
 impl SparkXorShiftRandom {
@@ -24,6 +27,8 @@ impl SparkXorShiftRandom {
     pub fn new(init: i64) -> Self {
         Self {
             seed: Self::hash_seed(init),
+            next_next_gaussian: 0.0,
+            have_next_next_gaussian: false,
         }
     }
 
@@ -134,6 +139,31 @@ impl SparkXorShiftRandom {
     pub fn next_int(&mut self) -> i32 {
         self.next(32)
     }
+
+    /// Generate the next pseudorandom Gaussian value with mean 0.0 and std dev 1.0.
+    ///
+    /// This is equivalent to Java's `Random.nextGaussian()`: polar Box-Muller using
+    /// `next_double()` as the source of randomness, with the spare value from each
+    /// pair cached for the following call.
+    /// Ref: https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/util/Random.java#L695-L762
+    pub fn next_gaussian(&mut self) -> f64 {
+        if self.have_next_next_gaussian {
+            self.have_next_next_gaussian = false;
+            return self.next_next_gaussian;
+        }
+        let (v1, v2, s) = loop {
+            let v1 = 2.0 * self.next_double() - 1.0;
+            let v2 = 2.0 * self.next_double() - 1.0;
+            let s = v1 * v1 + v2 * v2;
+            if s < 1.0 && s != 0.0 {
+                break (v1, v2, s);
+            }
+        };
+        let multiplier = (-2.0 * s.ln() / s).sqrt();
+        self.next_next_gaussian = v2 * multiplier;
+        self.have_next_next_gaussian = true;
+        v1 * multiplier
+    }
 }
 
 #[cfg(test)]
@@ -157,6 +187,14 @@ mod tests {
         0.3981939745854918,
     ];
 
+    const SPARK_XORSHIFT_GAUSSIAN_SEED_42: [f64; 5] = [
+        2.384479054241165,
+        0.1920934041293524,
+        0.7337336533286575,
+        -0.5224480195716871,
+        2.060084179317831,
+    ];
+
     #[test]
     fn test_spark_xorshift_seed_1() {
         let mut rng = SparkXorShiftRandom::new(1);
@@ -176,6 +214,20 @@ mod tests {
         let mut rng = SparkXorShiftRandom::new(24);
         for expected in SPARK_XORSHIFT_SEED_24 {
             let actual = rng.next_double();
+            assert!(
+                (actual - expected).abs() < 1e-15,
+                "Expected {}, got {}",
+                expected,
+                actual
+            );
+        }
+    }
+
+    #[test]
+    fn test_spark_xorshift_gaussian_seed_42() {
+        let mut rng = SparkXorShiftRandom::new(42);
+        for expected in SPARK_XORSHIFT_GAUSSIAN_SEED_42 {
+            let actual = rng.next_gaussian();
             assert!(
                 (actual - expected).abs() < 1e-15,
                 "Expected {}, got {}",

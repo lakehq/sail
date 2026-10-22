@@ -14,8 +14,10 @@ pub mod arrow_parquet;
 pub mod base_writer;
 pub mod config;
 pub mod file_writer;
+pub mod metrics;
 pub mod partition;
 pub mod table_writer;
+pub mod variant_shredding;
 
 use crate::spec::DataFile;
 

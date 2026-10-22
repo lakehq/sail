@@ -8,7 +8,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
-use sail_flight::serve;
+use sail_flight::entrypoint::serve;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};

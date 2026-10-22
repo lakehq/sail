@@ -1,6 +1,5 @@
 Feature: Iceberg SQL time travel
 
-  @sail-only
   Rule: SQL time travel works for named and direct Iceberg reads
 
     Background:
@@ -92,7 +91,6 @@ Feature: Iceberg SQL time travel
         """
       Then query error Invalid time travel spec
 
-  @sail-only
   Rule: VERSION AS OF selects schema by Iceberg ref type
 
     Background:

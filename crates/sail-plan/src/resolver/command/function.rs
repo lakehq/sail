@@ -6,8 +6,8 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::PlanResult;
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_catalog_register_function(

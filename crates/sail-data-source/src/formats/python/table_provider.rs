@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
@@ -56,10 +55,6 @@ impl PythonTableProvider {
 
 #[async_trait]
 impl TableProvider for PythonTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

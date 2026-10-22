@@ -2,7 +2,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::logical_expr::LogicalPlan;
-use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, plan_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;

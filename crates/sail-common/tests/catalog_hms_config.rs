@@ -27,6 +27,7 @@ fn test_deserialize_hive_metastore_catalog_type() {
             kerberos_service_principal,
             min_sasl_qop,
             connect_timeout_secs,
+            cache: _,
         } => {
             assert_eq!(name, "hms");
             assert_eq!(uris, vec!["127.0.0.1:9083"]);
@@ -95,6 +96,7 @@ fn test_deserialize_hms_catalog_rejects_legacy_uri_field() {
         r#"{
             "type": "hms",
             "name": "hms",
+            "uris": [],
             "uri": "127.0.0.1:9083"
         }"#,
     )

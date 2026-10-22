@@ -13,39 +13,58 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::datatypes::{
-    validate_decimal_precision_and_scale, DataType as ArrowDataType,
-    Decimal128Type as ArrowDecimal128Type, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
+    DataType as ArrowDataType, Decimal128Type as ArrowDecimal128Type, Field as ArrowField,
+    Schema as ArrowSchema, TimeUnit, validate_decimal_precision_and_scale,
 };
-use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use parquet_variant_compute::VariantType;
 use rust_decimal::prelude::ToPrimitive;
-use sail_common::spec::{
-    EXTENSION_TYPE_NAME_KEY, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, VARIANT_EXTENSION_NAME,
+use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
+use sail_common_datafusion::variant::{
+    is_marked_variant_storage_type, is_variant_arrow_field,
+    is_variant_storage_type as is_variant_arrow_storage_type, variant_metadata_field,
 };
 use serde_json;
 
+use crate::ICEBERG_LIST_FIELD_NAME;
 use crate::spec::types::values::Literal;
 use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
-use crate::ICEBERG_LIST_FIELD_NAME;
 
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 pub const ICEBERG_FIELD_INITIAL_DEFAULT: &str = "iceberg.field.initial-default";
 pub const ICEBERG_FIELD_WRITE_DEFAULT: &str = "iceberg.field.write-default";
+const ICEBERG_ARROW_TYPE_KEY: &str = "iceberg.type";
 
-fn get_field_id(field: &ArrowField) -> Result<i32> {
-    if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-        value
-            .parse::<i32>()
-            .map_err(|e| plan_datafusion_err!("Iceberg: Failed to parse field id: {e}"))
-    } else {
-        // Default to 0 when metadata is missing; callers may reassign stable IDs later.
-        Ok(0)
-    }
+pub(crate) fn is_uuid_arrow_field(field: &ArrowField) -> bool {
+    field.data_type() == &ArrowDataType::FixedSizeBinary(16)
+        && field
+            .metadata()
+            .get(ICEBERG_ARROW_TYPE_KEY)
+            .map(String::as_str)
+            == Some("uuid")
+}
+
+pub(crate) fn iceberg_field_id(field: &ArrowField) -> Result<Option<i32>> {
+    field
+        .metadata()
+        .get(PARQUET_FIELD_ID_META_KEY)
+        .map(|value| {
+            value
+                .parse::<i32>()
+                .map_err(|e| plan_datafusion_err!("Iceberg: Failed to parse field id: {e}"))
+        })
+        .transpose()
 }
 
 fn get_field_doc(field: &ArrowField) -> Option<String> {
-    if let Some(value) = field.metadata().get(ICEBERG_ARROW_FIELD_DOC_KEY) {
+    if let Some(value) = field
+        .metadata()
+        .get("comment")
+        .or_else(|| field.metadata().get(ICEBERG_ARROW_FIELD_DOC_KEY))
+    {
         return Some(value.clone());
     }
     None
@@ -59,6 +78,56 @@ pub fn iceberg_schema_to_arrow(schema: &Schema) -> Result<ArrowSchema> {
         .map(|field| iceberg_field_to_arrow(field))
         .collect::<Result<Vec<_>>>()?;
     Ok(ArrowSchema::new(fields))
+}
+
+pub(crate) fn apply_name_mapping(
+    schema: &ArrowSchema,
+    mapping: &crate::spec::name_mapping::NameMapping,
+) -> Result<ArrowSchema> {
+    fn annotate(field: &ArrowField, aliases: &HashMap<i32, Vec<String>>) -> Result<ArrowField> {
+        let ty = match field.data_type() {
+            ArrowDataType::Struct(fields) => ArrowDataType::Struct(
+                fields
+                    .iter()
+                    .map(|field| annotate(field, aliases).map(Arc::new))
+                    .collect::<Result<Vec<_>>>()?
+                    .into(),
+            ),
+            ArrowDataType::List(element) => {
+                ArrowDataType::List(Arc::new(annotate(element, aliases)?))
+            }
+            ArrowDataType::LargeList(element) => {
+                ArrowDataType::LargeList(Arc::new(annotate(element, aliases)?))
+            }
+            ArrowDataType::Map(entries, sorted) => {
+                ArrowDataType::Map(Arc::new(annotate(entries, aliases)?), *sorted)
+            }
+            ty => ty.clone(),
+        };
+        let mut metadata = field.metadata().clone();
+        if let Some(id) = iceberg_field_id(field)?
+            && let Some(names) = aliases.get(&id)
+        {
+            metadata.insert(
+                sail_common_datafusion::schema_evolution::FIELD_ALIASES_METADATA_KEY.to_string(),
+                serde_json::to_string(names).map_err(|error| {
+                    plan_datafusion_err!("Invalid Iceberg name mapping: {error}")
+                })?,
+            );
+        }
+        Ok(field.clone().with_data_type(ty).with_metadata(metadata))
+    }
+    let aliases = mapping
+        .field_names()
+        .map_err(|error| plan_datafusion_err!("{error}"))?;
+    Ok(ArrowSchema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| annotate(field, &aliases))
+            .collect::<Result<Vec<_>>>()?,
+        schema.metadata().clone(),
+    ))
 }
 
 /// Convert Arrow schema to Iceberg schema
@@ -83,9 +152,15 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
 
     if is_iceberg_variant_type(&field.field_type) {
         metadata.insert(
-            EXTENSION_TYPE_NAME_KEY.to_string(),
-            VARIANT_EXTENSION_NAME.to_string(),
+            arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+            VariantType::NAME.to_string(),
         );
+    }
+    if matches!(
+        field.field_type.as_ref(),
+        Type::Primitive(PrimitiveType::Uuid)
+    ) {
+        metadata.insert(ICEBERG_ARROW_TYPE_KEY.to_string(), "uuid".to_string());
     }
 
     if let Some(doc) = &field.doc {
@@ -110,26 +185,51 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
         metadata.insert(ICEBERG_FIELD_WRITE_DEFAULT.to_string(), json_str);
     }
 
+    if let Some(value) = crate::schema_defaults::field_default_scalar(
+        field,
+        crate::schema_defaults::DefaultKind::Initial,
+    )? {
+        metadata.insert(
+            sail_common_datafusion::schema_evolution::FIELD_DEFAULT_METADATA_KEY.to_string(),
+            sail_common_datafusion::schema_evolution::encode_field_default(&value)?,
+        );
+    }
+    if let Some(value) = crate::schema_defaults::field_default_scalar(
+        field,
+        crate::schema_defaults::DefaultKind::Write,
+    )? {
+        metadata.insert(
+            sail_common_datafusion::column_features::ColumnFeatureKey::CurrentDefaultValue
+                .as_str()
+                .to_string(),
+            sail_common_datafusion::schema_evolution::encode_field_default(&value)?,
+        );
+    }
+
     Ok(ArrowField::new(&field.name, arrow_type, nullable).with_metadata(metadata))
 }
 
 /// Convert Arrow field to Iceberg field
 pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
-    let iceberg_type = if is_variant_arrow_field(field) {
-        if !is_unshredded_variant_arrow_type(field.data_type()) {
-            return plan_err!(
-                "Invalid Variant data type for Iceberg conversion: {}",
-                field.data_type()
-            );
-        }
-        Type::Primitive(PrimitiveType::Variant)
-    } else {
-        arrow_type_to_iceberg(field.data_type())?
-    };
+    let iceberg_type =
+        if is_variant_arrow_field(field) || is_marked_variant_storage_type(field.data_type()) {
+            if !is_variant_arrow_storage_type(field.data_type()) {
+                return plan_err!(
+                    "Invalid Variant data type for Iceberg conversion: {}",
+                    field.data_type()
+                );
+            }
+            Type::Primitive(PrimitiveType::Variant)
+        } else if is_uuid_arrow_field(field) {
+            Type::Primitive(PrimitiveType::Uuid)
+        } else {
+            arrow_type_to_iceberg(field.data_type())?
+        };
     let required = !field.is_nullable();
     let doc = get_field_doc(field);
     let mut nested_field = NestedField::new(
-        get_field_id(field)?,
+        // Callers that create a new Iceberg schema may reassign a missing field ID later.
+        iceberg_field_id(field)?.unwrap_or_default(),
         field.name().clone(),
         iceberg_type.clone(),
         required,
@@ -147,7 +247,7 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
                 nested_field = nested_field.with_initial_default(literal);
             }
             Ok(None) => {
-                return Err(plan_datafusion_err!("initial_default JSON parsed to None"));
+                nested_field = nested_field.with_initial_default(Literal::Null);
             }
             Err(e) => {
                 return Err(plan_datafusion_err!(
@@ -165,7 +265,7 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
                 nested_field = nested_field.with_write_default(literal);
             }
             Ok(None) => {
-                return Err(plan_datafusion_err!("write_default JSON parsed to None"));
+                nested_field = nested_field.with_write_default(Literal::Null);
             }
             Err(e) => {
                 return Err(plan_datafusion_err!(
@@ -180,31 +280,6 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
 
 fn is_iceberg_variant_type(iceberg_type: &Type) -> bool {
     matches!(iceberg_type, Type::Primitive(PrimitiveType::Variant))
-}
-
-fn is_variant_arrow_field(field: &ArrowField) -> bool {
-    field
-        .metadata()
-        .get(EXTENSION_TYPE_NAME_KEY)
-        .is_some_and(|name| name == VARIANT_EXTENSION_NAME)
-}
-
-fn is_unshredded_variant_arrow_type(arrow_type: &ArrowDataType) -> bool {
-    let ArrowDataType::Struct(fields) = arrow_type else {
-        return false;
-    };
-    fields.len() == 2
-        && ["metadata", "value"].iter().all(|name| {
-            fields.iter().any(|field| {
-                field.name() == name
-                    && matches!(
-                        field.data_type(),
-                        ArrowDataType::Binary
-                            | ArrowDataType::LargeBinary
-                            | ArrowDataType::BinaryView
-                    )
-            })
-        })
 }
 
 /// Convert Iceberg type to Arrow data type
@@ -323,7 +398,8 @@ pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowData
         }
         PrimitiveType::Variant => ArrowDataType::Struct(
             vec![
-                ArrowField::new("metadata", ArrowDataType::Binary, false),
+                // Keep Variant identity when scalar folding drops the parent field metadata.
+                variant_metadata_field(ArrowDataType::Binary, false),
                 ArrowField::new("value", ArrowDataType::Binary, false),
             ]
             .into(),
@@ -381,7 +457,6 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
         ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
             PrimitiveType::String
         }
-        ArrowDataType::FixedSizeBinary(16) => PrimitiveType::Uuid,
         ArrowDataType::FixedSizeBinary(size) => PrimitiveType::Fixed(*size as u64),
         ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
             PrimitiveType::Binary
@@ -556,7 +631,7 @@ mod tests {
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                 PrimitiveType::TimestamptzNs,
             ),
-            (ArrowDataType::FixedSizeBinary(16), PrimitiveType::Uuid),
+            (ArrowDataType::FixedSizeBinary(16), PrimitiveType::Fixed(16)),
             (ArrowDataType::FixedSizeBinary(10), PrimitiveType::Fixed(10)),
         ];
 
@@ -700,6 +775,36 @@ mod tests {
         );
         assert!(price_field.required);
         assert_eq!(price_field.doc, Some("Price in USD".to_string()));
+    }
+
+    #[test]
+    fn test_arrow_shredded_variant_to_iceberg_conversion() {
+        let arrow_field = ArrowField::new(
+            "payload",
+            ArrowDataType::Struct(
+                vec![
+                    ArrowField::new("metadata", ArrowDataType::BinaryView, false),
+                    ArrowField::new("typed_value", ArrowDataType::Int64, true),
+                ]
+                .into(),
+            ),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "4".to_string(),
+        )]))
+        .with_extension_type(VariantType);
+
+        let iceberg_field = arrow_field_to_iceberg(&arrow_field).expect("variant field conversion");
+
+        assert_eq!(iceberg_field.id, 4);
+        assert_eq!(iceberg_field.name, "payload");
+        assert_eq!(
+            *iceberg_field.field_type,
+            Type::Primitive(PrimitiveType::Variant)
+        );
+        assert!(!iceberg_field.required);
     }
 
     #[expect(clippy::panic)]

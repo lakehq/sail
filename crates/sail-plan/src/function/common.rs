@@ -3,13 +3,16 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::prelude::SessionContext;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
-    cast, expr, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl,
-    WindowFrame, WindowFunctionDefinition, WindowUDF,
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl, WindowFrame,
+    WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
+use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
@@ -203,6 +206,7 @@ pub struct AggFunctionInput<'a> {
     pub ignore_nulls: Option<bool>,
     pub filter: Option<Box<expr::Expr>>,
     pub order_by: Vec<expr::Sort>,
+    pub preserve_count_argument_columns: bool,
     pub function_context: FunctionContextInput<'a>,
 }
 
@@ -235,6 +239,7 @@ impl AggFunctionBuilder {
                 ignore_nulls,
                 filter,
                 order_by,
+                preserve_count_argument_columns: _,
                 function_context: _function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
@@ -263,11 +268,7 @@ impl AggFunctionBuilder {
 
     pub fn unknown(name: &str) -> AggFunction {
         let name = name.to_string();
-        Arc::new(move |_| {
-            Err(PlanError::todo(format!(
-                "unknown aggregate function: {name}"
-            )))
-        })
+        Arc::new(move |_| Err(PlanError::todo(format!("function: {name}"))))
     }
 }
 
@@ -396,11 +397,98 @@ pub(crate) fn get_arguments_and_null_treatment(
             _ => {
                 return Err(PlanError::invalid(
                     "requires a boolean literal as the second argument",
-                ))
+                ));
             }
         };
         Ok((vec![expr], null_treatment))
     } else {
         Err(PlanError::invalid("requires 1 or 2 arguments"))
     }
+}
+
+pub(crate) fn hll_args_with_default_lg(
+    arguments: Vec<expr::Expr>,
+    function_name: &str,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(DEFAULT_HLL_LG_CONFIG_K)])
+        }
+        2 => {
+            let (value, lg_config_k) = arguments.two()?;
+            Ok(vec![value, cast(lg_config_k, DataType::Int32)])
+        }
+        count => Err(PlanError::invalid(format!(
+            "{function_name} requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn hll_union_args_with_default_allow_different_lg(
+    arguments: Vec<expr::Expr>,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(false)])
+        }
+        2 => {
+            let (value, allow_different_lg_config_k) = arguments.two()?;
+            Ok(vec![
+                value,
+                cast(allow_different_lg_config_k, DataType::Boolean),
+            ])
+        }
+        count => Err(PlanError::invalid(format!(
+            "hll_union_agg requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn count_min_sketch_args(arguments: Vec<expr::Expr>) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        4 => {
+            let (value, eps, confidence, seed) = arguments.four()?;
+            // Spark requires `eps` and `confidence` to be DOUBLE literals and rejects
+            // other types (including DECIMAL/FLOAT). Pass them through unchanged so the
+            // aggregate's type validation enforces the same rule, instead of casting and
+            // silently accepting types Spark rejects.
+            Ok(vec![value, eps, confidence, seed])
+        }
+        count => Err(PlanError::invalid(format!(
+            "count_min_sketch requires 4 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn theta_args_with_default_lg(
+    arguments: Vec<expr::Expr>,
+    function_name: &str,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(DEFAULT_THETA_LG_NOM_ENTRIES)])
+        }
+        2 => {
+            let (value, lg_nom_entries) = arguments.two()?;
+            Ok(vec![value, cast(lg_nom_entries, DataType::Int32)])
+        }
+        count => Err(PlanError::invalid(format!(
+            "{function_name} requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+// TODO: Match Catalyst constant folding and NullPropagation before extracting opaque
+//  Python or Variant scalar calls, so a foldable NULL can eliminate them.
+pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool> {
+    Ok(body.exists(|expression| {
+        Ok(matches!(
+            expression,
+            expr::Expr::ScalarFunction(function)
+                if function.func.inner().is::<SparkCastToVariant>()
+        ))
+    })?)
 }

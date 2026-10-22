@@ -99,6 +99,10 @@ impl RelationNode {
 pub struct JoinEdge {
     /// Set of all relations participating in this join condition.
     pub join_set: JoinSet,
+    /// One endpoint of the hyperedge.
+    pub left_endpoint: JoinSet,
+    /// The other endpoint of the hyperedge.
+    pub right_endpoint: JoinSet,
     /// Join filter expression (e.g., a.col1 = b.col1 AND a.col2 > 10).
     /// Non-equi joins use complex expressions.
     pub filter: Arc<dyn PhysicalExpr>,
@@ -114,13 +118,16 @@ pub struct JoinEdge {
 
 impl JoinEdge {
     pub fn new(
-        join_set: JoinSet,
+        left_endpoint: JoinSet,
+        right_endpoint: JoinSet,
         filter: Arc<dyn PhysicalExpr>,
         join_type: JoinType,
         equi_pairs: Vec<(StableColumn, StableColumn)>,
     ) -> Self {
         Self {
-            join_set,
+            join_set: left_endpoint | right_endpoint,
+            left_endpoint,
+            right_endpoint,
             filter,
             join_type,
             null_equality: NullEquality::NullEqualsNothing,
@@ -129,47 +136,14 @@ impl JoinEdge {
     }
 }
 
-/// Information about a neighbor relation and its connecting edges.
-#[derive(Debug, Clone)]
-pub struct NeighborInfo {
-    /// The neighbor JoinSet
-    pub neighbor: JoinSet,
-    /// Indices of connecting edges in the original edges vector
-    pub edge_indices: Vec<usize>,
-}
-
-impl NeighborInfo {
-    pub fn new(neighbor: JoinSet, edge_indices: Vec<usize>) -> Self {
-        Self {
-            neighbor,
-            edge_indices,
-        }
-    }
-}
-
-/// Optimized query edge structure using nested HashMap for fast neighbor lookup.
-/// This structure forms a trie-like tree where each path represents a subset of relations.
-#[derive(Debug, Clone, Default)]
-pub struct QueryEdge {
-    /// Direct neighbors accessible from this node
-    pub neighbors: Vec<NeighborInfo>,
-    /// Child nodes indexed by relation ID, forming the trie structure
-    pub children: HashMap<usize, QueryEdge>,
-}
-
-impl QueryEdge {}
-
 /// Query graph containing all relations and join conditions.
-/// Uses an optimized trie-like structure for fast neighbor lookup.
 #[derive(Debug, Clone, Default)]
 pub struct QueryGraph {
     pub relations: Vec<RelationNode>,
     /// Original edges vector for backward compatibility and edge access by index
     pub edges: Vec<JoinEdge>,
-    /// Root of the trie structure for fast neighbor lookup
-    root_edge: QueryEdge,
-    /// Cache for neighbor lookups to avoid repeated computation
-    neighbor_cache: HashMap<JoinSet, Vec<usize>>,
+    /// Cache for neighbor lookups before applying the caller's forbidden set.
+    neighbor_cache: HashMap<JoinSet, Vec<JoinSet>>,
 }
 
 impl QueryGraph {
@@ -182,374 +156,178 @@ impl QueryGraph {
         self.relations.push(relation);
     }
 
-    /// Adds a join edge to the query graph and updates the trie structure.
+    /// Adds a join edge to the query graph.
     pub fn add_edge(&mut self, edge: JoinEdge) -> Result<(), DataFusionError> {
-        let edge_index = self.edges.len();
         self.edges.push(edge);
 
         // Clear cache since we're adding a new edge
         self.neighbor_cache.clear();
-
-        // Update trie structure for this edge
-        self.update_trie_for_edge(edge_index).map_err(|e| {
-            DataFusionError::Internal(format!("Failed to update trie for edge: {}", e))
-        })?;
         Ok(())
     }
 
-    /// Updates the trie structure for a newly added edge.
-    fn update_trie_for_edge(&mut self, edge_index: usize) -> Result<(), DataFusionError> {
-        let edge = &self.edges[edge_index];
-        let relations: Vec<usize> = edge.join_set.iter().collect();
-
-        // For each subset of relations in this edge, create trie paths
-        // and add neighbors for all other relations in the edge
-        for i in 0..relations.len() {
-            for subset_size in 1..=relations.len() {
-                // Generate all subsets of the given size that include relations[i]
-                self.generate_subsets_and_update_trie(&relations, subset_size, i, edge_index)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Generates subsets and updates trie structure.
-    fn generate_subsets_and_update_trie(
-        &mut self,
-        relations: &[usize],
-        subset_size: usize,
-        must_include: usize,
-        edge_index: usize,
-    ) -> Result<(), DataFusionError> {
-        if subset_size == 1 {
-            let subset = vec![relations[must_include]];
-            let remaining: Vec<usize> = relations
-                .iter()
-                .filter(|&&r| r != relations[must_include])
-                .copied()
-                .collect();
-
-            if !remaining.is_empty() {
-                let neighbor_set = JoinSet::from_iter(remaining.iter().copied())?;
-                self.create_trie_path_and_add_neighbor(&subset, neighbor_set, edge_index);
-            }
-            return Ok(());
-        }
-
-        // Generate all combinations of subset_size that include must_include
-        let mut indices = vec![0; subset_size];
-        indices[0] = must_include;
-
-        self.generate_combinations_recursive(
-            relations,
-            &mut indices,
-            1,
-            must_include + 1,
-            subset_size,
-            edge_index,
-        )?;
-        Ok(())
-    }
-
-    /// Recursively generates combinations and updates trie.
-    fn generate_combinations_recursive(
-        &mut self,
-        relations: &[usize],
-        indices: &mut [usize],
-        pos: usize,
-        start: usize,
-        subset_size: usize,
-        edge_index: usize,
-    ) -> Result<(), DataFusionError> {
-        if pos == subset_size {
-            let subset: Vec<usize> = indices.iter().map(|&i| relations[i]).collect();
-            let remaining: Vec<usize> = relations
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !indices.contains(i))
-                .map(|(_, &r)| r)
-                .collect();
-
-            if !remaining.is_empty() {
-                let neighbor_set = JoinSet::from_iter(remaining.iter().copied())?;
-                self.create_trie_path_and_add_neighbor(&subset, neighbor_set, edge_index);
-            }
-            return Ok(());
-        }
-
-        for i in start..relations.len() {
-            indices[pos] = i;
-            self.generate_combinations_recursive(
-                relations,
-                indices,
-                pos + 1,
-                i + 1,
-                subset_size,
-                edge_index,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Creates a trie path for the given subset and adds a neighbor.
-    fn create_trie_path_and_add_neighbor(
-        &mut self,
-        subset: &[usize],
-        neighbor: JoinSet,
-        edge_index: usize,
-    ) {
-        let mut sorted_subset = subset.to_vec();
-        sorted_subset.sort_unstable();
-
-        // Navigate to the correct position in the trie
-        let mut current = &mut self.root_edge;
-        for &relation_id in &sorted_subset {
-            current = current.children.entry(relation_id).or_default();
-        }
-
-        // Add or update neighbor information
-        if let Some(existing) = current
-            .neighbors
-            .iter_mut()
-            .find(|n| n.neighbor == neighbor)
-        {
-            existing.edge_indices.push(edge_index);
+    /// Gets all neighbor hypernodes of a given JoinSet, excluding nodes in `forbidden`.
+    pub fn get_neighbors(&mut self, nodes: JoinSet, forbidden: JoinSet) -> Vec<JoinSet> {
+        let neighbors = if let Some(cached) = self.neighbor_cache.get(&nodes) {
+            cached.clone()
         } else {
-            current
-                .neighbors
-                .push(NeighborInfo::new(neighbor, vec![edge_index]));
+            let mut candidates = Vec::new();
+
+            for edge in &self.edges {
+                if edge.left_endpoint.is_subset(&nodes)
+                    && !edge.right_endpoint.is_empty()
+                    && edge.right_endpoint.is_disjoint(&nodes)
+                {
+                    candidates.push(edge.right_endpoint);
+                }
+                if edge.right_endpoint.is_subset(&nodes)
+                    && !edge.left_endpoint.is_empty()
+                    && edge.left_endpoint.is_disjoint(&nodes)
+                {
+                    candidates.push(edge.left_endpoint);
+                }
+            }
+
+            let result = Self::minimize_neighbor_sets(candidates);
+            self.neighbor_cache.insert(nodes, result.clone());
+            result
+        };
+
+        if forbidden.is_empty() {
+            neighbors
+        } else {
+            neighbors
+                .into_iter()
+                .filter(|neighbor| neighbor.is_disjoint(&forbidden))
+                .collect()
         }
     }
 
-    /// Gets all neighbors of a given JoinSet efficiently using the trie structure.
-    pub fn get_neighbors(&mut self, nodes: JoinSet) -> Vec<usize> {
-        // Check cache first
-        if let Some(cached) = self.neighbor_cache.get(&nodes) {
-            return cached.clone();
+    fn minimize_neighbor_sets(mut candidates: Vec<JoinSet>) -> Vec<JoinSet> {
+        candidates.sort_unstable_by(|left, right| {
+            left.cardinality()
+                .cmp(&right.cardinality())
+                .then_with(|| left.bits().cmp(&right.bits()))
+        });
+        candidates.dedup();
+
+        let mut result: Vec<JoinSet> = Vec::new();
+        for candidate in candidates {
+            if result.iter().any(|existing| existing.is_subset(&candidate)) {
+                continue;
+            }
+            result.push(candidate);
         }
-
-        let mut neighbors = std::collections::HashSet::new();
-        let relations: Vec<usize> = nodes.iter().collect();
-
-        // For each subset of the given nodes, find neighbors in the trie
-        for subset_size in 1..=relations.len() {
-            self.find_neighbors_for_subsets(&relations, subset_size, &mut neighbors);
-        }
-
-        let mut result: Vec<usize> = neighbors.into_iter().collect();
-        result.sort_unstable();
-
-        // Cache the result
-        self.neighbor_cache.insert(nodes, result.clone());
+        result.sort_unstable_by_key(|set| set.bits());
         result
     }
 
-    /// Finds neighbors for all subsets of given size.
-    fn find_neighbors_for_subsets(
-        &self,
-        relations: &[usize],
-        subset_size: usize,
-        neighbors: &mut std::collections::HashSet<usize>,
-    ) {
-        if subset_size == 1 {
-            for &rel in relations {
-                self.find_neighbors_in_trie(&[rel], neighbors);
-            }
-            return;
-        }
-
-        // Generate all combinations of the given size
-        let mut indices = vec![0; subset_size];
-        self.generate_subsets_for_neighbor_search(
-            relations,
-            &mut indices,
-            0,
-            0,
-            subset_size,
-            neighbors,
-        );
-    }
-
-    /// Recursively generates subsets for neighbor search.
-    fn generate_subsets_for_neighbor_search(
-        &self,
-        relations: &[usize],
-        indices: &mut [usize],
-        pos: usize,
-        start: usize,
-        subset_size: usize,
-        neighbors: &mut std::collections::HashSet<usize>,
-    ) {
-        if pos == subset_size {
-            let subset: Vec<usize> = indices.iter().map(|&i| relations[i]).collect();
-            self.find_neighbors_in_trie(&subset, neighbors);
-            return;
-        }
-
-        for i in start..relations.len() {
-            indices[pos] = i;
-            self.generate_subsets_for_neighbor_search(
-                relations,
-                indices,
-                pos + 1,
-                i + 1,
-                subset_size,
-                neighbors,
-            );
-        }
-    }
-
-    /// Finds neighbors in the trie for a specific subset.
-    fn find_neighbors_in_trie(
-        &self,
-        subset: &[usize],
-        neighbors: &mut std::collections::HashSet<usize>,
-    ) {
-        let mut sorted_subset = subset.to_vec();
-        sorted_subset.sort_unstable();
-
-        // Navigate to the position in the trie
-        let mut current = &self.root_edge;
-        for &relation_id in &sorted_subset {
-            if let Some(child) = current.children.get(&relation_id) {
-                current = child;
-            } else {
-                return; // Path doesn't exist
-            }
-        }
-
-        // Collect all neighbors from this position
-        for neighbor_info in &current.neighbors {
-            for rel in neighbor_info.neighbor.iter() {
-                neighbors.insert(rel);
-            }
-        }
-    }
-
-    /// Gets all edges connecting two disjoint subsets `left` and `right` using the optimized structure.
+    /// Gets all edges connecting two disjoint subsets `left` and `right`.
     pub fn get_connecting_edge_indices(&self, left: JoinSet, right: JoinSet) -> Vec<usize> {
         if !left.is_disjoint(&right) {
             return vec![];
         }
 
-        let mut edge_indices = std::collections::HashSet::new();
-        let left_relations: Vec<usize> = left.iter().collect();
-
-        // For each subset of left relations, find connections to right
-        for subset_size in 1..=left_relations.len() {
-            self.find_connecting_edges_for_subsets(
-                &left_relations,
-                subset_size,
-                right,
-                &mut edge_indices,
-            );
-        }
-
-        let union = left | right;
-
-        // NOTE: The trie neighbor lookup can surface hyperedges that *overlap* `left` and
-        // `right` but require additional relations not yet present. Those edges must not be used
-        // to connect two subsets in the DP enumerator, otherwise we may materialize only part of a
-        // multi-relation join predicate (e.g. split a compound join key across different joins),
-        // creating huge intermediates.
-        edge_indices
-            .into_iter()
-            .filter(|&idx| {
-                let Some(edge) = self.edges.get(idx) else {
-                    return false;
-                };
-                edge.join_set.is_subset(&union)
-                    && !edge.join_set.is_disjoint(&left)
-                    && !edge.join_set.is_disjoint(&right)
+        let parent = left | right;
+        self.edges
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, edge)| {
+                // A predicate can be evaluated at the binary join that is the lowest common
+                // ancestor of all relations it references. For complex hyperedges, one endpoint
+                // may be split across the two child subplans (for example `{t1,t2} -- {t3}` at
+                // the split `{t1,t3} | {t2}`). Endpoint-only checks miss those edges; the correct
+                // condition is that all referenced relations are now present and the predicate is
+                // not wholly contained in either child.
+                let is_available = edge.join_set.is_subset(&parent);
+                let spans_children =
+                    !edge.join_set.is_subset(&left) && !edge.join_set.is_subset(&right);
+                (is_available && spans_children).then_some(idx)
             })
             .collect()
     }
 
-    /// Finds connecting edges for all subsets of given size.
-    fn find_connecting_edges_for_subsets(
+    /// Returns true when a candidate CSG-CMP pair can be emitted without crossing a
+    /// non-commutative join boundary.
+    pub fn is_join_pair_legal(
         &self,
-        relations: &[usize],
-        subset_size: usize,
-        target: JoinSet,
-        edge_indices: &mut std::collections::HashSet<usize>,
-    ) {
-        if subset_size == 1 {
-            for &rel in relations {
-                self.find_connecting_edges_in_trie(&[rel], target, edge_indices);
+        left: JoinSet,
+        right: JoinSet,
+        edge_indices: &[usize],
+    ) -> bool {
+        let parent = left | right;
+
+        for (edge_index, edge) in self.edges.iter().enumerate() {
+            if edge.join_type == JoinType::Inner {
+                continue;
             }
-            return;
+
+            let barrier = edge.join_set;
+            let overlaps_barrier = !parent.is_disjoint(&barrier);
+            if !overlaps_barrier {
+                continue;
+            }
+
+            // Do not join a partial non-inner region with outside relations. The non-inner join
+            // must be materialized as its original semantic unit before outside joins can use it.
+            if !parent.is_subset(&barrier) && !barrier.is_subset(&parent) {
+                return false;
+            }
+
+            let emits_this_edge = edge_indices.contains(&edge_index);
+            if parent == barrier {
+                // The plan for a non-inner join's full original region must be formed by that
+                // non-inner edge, not by an unrelated inner/cross edge over the same relation set.
+                if !emits_this_edge {
+                    return false;
+                }
+
+                // Preserve original left/right orientation for non-inner joins. Full joins are
+                // commutative in principle, but keeping the original orientation avoids output-map
+                // and null-supplying-side surprises in this conservative implementation.
+                if !(edge.left_endpoint.is_subset(&left) && edge.right_endpoint.is_subset(&right)) {
+                    return false;
+                }
+            } else if emits_this_edge {
+                // A non-inner edge must not be applied after outside relations have already been
+                // joined into either side.
+                return false;
+            }
         }
 
-        // Generate all combinations of the given size
-        let mut indices = vec![0; subset_size];
-        self.generate_subsets_for_edge_search(
-            relations,
-            &mut indices,
-            0,
-            0,
-            subset_size,
-            target,
-            edge_indices,
-        );
+        true
     }
 
-    /// Recursively generates subsets for edge search.
-    fn generate_subsets_for_edge_search(
-        &self,
-        relations: &[usize],
-        indices: &mut [usize],
-        pos: usize,
-        start: usize,
-        subset_size: usize,
-        target: JoinSet,
-        edge_indices: &mut std::collections::HashSet<usize>,
-    ) {
-        if pos == subset_size {
-            let subset: Vec<usize> = indices.iter().map(|&i| relations[i]).collect();
-            self.find_connecting_edges_in_trie(&subset, target, edge_indices);
-            return;
-        }
-
-        for i in start..relations.len() {
-            indices[pos] = i;
-            self.generate_subsets_for_edge_search(
-                relations,
-                indices,
-                pos + 1,
-                i + 1,
-                subset_size,
-                target,
-                edge_indices,
-            );
-        }
+    /// Returns true when DP may choose either physical child order for these edges.
+    pub fn can_swap_physical_order(&self, edge_indices: &[usize]) -> bool {
+        edge_indices.iter().all(|&idx| {
+            self.edges
+                .get(idx)
+                .is_some_and(|edge| edge.join_type == JoinType::Inner)
+        })
     }
 
-    /// Finds connecting edges in the trie for a specific subset to target.
-    fn find_connecting_edges_in_trie(
-        &self,
-        subset: &[usize],
-        target: JoinSet,
-        edge_indices: &mut std::collections::HashSet<usize>,
-    ) {
-        let mut sorted_subset = subset.to_vec();
-        sorted_subset.sort_unstable();
+    pub fn join_type_for_edges(&self, edge_indices: &[usize]) -> Result<JoinType> {
+        let Some(&first_index) = edge_indices.first() else {
+            return Ok(JoinType::Inner);
+        };
+        let first = self.edges.get(first_index).ok_or_else(|| {
+            DataFusionError::Internal(format!("Edge with index {} not found", first_index))
+        })?;
+        let join_type = first.join_type;
 
-        // Navigate to the position in the trie
-        let mut current = &self.root_edge;
-        for &relation_id in &sorted_subset {
-            if let Some(child) = current.children.get(&relation_id) {
-                current = child;
-            } else {
-                return; // Path doesn't exist
+        for &edge_index in edge_indices.iter().skip(1) {
+            let edge = self.edges.get(edge_index).ok_or_else(|| {
+                DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
+            })?;
+            if edge.join_type != join_type {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: mixed join types in one physical join: {:?} and {:?}",
+                    join_type, edge.join_type
+                )));
             }
         }
 
-        // Check if any neighbor overlaps with target
-        for neighbor_info in &current.neighbors {
-            if !neighbor_info.neighbor.is_disjoint(&target) {
-                edge_indices.extend(&neighbor_info.edge_indices);
-            }
-        }
+        Ok(join_type)
     }
 
     /// Gets the number of relations.
@@ -662,29 +440,42 @@ mod tests {
         }
 
         // Create a join edge between relations 0 and 1
-        let join_set_01 = JoinSet::from_iter([0, 1]).unwrap();
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
-        let edge = JoinEdge::new(join_set_01, filter, JoinType::Inner, vec![]);
+        let edge = JoinEdge::new(
+            JoinSet::new_singleton(0).unwrap(),
+            JoinSet::new_singleton(1).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
         graph.add_edge(edge).unwrap();
 
         // Create a join edge between relations 1 and 2
-        let join_set_12 = JoinSet::from_iter([1, 2]).unwrap();
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
-        let edge = JoinEdge::new(join_set_12, filter, JoinType::Inner, vec![]);
+        let edge = JoinEdge::new(
+            JoinSet::new_singleton(1).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
         graph.add_edge(edge).unwrap();
 
         // Test neighbor lookup for relation 0
         let set_0 = JoinSet::new_singleton(0).unwrap();
-        let neighbors = graph.get_neighbors(set_0);
-        assert_eq!(neighbors, vec![1]); // Relation 0 connected to relation 1
+        let neighbors = graph.get_neighbors(set_0, JoinSet::new());
+        assert_eq!(neighbors, vec![JoinSet::new_singleton(1).unwrap()]); // Relation 0 connected to relation 1
 
         // Test neighbor lookup for relation 1
         let set_1 = JoinSet::new_singleton(1).unwrap();
-        let mut neighbors = graph.get_neighbors(set_1);
-        neighbors.sort();
-        let expected = vec![0, 2];
+        let mut neighbors = graph.get_neighbors(set_1, JoinSet::new());
+        neighbors.sort_by_key(|neighbor| neighbor.bits());
+        let expected = vec![
+            JoinSet::new_singleton(0).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
+        ];
         assert_eq!(neighbors, expected); // Relation 1 connected to relations 0 and 2
 
         // Test connecting edges lookup
@@ -695,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn test_trie_structure_with_complex_edges() {
+    fn test_hyperedge_neighbors_use_endpoint_semantics() {
         use std::sync::Arc;
 
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -723,21 +514,28 @@ mod tests {
             graph.add_relation(relation);
         }
 
-        // Create a complex join edge involving relations 0, 1, and 2
-        let join_set_012 = JoinSet::from_iter([0, 1, 2]).unwrap();
+        // Create a complex join edge with endpoint {0, 1} connected to endpoint {2}.
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
-        let edge = JoinEdge::new(join_set_012, filter, JoinType::Inner, vec![]);
+        let edge = JoinEdge::new(
+            JoinSet::from_iter([0, 1]).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
         graph.add_edge(edge).unwrap();
 
-        // Test that all relations in the edge can find each other as neighbors
         let set_0 = JoinSet::new_singleton(0).unwrap();
-        let neighbors_0 = graph.get_neighbors(set_0);
-        assert!(neighbors_0.contains(&1) && neighbors_0.contains(&2));
+        let neighbors_0 = graph.get_neighbors(set_0, JoinSet::new());
+        assert!(
+            neighbors_0.is_empty(),
+            "endpoint {{0, 1}} must be complete before {{2}} is considered a neighbor"
+        );
 
         let set_01 = JoinSet::from_iter([0, 1]).unwrap();
-        let neighbors_01 = graph.get_neighbors(set_01);
-        assert!(neighbors_01.contains(&2));
+        let neighbors_01 = graph.get_neighbors(set_01, JoinSet::new());
+        assert_eq!(neighbors_01, vec![JoinSet::new_singleton(2).unwrap()]);
 
         // A hyperedge {0,1,2} must NOT be treated as a binary connecting edge between {0} and {1}
         // because the join condition for that edge isn't fully available until relation 2 is
@@ -748,5 +546,93 @@ mod tests {
             connecting_edge_indices.is_empty(),
             "expected no connecting edges between {{0}} and {{1}} from a hyperedge {{0,1,2}}"
         );
+    }
+
+    #[test]
+    fn test_connecting_edges_include_complex_hyperedge_split_across_endpoint() {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::Column;
+
+        let mut graph = QueryGraph::new();
+        for relation_id in 0..3 {
+            graph.add_relation(create_test_relation(relation_id));
+        }
+
+        let filter =
+            Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+        let edge = JoinEdge::new(
+            JoinSet::from_iter([0, 1]).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
+        graph.add_edge(edge).unwrap();
+
+        let csg = JoinSet::from_iter([0, 2]).unwrap();
+        let cmp = JoinSet::new_singleton(1).unwrap();
+        assert_eq!(graph.get_connecting_edge_indices(csg, cmp), vec![0]);
+
+        let incomplete_left = JoinSet::new_singleton(0).unwrap();
+        let incomplete_right = JoinSet::new_singleton(1).unwrap();
+        assert!(
+            graph
+                .get_connecting_edge_indices(incomplete_left, incomplete_right)
+                .is_empty(),
+            "hyperedge must not be emitted before all referenced relations are present"
+        );
+    }
+
+    #[test]
+    fn test_non_inner_join_legality_preserves_boundary_and_orientation() {
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::Column;
+
+        let mut graph = QueryGraph::new();
+        for relation_id in 0..3 {
+            graph.add_relation(create_test_relation(relation_id));
+        }
+
+        let filter =
+            Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+        let left_join = JoinEdge::new(
+            JoinSet::new_singleton(0).unwrap(),
+            JoinSet::new_singleton(1).unwrap(),
+            filter,
+            JoinType::Left,
+            vec![],
+        );
+        graph.add_edge(left_join).unwrap();
+
+        let filter =
+            Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
+        let outside_inner = JoinEdge::new(
+            JoinSet::from_iter([0, 1]).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
+            filter,
+            JoinType::Inner,
+            vec![],
+        );
+        graph.add_edge(outside_inner).unwrap();
+
+        let a = JoinSet::new_singleton(0).unwrap();
+        let b = JoinSet::new_singleton(1).unwrap();
+        let c = JoinSet::new_singleton(2).unwrap();
+        let ab = a | b;
+
+        assert!(graph.is_join_pair_legal(a, b, &[0]));
+        assert!(
+            !graph.is_join_pair_legal(b, a, &[0]),
+            "non-inner edge must keep original left/right orientation"
+        );
+        assert!(
+            !graph.is_join_pair_legal(a, b, &[]),
+            "the full non-inner boundary cannot be formed without the non-inner edge"
+        );
+        assert!(
+            !graph.is_join_pair_legal(a, c, &[1]),
+            "a partial non-inner boundary cannot join with outside relations"
+        );
+        assert!(graph.is_join_pair_legal(ab, c, &[1]));
     }
 }

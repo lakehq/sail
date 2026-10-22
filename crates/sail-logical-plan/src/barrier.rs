@@ -1,7 +1,7 @@
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion_common::{plan_err, DFSchemaRef};
+use datafusion_common::{DFSchemaRef, plan_err};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common_datafusion::utils::items::ItemTaker;
 

@@ -1,4 +1,4 @@
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 
 /// Spark's default pattern when an empty string is passed to format_number.
 const DEFAULT_PATTERN: &str = "#,###,###,###,###,###,##0";

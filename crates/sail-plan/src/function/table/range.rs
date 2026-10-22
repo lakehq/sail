@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -6,8 +5,8 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::{Session, TableFunctionImpl, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{logical_plan, Expr, LogicalPlan, TableType, UserDefinedLogicalNodeCore};
+use datafusion_common::{Result, exec_err};
+use datafusion_expr::{Expr, LogicalPlan, TableType, UserDefinedLogicalNodeCore, logical_plan};
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
 use sail_logical_plan::range::RangeNode;
 use sail_physical_plan::range::RangeExec;
@@ -19,10 +18,6 @@ struct RangeTableProvider {
 
 #[tonic::async_trait]
 impl TableProvider for RangeTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.node.schema().inner().clone()
     }
@@ -106,7 +101,7 @@ impl TableFunctionImpl for RangeTableFunction {
                 return exec_err!(
                     "expected 1 to 4 arguments for range, but got {}",
                     args.len()
-                )
+                );
             }
         };
         let node = RangeNode::try_new("id".to_string(), start, end, step, num_partitions)?;

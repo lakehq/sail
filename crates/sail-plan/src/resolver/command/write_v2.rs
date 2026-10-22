@@ -2,9 +2,9 @@ use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
 use crate::error::PlanResult;
+use crate::resolver::PlanResolver;
 use crate::resolver::command::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     /// Resolves the write operation for the Spark DataFrameWriter v2 API.

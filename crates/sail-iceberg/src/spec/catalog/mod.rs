@@ -166,6 +166,7 @@ pub enum TableRequirement {
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum TableUpdate {
     UpgradeFormatVersion {
+        #[serde(rename = "format-version")]
         format_version: FormatVersion,
     },
     AssignUuid {
@@ -186,6 +187,7 @@ pub enum TableUpdate {
         spec_id: i32,
     },
     AddSortOrder {
+        #[serde(rename = "sort-order")]
         sort_order: SortOrder,
     },
     SetDefaultSortOrder {
@@ -245,7 +247,7 @@ pub enum TableUpdate {
 }
 
 pub(super) mod _serde {
-    use serde::{Deserialize as _, Deserializer};
+    use serde::Deserializer;
 
     use super::*;
     pub(super) fn deserialize_snapshot<'de, D>(
@@ -376,10 +378,13 @@ mod _serde_set_statistics {
             snapshot_id,
             statistics,
         } = SetStatistics::deserialize(deserializer)?;
-        if let Some(snapshot_id) = snapshot_id {
-            if snapshot_id != statistics.snapshot_id {
-                return Err(serde::de::Error::custom(format!("Snapshot id to set {snapshot_id} does not match the statistics file snapshot id {}", statistics.snapshot_id)));
-            }
+        if let Some(snapshot_id) = snapshot_id
+            && snapshot_id != statistics.snapshot_id
+        {
+            return Err(serde::de::Error::custom(format!(
+                "Snapshot id to set {snapshot_id} does not match the statistics file snapshot id {}",
+                statistics.snapshot_id
+            )));
         }
         Ok(statistics)
     }

@@ -2,15 +2,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
+use datafusion::functions::expr_fn::coalesce;
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, regr, stddev,
-    sum, variance,
+    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, stddev, sum,
+    variance,
 };
 use datafusion::functions_nested::string::array_to_string;
-use datafusion_common::ScalarValue;
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
+use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable, ScalarUDF};
+use datafusion_expr::{
+    AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
+};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
@@ -18,21 +22,30 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
+use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::regr::{Regr, RegrType};
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::theta_sketch::{
+    ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
+};
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
+    AggFunction, AggFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
+    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
+    theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -64,6 +77,164 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn spark_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let AggFunctionInput {
+        arguments,
+        distinct,
+        ignore_nulls,
+        filter,
+        order_by,
+        preserve_count_argument_columns: _,
+        function_context,
+    } = input;
+    let supports_linear_rewrite =
+        !distinct && ignore_nulls.is_none() && filter.is_none() && order_by.is_empty();
+    let arguments = coerce_string_sum_arguments(
+        arguments,
+        filter.as_deref(),
+        function_context.schema.as_ref(),
+        function_context.plan_config.ansi_mode,
+    )?;
+    let arguments = if supports_linear_rewrite {
+        arguments
+            .into_iter()
+            .map(|argument| {
+                widen_safe_linear_sum_argument(argument, function_context.schema.as_ref())
+            })
+            .collect()
+    } else {
+        arguments
+    };
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: sum::sum_udaf(),
+        params: AggregateFunctionParams {
+            args: arguments,
+            distinct,
+            filter,
+            order_by,
+            null_treatment: get_null_treatment(ignore_nulls),
+        },
+    }))
+}
+
+pub(super) fn coerce_string_sum_arguments(
+    arguments: Vec<expr::Expr>,
+    filter: Option<&expr::Expr>,
+    schema: &DFSchema,
+    ansi_mode: bool,
+) -> PlanResult<Vec<expr::Expr>> {
+    arguments
+        .into_iter()
+        .map(|argument| {
+            let argument_type = argument.get_type(schema)?;
+            match argument_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                    if ansi_mode {
+                        let argument = if let Some(filter) = filter {
+                            // Grouped aggregates evaluate arguments before FILTER, so mask
+                            // excluded rows before applying the fallible ANSI cast.
+                            let null_value = ScalarValue::try_from(&argument_type)?;
+                            when(filter.clone(), argument).otherwise(lit(null_value))?
+                        } else {
+                            argument
+                        };
+                        Ok(cast(argument, DataType::Float64))
+                    } else {
+                        Ok(try_cast(argument, DataType::Float64))
+                    }
+                }
+                _ => Ok(argument),
+            }
+        })
+        .collect()
+}
+
+fn widen_safe_linear_sum_argument(
+    argument: expr::Expr,
+    schema: &datafusion_common::DFSchema,
+) -> expr::Expr {
+    if argument.get_type(schema).ok() != Some(DataType::Int32) {
+        return argument;
+    }
+    let expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) = &argument else {
+        return argument;
+    };
+    if *op != Operator::Plus {
+        return argument;
+    }
+
+    let left_literal = widen_int32_literal(left);
+    let right_literal = widen_int32_literal(right);
+    let (value, widened_literal, value_expression, literal_is_left) =
+        match (left_literal, right_literal) {
+            (Some((value, literal)), None) => (value, literal, right.as_ref(), true),
+            (None, Some((value, literal))) => (value, literal, left.as_ref(), false),
+            _ => return argument,
+        };
+    let Ok(value_type) = value_expression.get_type(schema) else {
+        return argument;
+    };
+    let Some((minimum, maximum)) = signed_integer_bounds(&value_type) else {
+        return argument;
+    };
+    if minimum + value < i64::from(i32::MIN) || maximum + value > i64::from(i32::MAX) {
+        return argument;
+    }
+
+    let widened_value = cast(value_expression.clone(), DataType::Int64);
+    if literal_is_left {
+        widened_literal + widened_value
+    } else {
+        widened_value + widened_literal
+    }
+}
+
+fn widen_int32_literal(argument: &expr::Expr) -> Option<(i64, expr::Expr)> {
+    let expr::Expr::Literal(ScalarValue::Int32(Some(value)), metadata) = argument else {
+        return None;
+    };
+    let value = i64::from(*value);
+    Some((
+        value,
+        expr::Expr::Literal(ScalarValue::Int64(Some(value)), metadata.clone()),
+    ))
+}
+
+fn signed_integer_bounds(data_type: &DataType) -> Option<(i64, i64)> {
+    match data_type {
+        DataType::Int8 => Some((i64::from(i8::MIN), i64::from(i8::MAX))),
+        DataType::Int16 => Some((i64::from(i16::MIN), i64::from(i16::MAX))),
+        DataType::Int32 => Some((i64::from(i32::MIN), i64::from(i32::MAX))),
+        _ => None,
+    }
+}
+
+fn grouping_id(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let AggFunctionInput {
+        arguments,
+        distinct,
+        ignore_nulls,
+        filter,
+        order_by,
+        preserve_count_argument_columns: _,
+        function_context: _,
+    } = input;
+    if distinct || ignore_nulls.is_some() || filter.is_some() || !order_by.is_empty() {
+        return Err(PlanError::invalid("invalid grouping_id function clause"));
+    }
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(GroupingIdFunction::new())),
+        params: AggregateFunctionParams {
+            args: arguments,
+            distinct: false,
+            filter: None,
+            order_by: vec![],
+            null_treatment: None,
+        },
+    }))
+}
+
 fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
@@ -71,7 +242,8 @@ fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         func: first_last::first_value_udaf(),
         params: AggregateFunctionParams {
             args,
-            distinct: input.distinct,
+            // Spark's `EliminateDistinct` strips DISTINCT from `First` as duplicate-agnostic.
+            distinct: false,
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
@@ -86,7 +258,8 @@ fn last_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         func: first_last::last_value_udaf(),
         params: AggregateFunctionParams {
             args,
-            distinct: input.distinct,
+            // Spark's `EliminateDistinct` strips DISTINCT from `Last` as duplicate-agnostic.
+            distinct: false,
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
@@ -98,12 +271,7 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
         .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
-        })
+        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
@@ -121,12 +289,7 @@ fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
         .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
-        })
+        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ProductFunction::new())),
@@ -226,9 +389,10 @@ fn percentile_disc(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let column = sort.expr;
     let percentile = input.arguments.one()?;
     let args = vec![column, percentile];
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: percentile_disc_udaf(),
+        func: percentile_disc_udaf(ansi_mode),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -243,12 +407,7 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
         .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
-        })
+        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
@@ -295,16 +454,98 @@ fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,
-        distinct,
+        mut distinct,
         ignore_nulls,
         filter,
         order_by,
-        function_context: _,
+        preserve_count_argument_columns,
+        function_context,
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
     // For COUNT(DISTINCT *), the resolver already expanded the wildcard to column references
     // (with hidden-column filtering). For COUNT(*), convert to COUNT(1).
-    let args = transform_count_star_wildcard_expr(arguments);
+    let mut args = transform_count_star_wildcard_expr(arguments);
+    if args.is_empty() {
+        if function_context
+            .plan_config
+            .legacy_allow_parameterless_count
+        {
+            args.push(lit(ScalarValue::Null));
+        } else {
+            return Err(PlanError::invalid(
+                "The `count` function requires at least one parameter; set \
+                 `spark.sql.legacy.allowParameterlessCount` to true to restore the legacy \
+                 COUNT() result of zero",
+            ));
+        }
+    }
+
+    // Implicit SQL PIVOT grouping collects columns from the resolved aggregate, so its
+    // preservation scope must retain the original arguments through constant-filter folding.
+    let filter = match filter {
+        Some(filter)
+            if matches!(
+                filter.as_ref(),
+                expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+            ) =>
+        {
+            None
+        }
+        Some(filter)
+            if !preserve_count_argument_columns
+                && matches!(
+                    filter.as_ref(),
+                    expr::Expr::Literal(ScalarValue::Boolean(Some(false) | None), _)
+                        | expr::Expr::Literal(ScalarValue::Null, _)
+                ) =>
+        {
+            args = vec![lit(ScalarValue::Null)];
+            None
+        }
+        filter => filter,
+    };
+
+    if args.iter().all(is_typed_null_literal) {
+        // Keep an aggregate in the plan so global COUNT still emits one row on empty input.
+        args = vec![lit(ScalarValue::Null)];
+        distinct = false;
+    }
+
+    if distinct && order_by.is_empty() && args.iter().all(is_non_null_literal) {
+        // A distinct tuple of constants contributes exactly one value when the filtered input is
+        // non-empty. Express that through row COUNT so exact table cardinality can answer it.
+        let rows = expr::Expr::AggregateFunction(AggregateFunction {
+            func: count::count_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)],
+                distinct: false,
+                filter,
+                order_by,
+                null_treatment,
+            },
+        });
+        return Ok(when(rows.gt(lit(0_i64)), lit(1_i64)).otherwise(lit(0_i64))?);
+    }
+
+    if !distinct && !preserve_count_argument_columns {
+        let mut nullable_args = Vec::with_capacity(args.len());
+        for argument in args {
+            if argument.nullable(function_context.schema)?
+                && !matches!(&argument, expr::Expr::Column(column) if nullable_args.iter().any(
+                    |existing| matches!(existing, expr::Expr::Column(other) if other == column)
+                ))
+            {
+                nullable_args.push(argument);
+            }
+        }
+        // COUNT only tests whether every argument is non-null. Arguments proven non-null can be
+        // removed; an empty remainder is DataFusion's canonical COUNT(*) expansion.
+        args = if nullable_args.is_empty() {
+            vec![expr::Expr::Literal(COUNT_STAR_EXPANSION, None)]
+        } else {
+            nullable_args
+        };
+    }
     // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
     // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
     let args = if distinct && (args.len() > 1) {
@@ -345,6 +586,50 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn is_typed_null_literal(expression: &expr::Expr) -> bool {
+    match expression {
+        expr::Expr::Alias(alias) => is_typed_null_literal(alias.expr.as_ref()),
+        expr::Expr::Literal(value, _) => value.is_null(),
+        expr::Expr::Cast(cast) => is_typed_null_literal(cast.expr.as_ref()),
+        expr::Expr::TryCast(cast) => is_typed_null_literal(cast.expr.as_ref()),
+        _ => false,
+    }
+}
+
+fn is_non_null_literal(expression: &expr::Expr) -> bool {
+    match expression {
+        expr::Expr::Alias(alias) => is_non_null_literal(alias.expr.as_ref()),
+        expr::Expr::Literal(value, _) => !value.is_null(),
+        _ => false,
+    }
+}
+
+fn min_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    duplicate_agnostic_extreme(input, min_max::min_udaf)
+}
+
+fn max_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    duplicate_agnostic_extreme(input, min_max::max_udaf)
+}
+
+fn duplicate_agnostic_extreme(
+    input: AggFunctionInput,
+    function: fn() -> Arc<AggregateUDF>,
+) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: function(),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            // Duplicate elimination cannot change an extremum, and retaining DISTINCT creates
+            // an avoidable grouped aggregate that prevents exact-statistics substitution.
+            distinct: false,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     match input.arguments.len() {
         1 => {
@@ -369,71 +654,79 @@ fn count_if(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
     // Spark's collect_set ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
+    let arg = input.arguments.one()?;
+    let element_type = arg.get_type(schema)?;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
-    let (args, filter, null_treatment) = if ignore_nulls == Some(true) {
-        let arg = input.arguments.one()?;
+    let (filter, null_treatment) = if ignore_nulls == Some(true) {
         let null_filter = arg.clone().is_not_null();
         let combined_filter = match input.filter {
-            Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
-            None => Some(Box::new(null_filter)),
+            Some(existing) => existing.as_ref().clone().and(null_filter),
+            None => null_filter,
         };
-        (vec![arg], combined_filter, None) // Don't use null_treatment when we have explicit filter
+        // Don't use null_treatment when we have explicit filter
+        (Some(Box::new(combined_filter)), None)
     } else {
-        (
-            input.arguments,
-            input.filter,
-            get_null_treatment(ignore_nulls),
-        )
+        (input.filter, get_null_treatment(ignore_nulls))
     };
 
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    let agg = expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
-            args,
+            args: vec![arg],
             distinct: true,
             order_by: input.order_by,
             filter,
             null_treatment,
         },
-    }))
+    });
+    Ok(coalesce_to_empty_array(agg, &element_type))
 }
 
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
     // Spark's collect_list ignores NULLs by default
     let ignore_nulls = input.ignore_nulls.or(Some(true));
+    let arg = input.arguments.one()?;
+    let element_type = arg.get_type(schema)?;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
-    let (args, filter, null_treatment) = if input.distinct && ignore_nulls == Some(true) {
-        let arg = input.arguments.one()?;
+    let (filter, null_treatment) = if input.distinct && ignore_nulls == Some(true) {
         let null_filter = arg.clone().is_not_null();
         let combined_filter = match input.filter {
-            Some(existing) => Some(Box::new(existing.as_ref().clone().and(null_filter))),
-            None => Some(Box::new(null_filter)),
+            Some(existing) => existing.as_ref().clone().and(null_filter),
+            None => null_filter,
         };
-        (vec![arg], combined_filter, None) // Don't use null_treatment when we have explicit filter
+        // Don't use null_treatment when we have explicit filter
+        (Some(Box::new(combined_filter)), None)
     } else {
-        (
-            input.arguments,
-            input.filter,
-            get_null_treatment(ignore_nulls),
-        )
+        (input.filter, get_null_treatment(ignore_nulls))
     };
 
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    let agg = expr::Expr::AggregateFunction(AggregateFunction {
         func: array_agg::array_agg_udaf(),
         params: AggregateFunctionParams {
-            args,
+            args: vec![arg],
             distinct: input.distinct,
             order_by: input.order_by,
             filter,
             null_treatment,
         },
-    }))
+    });
+    Ok(coalesce_to_empty_array(agg, &element_type))
+}
+
+/// Spark's `collect_list`/`collect_set` return an empty array for a group with no (non-NULL)
+/// values to collect, but DataFusion's `array_agg` returns NULL over zero rows. Coalesce the
+/// aggregate to a typed empty array so the empty case matches Spark instead of yielding NULL.
+fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
+    let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
+    coalesce(vec![agg, lit(empty)])
 }
 
 fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -539,6 +832,76 @@ fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn hll_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = hll_args_with_default_lg(input.arguments, "hll_sketch_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HllSketchAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn hll_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = hll_union_args_with_default_allow_different_lg(input.arguments)?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HllUnionAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn count_min_sketch(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = count_min_sketch_args(input.arguments)?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(CountMinSketchFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn theta_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = theta_args_with_default_lg(input.arguments, "theta_sketch_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ThetaSketchAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn theta_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = theta_args_with_default_lg(input.arguments, "theta_union_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 /// Creates a list of built-in aggregate functions.
 /// This is used to create a hashmap that the resolver uses to look up
 /// aggregate functions by name.
@@ -577,26 +940,36 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("corr", F::default(correlation::corr_udaf)),
         ("count", F::custom(count)),
         ("count_if", F::custom(count_if)),
-        ("count_min_sketch", F::unknown("count_min_sketch")),
+        ("count_min_sketch", F::custom(count_min_sketch)),
         ("covar_pop", F::default(covariance::covar_pop_udaf)),
         ("covar_samp", F::default(covariance::covar_samp_udaf)),
         ("every", F::default(bool_and_or::bool_and_udaf)),
         ("first", F::custom(first_value)),
         ("first_value", F::custom(first_value)),
         ("grouping", F::default(grouping::grouping_udaf)),
-        ("grouping_id", F::unknown("grouping_id")),
+        ("grouping_id", F::custom(grouping_id)),
         ("histogram_numeric", F::custom(histogram_numeric)),
-        ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
-        ("hll_union_agg", F::unknown("hll_union_agg")),
+        ("hll_sketch_agg", F::custom(hll_sketch_agg)),
+        ("hll_union_agg", F::custom(hll_union_agg)),
+        ("kll_merge_agg_bigint", F::unknown("kll_merge_agg_bigint")),
+        ("kll_merge_agg_double", F::unknown("kll_merge_agg_double")),
+        ("kll_merge_agg_float", F::unknown("kll_merge_agg_float")),
+        (
+            "theta_intersection_agg",
+            F::default(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),
+        ),
+        ("theta_sketch_agg", F::custom(theta_sketch_agg)),
+        ("theta_union_agg", F::custom(theta_union_agg)),
         ("kurtosis", F::custom(kurtosis)),
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),
         ("listagg", F::custom(listagg)),
-        ("max", F::default(min_max::max_udaf)),
+        ("max", F::custom(max_value)),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
+        ("measure", F::unknown("measure")),
         ("median", F::custom(median)),
-        ("min", F::default(min_max::min_udaf)),
+        ("min", F::custom(min_value)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
@@ -607,15 +980,47 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("percentile_cont", F::custom(percentile_cont)),
         ("percentile_disc", F::custom(percentile_disc)),
         ("product", F::custom(product)),
-        ("regr_avgx", F::default(regr::regr_avgx_udaf)),
-        ("regr_avgy", F::default(regr::regr_avgy_udaf)),
-        ("regr_count", F::default(regr::regr_count_udaf)),
-        ("regr_intercept", F::default(regr::regr_intercept_udaf)),
-        ("regr_r2", F::default(regr::regr_r2_udaf)),
-        ("regr_slope", F::default(regr::regr_slope_udaf)),
-        ("regr_sxx", F::default(regr::regr_sxx_udaf)),
-        ("regr_sxy", F::default(regr::regr_sxy_udaf)),
-        ("regr_syy", F::default(regr::regr_syy_udaf)),
+        (
+            "regr_avgx",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::AvgX, "regr_avgx")))),
+        ),
+        (
+            "regr_avgy",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::AvgY, "regr_avgy")))),
+        ),
+        (
+            "regr_count",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Count, "regr_count")))),
+        ),
+        (
+            "regr_intercept",
+            F::default(|| {
+                Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Intercept,
+                    "regr_intercept",
+                )))
+            }),
+        ),
+        (
+            "regr_r2",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::R2, "regr_r2")))),
+        ),
+        (
+            "regr_slope",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Slope, "regr_slope")))),
+        ),
+        (
+            "regr_sxx",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Sxx, "regr_sxx")))),
+        ),
+        (
+            "regr_sxy",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Sxy, "regr_sxy")))),
+        ),
+        (
+            "regr_syy",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Syy, "regr_syy")))),
+        ),
         ("schema_of_variant_agg", F::custom(schema_of_variant_agg)),
         ("skewness", F::custom(skewness)),
         ("some", F::default(bool_and_or::bool_or_udaf)),
@@ -624,12 +1029,38 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("stddev_pop", F::default(stddev::stddev_pop_udaf)),
         ("stddev_samp", F::default(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
-        ("sum", F::default(sum::sum_udaf)),
+        ("sum", F::custom(spark_sum)),
+        (
+            "tuple_intersection_agg_double",
+            F::unknown("tuple_intersection_agg_double"),
+        ),
+        (
+            "tuple_intersection_agg_integer",
+            F::unknown("tuple_intersection_agg_integer"),
+        ),
+        (
+            "tuple_sketch_agg_double",
+            F::unknown("tuple_sketch_agg_double"),
+        ),
+        (
+            "tuple_sketch_agg_integer",
+            F::unknown("tuple_sketch_agg_integer"),
+        ),
+        (
+            "tuple_union_agg_double",
+            F::unknown("tuple_union_agg_double"),
+        ),
+        (
+            "tuple_union_agg_integer",
+            F::unknown("tuple_union_agg_integer"),
+        ),
         ("try_avg", F::custom(try_avg)),
         ("try_sum", F::custom(try_sum)),
         ("var_pop", F::default(variance::var_pop_udaf)),
         ("var_samp", F::default(variance::var_samp_udaf)),
         ("variance", F::default(variance::var_samp_udaf)),
+        ("vector_avg", F::unknown("vector_avg")),
+        ("vector_sum", F::unknown("vector_sum")),
     ]
 }
 
@@ -638,4 +1069,84 @@ pub(crate) fn get_built_in_aggregate_function(name: &str) -> PlanResult<AggFunct
         .get(name)
         .ok_or_else(|| PlanError::unsupported(format!("unknown aggregate function: {name}")))?
         .clone())
+}
+
+pub(crate) fn list_built_in_aggregate_function_names() -> impl Iterator<Item = &'static str> {
+    BUILT_IN_AGGREGATE_FUNCTIONS.keys().copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::Schema;
+    use datafusion::prelude::SessionContext;
+    use datafusion_expr::{ExprSchemable, col};
+
+    use super::*;
+    use crate::config::PlanConfig;
+    use crate::function::common::FunctionContextInput;
+
+    fn sum_test_schema(data_type: DataType) -> PlanResult<Arc<DFSchema>> {
+        Ok(Arc::new(DFSchema::try_from(Schema::new(vec![
+            Field::new("value", data_type, true),
+            Field::new("included", DataType::Boolean, true),
+        ]))?))
+    }
+
+    #[test]
+    fn string_sum_uses_mode_specific_cast_for_all_string_types() -> PlanResult<()> {
+        for data_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let schema = sum_test_schema(data_type)?;
+            let ansi_arguments =
+                coerce_string_sum_arguments(vec![col("value")], None, schema.as_ref(), true)?;
+            assert_eq!(ansi_arguments, vec![cast(col("value"), DataType::Float64)]);
+
+            let legacy_arguments =
+                coerce_string_sum_arguments(vec![col("value")], None, schema.as_ref(), false)?;
+            assert_eq!(
+                legacy_arguments,
+                vec![try_cast(col("value"), DataType::Float64)]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ansi_string_sum_masks_filter_before_cast_and_preserves_clauses() -> PlanResult<()> {
+        let schema = sum_test_schema(DataType::Utf8)?;
+        let argument_display_names = ["value".to_string()];
+        let plan_config = Arc::new(PlanConfig::default());
+        let session_context = SessionContext::new();
+        let filter = col("included");
+        let expression = spark_sum(AggFunctionInput {
+            arguments: vec![col("value")],
+            distinct: true,
+            ignore_nulls: None,
+            filter: Some(Box::new(filter.clone())),
+            order_by: vec![],
+            preserve_count_argument_columns: false,
+            function_context: FunctionContextInput {
+                argument_display_names: &argument_display_names,
+                plan_config: &plan_config,
+                session_context: &session_context,
+                schema: &schema,
+            },
+        })?;
+
+        assert_eq!(expression.get_type(schema.as_ref())?, DataType::Float64);
+        assert!(expression.nullable(schema.as_ref())?);
+        let expr::Expr::AggregateFunction(sum) = expression else {
+            return Err(PlanError::internal("expected aggregate SUM expression"));
+        };
+        let masked_argument =
+            when(filter.clone(), col("value")).otherwise(lit(ScalarValue::Utf8(None)))?;
+        assert_eq!(
+            sum.params.args,
+            vec![cast(masked_argument, DataType::Float64)]
+        );
+        assert_eq!(sum.params.filter, Some(Box::new(filter)));
+        assert!(sum.params.distinct);
+        Ok(())
+    }
 }

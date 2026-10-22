@@ -11,7 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 use super::arrow_utils::py_schema_to_rust;
-use super::error::{import_cloudpickle, PythonDataSourceContext, PythonDataSourceError};
+use super::error::{PythonDataSourceContext, PythonDataSourceError, import_cloudpickle};
 
 /// Represents a Python data source.
 ///

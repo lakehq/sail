@@ -17,10 +17,13 @@ updates:
         update-types:
           - "major"
     ignore:
+      - dependency-name: "rustfs-mimalloc-sys"
       - dependency-name: "datafusion"
       - dependency-name: "datafusion-*"
       - dependency-name: "arrow"
       - dependency-name: "arrow-*"
+      - dependency-name: "parquet"
+      - dependency-name: "parquet-*"
       - dependency-name: "sqlparser"
       - dependency-name: "pyo3"
       - dependency-name: "object_store"

@@ -3,9 +3,9 @@ use sail_common::spec::data_type_to_null_literal;
 use sail_sql_analyzer::literal::numeric::parse_decimal_string;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::spark::connect::expression::literal::{Array, Decimal, LiteralType, Map, Struct, Time};
 use crate::spark::connect::expression::Literal;
-use crate::spark::connect::{data_type as sdt, DataType};
+use crate::spark::connect::expression::literal::{Array, Decimal, LiteralType, Map, Struct, Time};
+use crate::spark::connect::{DataType, data_type as sdt};
 
 impl TryFrom<Literal> for spec::Literal {
     type Error = SparkError;
@@ -94,7 +94,7 @@ impl TryFrom<Literal> for spec::Literal {
                         other => {
                             return Err(SparkError::invalid(format!(
                                 "Unexpected Literal type for Decimal: {other:?}"
-                            )))
+                            )));
                         }
                     }
                 }
@@ -116,11 +116,15 @@ impl TryFrom<Literal> for spec::Literal {
                     nanoseconds: x.microseconds * 1_000,
                 }),
             },
-            LiteralType::YearMonthInterval(x) => {
-                spec::Literal::IntervalYearMonth { months: Some(x) }
-            }
-            LiteralType::DayTimeInterval(x) => spec::Literal::DurationMicrosecond {
+            LiteralType::YearMonthInterval(x) => spec::Literal::IntervalYearMonth {
+                months: Some(x),
+                start_field: Some(spec::IntervalFieldType::Year),
+                end_field: Some(spec::IntervalFieldType::Month),
+            },
+            LiteralType::DayTimeInterval(x) => spec::Literal::IntervalDayTimeMicrosecond {
                 microseconds: Some(x),
+                start_field: Some(spec::IntervalFieldType::Day),
+                end_field: Some(spec::IntervalFieldType::Second),
             },
             #[expect(deprecated)]
             LiteralType::Array(Array {
@@ -212,7 +216,7 @@ impl TryFrom<Literal> for spec::Literal {
                 }
             }
             LiteralType::SpecializedArray(_) => {
-                return Err(SparkError::todo("specialized array literal"))
+                return Err(SparkError::todo("specialized array literal"));
             }
             LiteralType::Time(Time { nano, precision }) => {
                 // Spark TIME literals carry nanoseconds since midnight.

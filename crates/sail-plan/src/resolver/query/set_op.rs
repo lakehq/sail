@@ -4,13 +4,13 @@ use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
-    expr, Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition,
+    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, expr,
 };
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_set_operation(
@@ -104,6 +104,11 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                // Spark Connect treats Union as a leaf for DataFrame plan IDs.
+                // WithCTE restores separately reachable definition bindings.
+                for field in left.schema().fields() {
+                    state.clear_field_plan_ids(field.name())?;
+                }
                 if is_all {
                     Ok(LogicalPlanBuilder::new(left).union(right)?.build()?)
                 } else {
@@ -136,8 +141,9 @@ impl PlanResolver<'_> {
                     .collect::<Vec<_>>();
 
                 let plan = if is_all {
-                    let left_row_number_alias = state.register_field_name("row_num");
-                    let right_row_number_alias = state.register_field_name("row_num");
+                    // The row numbers are internal and must not be referenceable by name.
+                    let left_row_number_alias = state.next_field_id();
+                    let right_row_number_alias = state.next_field_id();
                     let left_row_number_window =
                         Expr::WindowFunction(Box::new(expr::WindowFunction {
                             fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),

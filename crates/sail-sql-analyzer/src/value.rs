@@ -7,7 +7,7 @@ use crate::error::{SqlError, SqlResult};
 use crate::literal::binary::BinaryValue;
 use crate::literal::numeric::{
     parse_decimal_128_string, parse_decimal_256_string, parse_f32_string, parse_f64_string,
-    parse_i16_string, parse_i32_string, parse_i64_string, parse_i8_string,
+    parse_i8_string, parse_i16_string, parse_i32_string, parse_i64_string,
 };
 
 pub(crate) fn from_ast_number_literal(value: NumberLiteral) -> SqlResult<spec::Expr> {

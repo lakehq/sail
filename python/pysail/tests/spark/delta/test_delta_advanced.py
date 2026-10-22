@@ -2,154 +2,228 @@ import json
 import os
 import time
 from datetime import datetime, timezone
+from urllib.parse import unquote
 
-import pytest
+import pyarrow.parquet as pq
 from pyspark.sql.types import Row
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
-class TestDeltaAdvancedFeatures:
-    """Delta Lake advanced features tests"""
+def _read_delta_log_actions(log_dir, version: int) -> list[dict]:
+    log_path = log_dir / f"{version:020}.json"
+    with log_path.open("r", encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
 
-    @staticmethod
-    def _read_delta_log_actions(log_dir, version: int) -> list[dict]:
-        log_path = log_dir / f"{version:020}.json"
-        with log_path.open("r", encoding="utf-8") as f:
-            return [json.loads(line) for line in f if line.strip()]
 
-    @staticmethod
-    def _write_delta_log_actions(log_dir, version: int, actions: list[dict]) -> None:
-        log_path = log_dir / f"{version:020}.json"
-        with log_path.open("w", encoding="utf-8") as f:
-            f.write("\n".join(json.dumps(obj, separators=(",", ":")) for obj in actions))
+def _write_delta_log_actions(log_dir, version: int, actions: list[dict]) -> None:
+    log_path = log_dir / f"{version:020}.json"
+    with log_path.open("w", encoding="utf-8") as f:
+        f.write("\n".join(json.dumps(obj, separators=(",", ":")) for obj in actions))
 
-    @classmethod
-    def _rewrite_in_commit_timestamp(cls, log_dir, version: int, timestamp_ms: int) -> None:
-        rewritten = []
-        for obj in cls._read_delta_log_actions(log_dir, version):
-            if "commitInfo" in obj:
-                obj["commitInfo"]["inCommitTimestamp"] = timestamp_ms
-            rewritten.append(obj)
-        cls._write_delta_log_actions(log_dir, version, rewritten)
 
-        crc_path = log_dir / f"{version:020}.crc"
-        with crc_path.open("r", encoding="utf-8") as f:
-            crc_obj = json.load(f)
-        crc_obj["inCommitTimestampOpt"] = timestamp_ms
-        with crc_path.open("w", encoding="utf-8") as f:
-            json.dump(crc_obj, f, separators=(",", ":"))
+def _deletion_vector_unique_id(action: dict) -> str:
+    descriptor = action["deletionVector"]
+    offset = f"@{descriptor['offset']}" if "offset" in descriptor else ""
+    return f"{descriptor['storageType']}{descriptor['pathOrInlineDv']}{offset}"
 
-    @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake time travel")
-    def test_delta_feature_time_travel_by_version(self, spark, tmp_path):
-        """Test Delta Lake time travel functionality by version."""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = str(delta_path)
 
-        # Version 0: Initial data
-        v0_data = [Row(id=1, value="v0")]
-        df0 = spark.createDataFrame(v0_data)
-        df0.write.format("delta").mode("overwrite").save(delta_table_path)
+def _rewrite_in_commit_timestamp(log_dir, version: int, timestamp_ms: int) -> None:
+    rewritten = []
+    for obj in _read_delta_log_actions(log_dir, version):
+        if "commitInfo" in obj:
+            obj["commitInfo"]["inCommitTimestamp"] = timestamp_ms
+        rewritten.append(obj)
+    _write_delta_log_actions(log_dir, version, rewritten)
 
-        # Version 1: Add data
-        v1_data = [Row(id=2, value="v1")]
-        df1 = spark.createDataFrame(v1_data)
-        df1.write.format("delta").mode("append").save(delta_table_path)
+    crc_path = log_dir / f"{version:020}.crc"
+    with crc_path.open("r", encoding="utf-8") as f:
+        crc_obj = json.load(f)
+    crc_obj["inCommitTimestampOpt"] = timestamp_ms
+    with crc_path.open("w", encoding="utf-8") as f:
+        json.dump(crc_obj, f, separators=(",", ":"))
 
-        # Version 2: Overwrite data
-        v2_data = [Row(id=3, value="v2")]
-        df2 = spark.createDataFrame(v2_data)
-        df2.write.format("delta").mode("overwrite").save(delta_table_path)
 
-        # Read latest version
-        latest_df = spark.read.format("delta").load(delta_table_path)
-        assert latest_df.collect() == [Row(id=3, value="v2")]
+def test_delta_feature_time_travel_by_version(spark, tmp_path):
+    """Test Delta Lake time travel functionality by version."""
+    delta_path = tmp_path / "delta_table"
+    delta_table_path = str(delta_path)
 
-        # Read version 0
-        v0_df = spark.read.format("delta").option("versionAsOf", "0").load(delta_table_path)
-        assert v0_df.collect() == [Row(id=1, value="v0")]
+    # Version 0: Initial data
+    v0_data = [Row(id=1, value="v0")]
+    df0 = spark.createDataFrame(v0_data)
+    df0.write.format("delta").mode("overwrite").save(delta_table_path)
 
-        # Read version 1
-        v1_df = spark.read.format("delta").option("versionAsOf", "1").load(delta_table_path).sort("id")
-        expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
-        assert v1_df.collect() == expected_v1
+    # Version 1: Add data
+    v1_data = [Row(id=2, value="v1")]
+    df1 = spark.createDataFrame(v1_data)
+    df1.write.format("delta").mode("append").save(delta_table_path)
 
-    @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake time travel")
-    def test_delta_feature_time_travel_by_timestamp(self, spark, tmp_path):
-        """Test Delta Lake time travel functionality by timestamp."""
-        delta_path = tmp_path / "delta_table"
-        delta_table_path = str(delta_path)
+    # Version 2: Overwrite data
+    v2_data = [Row(id=3, value="v2")]
+    df2 = spark.createDataFrame(v2_data)
+    df2.write.format("delta").mode("overwrite").save(delta_table_path)
 
-        # Version 0: Initial data
-        v0_data = [Row(id=1, value="v0")]
-        df0 = spark.createDataFrame(v0_data)
-        df0.write.format("delta").mode("overwrite").save(delta_table_path)
-        # Capture the timestamp right after the commit
-        ts0 = datetime.now(timezone.utc).isoformat()
-        time.sleep(0.1)
+    # Read latest version
+    latest_df = spark.read.format("delta").load(delta_table_path)
+    assert latest_df.collect() == [Row(id=3, value="v2")]
 
-        # Version 1: Add data
-        v1_data = [Row(id=2, value="v1")]
-        df1 = spark.createDataFrame(v1_data)
-        df1.write.format("delta").mode("append").save(delta_table_path)
-        ts1 = datetime.now(timezone.utc).isoformat()
-        time.sleep(0.1)
+    # Read version 0
+    v0_df = spark.read.format("delta").option("versionAsOf", "0").load(delta_table_path)
+    assert v0_df.collect() == [Row(id=1, value="v0")]
 
-        # Version 2: Overwrite data
-        v2_data = [Row(id=3, value="v2")]
-        df2 = spark.createDataFrame(v2_data)
-        df2.write.format("delta").mode("overwrite").save(delta_table_path)
-        ts2 = datetime.now(timezone.utc).isoformat()
+    # Read version 1
+    v1_df = spark.read.format("delta").option("versionAsOf", "1").load(delta_table_path).sort("id")
+    expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
+    assert v1_df.collect() == expected_v1
 
-        # Read latest version (should be v2)
-        latest_df = spark.read.format("delta").load(delta_table_path)
-        assert latest_df.collect() == [Row(id=3, value="v2")]
 
-        # Read state as of timestamp ts0 (version 0)
-        v0_df = spark.read.format("delta").option("timestampAsOf", ts0).load(delta_table_path)
-        assert v0_df.collect() == [Row(id=1, value="v0")]
+def test_log_replay_key_includes_deletion_vector_identity(spark, tmp_path):
+    table_path = tmp_path / "delta_replay_dv_identity"
+    table_location = escape_sql_string_literal(str(table_path))
+    table_name = "delta_replay_dv_identity"
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
-        # Read state as of timestamp ts1 (version 1)
-        v1_df = spark.read.format("delta").option("timestampAsOf", ts1).load(delta_table_path).sort("id")
-        expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
-        assert v1_df.collect() == expected_v1
-
-        # Read state as of timestamp ts2 (version 2)
-        v2_df = spark.read.format("delta").option("timestampAsOf", ts2).load(delta_table_path)
-        assert v2_df.collect() == [Row(id=3, value="v2")]
-
-    @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake in-commit timestamps")
-    def test_delta_feature_time_travel_uses_in_commit_timestamp_not_json_mtime(self, spark, tmp_path):
-        delta_path = tmp_path / "delta_ict_table"
-        delta_table_path = str(delta_path)
-        delta_table_path_literal = escape_sql_string_literal(delta_table_path)
-        table_name = "delta_ict_time_travel_test"
-
-        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
         spark.sql(
             f"""
-            CREATE TABLE {table_name}
+            CREATE TABLE {table_name} (id INT)
             USING DELTA
-            LOCATION '{delta_table_path_literal}'
+            LOCATION '{table_location}'
             TBLPROPERTIES (
-              'delta.enableInCommitTimestamps' = 'true'
+              'delta.enableDeletionVectors' = 'true',
+              'delta.checkpointInterval' = '100'
             )
-            AS SELECT 1 AS id, 'v0' AS value
             """
         )
-        spark.createDataFrame([Row(id=2, value="v1")]).write.format("delta").mode("append").save(delta_table_path)
+        spark.sql(f"INSERT INTO {table_name} VALUES (1), (2), (3), (4), (5)")  # noqa: S608
+        spark.sql(f"DELETE FROM {table_name} WHERE id = 2")  # noqa: S608
+        spark.sql(f"DELETE FROM {table_name} WHERE id = 5")  # noqa: S608
+        spark.sql(f"DROP TABLE {table_name}")
 
-        log_dir = delta_path / "_delta_log"
-        self._rewrite_in_commit_timestamp(log_dir, 0, 100)
-        self._rewrite_in_commit_timestamp(log_dir, 1, 200)
-        os.utime(log_dir / "00000000000000000000.json", (86_400, 86_400))
-        os.utime(log_dir / "00000000000000000001.json", (1, 1))
+        log_dir = table_path / "_delta_log"
+        assert sorted(path.name for path in log_dir.glob("*.json")) == [f"{version:020}.json" for version in range(4)]
+        version_1 = _read_delta_log_actions(log_dir, 1)
+        version_2 = _read_delta_log_actions(log_dir, 2)
+        version_3 = _read_delta_log_actions(log_dir, 3)
+        initial_add = next(action["add"] for action in version_1 if "add" in action)
+        add_a = next(action["add"] for action in version_2 if action.get("add", {}).get("deletionVector"))
+        remove_a = next(action["remove"] for action in version_3 if action.get("remove", {}).get("deletionVector"))
+        add_b = next(action["add"] for action in version_3 if action.get("add", {}).get("deletionVector"))
 
-        df = (
-            spark.read.format("delta")
-            .option("timestampAsOf", "1970-01-01T00:00:00.150Z")
-            .load(delta_table_path)
-            .sort("id")
+        assert add_a["path"] == remove_a["path"] == add_b["path"]
+        assert add_a["deletionVector"] == remove_a["deletionVector"]
+        assert [
+            add_a["deletionVector"]["cardinality"],
+            add_b["deletionVector"]["cardinality"],
+        ] == [1, 2]
+        assert _deletion_vector_unique_id(add_a) == _deletion_vector_unique_id(remove_a)
+        assert _deletion_vector_unique_id(add_a) != _deletion_vector_unique_id(add_b)
+        parquet_data = pq.ParquetFile(table_path / unquote(initial_add["path"])).read().to_pydict()
+        assert sorted(parquet_data["id"]) == [1, 2, 3, 4, 5]
+        assert not list(log_dir.glob("*.checkpoint*.parquet"))
+
+        _write_delta_log_actions(log_dir, 4, [{"remove": remove_a}])
+        expected_v4 = json.dumps({"remove": remove_a}, separators=(",", ":"))
+        assert (log_dir / "00000000000000000004.json").read_text(encoding="utf-8") == expected_v4
+
+        eager_ids = [
+            row.id for row in spark.read.format("delta").load(str(table_path)).select("id").orderBy("id").collect()
+        ]
+        assert eager_ids == [1, 3, 4]
+
+        replay_ids = {}
+        for strategy in ("sort", "hash"):
+            rows = (
+                spark.read.format("delta")
+                .option("metadataAsDataRead", "true")
+                .option("deltaLogReplayStrategy", strategy)
+                .load(str(table_path))
+                .select("id")
+                .orderBy("id")
+                .collect()
+            )
+            replay_ids[strategy] = [row.id for row in rows]
+
+        assert replay_ids == {
+            "sort": [1, 3, 4],
+            "hash": [1, 3, 4],
+        }
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_delta_feature_time_travel_by_timestamp(spark, tmp_path):
+    """Test Delta Lake time travel functionality by timestamp."""
+    delta_path = tmp_path / "delta_table"
+    delta_table_path = str(delta_path)
+
+    # Version 0: Initial data
+    v0_data = [Row(id=1, value="v0")]
+    df0 = spark.createDataFrame(v0_data)
+    df0.write.format("delta").mode("overwrite").save(delta_table_path)
+    # Capture the timestamp right after the commit
+    ts0 = datetime.now(timezone.utc).isoformat()
+    time.sleep(0.1)
+
+    # Version 1: Add data
+    v1_data = [Row(id=2, value="v1")]
+    df1 = spark.createDataFrame(v1_data)
+    df1.write.format("delta").mode("append").save(delta_table_path)
+    ts1 = datetime.now(timezone.utc).isoformat()
+    time.sleep(0.1)
+
+    # Version 2: Overwrite data
+    v2_data = [Row(id=3, value="v2")]
+    df2 = spark.createDataFrame(v2_data)
+    df2.write.format("delta").mode("overwrite").save(delta_table_path)
+    ts2 = datetime.now(timezone.utc).isoformat()
+
+    # Read latest version (should be v2)
+    latest_df = spark.read.format("delta").load(delta_table_path)
+    assert latest_df.collect() == [Row(id=3, value="v2")]
+
+    # Read state as of timestamp ts0 (version 0)
+    v0_df = spark.read.format("delta").option("timestampAsOf", ts0).load(delta_table_path)
+    assert v0_df.collect() == [Row(id=1, value="v0")]
+
+    # Read state as of timestamp ts1 (version 1)
+    v1_df = spark.read.format("delta").option("timestampAsOf", ts1).load(delta_table_path).sort("id")
+    expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
+    assert v1_df.collect() == expected_v1
+
+    # Read state as of timestamp ts2 (version 2)
+    v2_df = spark.read.format("delta").option("timestampAsOf", ts2).load(delta_table_path)
+    assert v2_df.collect() == [Row(id=3, value="v2")]
+
+
+def test_delta_feature_time_travel_uses_in_commit_timestamp_not_json_mtime(spark, tmp_path):
+    delta_path = tmp_path / "delta_ict_table"
+    delta_table_path = str(delta_path)
+    delta_table_path_literal = escape_sql_string_literal(delta_table_path)
+    table_name = "delta_ict_time_travel_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    spark.sql(
+        f"""
+        CREATE TABLE {table_name}
+        USING DELTA
+        LOCATION '{delta_table_path_literal}'
+        TBLPROPERTIES (
+          'delta.enableInCommitTimestamps' = 'true'
         )
-        assert df.collect() == [Row(id=1, value="v0")]
+        AS SELECT 1 AS id, 'v0' AS value
+        """
+    )
+    spark.createDataFrame([Row(id=2, value="v1")]).write.format("delta").mode("append").save(delta_table_path)
+
+    log_dir = delta_path / "_delta_log"
+    _rewrite_in_commit_timestamp(log_dir, 0, 100)
+    _rewrite_in_commit_timestamp(log_dir, 1, 200)
+    os.utime(log_dir / "00000000000000000000.json", (86_400, 86_400))
+    os.utime(log_dir / "00000000000000000001.json", (1, 1))
+
+    df = (
+        spark.read.format("delta").option("timestampAsOf", "1970-01-01T00:00:00.150Z").load(delta_table_path).sort("id")
+    )
+    assert df.collect() == [Row(id=1, value="v0")]

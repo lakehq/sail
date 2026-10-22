@@ -63,6 +63,22 @@ impl std::str::FromStr for SaveMode {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    DynamicPartitionOverwrite {
+        partition_by: Option<Vec<String>>,
+    },
+    ReplaceColumns {
+        columns: Vec<Value>,
+    },
+    AddColumns {
+        columns: Vec<Value>,
+    },
+    DropColumns {
+        columns: Vec<String>,
+    },
+    RenameColumn {
+        old_column_path: String,
+        new_column_path: String,
+    },
     Create {
         mode: SaveMode,
         location: String,
@@ -77,6 +93,10 @@ pub enum DeltaOperation {
         predicate: Option<String>,
     },
     Delete {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        predicate: Option<String>,
+    },
+    Update {
         #[serde(skip_serializing_if = "Option::is_none")]
         predicate: Option<String>,
     },
@@ -102,29 +122,47 @@ pub enum DeltaOperation {
         properties: HashMap<String, String>,
     },
     #[serde(rename_all = "camelCase")]
+    DropConstraint {
+        name: String,
+        expr: Option<String>,
+    },
+    AddConstraint {
+        name: String,
+        expr: String,
+    },
+    #[serde(rename_all = "camelCase")]
     UnsetTableProperties {
         properties: Vec<String>,
     },
     #[serde(rename_all = "camelCase")]
     AlterColumn {
         column: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<String>,
     },
 }
 
 impl DeltaOperation {
     pub fn name(&self) -> &str {
         match self {
+            Self::ReplaceColumns { .. } => "REPLACE COLUMNS",
+            Self::AddColumns { .. } => "ADD COLUMNS",
+            Self::DropColumns { .. } => "DROP COLUMNS",
+            Self::RenameColumn { .. } => "RENAME COLUMN",
             Self::Create {
                 mode: SaveMode::Overwrite,
                 ..
             } => "CREATE OR REPLACE TABLE",
             Self::Create { .. } => "CREATE TABLE",
-            Self::Write { .. } => "WRITE",
+            Self::Write { .. } | Self::DynamicPartitionOverwrite { .. } => "WRITE",
             Self::Delete { .. } => "DELETE",
+            Self::Update { .. } => "UPDATE",
             Self::Merge { .. } => "MERGE",
             Self::FileSystemCheck { .. } => "FSCK",
             Self::Restore { .. } => "RESTORE",
             Self::SetTableProperties { .. } => "SET TBLPROPERTIES",
+            Self::AddConstraint { .. } => "ADD CONSTRAINT",
+            Self::DropConstraint { .. } => "DROP CONSTRAINT",
             Self::UnsetTableProperties { .. } => "UNSET TBLPROPERTIES",
             Self::AlterColumn { .. } => "CHANGE COLUMN",
         }
@@ -151,6 +189,25 @@ impl DeltaOperation {
 
         let mut parameters = HashMap::new();
         match self {
+            Self::DynamicPartitionOverwrite { partition_by } => {
+                insert_opt(&mut parameters, "mode", Some("Overwrite"));
+                if let Some(partitions) = partition_by {
+                    insert_json(&mut parameters, "partitionBy", partitions)?;
+                }
+            }
+            Self::ReplaceColumns { columns } | Self::AddColumns { columns } => {
+                insert_json(&mut parameters, "columns", columns)?;
+            }
+            Self::DropColumns { columns } => {
+                insert_json(&mut parameters, "columns", columns)?;
+            }
+            Self::RenameColumn {
+                old_column_path,
+                new_column_path,
+            } => {
+                insert_opt(&mut parameters, "oldColumnPath", Some(old_column_path));
+                insert_opt(&mut parameters, "newColumnPath", Some(new_column_path));
+            }
             Self::Create {
                 mode,
                 location,
@@ -174,6 +231,9 @@ impl DeltaOperation {
                 insert_opt(&mut parameters, "predicate", predicate.clone());
             }
             Self::Delete { predicate } => {
+                insert_opt(&mut parameters, "predicate", predicate.clone());
+            }
+            Self::Update { predicate } => {
                 insert_opt(&mut parameters, "predicate", predicate.clone());
             }
             Self::Merge {
@@ -205,11 +265,21 @@ impl DeltaOperation {
             Self::SetTableProperties { properties } => {
                 insert_json(&mut parameters, "properties", properties)?;
             }
+            Self::DropConstraint { name, expr } => {
+                insert_opt(&mut parameters, "name", Some(name));
+                insert_opt(&mut parameters, "expr", expr.as_deref());
+                insert_opt(&mut parameters, "existed", Some(expr.is_some()));
+            }
+            Self::AddConstraint { name, expr } => {
+                insert_opt(&mut parameters, "name", Some(name));
+                insert_opt(&mut parameters, "expr", Some(expr));
+            }
             Self::UnsetTableProperties { properties } => {
                 insert_json(&mut parameters, "properties", properties)?;
             }
-            Self::AlterColumn { column } => {
+            Self::AlterColumn { column, position } => {
                 insert_json(&mut parameters, "column", column)?;
+                insert_opt(&mut parameters, "position", position.as_deref());
             }
         }
 
@@ -252,6 +322,7 @@ impl DeltaOperation {
         match self {
             Self::Write { predicate, .. } => predicate.clone(),
             Self::Delete { predicate, .. } => predicate.clone(),
+            Self::Update { predicate, .. } => predicate.clone(),
             Self::Merge { predicate, .. } => predicate.clone(),
             _ => None,
         }
@@ -259,7 +330,11 @@ impl DeltaOperation {
 
     pub fn read_whole_table(&self) -> bool {
         match self {
-            // Predicate is none -> Merge operation had to join full source and target
+            Self::DynamicPartitionOverwrite { .. } => true,
+            // UPDATE predicates are not yet evaluated against concurrent file additions, so
+            // conservatively retain the full read set until predicate conflict checks are wired.
+            Self::Update { .. } => true,
+            Self::Delete { predicate } if predicate.is_none() => true,
             Self::Merge { predicate, .. } if predicate.is_none() => true,
             _ => false,
         }

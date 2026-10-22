@@ -1,12 +1,14 @@
-use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    as_primitive_array, Array, Float32Array, Float64Array, Int32Array, Int64Array,
+use datafusion::arrow::array::{Array, as_primitive_array};
+use datafusion::arrow::compute::binary;
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Float32Type, Float64Type, Int32Type, Int64Type,
 };
-use datafusion::arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type, Int64Type};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err, unsupported_data_types_exec_err,
@@ -32,10 +34,6 @@ impl SparkBRound {
 }
 
 impl ScalarUDFImpl for SparkBRound {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_bround"
     }
@@ -44,7 +42,21 @@ impl ScalarUDFImpl for SparkBRound {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `RoundBase.nullable = true`, unconditional; `BRound` inherits it and declares no
+    /// `nullable` of its own.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L1563>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
         if !(1..=2).contains(&arg_types.len()) {
             return Err(invalid_arg_count_exec_err(
                 "spark_bround",
@@ -53,19 +65,22 @@ impl ScalarUDFImpl for SparkBRound {
             ));
         }
         let t = &arg_types[0];
-        match t {
+        let data_type = match t {
             DataType::Float64
             | DataType::Float32
             | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _) => Ok(DataType::Float64),
-            DataType::Int32 => Ok(DataType::Int32),
-            DataType::Int64 => Ok(DataType::Int64),
-            _ => Err(unsupported_data_type_exec_err(
-                "spark_bround",
-                "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
-                t,
-            )),
-        }
+            | DataType::Decimal256(_, _) => DataType::Float64,
+            DataType::Int32 => DataType::Int32,
+            DataType::Int64 => DataType::Int64,
+            _ => {
+                return Err(unsupported_data_type_exec_err(
+                    "spark_bround",
+                    "Float64, Float32, Decimal128, Decimal256, Int32, Int64",
+                    t,
+                ));
+            }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -81,7 +96,7 @@ impl ScalarUDFImpl for SparkBRound {
                     "spark_bround",
                     (1, 2),
                     args.len(),
-                ))
+                ));
             }
         };
         let [x, d] = args.as_slice() else {
@@ -122,67 +137,39 @@ impl ScalarUDFImpl for SparkBRound {
             (DataType::Float64, DataType::Int32) => {
                 let x = as_primitive_array::<Float64Type>(&x_array);
                 let d = as_primitive_array::<Int32Type>(&d_array);
-                let result: Float64Array = x
-                    .iter()
-                    .zip(d.iter())
-                    .map(|(x_val, scale)| match (x_val, scale) {
-                        (Some(x), Some(s)) => Some(spark_bround_f64(x, s)),
-                        _ => None,
-                    })
-                    .collect();
+                let result = binary::<Float64Type, Int32Type, _, Float64Type>(x, d, |x, s| {
+                    spark_bround_f64(x, s)
+                })?;
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
             (DataType::Float32, DataType::Int32) => {
                 let x = as_primitive_array::<Float32Type>(&x_array);
                 let d = as_primitive_array::<Int32Type>(&d_array);
-                let result: Float32Array = x
-                    .iter()
-                    .zip(d.iter())
-                    .map(|(x_val, scale)| match (x_val, scale) {
-                        (Some(x), Some(s)) => {
-                            let pow = 10f32.powi(s);
-                            Some(round_half_to_even_f32(x * pow) / pow)
-                        }
-                        _ => None,
-                    })
-                    .collect();
+                let result = binary::<Float32Type, Int32Type, _, Float32Type>(x, d, |x, s| {
+                    let pow = 10f32.powi(s);
+                    round_half_to_even_f32(x * pow) / pow
+                })?;
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
             (DataType::Int32, DataType::Int32) => {
                 let x = as_primitive_array::<Int32Type>(&x_array);
                 let d = as_primitive_array::<Int32Type>(&d_array);
-                let result: Int32Array = x
-                    .iter()
-                    .zip(d.iter())
-                    .map(|(x_val, scale)| match (x_val, scale) {
-                        (Some(x), Some(s)) => {
-                            let x_f64 = x as f64;
-                            let pow = 10f64.powi(s);
-                            Some((round_half_to_even_f64(x_f64 * pow) / pow) as i32)
-                        }
-                        _ => None,
-                    })
-                    .collect();
+                let result = binary::<Int32Type, Int32Type, _, Int32Type>(x, d, |x, s| {
+                    let pow = 10f64.powi(s);
+                    (round_half_to_even_f64(x as f64 * pow) / pow) as i32
+                })?;
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
             (DataType::Int64, DataType::Int32) => {
                 let x = as_primitive_array::<Int64Type>(&x_array);
                 let d = as_primitive_array::<Int32Type>(&d_array);
-                let result: Int64Array = x
-                    .iter()
-                    .zip(d.iter())
-                    .map(|(x_val, scale)| match (x_val, scale) {
-                        (Some(x), Some(s)) => {
-                            let x_f64 = x as f64;
-                            let pow = 10f64.powi(s);
-                            Some((round_half_to_even_f64(x_f64 * pow).round() / pow).round() as i64)
-                        }
-                        _ => None,
-                    })
-                    .collect();
+                let result = binary::<Int64Type, Int32Type, _, Int64Type>(x, d, |x, s| {
+                    let pow = 10f64.powi(s);
+                    (round_half_to_even_f64(x as f64 * pow).round() / pow).round() as i64
+                })?;
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
@@ -309,7 +296,46 @@ fn spark_bround_f64(x: f64, scale: i32) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::array::{AsArray, Float64Array, Int32Array};
+    use datafusion::arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+
     use super::*;
+
+    #[test]
+    fn test_bround_null_propagation() -> Result<()> {
+        // NULL in `x` on some rows, NULL in `d` (scale) on others.
+        let x = Float64Array::from(vec![Some(2.5), None, Some(3.5), Some(1.25)]);
+        let d = Int32Array::from(vec![Some(0), Some(0), None, Some(1)]);
+        let x_field = Arc::new(Field::new("x", DataType::Float64, true));
+        let d_field = Arc::new(Field::new("d", DataType::Int32, true));
+
+        let result = SparkBRound::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(x)),
+                ColumnarValue::Array(Arc::new(d)),
+            ],
+            arg_fields: vec![x_field, d_field.clone()],
+            number_rows: 4,
+            return_field: Arc::new(Field::new("result", DataType::Float64, true)),
+            config_options: Arc::new(ConfigOptions::default()),
+        })?;
+
+        let output = result.into_array(4)?;
+        let output = output.as_primitive::<Float64Type>();
+
+        // Row 0: valid tie-to-even -> 2.0
+        assert!(output.is_valid(0));
+        assert_eq!(output.value(0), 2.0);
+        // Row 1: NULL x -> NULL
+        assert!(output.is_null(1));
+        // Row 2: NULL scale -> NULL
+        assert!(output.is_null(2));
+        // Row 3: valid -> 1.2
+        assert!(output.is_valid(3));
+        assert_eq!(output.value(3), 1.2);
+        Ok(())
+    }
 
     #[test]
     fn test_bround_f64_positive_scale() {

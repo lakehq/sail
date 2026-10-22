@@ -11,11 +11,14 @@
 // limitations under the License.
 
 pub mod conversions;
+pub(crate) mod literal_serde;
+pub mod metadata;
 pub mod partition_transform;
 pub mod snapshot_id;
 pub mod timestamp;
 pub mod transform;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
@@ -32,12 +35,11 @@ pub enum WritePathMode {
 
 impl WritePathMode {
     pub fn from_properties(props: Option<&std::collections::HashMap<String, String>>) -> Self {
-        if let Some(p) = props {
-            if let Some(v) = p.get(WRITE_RELATIVE_PROP) {
-                if v.eq_ignore_ascii_case("true") || v == "1" {
-                    return WritePathMode::Relative;
-                }
-            }
+        if let Some(p) = props
+            && let Some(v) = p.get(WRITE_RELATIVE_PROP)
+            && (v.eq_ignore_ascii_case("true") || v == "1")
+        {
+            return WritePathMode::Relative;
         }
         WritePathMode::Absolute
     }
@@ -50,12 +52,40 @@ pub fn join_table_uri(table_uri: &str, rel: &str, mode: &WritePathMode) -> Strin
     }
 }
 
+pub fn parse_absolute_url(raw: &str) -> Option<Url> {
+    Url::parse(raw).ok().filter(|url| url.scheme().len() > 1)
+}
+
+pub fn file_url_from_absolute_path(path: &str) -> Option<Url> {
+    if Path::new(path).is_absolute() {
+        return Url::from_file_path(path).ok();
+    }
+    windows_drive_path_to_file_url(path)
+}
+
+fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 3
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || !matches!(bytes[2], b'/' | b'\\')
+    {
+        return None;
+    }
+
+    let path = path.replace('\\', "/");
+    Url::parse(&format!("file:///{path}")).ok()
+}
+
 pub fn url_to_object_path(url: &Url) -> Result<object_store::path::Path> {
     let is_file = url.scheme() == "file";
     let p = if is_file {
         if cfg!(windows) {
-            // On Windows, decode percent-encoding and normalize drive-letter file URLs.
-            url.to_file_path()
+            // Normalize Windows drive/UNC paths without decoding literal partition escapes.
+            let mut escaped = url.clone();
+            escaped.set_path(&url.path().replace('%', "%25"));
+            escaped
+                .to_file_path()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| url.path().to_string())
         } else {
@@ -92,4 +122,35 @@ pub fn get_object_store_from_session(
         .object_store_registry
         .get_store(table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::Result;
+    use url::Url;
+
+    use super::url_to_object_path;
+
+    #[test]
+    fn object_paths_preserve_partition_escapes() -> Result<()> {
+        for (root, prefix) in [
+            ("file:///C:/warehouse/", "C:/warehouse/"),
+            ("file:///warehouse/", "warehouse/"),
+            ("s3://bucket/warehouse/", "warehouse/"),
+        ] {
+            for partition in [
+                "key=AQI%3D",
+                "key=%2Fw%3D%3D",
+                "key=a%2Fb",
+                "key=a%253Ab",
+                "key=a+b",
+            ] {
+                let url = Url::parse(&format!("{root}{partition}/data.parquet"))
+                    .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+                let expected = format!("{prefix}{partition}/data.parquet");
+                assert_eq!(url_to_object_path(&url)?.as_ref(), expected);
+            }
+        }
+        Ok(())
+    }
 }

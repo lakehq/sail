@@ -1,10 +1,9 @@
-use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{new_null_array, ArrayRef, AsArray, GenericStringBuilder};
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+use datafusion::arrow::array::{ArrayRef, AsArray, GenericStringBuilder, new_null_array};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
@@ -45,10 +44,6 @@ impl SparkMask {
 }
 
 impl ScalarUDFImpl for SparkMask {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_mask"
     }
@@ -57,21 +52,37 @@ impl ScalarUDFImpl for SparkMask {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `Mask.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/maskExpressions.scala#L201>
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
         if arg_types.is_empty() || arg_types.len() > 5 {
             return exec_err!(
                 "Spark `mask` function requires 1 to 5 arguments, got {}",
                 arg_types.len()
             );
         }
-        match arg_types[0] {
-            DataType::Utf8 | DataType::Utf8View | DataType::Null => Ok(DataType::Utf8),
-            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
-            _ => exec_err!(
-                "Spark `mask` function: first arg must be string, got {}",
-                arg_types[0]
-            ),
-        }
+        let data_type = match arg_types[0] {
+            DataType::Utf8 | DataType::Utf8View | DataType::Null => DataType::Utf8,
+            DataType::LargeUtf8 => DataType::LargeUtf8,
+            _ => {
+                return exec_err!(
+                    "Spark `mask` function: first arg must be string, got {}",
+                    arg_types[0]
+                );
+            }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -92,7 +103,9 @@ impl ScalarUDFImpl for SparkMask {
                         if string.chars().count() == 1 {
                             Ok(string.chars().next())
                         } else {
-                            exec_err!("Spark `mask` function: second arg must be a single character, got {string}")
+                            exec_err!(
+                                "Spark `mask` function: second arg must be a single character, got {string}"
+                            )
                         }
                     } else {
                         Ok(None)
@@ -117,7 +130,9 @@ impl ScalarUDFImpl for SparkMask {
                         if string.chars().count() == 1 {
                             Ok(string.chars().next())
                         } else {
-                            exec_err!("Spark `mask` function: third arg must be a single character, got {string}")
+                            exec_err!(
+                                "Spark `mask` function: third arg must be a single character, got {string}"
+                            )
                         }
                     } else {
                         Ok(None)
@@ -142,7 +157,9 @@ impl ScalarUDFImpl for SparkMask {
                         if string.chars().count() == 1 {
                             Ok(string.chars().next())
                         } else {
-                            exec_err!("Spark `mask` function: fourth arg must be a single character, got {string}")
+                            exec_err!(
+                                "Spark `mask` function: fourth arg must be a single character, got {string}"
+                            )
                         }
                     } else {
                         Ok(None)
@@ -167,7 +184,9 @@ impl ScalarUDFImpl for SparkMask {
                         if string.chars().count() == 1 {
                             Ok(string.chars().next())
                         } else {
-                            exec_err!("Spark `mask` function: fifth arg must be a single character, got {string}")
+                            exec_err!(
+                                "Spark `mask` function: fifth arg must be a single character, got {string}"
+                            )
                         }
                     } else {
                         Ok(None)

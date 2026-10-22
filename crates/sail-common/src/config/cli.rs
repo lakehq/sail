@@ -1,5 +1,5 @@
-use figment::providers::{Env, Serialized};
 use figment::Figment;
+use figment::providers::{Env, Serialized};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CommonError, CommonResult};

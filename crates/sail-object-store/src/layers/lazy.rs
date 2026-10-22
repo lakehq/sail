@@ -4,8 +4,8 @@ use std::future::Future;
 use std::ops::Range;
 use std::sync::Arc;
 
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StructArray};
@@ -9,9 +8,10 @@ use datafusion::logical_expr::{
 };
 use datafusion::scalar::ScalarValue;
 use datafusion_common::exec_err;
-use parquet_variant_compute::{cast_to_variant, VariantType};
+use parquet_variant_compute::{VariantType, cast_to_variant};
+use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
-use super::spark_json_to_variant::convert_binaryview_to_binary;
+use super::spark_parse_json::convert_variant_binaryview_to_binary;
 
 /// Implements `CAST(expr AS VARIANT)` for Spark-compatible variant conversion.
 ///
@@ -28,6 +28,14 @@ impl SparkCastToVariant {
             signature: Signature::any(1, Volatility::Immutable),
         }
     }
+
+    pub fn validate_input_type(input_type: &DataType) -> Result<()> {
+        match input_type {
+            DataType::Map(_, _) => exec_err!("cannot cast MAP to VARIANT"),
+            DataType::Struct(_) => exec_err!("cannot cast STRUCT to VARIANT"),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl Default for SparkCastToVariant {
@@ -37,10 +45,6 @@ impl Default for SparkCastToVariant {
 }
 
 impl ScalarUDFImpl for SparkCastToVariant {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_cast_to_variant"
     }
@@ -51,8 +55,8 @@ impl ScalarUDFImpl for SparkCastToVariant {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Struct(Fields::from(vec![
-            Field::new("metadata", DataType::Binary, false),
-            Field::new("value", DataType::Binary, false),
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
         ])))
     }
 
@@ -76,13 +80,7 @@ impl ScalarUDFImpl for SparkCastToVariant {
             .map(|f| f.data_type().clone())
             .unwrap_or(DataType::Null);
 
-        // Reject Map and Struct (Spark doesn't support CAST to VARIANT for these)
-        if matches!(input_type, DataType::Map(_, _)) {
-            return exec_err!("cannot cast MAP to VARIANT");
-        }
-        if matches!(input_type, DataType::Struct(_)) {
-            return exec_err!("cannot cast STRUCT to VARIANT");
-        }
+        Self::validate_input_type(&input_type)?;
 
         let arg = &args.args[0];
         match arg {
@@ -90,8 +88,8 @@ impl ScalarUDFImpl for SparkCastToVariant {
                 if scalar.is_null() {
                     // SQL NULL → NULL Variant struct (must match promised return type)
                     let fields = Fields::from(vec![
-                        Field::new("metadata", DataType::Binary, false),
-                        Field::new("value", DataType::Binary, false),
+                        Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
+                        variant_metadata_field(DataType::Binary, false),
                     ]);
                     let null_struct = StructArray::new_null(fields, 1);
                     return Ok(ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(
@@ -101,7 +99,7 @@ impl ScalarUDFImpl for SparkCastToVariant {
                 let arr = scalar.to_array()?;
                 let variant_array = cast_to_variant(&arr)?;
                 let struct_array: StructArray = variant_array.into();
-                let struct_array = convert_binaryview_to_binary(struct_array)?;
+                let struct_array = convert_variant_binaryview_to_binary(struct_array)?;
                 Ok(ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(
                     struct_array,
                 ))))
@@ -109,7 +107,7 @@ impl ScalarUDFImpl for SparkCastToVariant {
             ColumnarValue::Array(arr) => {
                 let variant_array = cast_to_variant(arr.as_ref())?;
                 let struct_array: StructArray = variant_array.into();
-                let struct_array = convert_binaryview_to_binary(struct_array)?;
+                let struct_array = convert_variant_binaryview_to_binary(struct_array)?;
                 Ok(ColumnarValue::Array(Arc::new(struct_array) as ArrayRef))
             }
         }

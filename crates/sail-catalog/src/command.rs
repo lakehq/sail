@@ -1,19 +1,26 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::catalog::TableKind;
-use sail_common_datafusion::datasource::TableFormatRegistry;
+use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
+use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::{
+    LakeSourceCreateTableColumn, LakeSourceCreateTableInfo, LakeSourceCreateTableResult,
+};
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{CatalogError, CatalogResult};
-use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
+use crate::lakehouse::{
+    LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
+};
 use crate::manager::CatalogManager;
+use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::provider::{
-    AlterTableOptions, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropTemporaryViewOptions, DropViewOptions,
+    AlterTableOptions, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableMode,
+    CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
@@ -66,6 +73,13 @@ pub enum CatalogCommand {
         database: Vec<String>,
         pattern: String,
     },
+    ShowFunctions {
+        database: Vec<String>,
+        pattern: Option<String>,
+        system_functions: Vec<FunctionStatus>,
+        show_user_functions: bool,
+        show_system_functions: bool,
+    },
     ListTables {
         database: Vec<String>,
         pattern: Option<String>,
@@ -78,6 +92,11 @@ pub enum CatalogCommand {
         table: Vec<String>,
         options: DropTableOptions,
     },
+    RenameTable {
+        table: Vec<String>,
+        destination: Vec<String>,
+        if_exists: bool,
+    },
     AlterTable {
         table: Vec<String>,
         if_exists: bool,
@@ -88,6 +107,7 @@ pub enum CatalogCommand {
     },
     FunctionExists {
         function: Vec<String>,
+        system_functions: Vec<FunctionStatus>,
     },
     GetFunction {
         function: Vec<String>,
@@ -95,6 +115,12 @@ pub enum CatalogCommand {
     ListFunctions {
         database: Vec<String>,
         pattern: Option<String>,
+        system_functions: Vec<FunctionStatus>,
+    },
+    DescribeFunction {
+        function: Vec<String>,
+        extended: bool,
+        system_functions: Vec<FunctionStatus>,
     },
     DropFunction {
         function: Vec<String>,
@@ -165,14 +191,17 @@ impl CatalogCommand {
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ShowTables { .. } => "ShowTables",
             CatalogCommand::ShowTableExtended { .. } => "ShowTableExtended",
+            CatalogCommand::ShowFunctions { .. } => "ShowFunctions",
             CatalogCommand::ListTables { .. } => "ListTables",
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
             CatalogCommand::AlterTable { .. } => "AlterTable",
+            CatalogCommand::RenameTable { .. } => "RenameTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
             CatalogCommand::ListFunctions { .. } => "ListFunctions",
+            CatalogCommand::DescribeFunction { .. } => "DescribeFunction",
             CatalogCommand::RegisterFunction { .. } => "RegisterFunction",
             CatalogCommand::RegisterTableFunction { .. } => "RegisterTableFunction",
             CatalogCommand::DropFunction { .. } => "DropFunction",
@@ -203,9 +232,15 @@ impl CatalogCommand {
             CatalogCommand::ShowTableExtended { .. } => {
                 ArrowSerializer::default().schema::<ShowTableExtendedRow>()?
             }
+            CatalogCommand::ShowFunctions { .. } => {
+                ArrowSerializer::default().schema::<ShowFunctionsRow>()?
+            }
             CatalogCommand::ListColumns { .. } => display.table_columns().schema()?,
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
                 display.functions().schema()?
+            }
+            CatalogCommand::DescribeFunction { .. } => {
+                ArrowSerializer::default().schema::<DescribeFunctionRow>()?
             }
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
@@ -230,6 +265,7 @@ impl CatalogCommand {
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::AlterTable { .. }
+            | CatalogCommand::RenameTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. }
@@ -238,9 +274,9 @@ impl CatalogCommand {
         Ok(schema)
     }
 
-    pub async fn execute<C: SessionExtensionAccessor>(
+    pub async fn execute(
         self,
-        ctx: &C,
+        ctx: &TaskContext,
         manager: &CatalogManager,
     ) -> CatalogResult<RecordBatch> {
         // TODO: make sure we return the same schema as Spark for each command
@@ -305,7 +341,31 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::CreateTable { table, options } => {
-                manager.create_table(&table, options).await?;
+                let existed_before = if options.mode.ignore_if_exists() {
+                    match manager.get_table_or_view(&table).await {
+                        Ok(_) => true,
+                        Err(CatalogError::NotFound(_, _)) => false,
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    false
+                };
+                let Some((options, create_plan)) =
+                    prepare_create_table_storage_metadata(ctx, manager, &table, options).await?
+                else {
+                    return Ok(display.bools().to_record_batch(vec![true])?);
+                };
+                let status = manager.create_table(&table, options).await?;
+                if !existed_before {
+                    prepare_created_table_storage_metadata(
+                        ctx,
+                        manager,
+                        &table,
+                        &status,
+                        &create_plan,
+                    )
+                    .await?;
+                }
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::TableExists { table } => {
@@ -353,6 +413,29 @@ impl CatalogCommand {
                     .collect::<CatalogResult<Vec<_>>>()?;
                 ArrowSerializer::default().build_record_batch(&rows)?
             }
+            CatalogCommand::ShowFunctions {
+                database,
+                pattern,
+                system_functions,
+                show_user_functions,
+                show_system_functions,
+            } => {
+                let rows = manager
+                    .list_functions(
+                        &database,
+                        pattern.as_deref(),
+                        &system_functions,
+                        show_user_functions,
+                        show_system_functions,
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|status| ShowFunctionsRow {
+                        function: status.name,
+                    })
+                    .collect::<Vec<_>>();
+                ArrowSerializer::default().build_record_batch(&rows)?
+            }
             CatalogCommand::ListTables { database, pattern } => {
                 let rows = manager
                     .list_tables_and_views(&database, pattern.as_deref())
@@ -367,6 +450,17 @@ impl CatalogCommand {
             }
             CatalogCommand::DropTable { table, options } => {
                 manager.drop_table(&table, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::RenameTable {
+                table,
+                destination,
+                if_exists,
+            } => {
+                match manager.rename_table(&table, &destination).await {
+                    Err(CatalogError::NotFound(CatalogObject::Table, _)) if if_exists => {}
+                    result => result?,
+                };
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::AlterTable {
@@ -384,6 +478,7 @@ impl CatalogCommand {
                     Err(e) => return Err(e),
                 };
 
+                manager.validate_alter_table(&table, &options)?;
                 let (location, format) = match &table_status.kind {
                     sail_common_datafusion::catalog::TableKind::Table {
                         location: Some(loc),
@@ -395,54 +490,157 @@ impl CatalogCommand {
                     }
                     _ => (None, None),
                 };
-
-                // Persist changes to storage first (source of truth for table formats
-                // such as Delta Lake). Only after storage commits successfully do we
-                // update the catalog metadata, so we never end up with the two layers
-                // out of sync.
-                if let (Some(location), Some(format)) = (location, format) {
-                    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
-                        CatalogError::External(format!(
-                            "missing TableFormatRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
-                        ))
-                    })?;
-                    let table_format = registry.get(&format).map_err(|e| {
-                        CatalogError::External(format!(
-                            "unknown table format '{format}' for storage-backed ALTER TABLE: {e}"
-                        ))
-                    })?;
-                    let runtime = ctx.runtime_env();
-                    match &options {
-                        AlterTableOptions::SetTableProperties { properties } => {
-                            let changes = properties
-                                .iter()
-                                .map(|(k, v)| (k.clone(), Some(v.clone())))
-                                .collect::<Vec<_>>();
-                            table_format
-                                .alter_table_properties(runtime, &location, changes, false)
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-                            let changes =
-                                keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>();
-                            table_format
-                                .alter_table_properties(runtime, &location, changes, *if_exists)
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                        AlterTableOptions::AlterColumnType { name, data_type } => {
-                            table_format
-                                .alter_table_column_type(
-                                    runtime,
-                                    &location,
-                                    name.clone(),
-                                    data_type.clone(),
+                if matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
+                    && (location.is_none()
+                        || !format
+                            .as_deref()
+                            .is_some_and(|format| format.eq_ignore_ascii_case("iceberg")))
+                {
+                    return Err(CatalogError::NotSupported(
+                        "Snapshot references require an Iceberg table with a location".into(),
+                    ));
+                }
+                if format
+                    .as_deref()
+                    .is_some_and(|format| !is_lakehouse_format(format))
+                    && let AlterTableOptions::AlterColumns { changes, .. } = &options
+                    && changes.iter().any(|change| {
+                        matches!(change, sail_common::spec::ColumnChange::Rename { .. })
+                    })
+                {
+                    return Err(CatalogError::NotSupported(
+                        "RENAME COLUMN requires a format that preserves column identities".into(),
+                    ));
+                }
+                if format
+                    .as_deref()
+                    .is_some_and(|format| format.eq_ignore_ascii_case("csv"))
+                    && match &options {
+                        AlterTableOptions::ReplaceColumns { .. } => true,
+                        AlterTableOptions::AlterColumns { changes, .. } => {
+                            changes.iter().any(|change| {
+                                matches!(
+                                    change,
+                                    sail_common::spec::ColumnChange::Add { .. }
+                                        | sail_common::spec::ColumnChange::Drop { .. }
+                                        | sail_common::spec::ColumnChange::Position { .. }
                                 )
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
+                            })
                         }
-                    };
+                        _ => false,
+                    }
+                {
+                    return Err(CatalogError::NotSupported(
+                        "CSV column additions, drops, reordering and replacement require rewriting existing files".into(),
+                    ));
+                }
+
+                // Lake sources commit authoritative format metadata, including catalog
+                // metadata when the provider supports an atomic update.
+                if let (Some(location), Some(format)) = (location, format) {
+                    // Non-lakehouse formats (e.g., plain Parquet/Hive tables) have no
+                    // storage-layer metadata — the catalog is the sole source of truth.
+                    // Skip straight to catalog-only update.
+                    // This mirrors Spark+Delta where DeltaCatalog intercepts ALTER TABLE
+                    // for Delta tables but plain tables fall through to SessionCatalog.
+                    if matches!(
+                        options,
+                        AlterTableOptions::AlterIdentifierFields { .. }
+                            | AlterTableOptions::SetWriteOrder { .. }
+                            | AlterTableOptions::AlterPartitionSpec { .. }
+                            | AlterTableOptions::SetPartitioning { .. }
+                    ) && !format.eq_ignore_ascii_case("iceberg")
+                    {
+                        return Err(CatalogError::NotSupported(
+                            "Identifier, partition and write order evolution require an Iceberg table".into(),
+                        ));
+                    }
+                    if !is_lakehouse_format(&format) {
+                        manager.alter_table(&table, options).await?;
+                        return Ok(display.bools().to_record_batch(vec![true])?);
+                    }
+                    let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
+                        CatalogError::External(format!(
+                            "missing DataSourceRegistry for storage-backed ALTER TABLE on format '{format}': {e}"
+                        ))
+                    })?;
+                    let lake_source = registry.get_lake_source(&format).map_err(|e| {
+                        CatalogError::External(format!(
+                            "unknown lake source '{format}' for storage-backed ALTER TABLE: {e}"
+                        ))
+                    })?;
+                    let storage_operation = (&options).into();
+                    let lakehouse_table = manager
+                        .resolve_lakehouse_table_status(
+                            &table,
+                            &table_status,
+                            LakehouseOperation::Alter,
+                        )
+                        .await?
+                        .execution;
+                    if !matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
+                        && matches!(lakehouse_table.commit,
+                        sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
+                        | sail_common_datafusion::catalog::CommitAuthority::VersionedCatalogCommit)
+                    {
+                        manager.alter_table(&table, options).await?;
+                        return Ok(display.bools().to_record_batch(vec![true])?);
+                    }
+                    let result = lake_source
+                        .alter_table(ctx, &location, storage_operation, Some(lakehouse_table))
+                        .await
+                        .map_err(|e| CatalogError::External(e.to_string()))?;
+
+                    // Storage is the source of truth for lakehouse ALTER TABLE
+                    // operations, but metadata reads still flow through the
+                    // catalog. Surface catalog sync failures so callers do not
+                    // observe successful storage mutation followed by stale
+                    // DESCRIBE/SHOW metadata.
+                    if !result.catalog_updated {
+                        let mut catalog_options = catalog_sync_alter_options(&format, &options)?;
+                        if let Some(schema) = result.schema {
+                            if let AlterTableOptions::ReplaceColumns { fields, .. } =
+                                &mut catalog_options
+                            {
+                                *fields = schema.fields().clone();
+                            }
+                            manager
+                                .alter_table_with_schema(&table, catalog_options, schema)
+                                .await?;
+                        } else {
+                            manager.alter_table(&table, catalog_options).await?;
+                        }
+                        if let Some(partition_by) = result.partition_by {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::SetPartitioning { partition_by },
+                                )
+                                .await?;
+                        }
+                        if !result.properties.is_empty() {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::SetTableProperties {
+                                        properties: result.properties,
+                                    },
+                                )
+                                .await?;
+                        }
+                        if !result.removed_properties.is_empty() {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::UnsetTableProperties {
+                                        keys: result.removed_properties,
+                                        if_exists: true,
+                                    },
+                                )
+                                .await?;
+                        }
+                    }
+                    return Ok(display.bools().to_record_batch(vec![true])?);
                 }
 
                 manager.alter_table(&table, options).await?;
@@ -515,14 +713,58 @@ impl CatalogCommand {
 
                 serializer.build_record_batch(&rows)?
             }
-            CatalogCommand::FunctionExists { .. } => {
-                return Err(CatalogError::NotSupported("function exists".to_string()));
+            CatalogCommand::FunctionExists {
+                function,
+                system_functions,
+            } => {
+                let value = match manager
+                    .get_function_status(&function, &system_functions)
+                    .await
+                {
+                    Ok(_) => true,
+                    Err(CatalogError::NotFound(_, _)) => false,
+                    Err(e) => return Err(e),
+                };
+                display.bools().to_record_batch(vec![value])?
             }
             CatalogCommand::GetFunction { .. } => {
                 return Err(CatalogError::NotSupported("get function".to_string()));
             }
-            CatalogCommand::ListFunctions { .. } => {
-                return Err(CatalogError::NotSupported("list functions".to_string()));
+            CatalogCommand::ListFunctions {
+                database,
+                pattern,
+                system_functions,
+            } => {
+                let rows = manager
+                    .list_functions(&database, pattern.as_deref(), &system_functions, true, true)
+                    .await?;
+                display.functions().to_record_batch(rows)?
+            }
+            CatalogCommand::DescribeFunction {
+                function,
+                extended,
+                system_functions,
+            } => {
+                let status = manager
+                    .get_function_status(&function, &system_functions)
+                    .await?;
+                let mut rows = vec![DescribeFunctionRow {
+                    function_desc: format!("Function: {}", status.name),
+                }];
+                if !status.class_name.is_empty() {
+                    rows.push(DescribeFunctionRow {
+                        function_desc: format!("Class: {}", status.class_name),
+                    });
+                }
+                rows.push(DescribeFunctionRow {
+                    function_desc: format!("Usage: {}", status.usage()),
+                });
+                if extended {
+                    rows.push(DescribeFunctionRow {
+                        function_desc: format!("Extended Usage:{}", status.extended_usage()),
+                    });
+                }
+                ArrowSerializer::default().build_record_batch(&rows)?
             }
             CatalogCommand::DropFunction {
                 function,
@@ -572,6 +814,7 @@ impl CatalogCommand {
                     replace: options.replace,
                     comment: options.comment,
                     properties: options.properties,
+                    source: options.source,
                 };
                 if is_global {
                     manager.create_global_temporary_view(&view, options).await?;
@@ -596,6 +839,7 @@ impl CatalogCommand {
                     sort_by,
                     bucket_by,
                     properties,
+                    is_external,
                 } = status.kind
                 else {
                     return Err(CatalogError::NotSupported(
@@ -682,6 +926,7 @@ impl CatalogCommand {
                             comment: c.comment,
                             default: c.default,
                             generated_always_as: c.generated_always_as,
+                            identity: c.identity,
                         })
                         .collect(),
                     comment,
@@ -691,9 +936,10 @@ impl CatalogCommand {
                     partition_by,
                     sort_by,
                     bucket_by,
-                    if_not_exists: false,
-                    replace: true,
+                    mode: CreateTableMode::Replace,
                     properties,
+                    is_external,
+                    is_write_precondition: false,
                 };
                 manager.create_table(&table, create_options).await?;
                 display.bools().to_record_batch(vec![true])?
@@ -742,6 +988,311 @@ impl CatalogCommand {
     }
 }
 
+async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
+    ctx: &C,
+    manager: &CatalogManager,
+    table: &[String],
+    mut options: CreateTableOptions,
+) -> CatalogResult<Option<(CreateTableOptions, LakehouseCreatePlan)>> {
+    match manager.get_table_or_view(table).await {
+        Ok(_) if options.mode.ignore_if_exists() => return Ok(None),
+        Ok(_) if !options.mode.is_replace() => {
+            return Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                table.join("."),
+            ));
+        }
+        Ok(_) => {}
+        Err(CatalogError::NotFound(_, _)) if options.mode.replace_requires_existing() => {
+            return Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                table.join("."),
+            ));
+        }
+        Err(CatalogError::NotFound(_, _)) => {}
+        Err(err) => return Err(err),
+    }
+
+    let create_plan = manager
+        .plan_lakehouse_create(
+            table,
+            LakehouseCreateRequest {
+                catalog_table: table.to_vec(),
+                options: options.clone(),
+            },
+        )
+        .await?;
+
+    let LakehouseCreateMaterialization::BeforeCatalogLakeSource { context, .. } =
+        &create_plan.materialization
+    else {
+        return Ok(Some((options, create_plan)));
+    };
+
+    let location = options.location.clone().ok_or_else(|| {
+        CatalogError::InvalidArgument(format!(
+            "Location is required to create storage metadata for {} tables",
+            options.format
+        ))
+    })?;
+    let metadata = materialize_lake_source_create_metadata(
+        ctx,
+        &options.format,
+        location,
+        &options.columns,
+        options.comment.clone(),
+        options.partition_by.clone(),
+        options.properties.clone(),
+        options.mode.is_replace(),
+        context.as_deref().cloned(),
+    )
+    .await?;
+    if options.columns.is_empty() {
+        if let Some(schema) = metadata.schema {
+            options.columns = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    let features =
+                        sail_common_datafusion::column_features::ColumnFeatures::from_field(field);
+                    crate::provider::CreateTableColumnOptions {
+                        name: field.name().clone(),
+                        data_type: field.data_type().clone(),
+                        nullable: field.is_nullable(),
+                        comment: field
+                            .metadata()
+                            .get("comment")
+                            .or_else(|| field.metadata().get("doc"))
+                            .cloned(),
+                        default: features.current_default(),
+                        generated_always_as: features.generation_expression(),
+                        identity: features.identity(),
+                    }
+                })
+                .collect();
+        }
+        if let Some(partition_by) = metadata.partition_by {
+            options.partition_by = partition_by;
+        }
+    }
+    options.properties.extend(metadata.properties);
+    Ok(Some((options, create_plan)))
+}
+
+async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
+    ctx: &C,
+    manager: &CatalogManager,
+    table: &[String],
+    status: &sail_common_datafusion::catalog::TableStatus,
+    create_plan: &LakehouseCreatePlan,
+) -> CatalogResult<()> {
+    let LakehouseCreateMaterialization::AfterCatalogLakeSource { mode, .. } =
+        &create_plan.materialization
+    else {
+        return Ok(());
+    };
+    let sail_common_datafusion::catalog::TableKind::Table {
+        columns,
+        comment,
+        location: Some(location),
+        format,
+        partition_by,
+        properties,
+        is_external,
+        ..
+    } = &status.kind
+    else {
+        return Ok(());
+    };
+
+    if matches!(
+        *mode,
+        crate::provider::LakeSourceCreateMetadataMode::PathManaged
+    ) && *is_external
+    {
+        return Ok(());
+    }
+    let lakehouse_table = match *mode {
+        crate::provider::LakeSourceCreateMetadataMode::PathManaged => None,
+        crate::provider::LakeSourceCreateMetadataMode::CatalogCoordinated => Some(
+            manager
+                .resolve_lakehouse_table_status(
+                    table,
+                    status,
+                    sail_common_datafusion::catalog::LakehouseOperation::Create,
+                )
+                .await?
+                .execution,
+        ),
+    };
+
+    materialize_lake_source_create_metadata(
+        ctx,
+        format,
+        location.clone(),
+        columns,
+        comment.clone(),
+        partition_by.clone(),
+        properties.clone(),
+        false,
+        lakehouse_table,
+    )
+    .await
+    .map(|_| ())
+}
+
+#[expect(clippy::too_many_arguments)]
+async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
+    ctx: &C,
+    format: &str,
+    location: String,
+    columns: &[impl CreateTableColumnView],
+    comment: Option<String>,
+    partition_by: Vec<sail_common_datafusion::catalog::CatalogPartitionField>,
+    properties: Vec<(String, String)>,
+    replace: bool,
+    lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
+) -> CatalogResult<LakeSourceCreateTableResult> {
+    let registry = ctx.extension::<DataSourceRegistry>().map_err(|e| {
+        CatalogError::External(format!(
+            "missing DataSourceRegistry for CREATE TABLE on format '{format}': {e}"
+        ))
+    })?;
+    let lake_source = registry.get_lake_source(format).map_err(|e| {
+        CatalogError::External(format!(
+            "unknown lake source '{format}' for CREATE TABLE: {e}"
+        ))
+    })?;
+    lake_source
+        .create_table_metadata(
+            ctx.runtime_env(),
+            LakeSourceCreateTableInfo {
+                path: location,
+                columns: columns
+                    .iter()
+                    .map(|column| LakeSourceCreateTableColumn {
+                        name: column.name().to_string(),
+                        data_type: column.data_type().clone(),
+                        nullable: column.nullable(),
+                        comment: column.comment().cloned(),
+                        default: column.default().cloned(),
+                        generated_always_as: column.generated_always_as().cloned(),
+                        identity: column.identity().cloned(),
+                    })
+                    .collect(),
+                comment,
+                partition_by,
+                properties,
+                replace,
+                lakehouse_table,
+            },
+        )
+        .await
+        .map_err(CatalogError::DataFusionError)
+}
+
+trait CreateTableColumnView {
+    fn name(&self) -> &str;
+    fn data_type(&self) -> &datafusion::arrow::datatypes::DataType;
+    fn nullable(&self) -> bool;
+    fn comment(&self) -> Option<&String>;
+    fn default(&self) -> Option<&String>;
+    fn generated_always_as(&self) -> Option<&String>;
+    fn identity(&self) -> Option<&sail_common_datafusion::catalog::CatalogTableColumnIdentity>;
+}
+
+impl CreateTableColumnView for crate::provider::CreateTableColumnOptions {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn data_type(&self) -> &datafusion::arrow::datatypes::DataType {
+        &self.data_type
+    }
+
+    fn nullable(&self) -> bool {
+        self.nullable
+    }
+
+    fn comment(&self) -> Option<&String> {
+        self.comment.as_ref()
+    }
+
+    fn default(&self) -> Option<&String> {
+        self.default.as_ref()
+    }
+
+    fn generated_always_as(&self) -> Option<&String> {
+        self.generated_always_as.as_ref()
+    }
+
+    fn identity(&self) -> Option<&sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
+        self.identity.as_ref()
+    }
+}
+
+impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatus {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn data_type(&self) -> &datafusion::arrow::datatypes::DataType {
+        &self.data_type
+    }
+
+    fn nullable(&self) -> bool {
+        self.nullable
+    }
+
+    fn comment(&self) -> Option<&String> {
+        self.comment.as_ref()
+    }
+
+    fn default(&self) -> Option<&String> {
+        self.default.as_ref()
+    }
+
+    fn generated_always_as(&self) -> Option<&String> {
+        self.generated_always_as.as_ref()
+    }
+
+    fn identity(&self) -> Option<&sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
+        self.identity.as_ref()
+    }
+}
+
+fn catalog_sync_alter_options(
+    format: &str,
+    options: &AlterTableOptions,
+) -> CatalogResult<AlterTableOptions> {
+    match options {
+        AlterTableOptions::UnsetTableProperties { keys, .. } => {
+            // Existence was checked against the format metadata before committing.
+            Ok(AlterTableOptions::UnsetTableProperties {
+                keys: keys.clone(),
+                if_exists: true,
+            })
+        }
+        AlterTableOptions::DropCheckConstraint { name, .. } => {
+            Ok(AlterTableOptions::UnsetTableProperties {
+                keys: vec![format!("delta.constraints.{}", name.to_lowercase())],
+                if_exists: true,
+            })
+        }
+        AlterTableOptions::AddCheckConstraint { name, expression } => {
+            if !format.eq_ignore_ascii_case("delta") {
+                return Err(CatalogError::NotSupported(format!(
+                    "CHECK constraints are not supported for {format} tables"
+                )));
+            }
+            Ok(AlterTableOptions::SetTableProperties {
+                properties: vec![(format!("delta.constraints.{name}"), expression.clone())],
+            })
+        }
+        _ => Ok(options.clone()),
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct DescribeTableRow {
     col_name: String,
@@ -772,4 +1323,432 @@ struct ShowTableExtendedRow {
     table_name: String,
     is_temporary: bool,
     information: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ShowFunctionsRow {
+    function: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DescribeFunctionRow {
+    function_desc: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use datafusion::catalog::Session;
+    use datafusion::execution::context::SessionConfig;
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::not_impl_err;
+    use datafusion_expr::{LogicalPlan, TableSource};
+    use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
+    use sail_common_datafusion::catalog::{
+        DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
+    };
+    use sail_common_datafusion::datasource::{DataSource, SinkInfo, SourceInfo};
+    use sail_common_datafusion::lakesource::{LakeSource, LakeSourceAlterTableOperation};
+    use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
+    use serde::{Deserialize, Serialize};
+
+    use super::*;
+    use crate::provider::CatalogProvider;
+
+    #[derive(Serialize, Deserialize)]
+    struct TestCatalogOutput {
+        value: String,
+    }
+
+    #[derive(Default)]
+    struct TestCatalogObjectDisplay;
+
+    impl CatalogObjectDisplay for TestCatalogObjectDisplay {
+        type Catalog = TestCatalogOutput;
+        type Database = TestCatalogOutput;
+        type Table = TestCatalogOutput;
+        type TableColumn = TestCatalogOutput;
+        type Function = TestCatalogOutput;
+
+        fn catalog(name: String) -> Self::Catalog {
+            TestCatalogOutput { value: name }
+        }
+
+        fn database(status: DatabaseStatus) -> Self::Database {
+            TestCatalogOutput {
+                value: status.database.join("."),
+            }
+        }
+
+        fn table(status: TableStatus) -> Self::Table {
+            TestCatalogOutput { value: status.name }
+        }
+
+        fn table_column(status: TableColumnStatus) -> Self::TableColumn {
+            TestCatalogOutput { value: status.name }
+        }
+
+        fn function(status: FunctionStatus) -> Self::Function {
+            TestCatalogOutput { value: status.name }
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+    struct TestPlanFormatter;
+
+    impl PlanFormatter for TestPlanFormatter {
+        fn data_type_to_simple_string(
+            &self,
+            _data_type: &datafusion::arrow::datatypes::DataType,
+        ) -> datafusion_common::Result<String> {
+            Ok("int".to_string())
+        }
+
+        fn literal_to_string(
+            &self,
+            _literal: &datafusion_common::ScalarValue,
+            _display_timezone: &str,
+        ) -> datafusion_common::Result<String> {
+            not_impl_err!("unused in test")
+        }
+
+        fn function_to_string(
+            &self,
+            _name: &str,
+            _arguments: Vec<&str>,
+            _is_distinct: bool,
+        ) -> datafusion_common::Result<String> {
+            not_impl_err!("unused in test")
+        }
+    }
+
+    struct TestProvider {
+        table_status: TableStatus,
+        alter_error: Option<String>,
+        table_exists: bool,
+        view_lookup_supported: bool,
+    }
+
+    #[async_trait]
+    impl CatalogProvider for TestProvider {
+        fn get_name(&self) -> &str {
+            "test"
+        }
+
+        async fn create_database(
+            &self,
+            _database: &crate::provider::Namespace,
+            _options: CreateDatabaseOptions,
+        ) -> CatalogResult<sail_common_datafusion::catalog::DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn get_database(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<sail_common_datafusion::catalog::DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn list_databases(
+            &self,
+            _prefix: Option<&crate::provider::Namespace>,
+        ) -> CatalogResult<Vec<sail_common_datafusion::catalog::DatabaseStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_database(
+            &self,
+            _database: &crate::provider::Namespace,
+            _options: DropDatabaseOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn create_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: CreateTableOptions,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            table: &str,
+        ) -> CatalogResult<TableStatus> {
+            if self.table_exists {
+                Ok(self.table_status.clone())
+            } else {
+                Err(CatalogError::NotFound(
+                    CatalogObject::Table,
+                    table.to_string(),
+                ))
+            }
+        }
+
+        async fn list_tables(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: DropTableOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn alter_table(
+            &self,
+            _database: &crate::provider::Namespace,
+            _table: &str,
+            _options: AlterTableOptions,
+        ) -> CatalogResult<()> {
+            match &self.alter_error {
+                Some(message) => Err(CatalogError::External(message.clone())),
+                None => Ok(()),
+            }
+        }
+
+        async fn create_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            _view: &str,
+            _options: CreateViewOptions,
+        ) -> CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            view: &str,
+        ) -> CatalogResult<TableStatus> {
+            if self.view_lookup_supported {
+                Err(CatalogError::NotFound(
+                    CatalogObject::View,
+                    view.to_string(),
+                ))
+            } else {
+                Err(CatalogError::NotSupported(
+                    "persistent views are not supported".to_string(),
+                ))
+            }
+        }
+
+        async fn list_views(
+            &self,
+            _database: &crate::provider::Namespace,
+        ) -> CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_view(
+            &self,
+            _database: &crate::provider::Namespace,
+            _view: &str,
+            _options: DropViewOptions,
+        ) -> CatalogResult<()> {
+            unreachable!()
+        }
+    }
+
+    struct TestLakeSource;
+
+    #[async_trait]
+    impl DataSource for TestLakeSource {
+        fn name(&self) -> &str {
+            "delta"
+        }
+
+        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+            Some(self)
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn Session,
+            _info: SourceInfo,
+        ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+            not_impl_err!("unused in test")
+        }
+
+        async fn create_writer(
+            &self,
+            _ctx: &dyn Session,
+            _info: SinkInfo,
+        ) -> datafusion_common::Result<LogicalPlan> {
+            not_impl_err!("unused in test")
+        }
+    }
+
+    #[async_trait]
+    impl LakeSource for TestLakeSource {
+        async fn alter_table(
+            &self,
+            _ctx: &datafusion::execution::TaskContext,
+            _path: &str,
+            _operation: LakeSourceAlterTableOperation,
+            _lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
+        ) -> datafusion_common::Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult>
+        {
+            Ok(Default::default())
+        }
+    }
+
+    fn test_session_context() -> SessionContext {
+        let registry = Arc::new(DataSourceRegistry::new());
+        let register_result = registry.register_data_source(Arc::new(TestLakeSource));
+        assert!(
+            register_result.is_ok(),
+            "failed to register test lake source: {register_result:?}"
+        );
+        let plan_service = Arc::new(PlanService::new(
+            Box::new(DefaultCatalogDisplay::<TestCatalogObjectDisplay>::default()),
+            Box::new(TestPlanFormatter),
+        ));
+        let config = SessionConfig::new()
+            .with_extension(registry)
+            .with_extension(plan_service);
+        SessionContext::new_with_config(config)
+    }
+
+    fn test_manager(alter_error: Option<&str>) -> CatalogManager {
+        test_manager_with_catalog_behavior(alter_error, true, false)
+    }
+
+    fn test_manager_with_catalog_behavior(
+        alter_error: Option<&str>,
+        table_exists: bool,
+        view_lookup_supported: bool,
+    ) -> CatalogManager {
+        let table_status = TableStatus {
+            catalog: Some("test".to_string()),
+            database: vec!["default".to_string()],
+            name: "items".to_string(),
+            kind: TableKind::Table {
+                columns: vec![TableColumnStatus {
+                    name: "id".to_string(),
+                    data_type: datafusion::arrow::datatypes::DataType::Int32,
+                    nullable: false,
+                    comment: None,
+                    default: None,
+                    generated_always_as: None,
+                    identity: None,
+                    is_partition: false,
+                    is_bucket: false,
+                    is_cluster: false,
+                }],
+                comment: None,
+                constraints: vec![],
+                location: Some("s3://bucket/items".to_string()),
+                format: "delta".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                properties: vec![],
+                is_external: true,
+            },
+        };
+        let manager = CatalogManager::try_new(crate::manager::CatalogManagerOptions {
+            catalogs: std::iter::once((
+                "test".to_string(),
+                Arc::new(TestProvider {
+                    table_status,
+                    alter_error: alter_error.map(ToString::to_string),
+                    table_exists,
+                    view_lookup_supported,
+                }) as Arc<dyn CatalogProvider>,
+            ))
+            .collect(),
+            default_catalog: "test".to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        });
+        assert!(
+            manager.is_ok(),
+            "failed to construct test catalog manager: {}",
+            manager
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        );
+        let Ok(manager) = manager else {
+            unreachable!();
+        };
+        manager
+    }
+
+    #[tokio::test]
+    async fn table_or_view_lookup_treats_unsupported_persistent_views_as_missing() {
+        let manager = test_manager_with_catalog_behavior(None, false, false);
+
+        let result = manager.get_table_or_view(&["missing"]).await;
+        assert!(
+            result.is_err(),
+            "expected table-or-view lookup to report missing relation, got success: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(
+            matches!(
+                error,
+                CatalogError::NotFound(CatalogObject::Table, ref message)
+                    if message.contains("[TABLE_OR_VIEW_NOT_FOUND]")
+                        && message.contains("missing")
+            ),
+            "unexpected table-or-view error: {error:?}"
+        );
+
+        let result = manager.get_view(&["missing"]).await;
+        assert!(
+            result.is_err(),
+            "expected explicit view lookup to stay unsupported, got success: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+        assert!(
+            matches!(error, CatalogError::NotSupported(ref message) if message.contains("persistent views")),
+            "unexpected explicit view error: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn alter_table_returns_error_when_catalog_sync_fails() {
+        let ctx = test_session_context();
+        let manager = test_manager(Some("catalog sync failed"));
+        let command = CatalogCommand::AlterTable {
+            table: vec!["items".to_string()],
+            if_exists: false,
+            options: AlterTableOptions::SetTableProperties {
+                properties: vec![("owner".to_string(), "alice".to_string())],
+            },
+        };
+
+        let result = command.execute(ctx.task_ctx().as_ref(), &manager).await;
+        assert!(
+            result.is_err(),
+            "expected catalog sync failure, got success: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(
+            matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
+        );
+    }
 }

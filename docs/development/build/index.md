@@ -1,6 +1,6 @@
 ---
 title: Building the Project
-rank: 2
+rank: 3
 ---
 
 # Building the Project

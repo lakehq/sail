@@ -1,5 +1,25 @@
 Feature: Delta Lake operationMetrics in commitInfo
 
+  Rule: Delta DDL result collection
+
+    Background:
+      Given variable location for temporary directory op_metrics_collect
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_op_metrics_collect
+        """
+
+    Scenario: CREATE TABLE AS SELECT result can be collected
+      When query template
+        """
+        CREATE TABLE delta_op_metrics_collect
+        USING DELTA LOCATION {{ location.sql }}
+        AS SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, value)
+        """
+      Then query result collected
+        | count |
+        | 2     |
+
   Rule: WRITE operationMetrics
 
     Background:
@@ -14,7 +34,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         USING DELTA LOCATION {{ location.sql }}
         """
 
-    @sail-only
     Scenario: Append WRITE reports numFiles, numOutputRows and numOutputBytes
       Given statement
         """
@@ -29,7 +48,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         | operation        |
         | operationMetrics |
 
-    @sail-only
     Scenario: replaceWhere overwrite reports added and removed counters
       Given statement
         """
@@ -64,7 +82,6 @@ Feature: Delta Lake operationMetrics in commitInfo
           (1,'a'),(2,'a'),(3,'b'),(4,'b'),(5,'c')
         """
 
-    @sail-only
     Scenario: Data-predicate DELETE reports numDeletedRows and numCopiedRows
       Given statement
         """
@@ -95,7 +112,6 @@ Feature: Delta Lake operationMetrics in commitInfo
           (1, 2023),(2, 2023),(3, 2024),(4, 2024)
         """
 
-    @sail-only
     Scenario: Partition-only DELETE removes whole files without scanning
       Given statement
         """
@@ -124,7 +140,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         AS t(id, value)
         """
 
-    @sail-only
     Scenario: DV DELETE updates an existing deletion vector
       Given statement
         """
@@ -171,7 +186,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         AS src(id, value, flag)
         """
 
-    @sail-only
     Scenario: Full MERGE reports detailed target row counters
       Given statement
         """
@@ -190,7 +204,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         | operation        |
         | operationMetrics |
 
-    @sail-only
     Scenario: Conditional MERGE counts source rows without actions
       Given statement
         """
@@ -215,7 +228,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         | operation        |
         | operationMetrics |
 
-    @sail-only
     Scenario: Insert-only MERGE fast-appends without removing files
       Given statement
         """
@@ -229,7 +241,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         | operation        |
         | operationMetrics |
 
-    @sail-only
     Scenario: Insert-only MERGE counts duplicate target matches once per source row
       Given statement
         """
@@ -247,7 +258,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         | operation        |
         | operationMetrics |
 
-    @sail-only
     Scenario: Target-only MERGE actions report zero source rows
       Given statement
         """
@@ -270,6 +280,9 @@ Feature: Delta Lake operationMetrics in commitInfo
         | path             |
         | operation        |
         | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                 | value |
+        | operationMetrics.numTargetFilesAdded | 1     |
 
   Rule: MERGE operationMetrics (Merge-on-Read with deletion vectors)
 
@@ -298,7 +311,6 @@ Feature: Delta Lake operationMetrics in commitInfo
         SELECT * FROM VALUES (3,'delete') AS src(id, value)
         """
 
-    @sail-only
     Scenario: MERGE DELETE on DV table reports target deletion vector update counters
       Given statement
         """
@@ -311,3 +323,88 @@ Feature: Delta Lake operationMetrics in commitInfo
         | path             |
         | operation        |
         | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                                          | value |
+        | operationMetrics.numTargetRowsDeleted                         | 1     |
+        | operationMetrics.numTargetRowsMatchedDeleted                  | 1     |
+        | operationMetrics.numTargetRowsNotMatchedBySourceDeleted       | 0     |
+
+    Scenario: Target-only MERGE DELETE on a DV table reports its detailed counter
+      Given statement
+        """
+        MERGE INTO delta_op_metrics_merge_dv AS t
+        USING src_op_metrics_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED BY SOURCE AND t.id = 4 THEN DELETE
+        """
+      Then delta log latest commit info matches snapshot for paths
+        | path             |
+        | operation        |
+        | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                                          | value |
+        | operationMetrics.numTargetRowsDeleted                         | 1     |
+        | operationMetrics.numTargetRowsMatchedDeleted                  | 0     |
+        | operationMetrics.numTargetRowsNotMatchedBySourceDeleted       | 1     |
+
+  Rule: MERGE operationMetrics (Copy-on-Write rewrite with an existing deletion vector)
+
+    Background:
+      Given variable location for temporary directory op_metrics_merge_existing_dv_cow
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_op_metrics_merge_existing_dv_cow
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_op_metrics_merge_existing_dv_cow
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')
+        AS SELECT * FROM VALUES
+          (1,'deleted'),(2,'old'),(3,'keep'),(4,'keep')
+        AS t(id, value)
+        """
+      Given statement
+        """
+        DELETE FROM delta_op_metrics_merge_existing_dv_cow WHERE id = 1
+        """
+      Given statement
+        """
+        ALTER TABLE delta_op_metrics_merge_existing_dv_cow
+        SET TBLPROPERTIES ('delta.enableDeletionVectors' = 'false')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_op_metrics_merge_existing_dv_cow AS
+        SELECT * FROM VALUES (2,'updated') AS src(id, value)
+        """
+
+    Scenario: COW MERGE excludes previously deleted rows from inferred delete metrics
+      Given statement
+        """
+        MERGE INTO delta_op_metrics_merge_existing_dv_cow AS t
+        USING src_op_metrics_merge_existing_dv_cow AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        """
+      Then delta log latest commit info matches snapshot for paths
+        | path             |
+        | operation        |
+        | operationMetrics |
+      Then delta log latest commit info contains
+        | path                                                    | value |
+        | operationMetrics.numTargetRowsUpdated                   | 1     |
+        | operationMetrics.numTargetRowsDeleted                   | 0     |
+        | operationMetrics.numTargetRowsMatchedDeleted            | 0     |
+        | operationMetrics.numTargetRowsNotMatchedBySourceDeleted | 0     |
+      When query
+        """
+        SELECT id, value
+        FROM delta_op_metrics_merge_existing_dv_cow
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | value   |
+        | 2  | updated |
+        | 3  | keep    |
+        | 4  | keep    |

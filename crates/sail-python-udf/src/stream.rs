@@ -2,22 +2,22 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow_pyarrow::{FromPyArrow, ToPyArrow};
+use arrow_pyarrow::FromPyArrow;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
-use pyo3::{pyclass, pymethods, IntoPyObject, Py, PyAny, PyRef, PyRefMut, PyResult, Python};
-use sail_common_datafusion::array::record_batch::record_batch_with_schema;
+use pyo3::{IntoPyObject, Py, PyAny, PyRef, PyRefMut, PyResult, Python, pyclass, pymethods};
+use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
 use tokio::runtime::Handle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::conversion::TryToPy;
 use crate::error::PyUdfResult;
 
 struct PyInputStreamState {
@@ -38,6 +38,7 @@ impl PyInputStreamState {
 struct PyInputStream {
     state: Arc<tokio::sync::Mutex<PyInputStreamState>>,
     handle: Handle,
+    large_var_types: bool,
 }
 
 impl PyInputStream {
@@ -45,6 +46,7 @@ impl PyInputStream {
         input: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
         handle: Handle,
+        large_var_types: bool,
     ) -> Self {
         Self {
             state: Arc::new(tokio::sync::Mutex::new(PyInputStreamState {
@@ -52,6 +54,7 @@ impl PyInputStream {
                 signal,
             })),
             handle,
+            large_var_types,
         }
     }
 }
@@ -65,6 +68,7 @@ impl PyInputStream {
     fn __next__(self_: PyRefMut<'_, Self>) -> PyResult<Py<PyAny>> {
         let state = Arc::clone(&self_.state);
         let handle = self_.handle.clone();
+        let large_var_types = self_.large_var_types;
         let py = self_.py();
         py.detach(|| {
             handle.block_on(async {
@@ -76,7 +80,7 @@ impl PyInputStream {
                     .map(|x| x.map_err(|e| PyRuntimeError::new_err(e.to_string())))
             })
         })
-        .map(|x| x.and_then(|x| x.to_pyarrow(py).map(|b| b.unbind())))
+        .map(|x| x.and_then(|x| x.try_to_py(py, large_var_types).map(|batch| batch.unbind())))
         .unwrap_or(Err(PyStopIteration::new_err("")))
     }
 }
@@ -90,7 +94,8 @@ enum PyMapStreamState {
 }
 
 pub struct PyMapStream {
-    inner: SendableRecordBatchStream,
+    output: ReceiverStream<Result<RecordBatch>>,
+    schema: SchemaRef,
     state: PyMapStreamState,
 }
 
@@ -101,6 +106,7 @@ impl PyMapStream {
         input: SendableRecordBatchStream,
         function: Py<PyAny>,
         output_schema: SchemaRef,
+        large_var_types: bool,
     ) -> Self {
         let (output_tx, output_rx) = mpsc::channel(Self::OUTPUT_CHANNEL_BUFFER);
         let (signal_tx, signal_rx) = oneshot::channel();
@@ -118,6 +124,7 @@ impl PyMapStream {
                     signal_rx,
                     output_tx.clone(),
                     handle,
+                    large_var_types,
                 )
             }) {
                 Ok(()) => {}
@@ -127,10 +134,8 @@ impl PyMapStream {
             }
         });
         Self {
-            inner: Box::pin(RecordBatchStreamAdapter::new(
-                output_schema,
-                ReceiverStream::new(output_rx),
-            )),
+            output: ReceiverStream::new(output_rx),
+            schema: output_schema,
             state: PyMapStreamState::Running {
                 signal: signal_tx,
                 python_task,
@@ -146,12 +151,13 @@ impl PyMapStream {
         signal: oneshot::Receiver<()>,
         sender: mpsc::Sender<Result<RecordBatch>>,
         handle: Handle,
+        large_var_types: bool,
     ) -> PyUdfResult<()> {
         // Create a Python iterator from the input record batch stream and call the function.
         // We could have wrap each record batch in a single-element list and call the function
         // for each record batch, but that does not work if the user wants to maintain state
         // across record batches.
-        let input = PyInputStream::new(input, signal, handle);
+        let input = PyInputStream::new(input, signal, handle, large_var_types);
         let input = input.into_pyobject(py)?;
         let output = function.call1(py, (input,))?.into_bound(py);
         for batch in output.try_iter()? {
@@ -165,7 +171,9 @@ impl PyMapStream {
                 .detach(|| {
                     let batch = batch
                         .map_err(|e| DataFusionError::External(e.into()))
-                        .and_then(|x| record_batch_with_schema(x, &output_schema));
+                        .and_then(|x| {
+                            cast_record_batch_positionally(x, Arc::clone(&output_schema))
+                        });
                     sender.blocking_send(batch)
                 })
                 .is_err()
@@ -179,6 +187,8 @@ impl PyMapStream {
 
 impl Drop for PyMapStream {
     fn drop(&mut self) {
+        // Release producers blocked on a full output channel before joining them.
+        self.output.close();
         let state = std::mem::replace(&mut self.state, PyMapStreamState::Stopped);
         match state {
             PyMapStreamState::Running {
@@ -190,7 +200,7 @@ impl Drop for PyMapStream {
                 // to finish processing all input batches received before the stop signal.
                 // Unfortunately, there is no reliable way to abort the thread cleanly,
                 // so we have to wait for it to finish.
-                let _ = python_task.join();
+                let _ = Python::attach(|py| py.detach(|| python_task.join()));
             }
             PyMapStreamState::Stopped => {}
         }
@@ -201,12 +211,12 @@ impl Stream for PyMapStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(cx)
+        Pin::new(&mut self.output).poll_next(cx)
     }
 }
 
 impl RecordBatchStream for PyMapStream {
     fn schema(&self) -> SchemaRef {
-        self.inner.schema()
+        Arc::clone(&self.schema)
     }
 }

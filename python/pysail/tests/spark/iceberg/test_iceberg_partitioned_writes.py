@@ -1,5 +1,7 @@
 import datetime as dt
 import platform
+import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import List, Tuple  # noqa: UP035
 
@@ -16,7 +18,18 @@ from pyiceberg.partitioning import (
     YearTransform,
 )
 from pyiceberg.schema import Schema
-from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
+from pyiceberg.table import StaticTable
+from pyiceberg.types import (
+    DateType,
+    DecimalType,
+    FixedType,
+    IntegerType,
+    NestedField,
+    StringType,
+    TimestampType,
+    TimeType,
+    UUIDType,
+)
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests.spark.iceberg.utils import create_sql_catalog, pyiceberg_to_pandas
@@ -52,6 +65,155 @@ def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:  # noqa
     for i in range(12):
         rows.append((i + 1, letters[i], start_ts + dt.timedelta(days=i), start_date + dt.timedelta(days=i)))  # noqa: PERF401
     return rows
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_binary_identity_partition_dataframe_write_keeps_typed_values(spark, tmp_path):
+    table_path = tmp_path / "binary_identity_dataframe"
+    frame = spark.createDataFrame(
+        [
+            (1, bytes.fromhex("fbff")),
+            (2, bytes.fromhex("010203")),
+            (3, None),
+        ],
+        schema="id INT, payload BINARY",
+    )
+
+    frame.write.format("iceberg").mode("overwrite").partitionBy("payload").save(table_path.as_uri())
+
+    result = spark.read.format("iceberg").load(table_path.as_uri())
+    rows = [(row.id, bytes(row.payload) if row.payload is not None else None) for row in result.orderBy("id").collect()]
+    assert rows == [
+        (1, bytes.fromhex("fbff")),
+        (2, bytes.fromhex("010203")),
+        (3, None),
+    ]
+    filtered_ids = [row.id for row in result.filter("payload = X'FBFF'").collect()]
+    assert filtered_ids == [1]
+
+    table = StaticTable.from_metadata(table_path.as_uri())
+    manifest_partitions = {
+        bytes(task.file.partition[0]) if task.file.partition[0] is not None else None
+        for task in table.scan().plan_files()
+    }
+    assert manifest_partitions == {bytes.fromhex("fbff"), bytes.fromhex("010203"), None}
+
+    partition_directories = {path.name for path in (table_path / "data").iterdir() if path.is_dir()}
+    assert partition_directories == {
+        "payload=%2B%2F8%3D",
+        "payload=AQID",
+        "payload=null",
+    }
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_fixed_identity_partition_dataframe_write_uses_base64_path(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    table_name = "default.fixed_identity_dataframe"
+    schema = Schema(
+        NestedField(1, "id", IntegerType(), required=True),
+        NestedField(2, "fixed_value", FixedType(3), required=False),
+    )
+    spec = PartitionSpec(PartitionField(2, 1000, IdentityTransform(), "fixed_value"))
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
+    try:
+        spark.createDataFrame(
+            [(1, bytes.fromhex("010203")), (2, None)],
+            schema="id INT, fixed_value BINARY",
+        ).write.format("iceberg").mode("append").save(table.location())
+
+        rows = spark.read.format("iceberg").load(table.location()).orderBy("id").collect()
+        assert [(row.id, bytes(row.fixed_value) if row.fixed_value is not None else None) for row in rows] == [
+            (1, bytes.fromhex("010203")),
+            (2, None),
+        ]
+
+        table_path = Path(table.location().removeprefix("file://"))
+        partition_directories = {path.name for path in (table_path / "data").iterdir() if path.is_dir()}
+        assert partition_directories == {"fixed_value=AQID", "fixed_value=null"}
+    finally:
+        catalog.drop_table(table_name)
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_logical_identity_partitions_use_jvm_manifest_values_and_paths(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    table_name = "default.logical_identity_partitions"
+    schema = Schema(
+        NestedField(1, "id", IntegerType(), required=True),
+        NestedField(2, "decimal_value", DecimalType(9, 2), required=False),
+        NestedField(3, "uuid_value", UUIDType(), required=False),
+        NestedField(4, "time_value", TimeType(), required=False),
+    )
+    spec = PartitionSpec(
+        PartitionField(2, 1000, IdentityTransform(), "decimal_value"),
+        PartitionField(3, 1001, IdentityTransform(), "uuid_value"),
+        PartitionField(4, 1002, IdentityTransform(), "time_value"),
+    )
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
+    expected_uuid = uuid.UUID("00112233-4455-6677-8899-aabbccddeeff")
+    expected_time = dt.time(10, 12, 55, 38_194)
+    expected_time_micros = 36_775_038_194
+    try:
+        # PySpark clients before 4.1 cannot deserialize Spark Connect TIME schemas.
+        frame = spark.createDataFrame(
+            [(1, Decimal("12.34"), expected_uuid.bytes, expected_time.isoformat())],
+            schema="id INT, decimal_value DECIMAL(9, 2), uuid_value BINARY, time_text STRING",
+        ).selectExpr(
+            "id",
+            "decimal_value",
+            "uuid_value",
+            "CAST(time_text AS TIME(6)) AS time_value",
+        )
+        frame.write.format("iceberg").mode("append").save(table.location())
+
+        rows = spark.read.format("iceberg").load(table.location()).select("id").collect()
+        assert [row.id for row in rows] == [1]
+
+        reloaded = StaticTable.from_metadata(table.location())
+        manifest_partition = next(iter(reloaded.scan().plan_files())).file.partition
+        assert manifest_partition[0] == Decimal("12.34")
+        assert manifest_partition[1] == expected_uuid
+        assert manifest_partition[2] == expected_time_micros
+
+        table_path = Path(table.location().removeprefix("file://"))
+        data_files = list(
+            (
+                table_path
+                / "data"
+                / "decimal_value=12.34"
+                / "uuid_value=00112233-4455-6677-8899-aabbccddeeff"
+                / "time_value=10%3A12%3A55.038194"
+            ).glob("*.parquet")
+        )
+        assert len(data_files) == 1
+    finally:
+        catalog.drop_table(table_name)
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_identity_partition_name_and_value_use_jvm_encoding(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    table_name = "default.identity_partition_form_encoding"
+    schema = Schema(
+        NestedField(1, "id", IntegerType(), required=True),
+        NestedField(2, "value", StringType(), required=False),
+    )
+    spec = PartitionSpec(PartitionField(2, 1000, IdentityTransform(), "part/name"))
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
+    try:
+        spark.createDataFrame([(1, "a b/c+")], schema="id INT, value STRING").write.format("iceberg").mode(
+            "append"
+        ).save(table.location())
+
+        rows = spark.read.format("iceberg").load(table.location()).collect()
+        assert [(row.id, row.value) for row in rows] == [(1, "a b/c+")]
+
+        table_path = Path(table.location().removeprefix("file://"))
+        partition_directories = {path.name for path in (table_path / "data").iterdir() if path.is_dir()}
+        assert partition_directories == {"part%2Fname=a+b%2Fc%2B"}
+    finally:
+        catalog.drop_table(table_name)
 
 
 @pytest.mark.parametrize(
@@ -171,7 +333,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
         df = spark.createDataFrame(rows, schema="number INT, letter STRING, ts TIMESTAMP, dt DATE")
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
-        py_tbl = catalog.load_table(table_name)
+        py_tbl = StaticTable.from_metadata(table.location())
         actual = pyiceberg_to_pandas(py_tbl, sort_by="number")
 
         expected_letters = [
@@ -199,7 +361,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
 def test_iceberg_partition_writes_sql(spark, tmp_path):
     warehouse = tmp_path / "warehouse"
     warehouse.mkdir(parents=True, exist_ok=True)
-    path_single = f"file://{warehouse / 'ice_single'}"
+    path_single = (warehouse / "ice_single").as_uri()
     spark.sql(
         f"""
         CREATE TABLE tmp_ice_single (
@@ -221,7 +383,7 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
     finally:
         spark.sql("DROP TABLE IF EXISTS tmp_ice_single")
 
-    path_multi = f"file://{warehouse / 'ice_multi'}"
+    path_multi = (warehouse / "ice_multi").as_uri()
     spark.sql(
         f"""
         CREATE TABLE tmp_ice_multi (
@@ -245,6 +407,43 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
         assert actual == {"region=1/category=1", "region=1/category=2", "region=2/category=1", "region=2/category=2"}
     finally:
         spark.sql("DROP TABLE IF EXISTS tmp_ice_multi")
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_identity_partition_distinguishes_null_from_null_string(spark, tmp_path):
+    table_name = "iceberg_partition_null_identity"
+    table_path = tmp_path / table_name
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              part STRING
+            )
+            USING iceberg
+            PARTITIONED BY (part)
+            LOCATION '{escape_sql_string_literal(table_path.as_uri())}'
+            """
+        )
+        partition_rows_insert_sql = (
+            f"INSERT INTO {table_name} VALUES "  # noqa: S608
+            "(1, NULL), "
+            "(2, 'null')"
+        )
+        spark.sql(partition_rows_insert_sql)
+
+        null_partition_rows_sql = f"SELECT id FROM {table_name} WHERE part IS NULL"  # noqa: S608
+        literal_null_partition_rows_sql = f"SELECT id FROM {table_name} WHERE part = 'null'"  # noqa: S608
+        null_rows = [row.id for row in spark.sql(null_partition_rows_sql).collect()]
+        string_rows = [row.id for row in spark.sql(literal_null_partition_rows_sql).collect()]
+        assert null_rows == [1]
+        assert string_rows == [2]
+
+        partition_files = list((table_path / "data" / "part=null").glob("*.parquet"))
+        assert len(partition_files) == 2  # noqa: PLR2004
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")

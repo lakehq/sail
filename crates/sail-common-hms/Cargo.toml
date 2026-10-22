@@ -1,0 +1,20 @@
+[package]
+name = "sail-common-hms"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+
+[lints]
+workspace = true
+
+[build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }
+
+[dependencies]
+sail-thrift = { path = "../sail-thrift" }
+
+thrift = { workspace = true }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+tokio = { workspace = true }

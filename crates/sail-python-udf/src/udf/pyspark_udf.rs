@@ -1,8 +1,7 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{ArrayData, ArrayRef, make_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
@@ -12,7 +11,7 @@ use pyo3::{Py, PyAny, Python};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
 use crate::conversion::{TryFromPy, TryToPy};
-use crate::error::PyUdfResult;
+use crate::error::{PyUdfError, PyUdfResult};
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
@@ -21,6 +20,7 @@ pub enum PySparkUdfKind {
     Batch,
     ArrowBatch,
     ScalarPandas,
+    // Extracted into partition stream execution during analysis.
     ScalarPandasIter,
     // Spark 4.0 Arrow-native scalar UDF types
     ScalarArrow,
@@ -103,7 +103,9 @@ impl PySparkUDF {
                 PySparkUdfKind::ArrowBatch => PySpark::arrow_batch_udf(py, udf, &self.config)?,
                 PySparkUdfKind::ScalarPandas => PySpark::scalar_pandas_udf(py, udf, &self.config)?,
                 PySparkUdfKind::ScalarPandasIter => {
-                    PySpark::scalar_pandas_iter_udf(py, udf, &self.config)?
+                    return Err(PyUdfError::internal(
+                        "scalar iterator UDF requires partition stream execution",
+                    ));
                 }
                 // Arrow-native: no Pandas conversion, pass Arrow arrays directly
                 PySparkUdfKind::ScalarArrow => PySpark::scalar_arrow_udf(py, udf, &self.config)?,
@@ -118,10 +120,6 @@ impl PySparkUDF {
 }
 
 impl ScalarUDFImpl for PySparkUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         &self.name
     }
@@ -141,7 +139,13 @@ impl ScalarUDFImpl for PySparkUDF {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
         let udf = Python::attach(|py| self.udf(py))?;
         let data = Python::attach(|py| -> PyUdfResult<_> {
-            let output = udf.call1(py, (args.try_to_py(py)?, number_rows))?;
+            let output = udf.call1(
+                py,
+                (
+                    args.try_to_py(py, self.config.arrow_use_large_var_types)?,
+                    number_rows,
+                ),
+            )?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;
         let array = cast(&make_array(data), &self.output_type)?;

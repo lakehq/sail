@@ -1,0 +1,27 @@
+>>> from pyspark.ml.linalg import VectorUDT
+>>> from pyspark.sql.types import LongType, StructType
+>>> from pysail.tests.spark.dataframe.udt import NamedPythonUDT, UnnamedPythonUDT
+>>> schema = StructType().add("key", LongType()).add("vec", VectorUDT())
+>>> df = spark.createDataFrame(data=[], schema=schema)
+>>> df
+DataFrame[key: bigint, vec: vector]
+>>> df.printSchema()  # doctest: +SKIP
+root
+ |-- key: long (nullable = true)
+ |-- vec: vector (nullable = true)
+>>> schema = StructType().add("key", LongType()).add("a", UnnamedPythonUDT())
+>>> df = spark.createDataFrame(data=[], schema=schema)
+>>> df
+DataFrame[key: bigint, a: udt]
+>>> df.printSchema()  # doctest: +SKIP
+root
+ |-- key: long (nullable = true)
+ |-- a: pythonuserdefined (nullable = true)
+>>> schema = StructType().add("key", LongType()).add("b", NamedPythonUDT())
+>>> df = spark.createDataFrame(data=[], schema=schema)
+>>> df
+DataFrame[key: bigint, b: foo]
+>>> df.printSchema()  # doctest: +SKIP
+root
+ |-- key: long (nullable = true)
+ |-- b: pythonuserdefined (nullable = true)

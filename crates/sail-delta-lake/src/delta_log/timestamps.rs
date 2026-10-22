@@ -1,10 +1,10 @@
 use object_store::{ObjectMeta, ObjectStoreExt};
 
+use crate::delta_log::{LogStore, get_actions};
 use crate::spec::{
-    checksum_path, commit_path, Action, DeltaError, DeltaResult, Metadata, Protocol,
-    TableProperties, VersionChecksum,
+    Action, DeltaError, DeltaResult, Metadata, Protocol, TableProperties, VersionChecksum,
+    checksum_path, commit_path,
 };
-use crate::storage::{get_actions, LogStore};
 
 pub(crate) fn in_commit_timestamp_from_actions(actions: &[Action]) -> Option<i64> {
     actions.iter().find_map(|action| match action {
@@ -146,8 +146,8 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
     use crate::spec::{CommitInfo, DataType, Metadata, StructField, StructType, TableFeature};
-    use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
         default_logstore(
@@ -253,8 +253,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_version_timestamp_ignores_pre_enable_ict_in_checksum_and_commit(
-    ) -> DeltaResult<()> {
+    async fn resolve_version_timestamp_ignores_pre_enable_ict_in_checksum_and_commit()
+    -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store.clone());
         let pre_enable_protocol = Protocol::new(1, 2, None, None);

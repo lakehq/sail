@@ -1,18 +1,18 @@
 use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
-use datafusion::physical_plan::{displayable, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, displayable};
 use datafusion::prelude::SessionContext;
-use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result;
+use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
-use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
+use crate::resolver::plan::NamedPlan;
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
 pub mod catalog;
@@ -21,6 +21,7 @@ pub mod error;
 pub mod explain;
 pub mod formatter;
 pub mod function;
+pub mod procedure;
 pub mod resolver;
 mod streaming;
 

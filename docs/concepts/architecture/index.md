@@ -5,11 +5,11 @@ rank: 1
 
 # Architecture
 
-Sail is designed to be a high-performance, user-friendly compute engine that supports both local and cluster modes.
+Sail is a high-performance, user-friendly compute engine that supports both local and cluster modes.
 The **local mode** is designed for ad-hoc data analysis and development, while the **cluster mode** supports distributed data processing at scale.
-The architecture of Sail allows for smooth transitions between these modes, enabling users to scale their workloads from laptops to clusters with minimal friction.
+The architecture of Sail allows for transitions between these modes, so users can scale their workloads from laptops to clusters with minimal friction.
 
-Sail serves as a Spark Connect server that maintains a bidirectional gRPC connection with the PySpark client.
+Sail is a Spark Connect server that maintains a bidirectional gRPC connection with the PySpark client.
 The PySpark client submits execution requests and receives execution results through this connection.
 
 The Sail server performs semantic analysis on the submitted execution requests and generates an optimized physical execution plan, which is discussed in more detail on the [Query Planning](../query-planning/) page.
@@ -21,7 +21,7 @@ The physical plan is then executed in different ways depending on the mode.
 
 In local mode, Sail runs as a single process.
 Each session is powered by a **local job runner** responsible for executing the optimized physical plan.
-The local job runner can use multiple threads to process data partitions in parallel, leveraging the available CPU cores on the host.
+The local job runner can use multiple threads to process data partitions in parallel, using the available CPU cores on the host.
 
 ## Cluster Mode
 
@@ -35,7 +35,7 @@ Sail operates with a separation of concerns between the **control plane** and th
 For the control plane, the internal Sail gRPC protocol is used for communication between the driver and workers.
 The driver and workers act as both gRPC servers and clients.
 Note that the Sail workers do not communicate with each other in the control plane.
-The **actor model** forms the backbone of the control plane, offering a concurrency model that ensures state is safely managed without locks.
+The **actor model** is the basis of the control plane, providing a concurrency model that manages state safely without locks.
 
 For the data plane, the Arrow Flight gRPC protocol is used for exchanging shuffle data among the workers and returning results from the workers to the driver.
 

@@ -1,12 +1,11 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_int32_array, as_string_view_array};
-use datafusion_common::types::{logical_int32, logical_string, NativeType};
+use datafusion_common::types::{NativeType, logical_int32, logical_string};
 use datafusion_common::utils::datafusion_strsim;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureClass};
 use datafusion_expr_common::type_coercion::binary::{binary_to_string_coercion, string_coercion};
@@ -61,10 +60,6 @@ impl Levenshtein {
 }
 
 impl ScalarUDFImpl for Levenshtein {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "levenshtein"
     }

@@ -7,7 +7,7 @@ description: >-
 
 # Welcome
 
-**Sail** :sailboat: is an open-source multimodal compute engine designed for both single-host and distributed settings. Our mission is to **unify batch processing, stream processing, and compute-intensive AI workloads**.
+**Sail** :sailboat: is an open-source multimodal compute engine designed for both single-host and distributed settings. Our mission is to unify batch processing, stream processing, and compute-intensive AI workloads.
 
 You can start with the [Introduction](/introduction/) to get an overview of Sail.
 

@@ -17,9 +17,15 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/values.rs
 
+use datafusion::arrow::compute::kernels::cast::rescale_decimal;
+use datafusion::arrow::datatypes::Decimal128Type;
 use ordered_float::OrderedFloat;
+use sail_common::spec as sail_spec;
 use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 use serde_json::Value as JsonValue;
+
+use crate::spec::avro_utils::avro_compatible_name;
 
 /// Literal values used in Iceberg
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -29,6 +35,7 @@ pub enum Literal {
     Struct(Vec<(String, Option<Literal>)>),
     List(Vec<Option<Literal>>),
     Map(Vec<(Literal, Option<Literal>)>),
+    Null,
 }
 
 /// Primitive literal values
@@ -43,7 +50,7 @@ pub enum PrimitiveLiteral {
     Int128(i128),
     String(String),
     UInt128(u128),
-    Binary(Vec<u8>),
+    Binary(#[serde(with = "serde_bytes")] Vec<u8>),
 }
 
 impl PartialOrd for PrimitiveLiteral {
@@ -103,9 +110,387 @@ impl Datum {
     pub fn new(r#type: crate::spec::types::PrimitiveType, literal: PrimitiveLiteral) -> Self {
         Self { r#type, literal }
     }
+
+    /// Encode the datum using Iceberg's single-value binary representation.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
+        let literal = self.r#type.promote_literal(&self.literal).ok_or_else(|| {
+            format!(
+                "Literal is not compatible with Iceberg type {}",
+                self.r#type
+            )
+        })?;
+        let bytes = match literal.as_ref() {
+            PrimitiveLiteral::Boolean(value) => vec![u8::from(*value)],
+            PrimitiveLiteral::Int(value) => value.to_le_bytes().to_vec(),
+            PrimitiveLiteral::Long(value) => value.to_le_bytes().to_vec(),
+            PrimitiveLiteral::Float(value) => value.0.to_le_bytes().to_vec(),
+            PrimitiveLiteral::Double(value) => value.0.to_le_bytes().to_vec(),
+            PrimitiveLiteral::Int128(value) => {
+                let bytes = value.to_be_bytes();
+                let mut start = 0;
+                while start < bytes.len() - 1 {
+                    let current = bytes[start];
+                    let next = bytes[start + 1];
+                    let redundant_positive = current == 0x00 && (next & 0x80) == 0;
+                    let redundant_negative = current == 0xff && (next & 0x80) != 0;
+                    if redundant_positive || redundant_negative {
+                        start += 1;
+                    } else {
+                        break;
+                    }
+                }
+                bytes[start..].to_vec()
+            }
+            PrimitiveLiteral::String(value) => value.as_bytes().to_vec(),
+            PrimitiveLiteral::UInt128(value) => value.to_be_bytes().to_vec(),
+            PrimitiveLiteral::Binary(value) => value.clone(),
+        };
+        Ok(bytes)
+    }
+}
+
+fn sail_literal_from_str(
+    value: &str,
+    data_type: &crate::spec::types::Type,
+) -> Result<sail_spec::Literal, String> {
+    use std::str::FromStr;
+
+    use chrono::{NaiveDate, NaiveTime, Timelike};
+    use datafusion::arrow::array::timezone::Tz;
+    use sail_common_datafusion::utils::datetime::localize_with_fallback;
+    use sail_sql_analyzer::expression::from_ast_expression;
+    use sail_sql_analyzer::literal::numeric::{
+        parse_decimal_128_string, parse_f32_string, parse_f64_string, parse_i32_string,
+        parse_i64_string,
+    };
+    use sail_sql_analyzer::parser::{parse_date, parse_expression, parse_time, parse_timestamp};
+
+    use crate::spec::types::{PrimitiveType, Type};
+
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("null") {
+        return Ok(sail_spec::Literal::Null);
+    }
+
+    let temporal_value = match (
+        data_type,
+        parse_expression(value).and_then(from_ast_expression),
+    ) {
+        (Type::Primitive(PrimitiveType::Date), Ok(sail_spec::Expr::UnresolvedDate { value }))
+        | (Type::Primitive(PrimitiveType::Time), Ok(sail_spec::Expr::UnresolvedTime { value }))
+        | (
+            Type::Primitive(
+                PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs,
+            ),
+            Ok(sail_spec::Expr::UnresolvedTimestamp { value, .. }),
+        ) => Some(value),
+        (
+            Type::Primitive(
+                PrimitiveType::Date
+                | PrimitiveType::Time
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs,
+            ),
+            Ok(sail_spec::Expr::Literal(sail_spec::Literal::Utf8 { value })),
+        ) => value,
+        _ => None,
+    };
+    let value = temporal_value.as_deref().unwrap_or(value);
+
+    fn parse_error(e: impl std::fmt::Display) -> String {
+        e.to_string()
+    }
+    fn parse_bool(value: &str) -> Result<bool, String> {
+        if value.eq_ignore_ascii_case("true") {
+            Ok(true)
+        } else if value.eq_ignore_ascii_case("false") {
+            Ok(false)
+        } else {
+            value.parse::<bool>().map_err(parse_error)
+        }
+    }
+
+    match data_type {
+        Type::Primitive(PrimitiveType::Boolean)
+        | Type::Primitive(PrimitiveType::Int)
+        | Type::Primitive(PrimitiveType::Long)
+        | Type::Primitive(PrimitiveType::Float)
+        | Type::Primitive(PrimitiveType::Double)
+        | Type::Primitive(PrimitiveType::Decimal { .. }) => {
+            // SQL serialization may separate a unary sign from the numeric token.
+            let signed_value = value
+                .strip_prefix(['+', '-'])
+                .map(|magnitude| format!("{}{}", &value[..1], magnitude.trim_start()));
+            let value = signed_value.as_deref().unwrap_or(value);
+            let literal = match data_type {
+                Type::Primitive(PrimitiveType::Boolean) => sail_spec::Literal::Boolean {
+                    value: Some(parse_bool(value)?),
+                },
+                Type::Primitive(PrimitiveType::Int) => {
+                    parse_i32_string(value).map_err(parse_error)?
+                }
+                Type::Primitive(PrimitiveType::Long) => {
+                    parse_i64_string(value).map_err(parse_error)?
+                }
+                Type::Primitive(PrimitiveType::Float) => {
+                    parse_f32_string(value).map_err(parse_error)?
+                }
+                Type::Primitive(PrimitiveType::Double) => {
+                    parse_f64_string(value).map_err(parse_error)?
+                }
+                Type::Primitive(PrimitiveType::Decimal { .. }) => {
+                    parse_decimal_128_string(value).map_err(parse_error)?
+                }
+                _ => unreachable!(),
+            };
+            Ok(literal)
+        }
+        Type::Primitive(PrimitiveType::Date) => {
+            let date = parse_date(value).map_err(parse_error)?;
+            let date = NaiveDate::try_from(date).map_err(parse_error)?;
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).ok_or("Bad epoch")?;
+            Ok(sail_spec::Literal::Date32 {
+                days: Some((date - epoch).num_days() as i32),
+            })
+        }
+        Type::Primitive(PrimitiveType::Time) => {
+            let time = parse_time(value).map_err(parse_error)?;
+            let time = NaiveTime::try_from(time).map_err(parse_error)?;
+            let microseconds = time.num_seconds_from_midnight() as i64 * 1_000_000
+                + time.nanosecond() as i64 / 1_000;
+            Ok(sail_spec::Literal::Time64Microsecond {
+                microseconds: Some(microseconds),
+            })
+        }
+        Type::Primitive(PrimitiveType::Timestamp) => {
+            let timestamp = parse_timestamp(value).map_err(parse_error)?;
+            let (timestamp, _) = timestamp.into_naive().map_err(parse_error)?;
+            Ok(sail_spec::Literal::TimestampMicrosecond {
+                microseconds: Some(timestamp.and_utc().timestamp_micros()),
+                timestamp_type: sail_spec::TimestampType::WithoutTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::Timestamptz) => {
+            let timestamp = parse_timestamp(value).map_err(parse_error)?;
+            let (timestamp, timezone) = timestamp.into_naive().map_err(parse_error)?;
+            let timestamp = if timezone.is_empty() {
+                timestamp.and_utc()
+            } else {
+                let timezone = Tz::from_str(timezone).map_err(parse_error)?;
+                localize_with_fallback(&timezone, &timestamp).map_err(parse_error)?
+            };
+            Ok(sail_spec::Literal::TimestampMicrosecond {
+                microseconds: Some(timestamp.timestamp_micros()),
+                timestamp_type: sail_spec::TimestampType::WithLocalTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::TimestampNs) => {
+            let timestamp = parse_timestamp(value).map_err(parse_error)?;
+            let (timestamp, _) = timestamp.into_naive().map_err(parse_error)?;
+            Ok(sail_spec::Literal::TimestampNanosecond {
+                nanoseconds: Some(
+                    timestamp
+                        .and_utc()
+                        .timestamp_nanos_opt()
+                        .ok_or("timestamp nanoseconds out of range")?,
+                ),
+                timestamp_type: sail_spec::TimestampType::WithoutTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::TimestamptzNs) => {
+            let timestamp = parse_timestamp(value).map_err(parse_error)?;
+            let (timestamp, timezone) = timestamp.into_naive().map_err(parse_error)?;
+            let timestamp = if timezone.is_empty() {
+                timestamp.and_utc()
+            } else {
+                let timezone = Tz::from_str(timezone).map_err(parse_error)?;
+                localize_with_fallback(&timezone, &timestamp).map_err(parse_error)?
+            };
+            Ok(sail_spec::Literal::TimestampNanosecond {
+                nanoseconds: Some(
+                    timestamp
+                        .timestamp_nanos_opt()
+                        .ok_or("timestamp nanoseconds out of range")?,
+                ),
+                timestamp_type: sail_spec::TimestampType::WithLocalTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::String | PrimitiveType::Uuid) => {
+            match parse_expression(value)
+                .and_then(from_ast_expression)
+                .map_err(parse_error)?
+            {
+                sail_spec::Expr::Literal(sail_spec::Literal::Utf8 { value }) => {
+                    Ok(sail_spec::Literal::Utf8 { value })
+                }
+                other => Err(format!("expected string literal, got {other:?}")),
+            }
+        }
+        Type::Primitive(PrimitiveType::Binary) => {
+            match parse_expression(value)
+                .and_then(from_ast_expression)
+                .map_err(parse_error)?
+            {
+                sail_spec::Expr::Literal(sail_spec::Literal::Binary { value }) => {
+                    Ok(sail_spec::Literal::Binary { value })
+                }
+                sail_spec::Expr::Literal(sail_spec::Literal::Utf8 { value }) => {
+                    Ok(sail_spec::Literal::Binary {
+                        value: value.map(String::into_bytes),
+                    })
+                }
+                other => Err(format!("expected binary literal, got {other:?}")),
+            }
+        }
+        Type::Primitive(PrimitiveType::Fixed(size)) => {
+            let size = i32::try_from(*size).map_err(parse_error)?;
+            match parse_expression(value)
+                .and_then(from_ast_expression)
+                .map_err(parse_error)?
+            {
+                sail_spec::Expr::Literal(sail_spec::Literal::Binary { value }) => {
+                    Ok(sail_spec::Literal::FixedSizeBinary { size, value })
+                }
+                sail_spec::Expr::Literal(sail_spec::Literal::Utf8 { value }) => {
+                    Ok(sail_spec::Literal::FixedSizeBinary {
+                        size,
+                        value: value.map(String::into_bytes),
+                    })
+                }
+                other => Err(format!("expected fixed-size binary literal, got {other:?}")),
+            }
+        }
+        Type::Primitive(PrimitiveType::Unknown) => {
+            Err("string defaults for Iceberg unknown type are not supported".to_string())
+        }
+        Type::Primitive(PrimitiveType::Variant) => {
+            Err("string defaults for Iceberg variant type are not supported".to_string())
+        }
+        Type::Primitive(PrimitiveType::Geometry { .. }) => {
+            Err("string defaults for Iceberg geometry type are not supported".to_string())
+        }
+        Type::Primitive(PrimitiveType::Geography { .. }) => {
+            Err("string defaults for Iceberg geography type are not supported".to_string())
+        }
+        Type::Struct(_) | Type::List(_) | Type::Map(_) => {
+            Err("string defaults for complex Iceberg types are not supported".to_string())
+        }
+    }
+}
+
+fn parse_uuid_to_u128(s: &str) -> Result<u128, String> {
+    uuid::Uuid::parse_str(s)
+        .map(|value| value.as_u128())
+        .map_err(|error| error.to_string())
 }
 
 impl Literal {
+    pub fn try_from_str(
+        value: &str,
+        data_type: &crate::spec::types::Type,
+    ) -> Result<Option<Self>, String> {
+        let literal = sail_literal_from_str(value, data_type)?;
+        Self::try_from_sail_literal(literal, data_type)
+    }
+
+    pub fn try_from_sail_literal(
+        literal: sail_spec::Literal,
+        data_type: &crate::spec::types::Type,
+    ) -> Result<Option<Self>, String> {
+        use crate::spec::types::{PrimitiveType, Type};
+
+        Ok(match (data_type, literal) {
+            (_, sail_spec::Literal::Null) => None,
+            (Type::Primitive(PrimitiveType::Boolean), sail_spec::Literal::Boolean { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Boolean(v)))
+            }
+            (Type::Primitive(PrimitiveType::Int), sail_spec::Literal::Int32 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Int(v)))
+            }
+            (Type::Primitive(PrimitiveType::Long), sail_spec::Literal::Int64 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v)))
+            }
+            (Type::Primitive(PrimitiveType::Float), sail_spec::Literal::Float32 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(v))))
+            }
+            (Type::Primitive(PrimitiveType::Double), sail_spec::Literal::Float64 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(v))))
+            }
+            (Type::Primitive(PrimitiveType::Date), sail_spec::Literal::Date32 { days }) => {
+                days.map(|v| Literal::Primitive(PrimitiveLiteral::Int(v)))
+            }
+            (
+                Type::Primitive(PrimitiveType::Time),
+                sail_spec::Literal::Time64Microsecond { microseconds },
+            ) => microseconds.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v))),
+            (
+                Type::Primitive(PrimitiveType::Timestamp | PrimitiveType::Timestamptz),
+                sail_spec::Literal::TimestampMicrosecond { microseconds, .. },
+            ) => microseconds.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v))),
+            (
+                Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs),
+                sail_spec::Literal::TimestampNanosecond { nanoseconds, .. },
+            ) => nanoseconds.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v))),
+            (Type::Primitive(PrimitiveType::String), sail_spec::Literal::Utf8 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::String(v)))
+            }
+            (Type::Primitive(PrimitiveType::Uuid), sail_spec::Literal::Utf8 { value }) => value
+                .map(|v| parse_uuid_to_u128(&v).map(PrimitiveLiteral::UInt128))
+                .transpose()?
+                .map(Literal::Primitive),
+            (Type::Primitive(PrimitiveType::Binary), sail_spec::Literal::Binary { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Binary(v)))
+            }
+            (
+                Type::Primitive(PrimitiveType::Fixed(size)),
+                sail_spec::Literal::FixedSizeBinary { value, .. },
+            ) => value
+                .map(|v| {
+                    if v.len() == *size as usize {
+                        Ok(Literal::Primitive(PrimitiveLiteral::Binary(v)))
+                    } else {
+                        Err(format!(
+                            "Fixed literal length {} does not match Iceberg fixed length {size}",
+                            v.len()
+                        ))
+                    }
+                })
+                .transpose()?,
+            (
+                Type::Primitive(PrimitiveType::Decimal { precision, scale }),
+                sail_spec::Literal::Decimal128 {
+                    value,
+                    precision: source_precision,
+                    scale: source_scale,
+                },
+            ) => value
+                .map(|value| {
+                    let precision = u8::try_from(*precision).map_err(|e| e.to_string())?;
+                    let scale = i8::try_from(*scale).map_err(|e| e.to_string())?;
+                    rescale_decimal::<Decimal128Type, Decimal128Type>(
+                        value,
+                        source_precision,
+                        source_scale,
+                        precision,
+                        scale,
+                    )
+                    .map(|v| Literal::Primitive(PrimitiveLiteral::Int128(v)))
+                    .ok_or_else(|| format!("Decimal literal cannot be represented as {data_type}"))
+                })
+                .transpose()?,
+            (expected, literal) => {
+                return Err(format!(
+                    "Sail literal {literal:?} is not supported for Iceberg type {expected:?}"
+                ));
+            }
+        })
+    }
+
     pub fn try_from_json(
         value: JsonValue,
         data_type: &crate::spec::types::Type,
@@ -156,7 +541,7 @@ impl Literal {
             }
             Err(last_err.unwrap_or_else(|| "Invalid time".to_string()))
         }
-        fn parse_ts_to_micros(s: &str) -> Result<i64, String> {
+        fn parse_timestamp_value(s: &str, nanoseconds: bool) -> Result<i64, String> {
             // Accept naive timestamp like 2020-01-01T12:34:56[.ffffff]
             let fmt_candidates = [
                 "%Y-%m-%dT%H:%M:%S",
@@ -172,8 +557,15 @@ impl Literal {
                             .ok_or("Bad epoch")?
                             .and_hms_nano_opt(0, 0, 0, 0)
                             .ok_or("Bad epoch")?;
-                        let micros = (dt - epoch).num_microseconds().ok_or("overflow")?;
-                        return Ok(micros);
+                        return if nanoseconds {
+                            (dt - epoch)
+                                .num_nanoseconds()
+                                .ok_or_else(|| "timestamp overflow".to_string())
+                        } else {
+                            (dt - epoch)
+                                .num_microseconds()
+                                .ok_or_else(|| "timestamp overflow".to_string())
+                        };
                     }
                     Err(e) => last_err = Some(e.to_string()),
                 }
@@ -182,22 +574,32 @@ impl Literal {
             match chrono::DateTime::parse_from_rfc3339(s)
                 .or_else(|_| chrono::DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f%:z"))
             {
-                Ok(dt) => Ok(dt.timestamp_micros()),
+                Ok(dt) => {
+                    if nanoseconds {
+                        dt.timestamp_nanos_opt()
+                            .ok_or_else(|| "timestamp overflow".to_string())
+                    } else {
+                        Ok(dt.timestamp_micros())
+                    }
+                }
                 Err(_) => Err(last_err.unwrap_or_else(|| "Invalid timestamp".to_string())),
             }
         }
 
-        fn parse_uuid_to_u128(s: &str) -> Result<u128, String> {
-            let u = uuid::Uuid::parse_str(s).map_err(|e| e.to_string())?;
-            let bytes = u.as_bytes();
-            let mut acc: u128 = 0;
-            for b in bytes.iter() {
-                acc = (acc << 8) | (*b as u128);
+        fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
+            if !s.len().is_multiple_of(2) || !s.is_ascii() {
+                return Err("Invalid hexadecimal binary literal".to_string());
             }
-            Ok(acc)
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|error| error.to_string()))
+                .collect()
         }
 
-        fn parse_decimal_to_i128(s: &str, scale: u32) -> Result<i128, String> {
+        fn parse_decimal_to_i128(s: &str, precision: u32, scale: u32) -> Result<i128, String> {
+            if precision == 0 || precision > 38 || scale > precision {
+                return Err("Invalid decimal precision or scale".to_string());
+            }
             let s = s.trim();
             if s.is_empty() {
                 return Err("empty decimal".to_string());
@@ -212,6 +614,7 @@ impl Literal {
             let mut frac_part: i128 = 0;
             let mut frac_len: u32 = 0;
             let mut seen_dot = false;
+            let mut seen_digit = false;
             for ch in s.chars() {
                 if ch == '.' {
                     if seen_dot {
@@ -223,6 +626,7 @@ impl Literal {
                 if !ch.is_ascii_digit() {
                     return Err("invalid decimal".to_string());
                 }
+                seen_digit = true;
                 let d = (ch as u8 - b'0') as i128;
                 if !seen_dot {
                     int_part = int_part
@@ -235,15 +639,21 @@ impl Literal {
                         .and_then(|v| v.checked_add(d))
                         .ok_or("overflow")?;
                     frac_len += 1;
-                } else {
-                    // truncate extra fractional digits beyond scale (rounding not applied)
+                } else if d != 0 {
+                    return Err("Decimal literal exceeds declared scale".to_string());
                 }
+            }
+            if !seen_digit {
+                return Err("invalid decimal".to_string());
             }
             let pow10 = 10i128.pow(scale);
             let scaled = int_part
                 .checked_mul(pow10)
                 .and_then(|v| v.checked_add(frac_part * 10i128.pow(scale - frac_len)))
                 .ok_or("overflow")?;
+            if scaled >= 10i128.pow(precision) {
+                return Err("Decimal literal exceeds declared precision".to_string());
+            }
             Ok(if negative { -scaled } else { scaled })
         }
 
@@ -271,16 +681,16 @@ impl Literal {
                 Literal::Primitive(PrimitiveLiteral::Long(parse_time_to_micros(&s)?)),
             ),
             (Type::Primitive(PrimitiveType::Timestamp), JsonValue::String(s)) => Some(
-                Literal::Primitive(PrimitiveLiteral::Long(parse_ts_to_micros(&s)?)),
+                Literal::Primitive(PrimitiveLiteral::Long(parse_timestamp_value(&s, false)?)),
             ),
             (Type::Primitive(PrimitiveType::Timestamptz), JsonValue::String(s)) => Some(
-                Literal::Primitive(PrimitiveLiteral::Long(parse_ts_to_micros(&s)?)),
+                Literal::Primitive(PrimitiveLiteral::Long(parse_timestamp_value(&s, false)?)),
             ),
             (Type::Primitive(PrimitiveType::TimestampNs), JsonValue::String(s)) => Some(
-                Literal::Primitive(PrimitiveLiteral::Long(parse_ts_to_micros(&s)? * 1000)),
+                Literal::Primitive(PrimitiveLiteral::Long(parse_timestamp_value(&s, true)?)),
             ),
             (Type::Primitive(PrimitiveType::TimestamptzNs), JsonValue::String(s)) => Some(
-                Literal::Primitive(PrimitiveLiteral::Long(parse_ts_to_micros(&s)? * 1000)),
+                Literal::Primitive(PrimitiveLiteral::Long(parse_timestamp_value(&s, true)?)),
             ),
             (Type::Primitive(PrimitiveType::String), JsonValue::String(s)) => {
                 Some(Literal::Primitive(PrimitiveLiteral::String(s)))
@@ -289,28 +699,34 @@ impl Literal {
                 Literal::Primitive(PrimitiveLiteral::UInt128(parse_uuid_to_u128(&s)?)),
             ),
             (Type::Primitive(PrimitiveType::Binary), JsonValue::String(s)) => {
-                Some(Literal::Primitive(PrimitiveLiteral::Binary(s.into_bytes())))
+                Some(Literal::Primitive(PrimitiveLiteral::Binary(parse_hex(&s)?)))
             }
-            (Type::Primitive(PrimitiveType::Fixed(_)), JsonValue::String(s)) => {
-                Some(Literal::Primitive(PrimitiveLiteral::Binary(s.into_bytes())))
+            (Type::Primitive(PrimitiveType::Fixed(size)), JsonValue::String(s)) => {
+                let bytes = parse_hex(&s)?;
+                if bytes.len() != *size as usize {
+                    return Err(format!(
+                        "Fixed literal length {} does not match {size}",
+                        bytes.len()
+                    ));
+                }
+                Some(Literal::Primitive(PrimitiveLiteral::Binary(bytes)))
             }
-            (Type::Primitive(PrimitiveType::Decimal { scale, .. }), JsonValue::String(s)) => Some(
-                Literal::Primitive(PrimitiveLiteral::Int128(parse_decimal_to_i128(&s, *scale)?)),
-            ),
+            (
+                Type::Primitive(PrimitiveType::Decimal { precision, scale }),
+                JsonValue::String(s),
+            ) => Some(Literal::Primitive(PrimitiveLiteral::Int128(
+                parse_decimal_to_i128(&s, *precision, *scale)?,
+            ))),
             (Type::Struct(struct_ty), JsonValue::Object(mut map)) => {
                 let mut out = Vec::with_capacity(struct_ty.fields().len());
                 for field in struct_ty.fields() {
                     let key = field.id.to_string();
-                    let v = map.remove(&key);
-                    let val = match v {
-                        Some(json) => Literal::try_from_json(json, &field.field_type)
-                            .and_then(|opt| {
-                                opt.ok_or_else(|| "Key of map cannot be null".to_string())
-                            })
-                            .ok(),
-                        None => None,
-                    };
-                    out.push((key, val));
+                    if let Some(json) = map.remove(&key) {
+                        out.push((key, Literal::try_from_json(json, &field.field_type)?));
+                    }
+                }
+                if !map.is_empty() {
+                    return Err("Unknown struct literal field IDs".to_string());
                 }
                 Some(Literal::Struct(out))
             }
@@ -318,13 +734,19 @@ impl Literal {
                 let mut out = Vec::with_capacity(arr.len());
                 for item in arr.into_iter() {
                     let elem = Literal::try_from_json(item, &list_ty.element_field.field_type)?;
+                    if elem.is_none() && list_ty.element_field.required {
+                        return Err("Required list element cannot be null".to_string());
+                    }
                     out.push(elem);
                 }
                 Some(Literal::List(out))
             }
             (Type::Map(map_ty), JsonValue::Object(mut obj)) => {
-                let keys = obj.remove("keys").unwrap_or(JsonValue::Array(vec![]));
-                let vals = obj.remove("values").unwrap_or(JsonValue::Array(vec![]));
+                let keys = obj.remove("keys").ok_or("Missing map keys")?;
+                let vals = obj.remove("values").ok_or("Missing map values")?;
+                if !obj.is_empty() {
+                    return Err("Unknown map literal fields".to_string());
+                }
                 let (JsonValue::Array(keys), JsonValue::Array(vals)) = (keys, vals) else {
                     return Err("Invalid map JSON".to_string());
                 };
@@ -336,14 +758,18 @@ impl Literal {
                     let key = Literal::try_from_json(k, &map_ty.key_field.field_type)
                         .and_then(|opt| opt.ok_or_else(|| "Map key cannot be null".to_string()))?;
                     let val = Literal::try_from_json(v, &map_ty.value_field.field_type)?;
+                    if val.is_none() && map_ty.value_field.required {
+                        return Err("Required map value cannot be null".to_string());
+                    }
                     out.push((key, val));
                 }
                 Some(Literal::Map(out))
             }
-            // Fallback: store as string for unsupported combinations
-            (_, other) => Some(Literal::Primitive(PrimitiveLiteral::String(
-                other.to_string(),
-            ))),
+            (_, other) => {
+                return Err(format!(
+                    "Invalid literal {other} for Iceberg type {data_type}"
+                ));
+            }
         })
     }
 
@@ -357,7 +783,7 @@ impl Literal {
             #[expect(clippy::expect_used)]
             let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
                 .expect("Creating date from constant should never fail");
-            let d = epoch + chrono::Days::new(days as u64);
+            let d = epoch + chrono::Duration::days(i64::from(days));
             d.to_string()
         }
         fn micros_to_time_str(us: i64) -> String {
@@ -389,6 +815,7 @@ impl Literal {
         }
 
         match (self, data_type) {
+            (Literal::Null, _) => Ok(JsonValue::Null),
             (Literal::Primitive(prim), Type::Primitive(prim_ty)) => match (prim_ty, prim) {
                 (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(v)) => Ok(JsonValue::Bool(*v)),
                 (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => {
@@ -412,27 +839,24 @@ impl Literal {
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
                     Ok(JsonValue::String(micros_to_datetime_str(*v)))
                 }
-                (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v)))
-                }
-                (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)))
-                }
-                (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
-                    Ok(JsonValue::String(micros_to_datetime_str(*v / 1000)))
-                }
+                (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => Ok(JsonValue::String(
+                    format!("{}+00:00", micros_to_datetime_str(*v)),
+                )),
+                (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Ok(JsonValue::String(
+                    chrono::DateTime::from_timestamp_nanos(*v)
+                        .format("%Y-%m-%dT%H:%M:%S%.9f")
+                        .to_string(),
+                )),
+                (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => Ok(JsonValue::String(
+                    chrono::DateTime::from_timestamp_nanos(*v)
+                        .format("%Y-%m-%dT%H:%M:%S%.9f+00:00")
+                        .to_string(),
+                )),
                 (PrimitiveType::String, PrimitiveLiteral::String(s)) => {
                     Ok(JsonValue::String(s.clone()))
                 }
-                (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(u)) => {
-                    let mut bytes = [0u8; 16];
-                    let mut tmp = *u;
-                    for i in (0..16).rev() {
-                        bytes[i] = (tmp & 0xFF) as u8;
-                        tmp >>= 8;
-                    }
-                    let u = uuid::Uuid::from_bytes(bytes);
-                    Ok(JsonValue::String(u.to_string()))
+                (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => {
+                    Ok(JsonValue::String(uuid::Uuid::from_u128(*value).to_string()))
                 }
                 (PrimitiveType::Decimal { scale, .. }, PrimitiveLiteral::Int128(v)) => {
                     // render scaled decimal as string
@@ -456,19 +880,24 @@ impl Literal {
                     }
                     Ok(JsonValue::String(s))
                 }
-                (PrimitiveType::Binary, PrimitiveLiteral::Binary(b)) => {
-                    // store as UTF-8 string of bytes if valid; otherwise hex-ish
-                    Ok(JsonValue::String(String::from_utf8_lossy(b).into_owned()))
-                }
-                (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(b)) => {
-                    Ok(JsonValue::String(String::from_utf8_lossy(b).into_owned()))
-                }
-                // Fallback for mismatched pairs
-                _ => Ok(JsonValue::Null),
+                (PrimitiveType::Binary, PrimitiveLiteral::Binary(b)) => Ok(JsonValue::String(
+                    b.iter().map(|byte| format!("{byte:02x}")).collect(),
+                )),
+                (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(b)) => Ok(JsonValue::String(
+                    b.iter().map(|byte| format!("{byte:02x}")).collect(),
+                )),
+                _ => Err(format!(
+                    "Literal {self:?} does not match Iceberg type {data_type}"
+                )),
             },
             (Literal::Struct(s), Type::Struct(struct_ty)) => {
                 let mut map = serde_json::Map::with_capacity(struct_ty.fields().len());
-                for ((id_str, val_opt), field) in s.iter().zip(struct_ty.fields()) {
+                for (id_str, val_opt) in s {
+                    let field = struct_ty
+                        .fields()
+                        .iter()
+                        .find(|field| field.id.to_string() == *id_str)
+                        .ok_or_else(|| format!("Unknown struct literal field ID {id_str}"))?;
                     let key = id_str.clone();
                     let json = match val_opt {
                         Some(l) => l.try_into_json(&field.field_type)?,
@@ -509,20 +938,288 @@ impl Literal {
     }
 }
 
-/// A lightweight, schema-agnostic representation of a struct literal that
-/// serializes into an Avro record matching a provided `StructType`.
-///
-/// This is used for encoding the `partition` tuple in `DataFile` manifest
-/// entries. It intentionally avoids carrying type information and focuses on
-/// field-name to optional `Literal` mapping; type validation is deferred to
-/// the caller that provides the `StructType`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawLiteral(pub Vec<(String, Option<Literal>)>);
+enum RawPrimitiveLiteral {
+    Boolean(bool),
+    Int(i32),
+    Long(i64),
+    Float(OrderedFloat<f32>),
+    Double(OrderedFloat<f64>),
+    String(String),
+    Bytes(ByteBuf),
+}
+
+impl Serialize for RawPrimitiveLiteral {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Boolean(value) => serializer.serialize_bool(*value),
+            Self::Int(value) => serializer.serialize_i32(*value),
+            Self::Long(value) => serializer.serialize_i64(*value),
+            Self::Float(value) => serializer.serialize_f32(value.0),
+            Self::Double(value) => serializer.serialize_f64(value.0),
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Bytes(value) => serializer.serialize_bytes(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawPrimitiveLiteral {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Visitor;
+
+        struct RawPrimitiveVisitor;
+
+        impl<'de> Visitor<'de> for RawPrimitiveVisitor {
+            type Value = RawPrimitiveLiteral;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("an Iceberg primitive manifest value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Boolean(value))
+            }
+
+            fn visit_i32<E>(self, value: i32) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Int(value))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Long(value))
+            }
+
+            fn visit_f32<E>(self, value: f32) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Float(OrderedFloat(value)))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Double(OrderedFloat(value)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::String(value.to_string()))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::String(value.to_string()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::String(value))
+            }
+
+            fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value)))
+            }
+
+            fn visit_borrowed_bytes<E>(self, value: &'de [u8]) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value)))
+            }
+
+            fn visit_byte_buf<E>(self, value: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value)))
+            }
+        }
+
+        deserializer.deserialize_any(RawPrimitiveVisitor)
+    }
+}
+
+/// Type-aware Avro representation of the primitive partition tuple in a manifest data file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawLiteral(Vec<(String, Option<RawPrimitiveLiteral>)>);
 
 impl RawLiteral {
+    fn decimal_bytes(value: i128, precision: u32) -> Result<ByteBuf, String> {
+        let byte_count = crate::spec::Type::decimal_required_bytes(precision)? as usize;
+        let bytes = value.to_be_bytes();
+        let start = bytes.len() - byte_count;
+        let encoded = &bytes[start..];
+        let sign_extension = if encoded[0] & 0x80 == 0 { 0 } else { u8::MAX };
+        let mut decoded = [sign_extension; 16];
+        decoded[start..].copy_from_slice(encoded);
+        if i128::from_be_bytes(decoded) != value {
+            return Err(format!(
+                "Decimal value {value} exceeds Iceberg precision {precision}"
+            ));
+        }
+        Ok(ByteBuf::from(encoded))
+    }
+
+    fn from_literal(
+        literal: &Literal,
+        ty: &crate::spec::types::Type,
+    ) -> Result<RawPrimitiveLiteral, String> {
+        use crate::spec::types::{PrimitiveType, Type};
+
+        let Type::Primitive(primitive_type) = ty else {
+            return Err(format!("Partition field type must be primitive, got {ty}"));
+        };
+        let Literal::Primitive(literal) = literal else {
+            return Err(format!(
+                "Partition value must be primitive, got {literal:?}"
+            ));
+        };
+        let literal = primitive_type.promote_literal(literal).ok_or_else(|| {
+            format!("Partition value {literal:?} is incompatible with type {primitive_type}")
+        })?;
+
+        match (primitive_type, literal.as_ref()) {
+            (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(value)) => {
+                Ok(RawPrimitiveLiteral::Boolean(*value))
+            }
+            (PrimitiveType::Int | PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
+                Ok(RawPrimitiveLiteral::Int(*value))
+            }
+            (
+                PrimitiveType::Long
+                | PrimitiveType::Time
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs,
+                PrimitiveLiteral::Long(value),
+            ) => Ok(RawPrimitiveLiteral::Long(*value)),
+            (PrimitiveType::Float, PrimitiveLiteral::Float(value)) => {
+                Ok(RawPrimitiveLiteral::Float(*value))
+            }
+            (PrimitiveType::Double, PrimitiveLiteral::Double(value)) => {
+                Ok(RawPrimitiveLiteral::Double(*value))
+            }
+            (PrimitiveType::Decimal { precision, .. }, PrimitiveLiteral::Int128(value)) => Ok(
+                RawPrimitiveLiteral::Bytes(Self::decimal_bytes(*value, *precision)?),
+            ),
+            (PrimitiveType::String, PrimitiveLiteral::String(value)) => {
+                Ok(RawPrimitiveLiteral::String(value.clone()))
+            }
+            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(value)) => Ok(
+                RawPrimitiveLiteral::Bytes(ByteBuf::from(value.to_be_bytes())),
+            ),
+            (PrimitiveType::Fixed(size), PrimitiveLiteral::Binary(value)) => {
+                let expected = usize::try_from(*size)
+                    .map_err(|_| format!("Iceberg fixed width {size} is too large"))?;
+                if value.len() != expected {
+                    return Err(format!(
+                        "Fixed partition value must be {expected} bytes, got {}",
+                        value.len()
+                    ));
+                }
+                Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value.clone())))
+            }
+            (
+                PrimitiveType::Binary
+                | PrimitiveType::Variant
+                | PrimitiveType::Geometry { .. }
+                | PrimitiveType::Geography { .. },
+                PrimitiveLiteral::Binary(value),
+            ) => Ok(RawPrimitiveLiteral::Bytes(ByteBuf::from(value.clone()))),
+            (PrimitiveType::Unknown, _) => {
+                Err("Iceberg unknown partition type cannot contain a value".to_string())
+            }
+            _ => Err(format!(
+                "Partition value {literal:?} is incompatible with type {primitive_type}"
+            )),
+        }
+    }
+
+    fn into_literal(
+        literal: RawPrimitiveLiteral,
+        ty: &crate::spec::types::Type,
+    ) -> Result<Literal, String> {
+        use crate::spec::types::{PrimitiveType, Type};
+
+        let Type::Primitive(primitive_type) = ty else {
+            return Err(format!("Partition field type must be primitive, got {ty}"));
+        };
+        let literal = match (primitive_type, literal) {
+            (PrimitiveType::Boolean, RawPrimitiveLiteral::Boolean(value)) => {
+                PrimitiveLiteral::Boolean(value)
+            }
+            (PrimitiveType::Int | PrimitiveType::Date, RawPrimitiveLiteral::Int(value)) => {
+                PrimitiveLiteral::Int(value)
+            }
+            (PrimitiveType::Long, RawPrimitiveLiteral::Int(value)) => {
+                PrimitiveLiteral::Long(i64::from(value))
+            }
+            (
+                PrimitiveType::Long
+                | PrimitiveType::Time
+                | PrimitiveType::Timestamp
+                | PrimitiveType::Timestamptz
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs,
+                RawPrimitiveLiteral::Long(value),
+            ) => PrimitiveLiteral::Long(value),
+            (PrimitiveType::Float, RawPrimitiveLiteral::Float(value)) => {
+                PrimitiveLiteral::Float(value)
+            }
+            (PrimitiveType::Double, RawPrimitiveLiteral::Float(value)) => {
+                PrimitiveLiteral::Double(OrderedFloat(f64::from(value.0)))
+            }
+            (PrimitiveType::Double, RawPrimitiveLiteral::Double(value)) => {
+                PrimitiveLiteral::Double(value)
+            }
+            (PrimitiveType::String, RawPrimitiveLiteral::String(value)) => {
+                PrimitiveLiteral::String(value)
+            }
+            (PrimitiveType::Uuid, RawPrimitiveLiteral::String(value)) => PrimitiveLiteral::UInt128(
+                parse_uuid_to_u128(&value)
+                    .map_err(|error| format!("Invalid UUID partition value {value:?}: {error}"))?,
+            ),
+            (PrimitiveType::Uuid, RawPrimitiveLiteral::Bytes(value)) => {
+                primitive_type.literal_from_bytes(&value).map_err(|_| {
+                    format!("UUID partition value must be 16 bytes, got {}", value.len())
+                })?
+            }
+            (PrimitiveType::Fixed(size), RawPrimitiveLiteral::Bytes(value)) => {
+                let expected = usize::try_from(*size)
+                    .map_err(|_| format!("Iceberg fixed width {size} is too large"))?;
+                if value.len() != expected {
+                    return Err(format!(
+                        "Fixed partition value must be {expected} bytes, got {}",
+                        value.len()
+                    ));
+                }
+                primitive_type.literal_from_bytes(&value)?
+            }
+            (
+                PrimitiveType::Binary
+                | PrimitiveType::Variant
+                | PrimitiveType::Geometry { .. }
+                | PrimitiveType::Geography { .. },
+                RawPrimitiveLiteral::Bytes(value),
+            ) => PrimitiveLiteral::Binary(value.into_vec()),
+            (PrimitiveType::Decimal { precision, .. }, RawPrimitiveLiteral::Bytes(value)) => {
+                let expected = crate::spec::Type::decimal_required_bytes(*precision)? as usize;
+                if value.len() != expected {
+                    return Err(format!(
+                        "Decimal partition value with precision {precision} must be {expected} bytes, got {}",
+                        value.len()
+                    ));
+                }
+                primitive_type.literal_from_bytes(&value)?
+            }
+            (PrimitiveType::Unknown, _) => {
+                return Err("Iceberg unknown partition type cannot contain a value".to_string());
+            }
+            (_, value) => {
+                return Err(format!(
+                    "Manifest value {value:?} is incompatible with partition type {primitive_type}"
+                ));
+            }
+        };
+        Ok(Literal::Primitive(literal))
+    }
+
     /// Build from a positional vector of values and a struct type; positions
     /// are matched to the struct fields' order.
-    pub fn from_struct_values(
+    pub(crate) fn from_struct_values(
         values: &[Option<Literal>],
         ty: &crate::spec::types::StructType,
     ) -> Result<Self, String> {
@@ -535,21 +1232,40 @@ impl RawLiteral {
             ));
         }
         let mut out = Vec::with_capacity(values.len());
-        for (i, f) in fields.iter().enumerate() {
-            out.push((f.name.clone(), values[i].clone()));
+        for (value, field) in values.iter().zip(fields) {
+            out.push((
+                avro_compatible_name(&field.name),
+                value
+                    .as_ref()
+                    .map(|value| Self::from_literal(value, &field.field_type))
+                    .transpose()?,
+            ));
         }
         Ok(RawLiteral(out))
     }
 
     /// Convert back to positional vector based on the struct type's field order.
-    pub fn into_struct_values(self, ty: &crate::spec::types::StructType) -> Vec<Option<Literal>> {
+    pub(crate) fn into_struct_values(
+        self,
+        ty: &crate::spec::types::StructType,
+    ) -> Result<Vec<Option<Literal>>, String> {
         let mut by_name = std::collections::HashMap::with_capacity(self.0.len());
         for (k, v) in self.0.into_iter() {
             by_name.insert(k, v);
         }
         ty.fields()
             .iter()
-            .map(|f| by_name.remove(&f.name).unwrap_or(None))
+            .map(|f| {
+                let avro_name = avro_compatible_name(&f.name);
+                let value = match by_name.remove(&avro_name) {
+                    Some(value) => value,
+                    None if avro_name != f.name => by_name.remove(&f.name).unwrap_or(None),
+                    None => None,
+                };
+                value
+                    .map(|value| Self::into_literal(value, &f.field_type))
+                    .transpose()
+            })
             .collect()
     }
 }
@@ -559,13 +1275,13 @@ impl Serialize for RawLiteral {
     where
         S: serde::Serializer,
     {
-        use serde::ser::SerializeStruct;
-        let mut ss = serializer.serialize_struct("", self.0.len())?;
+        use serde::ser::SerializeMap;
+
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (k, v) in &self.0 {
-            // Avro's serde requires &'static str for field names
-            ss.serialize_field(Box::leak(k.clone().into_boxed_str()), v)?;
+            map.serialize_entry(k, v)?;
         }
-        ss.end()
+        map.end()
     }
 }
 
@@ -585,8 +1301,8 @@ impl<'de> Deserialize<'de> for RawLiteral {
             where
                 M: MapAccess<'de>,
             {
-                let mut out: Vec<(String, Option<Literal>)> = Vec::new();
-                while let Some((k, v)) = map.next_entry::<String, Option<Literal>>()? {
+                let mut out: Vec<(String, Option<RawPrimitiveLiteral>)> = Vec::new();
+                while let Some((k, v)) = map.next_entry::<String, Option<RawPrimitiveLiteral>>()? {
                     out.push((k, v));
                 }
                 Ok(RawLiteral(out))
@@ -599,6 +1315,30 @@ impl<'de> Deserialize<'de> for RawLiteral {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::types::{PrimitiveType, Type};
+
+    #[test]
+    fn test_boolean_string_defaults_are_case_insensitive() {
+        let data_type = Type::Primitive(PrimitiveType::Boolean);
+
+        assert_eq!(
+            Literal::try_from_str("TRUE", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert_eq!(
+            Literal::try_from_str("FALSE", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(false))))
+        );
+        assert_eq!(
+            Literal::try_from_str("TrUe", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert_eq!(
+            Literal::try_from_str(" true ", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert!(Literal::try_from_str("not_bool", &data_type).is_err());
+    }
 
     #[test]
     fn test_primitive_literal_ordering_same_type() {
@@ -684,5 +1424,40 @@ mod tests {
 
         let c = PrimitiveLiteral::Binary(vec![1, 2, 3]);
         assert_eq!(a, c);
+    }
+
+    #[test]
+    fn decimal_uses_minimal_signed_big_endian_bytes() -> Result<(), String> {
+        let decimal = PrimitiveType::Decimal {
+            precision: 38,
+            scale: 0,
+        };
+        let cases = [
+            (-129, vec![0xff, 0x7f]),
+            (-128, vec![0x80]),
+            (-1, vec![0xff]),
+            (0, vec![0x00]),
+            (127, vec![0x7f]),
+            (128, vec![0x00, 0x80]),
+        ];
+
+        for (value, expected) in cases {
+            let literal = PrimitiveLiteral::Int128(value);
+            let encoded = Datum::new(decimal.clone(), literal.clone()).to_bytes()?;
+            assert_eq!(encoded, expected);
+            assert_eq!(decimal.literal_from_bytes(&encoded)?, literal);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn uuid_uses_sixteen_big_endian_bytes() -> Result<(), String> {
+        let value = 0x00112233445566778899aabbccddeeff_u128;
+        let literal = PrimitiveLiteral::UInt128(value);
+        let encoded = Datum::new(PrimitiveType::Uuid, literal.clone()).to_bytes()?;
+
+        assert_eq!(encoded, value.to_be_bytes());
+        assert_eq!(PrimitiveType::Uuid.literal_from_bytes(&encoded)?, literal);
+        Ok(())
     }
 }

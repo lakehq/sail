@@ -18,9 +18,13 @@ use sail_sql_parser::common::Sequence;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{
-    from_ast_expression, from_ast_function_arguments, from_ast_grouping_expression,
-    from_ast_identifier_list, from_ast_object_name, from_ast_order_by,
+    expr_with_default_column_values, from_ast_expression, from_ast_function_arguments,
+    from_ast_grouping_expression, from_ast_identifier_list, from_ast_object_name,
+    from_ast_order_by, from_ast_window,
 };
+
+/// The table alias that Spark generates for an unaliased derived table.
+pub const AUTO_GENERATED_SUBQUERY_NAME: &str = "__auto_generated_subquery_name";
 
 #[derive(Default)]
 struct QueryModifiers {
@@ -30,7 +34,7 @@ struct QueryModifiers {
     distribute_by: Option<Vec<Expr>>,
     offset: Option<Expr>,
     limit: Option<LimitValue>,
-    window: Vec<NamedWindow>,
+    window: Option<Vec<NamedWindow>>,
 }
 
 impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
@@ -41,7 +45,13 @@ impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
         for modifier in value {
             match modifier {
                 QueryModifier::Window(WindowClause { window: _, items }) => {
-                    output.window.extend(items.into_items())
+                    if output
+                        .window
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid("duplicated WINDOW clause"));
+                    }
                 }
                 QueryModifier::OrderBy(OrderByClause { order_by: _, items }) => {
                     if output
@@ -135,7 +145,7 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         distribute_by,
         offset,
         limit,
-        window: _, // TODO: support window
+        window,
     } = modifiers.try_into()?;
 
     if cluster_by.is_some() {
@@ -193,6 +203,22 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         }
     };
 
+    let plan = if let Some(w) = window {
+        spec::QueryPlan::new(spec::QueryNode::NamedWindows {
+            input: Box::new(plan),
+            windows: from_ast_named_windows(w)?,
+        })
+    } else {
+        plan
+    };
+
+    from_ast_with_clause(plan, with)
+}
+
+pub(crate) fn from_ast_with_clause(
+    plan: spec::QueryPlan,
+    with: Option<WithClause>,
+) -> SqlResult<spec::QueryPlan> {
     if let Some(WithClause {
         with: _,
         recursive,
@@ -224,6 +250,7 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
         select:
             SelectClause {
                 select: _,
+                hints,
                 quantifier,
                 projection,
             },
@@ -315,7 +342,28 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
         }
     };
 
-    Ok(plan)
+    let hints = hints
+        .into_iter()
+        .flat_map(|hint| hint.items.into_items())
+        .collect::<Vec<_>>();
+    hints.into_iter().rev().try_fold(plan, |input, hint| {
+        let parameters = hint
+            .parameters
+            .map(|parameters| parameters.items)
+            .map(|items| {
+                items
+                    .into_items()
+                    .map(from_ast_expression)
+                    .collect::<SqlResult<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        Ok(spec::QueryPlan::new(spec::QueryNode::Hint {
+            input: Box::new(input),
+            name: hint.name.value,
+            parameters,
+        }))
+    })
 }
 
 fn from_ast_query_body(body: QueryBody) -> SqlResult<spec::QueryPlan> {
@@ -379,8 +427,11 @@ fn from_ast_values(values: ValuesClause) -> SqlResult<spec::QueryPlan> {
             Expr::Atom(AtomExpr::Tuple(_, expressions, _)) => expressions
                 .into_items()
                 .map(from_ast_named_expression)
+                .map(|result| result.map(expr_with_default_column_values))
                 .collect::<SqlResult<Vec<_>>>(),
-            x => Ok(vec![from_ast_expression(x)?]),
+            x => Ok(vec![expr_with_default_column_values(from_ast_expression(
+                x,
+            )?)]),
         })
         .collect::<SqlResult<Vec<_>>>()?;
     let plan = spec::QueryPlan::new(spec::QueryNode::Values(rows));
@@ -474,6 +525,17 @@ fn from_ast_table_factor(table: TableFactor) -> SqlResult<spec::QueryPlan> {
                 spec::QueryPlan::new(spec::QueryNode::TableSample {
                     input: Box::new(plan),
                     sample,
+                })
+            } else {
+                plan
+            };
+            // Like Spark, alias an unaliased derived table so that enclosing
+            // operators cannot resolve columns hidden inside the subquery.
+            let plan = if alias.is_none() {
+                spec::QueryPlan::new(spec::QueryNode::TableAlias {
+                    input: Box::new(plan),
+                    name: spec::Identifier::from(AUTO_GENERATED_SUBQUERY_NAME),
+                    columns: vec![],
                 })
             } else {
                 plan
@@ -660,17 +722,14 @@ fn query_plan_with_table_modifier(
                             .collect::<SqlResult<Vec<_>>>()?,
                         _ => vec![from_ast_expression(expr)?],
                     };
-                    let values = expr
-                        .into_iter()
-                        .map(|x| match x {
-                            spec::Expr::Literal(literal) => Ok(literal),
-                            _ => Err(SqlError::invalid("non-literal value in PIVOT")),
-                        })
-                        .collect::<SqlResult<Vec<_>>>()?;
+                    // Pivot values are foldable expressions (literals, typed literals such as
+                    // `DATE'...'`, or casts); the resolver evaluates each to a scalar. Passing the
+                    // expressions through here lets all of those forms work, matching Spark.
+                    let values = expr;
                     let alias = match alias {
                         Some((_, Either::Left(x))) => Some(x.value.into()),
                         Some((_, Either::Right(IdentList { .. }))) => {
-                            return Err(SqlError::invalid("multiple alias for pivot value"))
+                            return Err(SqlError::invalid("multiple alias for pivot value"));
                         }
                         None => None,
                     };
@@ -679,7 +738,7 @@ fn query_plan_with_table_modifier(
                 .collect::<SqlResult<Vec<_>>>()?;
             Ok(spec::QueryPlan::new(spec::QueryNode::Pivot(spec::Pivot {
                 input: Box::new(plan),
-                grouping: vec![],
+                grouping: None,
                 aggregate,
                 columns,
                 values,
@@ -798,6 +857,19 @@ pub fn from_ast_with(
                 columns,
             });
             Ok((name, plan))
+        })
+        .collect::<SqlResult<Vec<_>>>()
+}
+
+pub fn from_ast_named_windows(
+    windows: Vec<NamedWindow>,
+) -> SqlResult<Vec<(spec::Identifier, spec::Window)>> {
+    windows
+        .into_iter()
+        .map(|window| {
+            let name = spec::Identifier::from(window.name.value);
+            let window = from_ast_window(window.window)?;
+            Ok((name, window))
         })
         .collect::<SqlResult<Vec<_>>>()
 }

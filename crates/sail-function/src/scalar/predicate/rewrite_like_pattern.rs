@@ -1,11 +1,10 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,
@@ -51,10 +50,6 @@ impl RewriteLikePatternFunc {
 }
 
 impl ScalarUDFImpl for RewriteLikePatternFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "rewrite_like_pattern"
     }

@@ -3,19 +3,23 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
-    create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
+    LexOrdering, LexRequirement, PhysicalSortRequirement, create_physical_sort_exprs,
 };
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
+use datafusion_common::{
+    Constraints, DFSchema, DFSchemaRef, Result, not_impl_datafusion_err, plan_err,
+};
 use datafusion_expr::expr::Sort;
-use datafusion_expr::TableSource;
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion_expr::{Expr, TableSource};
 
-use crate::catalog::CatalogPartitionField;
+use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::extension::SessionExtension;
+use crate::lakesource::LakeSource;
 use crate::logical_expr::ExprWithSource;
 
 /// File path metadata column for row-level modifications (MERGE, UPDATE, DELETE).
@@ -26,11 +30,14 @@ pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 
 /// Row-level operation type column appended to expanded row-level write output.
 ///
-/// This is internal Sail metadata. Format writers may use it to route rows,
+/// This is internal Sail metadata. Source writers may use it to route rows,
 /// collect operation metrics, or produce low-level delete artifacts, but must
 /// remove it before persisting user data.
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
+
+/// Reserved private write option name. User-visible option layers must reject this key.
+pub const CATALOG_TABLE_OPTION: &str = "__sail.catalog.table";
 
 /// Internal column carrying pre-aggregated MERGE source row counts on
 /// [`RowLevelOperationType::SourceMetric`] rows.
@@ -58,12 +65,20 @@ pub enum OptionLayer {
 impl OptionLayer {
     /// Converts this option layer into an opaque key-value map.
     ///
-    /// This is used for data sources that have not yet migrated to the typed
-    /// option system. The returned map can be passed to existing code that
-    /// accepts `HashMap<String, String>`.
+    /// This is used when a data source consumes untyped key-value options.
+    /// The returned map can be passed to code that accepts `HashMap<String, String>`.
     pub fn into_opaque_options(self) -> HashMap<String, String> {
         match self {
-            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
+            OptionLayer::TablePropertyList { items } => items
+                .into_iter()
+                .map(|(key, value)| {
+                    if let Some(key) = key.strip_prefix("option.") {
+                        (key.to_string(), value)
+                    } else {
+                        (key, value)
+                    }
+                })
+                .collect(),
             OptionLayer::OptionList { items } => items.into_iter().collect(),
             OptionLayer::TableLocation { .. }
             | OptionLayer::AsOfTimestamp { .. }
@@ -75,8 +90,8 @@ impl OptionLayer {
 
 /// Internal row intent tag for row-level write plans.
 ///
-/// The numeric values are not table-format protocol values. They are stable
-/// within Sail physical plans so logical expansion and format writers can share
+/// The numeric values are not storage protocol values. They are stable within
+/// Sail physical plans so logical expansion and source writers can share
 /// a compact representation of per-row intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
@@ -104,19 +119,48 @@ pub enum RowLevelOperationType {
 }
 
 impl RowLevelOperationType {
-    pub fn as_i32(self) -> i32 {
+    pub const fn as_i32(self) -> i32 {
         self as i32
     }
 }
 
-/// Materialization strategy for row-level modifications.
+impl TryFrom<i32> for RowLevelOperationType {
+    type Error = i32;
+
+    fn try_from(value: i32) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Copy),
+            1 => Ok(Self::Delete),
+            2 => Ok(Self::Update),
+            3 => Ok(Self::Insert),
+            4 => Ok(Self::Noop),
+            5 => Ok(Self::MatchedDelete),
+            6 => Ok(Self::MatchedUpdate),
+            7 => Ok(Self::NotMatchedBySourceDelete),
+            8 => Ok(Self::NotMatchedBySourceUpdate),
+            9 => Ok(Self::SourceMetric),
+            value => Err(value),
+        }
+    }
+}
+
+impl TryFrom<i64> for RowLevelOperationType {
+    type Error = i64;
+
+    fn try_from(value: i64) -> std::result::Result<Self, Self::Error> {
+        let value_i32 = i32::try_from(value).map_err(|_| value)?;
+        Self::try_from(value_i32).map_err(i64::from)
+    }
+}
+
+/// Storage mode selected by a lake source for a row-level write.
 ///
-/// - `Eager`: rewrite affected files (Copy-on-Write).
-/// - `MergeOnRead`: write delete files at write time, merge at read time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum MergeStrategy {
-    #[default]
-    Eager,
+/// Metadata-only optimizations may bypass row materialization in either mode.
+/// When rows must be materialized, `CopyOnWrite` rewrites affected data files,
+/// while `MergeOnRead` writes row-level delete artifacts alongside new data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
+pub enum RowLevelWriteMode {
+    CopyOnWrite,
     MergeOnRead,
 }
 
@@ -176,6 +220,8 @@ pub struct BucketBy {
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
     pub paths: Vec<String>,
+    /// Unified lakehouse catalog context for catalog-coordinated reads.
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     /// The (optional) schema of the data source including partitioning columns.
     pub schema: Option<Schema>,
     pub constraints: Constraints,
@@ -185,25 +231,193 @@ pub struct SourceInfo {
     /// The layers of options for the data source.
     /// A later layer can override earlier ones.
     pub options: Vec<OptionLayer>,
+    /// Whether reads match the requested columns case-sensitively against the
+    /// physical file schema. Spark defaults to case-insensitive matching
+    /// (`spark.sql.caseSensitive=false`). This only affects formats that
+    /// reconcile a requested schema against files on read (e.g. Parquet); it is
+    /// inert for formats that resolve their schema from metadata.
+    pub read_case_sensitive: bool,
+}
+
+impl SourceInfo {
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table())
+    }
 }
 
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
-    pub input: Arc<dyn ExecutionPlan>,
-    pub mode: PhysicalSinkMode,
+    pub input: LogicalPlan,
+    pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
-    pub sort_order: Option<LexRequirement>,
+    pub sort_order: Vec<Sort>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<OptionLayer>,
-    /// The logical schema of the writer's input, if available. This schema can
-    /// preserve arrow field metadata that the physical planner may strip (e.g.
-    /// metadata attached via `Expr::Alias::with_metadata`). Table formats can use
-    /// this to recover column-level metadata such as `delta.generationExpression`.
-    pub logical_schema: Option<datafusion_common::DFSchemaRef>,
+    /// Unified lakehouse catalog context for catalog-coordinated writes.
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
+}
+
+impl SinkInfo {
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table())
+    }
+}
+
+/// Information required to create a logical DELETE plan for a lake source.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct DeleteInfo {
+    pub target_plan: Arc<LogicalPlan>,
+    pub target: RowLevelTarget,
+    pub condition: Option<ExprWithSource>,
+    pub input_schema: DFSchemaRef,
+    pub resolved_target_field_names: Vec<String>,
+    pub case_sensitive: bool,
+}
+
+/// Information required to create a logical UPDATE plan for a lake source.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct UpdateInfo {
+    pub target_plan: Arc<LogicalPlan>,
+    pub target: RowLevelTarget,
+    pub condition: Option<ExprWithSource>,
+    pub assignments: Vec<UpdateAssignment>,
+    pub input_schema: DFSchemaRef,
+    pub resolved_target_field_names: Vec<String>,
+    pub case_sensitive: bool,
+    pub generated_column_exprs: Vec<(String, Expr)>,
+    pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct UpdateAssignment {
+    pub column: String,
+    pub value: Expr,
+}
+
+/// Information required to create a logical MERGE plan for a lake source.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct MergeInfo {
+    pub target: Arc<LogicalPlan>,
+    pub source: Arc<LogicalPlan>,
+    pub options: MergeIntoOptions,
+    pub input_schema: DFSchemaRef,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeIntoOptions {
+    pub target_alias: Option<String>,
+    pub source_alias: Option<String>,
+    pub target: RowLevelTarget,
+    pub with_schema_evolution: bool,
+    pub case_sensitive: bool,
+    /// Resolved logical schemas from analysis time (before any rewrites)
+    pub resolved_target_schema: DFSchemaRef,
+    pub resolved_source_schema: DFSchemaRef,
+    /// User-facing field names for target and source, resolved from opaque IDs
+    /// at plan resolution time. Used by MERGE expansion to map opaque IDs back
+    /// to real column names without the fragile recover-field-names heuristic.
+    pub resolved_target_field_names: Vec<String>,
+    pub resolved_source_field_names: Vec<String>,
+    /// User-facing source column name and its collision-free internal alias.
+    pub source_column_aliases: Vec<(String, String)>,
+    pub on_condition: ExprWithSource,
+    pub matched_clauses: Vec<MergeMatchedClause>,
+    pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
+    pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClause>,
+    /// Pre-analyzed join equality keys extracted from the ON condition (target, source)
+    pub join_key_pairs: Vec<(Expr, Expr)>,
+    /// Residual predicates from the ON condition that are not equality join keys
+    pub residual_predicates: Vec<Expr>,
+    /// Predicates from ON that only touch target columns (useful for early pruning)
+    pub target_only_predicates: Vec<Expr>,
+    /// Generation expressions for generated columns in the target table.
+    /// Each entry is `(column_name, resolved_expr)` where `resolved_expr` initially
+    /// references target schema field IDs and is rewritten to actual column names
+    /// by MERGE expansion before being applied as a post-processing projection.
+    pub generated_column_exprs: Vec<(String, Expr)>,
+    /// Resolved target column defaults used by explicit MERGE inserts.
+    pub default_column_exprs: Vec<(String, Expr)>,
+    /// Delta CHECK constraint expressions for the target table.
+    pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+pub struct RowLevelTarget {
+    pub table_name: Vec<String>,
+    pub format: String,
+    pub location: String,
+    pub partition_by: Vec<String>,
+    pub options: Vec<OptionLayer>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeMatchedClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeMatchedAction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MergeMatchedAction {
+    Delete,
+    UpdateAll,
+    UpdateSet(Vec<MergeAssignment>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeNotMatchedBySourceClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeNotMatchedBySourceAction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MergeNotMatchedBySourceAction {
+    Delete,
+    UpdateSet(Vec<MergeAssignment>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeNotMatchedByTargetClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeNotMatchedByTargetAction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MergeNotMatchedByTargetAction {
+    InsertAll,
+    InsertColumns {
+        columns: Vec<String>,
+        values: Vec<Expr>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeAssignment {
+    pub column: String,
+    pub value: Expr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct DeltaCheckConstraintExpr {
+    pub name: String,
+    pub expression: String,
+    pub expr: Expr,
+    pub violation: DeltaConstraintViolation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum DeltaConstraintViolation {
+    Check,
+    NotNull { column: String },
+    Invariant { column: String },
 }
 
 /// Returns the path from options, or `None` if not set.
@@ -229,7 +443,9 @@ pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
         }
         None
     };
-    find("path").or_else(|| find("location"))
+    find("path")
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| find("location").filter(|v| !v.trim().is_empty()))
 }
 
 /// The kind of row-level DML command being executed.
@@ -240,64 +456,19 @@ pub enum RowLevelCommand {
     Merge,
 }
 
-/// Target table information shared by all row-level operations.
-#[derive(Debug, Clone)]
-pub struct RowLevelTargetInfo {
-    pub table_name: Vec<String>,
-    pub path: String,
-    pub partition_by: Vec<String>,
-    pub options: Vec<OptionLayer>,
-}
-
-/// Operation metadata used to construct commit log `operationParameters`.
-#[derive(Debug, Clone)]
-pub struct MergePredicateInfo {
-    pub action_type: String,
-    pub predicate: Option<String>,
-}
-
-/// Override metadata for operation commit logs.
-#[derive(Debug, Clone)]
-pub enum OperationOverride {
-    Merge {
-        predicate: Option<String>,
-        merge_predicate: Option<String>,
-        matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_by_source_predicates: Vec<MergePredicateInfo>,
-    },
-}
-
-/// Unified information for all row-level write operations (DELETE, UPDATE, MERGE).
-#[derive(Debug, Clone)]
-pub struct RowLevelWriteInfo {
-    pub command: RowLevelCommand,
-    pub target: RowLevelTargetInfo,
-    /// Condition for DELETE/UPDATE. `None` for MERGE.
-    pub condition: Option<ExprWithSource>,
-    /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
-    pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields touched file paths (MERGE targeted rewrite).
-    pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
-    pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
-    pub with_schema_evolution: bool,
-    /// Override for commit operation metadata.
-    pub operation_override: Option<OperationOverride>,
-    /// Materialization strategy. Defaults to [`MergeStrategy::Eager`].
-    pub merge_strategy: MergeStrategy,
-}
-
-// TODO: MERGE schema evolution end-to-end
-// - Expand sink schema during MERGE: detect source-only columns (case-insensitive), keep target order, append new cols, project source/NULL for them.
-// - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
-// - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
-
-/// A trait for preparing physical execution for a specific format.
+/// A named data source that plans logical reads and writes.
 #[async_trait]
-pub trait TableFormat: Send + Sync {
-    /// Returns the name of the format.
+pub trait DataSource: Send + Sync {
+    /// Returns the name of the data source.
     fn name(&self) -> &str;
+
+    /// Returns this data source's lake capability, if supported.
+    ///
+    /// The owned receiver keeps the source alive while callers use the
+    /// capability across asynchronous operations.
+    fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+        None
+    }
 
     /// Creates a logical [`TableSource`] for read.
     async fn create_source(
@@ -306,106 +477,126 @@ pub trait TableFormat: Send + Sync {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
 
-    /// Creates a `ExecutionPlan` for write.
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-
-    /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
-    async fn create_row_level_writer(
-        &self,
-        ctx: &dyn Session,
-        info: RowLevelWriteInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _ = (ctx, info);
-        not_impl_err!(
-            "Row-level operations are not yet implemented for {} format",
-            self.name()
-        )
+    /// Infers the logical schema for planning without requiring callers to construct a read source.
+    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
+        Ok(self.create_source(ctx, info).await?.schema())
     }
 
-    /// Returns the materialization strategy for row-level modifications.
-    /// Defaults to [`MergeStrategy::Eager`]. Override for Merge-on-Read formats.
-    fn merge_strategy(&self) -> MergeStrategy {
-        MergeStrategy::Eager
-    }
-
-    /// Alters table properties (SET/UNSET TBLPROPERTIES).
-    ///
-    /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
-    /// or `None` to unset/remove it. When `if_exists` is `false`, implementations MUST error if
-    /// an UNSET key is not present on the table; when `if_exists` is `true`, UNSET for a missing
-    /// key is a no-op. The implementation is responsible for committing these changes to the
-    /// underlying table storage (e.g., writing a new Delta log entry).
-    async fn alter_table_properties(
-        &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        path: &str,
-        changes: Vec<(String, Option<String>)>,
-        if_exists: bool,
-    ) -> Result<()> {
-        let _ = (runtime_env, path, changes, if_exists);
-        not_impl_err!(
-            "Table properties alteration not supported for {} format",
-            self.name()
-        )
-    }
-
-    /// Alters the type of a table column.
-    async fn alter_table_column_type(
-        &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        path: &str,
-        column_path: Vec<String>,
-        data_type: datafusion::arrow::datatypes::DataType,
-    ) -> Result<()> {
-        let _ = (runtime_env, path, column_path, data_type);
-        not_impl_err!(
-            "Column type alteration not supported for {} format",
-            self.name()
-        )
-    }
+    /// Creates a logical plan for write.
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
 }
 
-/// Thread-safe registry of available `TableFormat` implementations.
+/// Thread-safe registry of named data and lake sources.
 #[derive(Default)]
-pub struct TableFormatRegistry {
-    formats: RwLock<HashMap<String, Arc<dyn TableFormat>>>,
+pub struct DataSourceRegistry {
+    sources: RwLock<HashMap<String, Arc<dyn DataSource>>>,
 }
 
-impl TableFormatRegistry {
+impl DataSourceRegistry {
     pub fn new() -> Self {
         Self {
-            formats: RwLock::new(HashMap::new()),
+            sources: RwLock::new(HashMap::new()),
         }
     }
 
-    pub fn register(&self, format: Arc<dyn TableFormat>) -> Result<()> {
-        let mut formats = self
-            .formats
+    pub fn register_data_source(&self, source: Arc<dyn DataSource>) -> Result<()> {
+        let mut sources = self
+            .sources
             .write()
-            .map_err(|_| plan_datafusion_err!("table format registry poisoned"))?;
-        formats.insert(format.name().to_lowercase(), format);
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        let name = source.name().to_lowercase();
+        sources.insert(name, source);
         Ok(())
     }
 
-    pub fn get(&self, name: &str) -> Result<Arc<dyn TableFormat>> {
-        let formats = self
-            .formats
+    pub fn get_data_source(&self, name: &str) -> Result<Arc<dyn DataSource>> {
+        let sources = self
+            .sources
             .read()
-            .map_err(|_| plan_datafusion_err!("table format registry poisoned"))?;
-        formats
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        let normalized = name.to_lowercase();
+        // Spark's legacy JSON provider names still occur in saved client configurations.
+        let canonical = match normalized.as_str() {
+            "org.apache.spark.sql.json"
+            | "org.apache.spark.sql.json.defaultsource"
+            | "org.apache.spark.sql.execution.datasources.json"
+            | "org.apache.spark.sql.execution.datasources.json.defaultsource"
+            | "org.apache.spark.sql.execution.datasources.json.jsonfileformat" => "json",
+            _ => &normalized,
+        };
+        sources
+            .get(canonical)
+            .cloned()
+            .ok_or_else(|| missing_data_source_error(name))
+    }
+
+    pub fn get_lake_source(&self, name: &str) -> Result<Arc<dyn LakeSource>> {
+        let source = {
+            let sources = self
+                .sources
+                .read()
+                .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+            sources
+                .get(&name.to_lowercase())
+                .cloned()
+                .ok_or_else(|| missing_lake_source_error(name))?
+        };
+        source.as_lake_source().ok_or_else(|| {
+            not_impl_datafusion_err!("Data source '{name}' does not support lake operations")
+        })
+    }
+
+    /// Returns the optional lakehouse capability for a registered data source.
+    pub fn get_lake_source_if_supported(&self, name: &str) -> Result<Option<Arc<dyn LakeSource>>> {
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        Ok(sources
             .get(&name.to_lowercase())
             .cloned()
-            .ok_or_else(|| plan_datafusion_err!("No table format found for: {name}"))
+            .and_then(|source| source.as_lake_source()))
+    }
+
+    pub fn lake_sources(&self) -> Result<Vec<(String, Arc<dyn LakeSource>)>> {
+        let sources = self
+            .sources
+            .read()
+            .map_err(|_| plan_datafusion_err!("data source registry poisoned"))?;
+        let mut lake_sources = sources
+            .iter()
+            .filter_map(|(name, source)| {
+                source
+                    .clone()
+                    .as_lake_source()
+                    .map(|source| (name.clone(), source))
+            })
+            .collect::<Vec<_>>();
+        lake_sources.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        Ok(lake_sources)
     }
 }
 
-impl SessionExtension for TableFormatRegistry {
+fn missing_data_source_error(name: &str) -> datafusion::common::DataFusionError {
+    if name.eq_ignore_ascii_case("jdbc") {
+        plan_datafusion_err!(
+            "No data source found for: {name}. \
+             The JDBC data source is provided by pysail and must be registered before use: \
+             `from pysail.spark.datasource.jdbc import JdbcDataSource`; \
+             `spark.dataSource.register(JdbcDataSource)`"
+        )
+    } else {
+        plan_datafusion_err!("No data source found for: {name}")
+    }
+}
+
+fn missing_lake_source_error(name: &str) -> datafusion::common::DataFusionError {
+    plan_datafusion_err!("No lake source found for: {name}")
+}
+
+impl SessionExtension for DataSourceRegistry {
     fn name() -> &'static str {
-        "TableFormatRegistry"
+        "DataSourceRegistry"
     }
 }
 
@@ -414,7 +605,12 @@ pub fn create_sort_order(
     sort_by: Vec<Sort>,
     schema: &DFSchema,
 ) -> Result<Option<LexRequirement>> {
-    let expr = create_physical_sort_exprs(sort_by.as_slice(), schema, session.execution_props())?;
+    let expr = create_physical_sort_exprs(
+        sort_by.as_slice(),
+        schema,
+        session.execution_props(),
+        &PhysicalPlanningContext::default(),
+    )?;
     let ordering = LexOrdering::new(expr);
     if let Some(ordering) = ordering {
         Ok(LexRequirement::new(
@@ -428,13 +624,13 @@ pub fn create_sort_order(
     }
 }
 
-/// Given a schema and a list of partition columns, returns the partition columns
-/// with their data types, and a schema with the partition columns removed.
+/// Given a schema and a list of partition column names, returns the partition fields
+/// and a schema with the partition columns removed.
 pub fn get_partition_columns_and_file_schema(
     schema: &Schema,
     partition_by: Vec<String>,
-) -> Result<(Vec<(String, DataType)>, Schema)> {
-    let partition_columns = partition_by
+) -> Result<(Vec<FieldRef>, Schema)> {
+    let partition_fields = partition_by
         .into_iter()
         .map(|col| {
             let mut candidates = schema
@@ -442,7 +638,7 @@ pub fn get_partition_columns_and_file_schema(
                 .iter()
                 .filter(|f| f.name().eq_ignore_ascii_case(&col));
             match (candidates.next(), candidates.next()) {
-                (Some(field), None) => Ok((col, field.data_type().clone())),
+                (Some(field), None) => Ok(field.clone()),
                 _ => {
                     plan_err!("missing or ambiguous partition column: {col}")
                 }
@@ -453,12 +649,181 @@ pub fn get_partition_columns_and_file_schema(
         .fields()
         .iter()
         .filter(|f| {
-            !partition_columns
+            !partition_fields
                 .iter()
-                .any(|(col, _)| col.eq_ignore_ascii_case(f.name()))
+                .any(|p| f.name().eq_ignore_ascii_case(p.name()))
         })
         .cloned()
         .collect::<Vec<_>>();
     let file_schema = Schema::new(file_schema_fields);
-    Ok((partition_columns, file_schema))
+    Ok((partition_fields, file_schema))
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+
+    use super::*;
+
+    #[test]
+    fn row_level_operation_type_decodes_typed_values() {
+        let operations = [
+            RowLevelOperationType::Copy,
+            RowLevelOperationType::Delete,
+            RowLevelOperationType::Update,
+            RowLevelOperationType::Insert,
+            RowLevelOperationType::Noop,
+            RowLevelOperationType::MatchedDelete,
+            RowLevelOperationType::MatchedUpdate,
+            RowLevelOperationType::NotMatchedBySourceDelete,
+            RowLevelOperationType::NotMatchedBySourceUpdate,
+            RowLevelOperationType::SourceMetric,
+        ];
+
+        for operation in operations {
+            assert_eq!(
+                RowLevelOperationType::try_from(operation.as_i32()),
+                Ok(operation)
+            );
+            assert_eq!(
+                RowLevelOperationType::try_from(i64::from(operation.as_i32())),
+                Ok(operation)
+            );
+        }
+        assert_eq!(RowLevelOperationType::try_from(10_i32), Err(10));
+        assert_eq!(RowLevelOperationType::try_from(i64::MAX), Err(i64::MAX));
+    }
+
+    struct TestDataSource;
+
+    #[async_trait]
+    impl DataSource for TestDataSource {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn Session,
+            _info: SourceInfo,
+        ) -> Result<Arc<dyn TableSource>> {
+            plan_err!("test source does not create tables")
+        }
+
+        async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
+            plan_err!("test source does not create writers")
+        }
+    }
+
+    struct TestLakeSource;
+
+    #[async_trait]
+    impl DataSource for TestLakeSource {
+        fn name(&self) -> &str {
+            "test"
+        }
+
+        fn as_lake_source(self: Arc<Self>) -> Option<Arc<dyn LakeSource>> {
+            Some(self)
+        }
+
+        async fn create_source(
+            &self,
+            _ctx: &dyn Session,
+            _info: SourceInfo,
+        ) -> Result<Arc<dyn TableSource>> {
+            plan_err!("test source does not create tables")
+        }
+
+        async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
+            plan_err!("test source does not create writers")
+        }
+    }
+
+    impl LakeSource for TestLakeSource {}
+
+    #[test]
+    fn lake_source_registration_replaces_an_ordinary_source() -> Result<()> {
+        let registry = DataSourceRegistry::new();
+
+        registry.register_data_source(Arc::new(TestDataSource))?;
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source("test").is_err());
+
+        registry.register_data_source(Arc::new(TestLakeSource))?;
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source("test").is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_data_source_registration_replaces_a_lake_source() -> Result<()> {
+        let registry = DataSourceRegistry::new();
+        registry.register_data_source(Arc::new(TestLakeSource))?;
+        assert!(registry.get_lake_source("test").is_ok());
+
+        registry.register_data_source(Arc::new(TestDataSource))?;
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source("test").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_data_source_has_no_lake_capability() -> Result<()> {
+        let registry = DataSourceRegistry::new();
+        registry.register_data_source(Arc::new(TestDataSource))?;
+
+        assert!(registry.get_data_source("test").is_ok());
+        assert!(registry.get_lake_source_if_supported("test")?.is_none());
+        assert!(matches!(
+            registry.get_lake_source("test"),
+            Err(datafusion_common::DataFusionError::NotImplemented(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_jdbc_data_source_error_includes_registration_hint() -> std::result::Result<(), String>
+    {
+        let registry = DataSourceRegistry::new();
+        let error = match registry.get_data_source("jdbc") {
+            Ok(_) => return Err("expected missing jdbc data source error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(error.contains("No data source found for: jdbc"));
+        assert!(error.contains("from pysail.spark.datasource.jdbc import JdbcDataSource"));
+        assert!(error.contains("spark.dataSource.register(JdbcDataSource)"));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_non_jdbc_data_source_error_stays_generic() -> std::result::Result<(), String> {
+        let registry = DataSourceRegistry::new();
+        let error = match registry.get_data_source("unknown") {
+            Ok(_) => return Err("expected missing unknown data source error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(
+            error,
+            "Error during planning: No data source found for: unknown"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_lake_source_error_stays_generic() -> std::result::Result<(), String> {
+        let registry = DataSourceRegistry::new();
+        let error = match registry.get_lake_source("unknown") {
+            Ok(_) => return Err("expected missing unknown lake source error".to_string()),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(
+            error,
+            "Error during planning: No lake source found for: unknown"
+        );
+        Ok(())
+    }
 }

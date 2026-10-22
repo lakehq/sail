@@ -1,22 +1,29 @@
+use arrow::datatypes::DataType;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
+use datafusion_expr::{EmptyRelation, Expr, ExprSchemable, LogicalPlan, expr};
+use datafusion_functions::core::getfield::GetFieldFunc;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::explode::Explode;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
-use crate::function::{get_built_in_aggregate_function, get_built_in_function};
+use crate::function::{
+    get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
+};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::lambda::is_spec_lambda_argument;
+use crate::resolver::expression::predicate::coerce_timestamp_string_predicate;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_function(
@@ -70,10 +77,10 @@ impl PlanResolver<'_> {
 
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
-            if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
-                state.config_mut().arrow_allow_large_var_types = true;
-            }
+        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
+            && udf.inner().is::<PySparkUnresolvedUDF>()
+        {
+            state.config_mut().arrow_allow_large_var_types = true;
         }
 
         // For functions that accept a date-part keyword as the first argument
@@ -81,121 +88,172 @@ impl PlanResolver<'_> {
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
+        // For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression and a
+        // tie-break sentinel into the argument list before resolution, so that the
+        // aggregate function receives the column and the output column name can be
+        // derived from the argument display names.
+        let (arguments, order_by) =
+            Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
+
+        let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
+
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
+        } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
+            self.resolve_higher_order_function_arguments(
+                &canonical_function_name,
+                arguments,
+                schema,
+                state,
+            )
+            .await?
         } else {
             self.resolve_expressions_and_names(arguments, schema, state)
                 .await?
         };
 
+        let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
+
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
-        let func = if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
-            if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
-                return Err(PlanError::invalid("invalid scalar function clause"));
-            }
-            if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
-                if f.eval_type().is_table_function() {
-                    return Err(PlanError::AnalysisError(format!(
-                        "user-defined table function cannot be used as a scalar function: {function_name}"
-                    )));
+        let func = match catalog_manager.get_function(&canonical_function_name)? {
+            Some(udf) => {
+                if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
+                    return Err(PlanError::invalid("invalid scalar function clause"));
                 }
-                let output_type = f.output_type().cloned().ok_or_else(|| {
-                    PlanError::internal(format!(
-                        "unresolved UDF {function_name} has no scalar return type"
-                    ))
-                })?;
-                let function = PythonUdf {
-                    python_version: f.python_version().to_string(),
-                    eval_type: f.eval_type(),
-                    command: f.command().to_vec(),
-                    output_type,
-                };
-                self.resolve_python_udf_expr(
-                    function,
-                    &function_name,
-                    arguments,
-                    &argument_display_names,
-                    &kwarg_names, // pass kwargs from named_arguments
-                    schema,
-                    f.deterministic(),
-                    is_distinct,
-                    state,
-                )?
-            } else {
-                expr::Expr::ScalarFunction(ScalarFunction {
-                    func: std::sync::Arc::new(udf),
-                    args: arguments,
-                })
-            }
-        } else if let Ok(func) = get_built_in_function(&canonical_function_name) {
-            if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
-                return Err(PlanError::invalid("invalid scalar function clause"));
-            }
-            let input = ScalarFunctionInput {
-                arguments,
-                function_context: FunctionContextInput {
-                    argument_display_names: &argument_display_names,
-                    plan_config: &self.config,
-                    session_context: self.ctx,
-                    schema,
-                },
-            };
-            func(input)?
-        } else if let Ok(func) = get_built_in_aggregate_function(&canonical_function_name) {
-            let filter = match filter {
-                Some(x) => Some(Box::new(self.resolve_expression(*x, schema, state).await?)),
-                None => None,
-            };
-            let order_by = match order_by {
-                Some(x) => self.resolve_sort_orders(x, true, schema, state).await?,
-                None => vec![],
-            };
-            // For DISTINCT aggregate functions with a wildcard argument (e.g., COUNT(DISTINCT *)),
-            // expand the wildcard to visible column references here in the resolver where we have
-            // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
-            // join keys) are excluded from the distinct count.
-            #[expect(deprecated)]
-            let arguments = if is_distinct
-                && matches!(
-                    arguments.as_slice(),
-                    [expr::Expr::Wildcard {
-                        qualifier: None,
-                        options: _
-                    }]
-                ) {
-                schema
-                    .columns()
-                    .into_iter()
-                    .filter(|c| {
-                        state
-                            .get_field_info(&c.name)
-                            .is_ok_and(|info| !info.is_hidden())
+                if let Some(f) = udf.inner().downcast_ref::<PySparkUnresolvedUDF>() {
+                    if f.eval_type().is_table_function() {
+                        return Err(PlanError::AnalysisError(format!(
+                            "user-defined table function cannot be used as a scalar function: {function_name}"
+                        )));
+                    }
+                    let output_type = f.output_type().cloned().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "unresolved UDF {function_name} has no scalar return type"
+                        ))
+                    })?;
+                    let function = PythonUdf {
+                        python_version: f.python_version().to_string(),
+                        eval_type: f.eval_type(),
+                        command: f.command().to_vec(),
+                        output_type,
+                    };
+                    self.resolve_python_udf_expr(
+                        function,
+                        &function_name,
+                        arguments,
+                        &argument_display_names,
+                        &kwarg_names, // pass kwargs from named_arguments
+                        schema,
+                        f.deterministic(),
+                        is_distinct,
+                        state,
+                    )?
+                } else {
+                    expr::Expr::ScalarFunction(ScalarFunction {
+                        func: std::sync::Arc::new(udf),
+                        args: arguments,
                     })
-                    .map(expr::Expr::Column)
-                    .collect()
-            } else {
-                arguments
-            };
-            let input = AggFunctionInput {
-                arguments,
-                distinct: is_distinct,
-                ignore_nulls,
-                filter,
-                order_by,
-                function_context: FunctionContextInput {
-                    argument_display_names: &argument_display_names,
-                    plan_config: &self.config,
-                    session_context: self.ctx,
-                    schema,
-                },
-            };
-            func(input)?
+                }
+            }
+            _ => {
+                match get_built_in_function(&canonical_function_name) {
+                    Ok(func) => {
+                        if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
+                            return Err(PlanError::invalid("invalid scalar function clause"));
+                        }
+                        let input = ScalarFunctionInput {
+                            arguments,
+                            function_context: FunctionContextInput {
+                                argument_display_names: &argument_display_names,
+                                plan_config: &self.config,
+                                session_context: self.ctx,
+                                schema,
+                            },
+                        };
+                        func(input)?
+                    }
+                    _ => {
+                        match get_built_in_aggregate_function(&canonical_function_name) {
+                            Ok(func) => {
+                                let filter = match filter {
+                                    Some(x) => Some(Box::new(
+                                        self.resolve_expression(*x, schema, state).await?,
+                                    )),
+                                    None => None,
+                                };
+                                let order_by = match order_by {
+                                    Some(x) => {
+                                        self.resolve_sort_orders(x, true, schema, state).await?
+                                    }
+                                    None => vec![],
+                                };
+                                // For DISTINCT aggregate functions with a wildcard argument (e.g., COUNT(DISTINCT *)),
+                                // expand the wildcard to visible column references here in the resolver where we have
+                                // access to `state` for hidden-column filtering. This ensures hidden columns (e.g.,
+                                // join keys) are excluded from the distinct count.
+                                #[expect(deprecated)]
+                                let arguments = if is_distinct
+                                    && matches!(
+                                        arguments.as_slice(),
+                                        [expr::Expr::Wildcard {
+                                            qualifier: None,
+                                            options: _
+                                        }]
+                                    ) {
+                                    schema
+                                        .columns()
+                                        .into_iter()
+                                        .filter(|c| {
+                                            state
+                                                .get_field_info(&c.name)
+                                                .is_ok_and(|info| !info.is_hidden())
+                                        })
+                                        .map(expr::Expr::Column)
+                                        .collect()
+                                } else {
+                                    arguments
+                                };
+                                let input = AggFunctionInput {
+                                    arguments,
+                                    distinct: is_distinct,
+                                    ignore_nulls,
+                                    filter,
+                                    order_by,
+                                    preserve_count_argument_columns: state
+                                        .config()
+                                        .preserve_count_argument_columns,
+                                    function_context: FunctionContextInput {
+                                        argument_display_names: &argument_display_names,
+                                        plan_config: &self.config,
+                                        session_context: self.ctx,
+                                        schema,
+                                    },
+                                };
+                                func(input)?
+                            }
+                            _ => {
+                                return Err(PlanError::unsupported(format!(
+                                    "unknown function: {function_name}",
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let func = coerce_timestamp_string_predicate(func, schema, &self.config)?;
+
+        // DataFusion lambda variables carry no type until resolved against the schema.
+        // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
+        // only when not inside an enclosing lambda scope: a higher-order function
+        // nested in another lambda body has free variables that only the outermost
+        // resolution, which sees the whole expression tree, can bind.
+        let func = if has_lambda_argument && !state.in_lambda_scope() {
+            func.resolve_lambda_variables(schema)?.data
         } else {
-            return Err(PlanError::unsupported(format!(
-                "unknown function: {function_name}",
-            )));
+            func
         };
 
         // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
@@ -219,11 +277,22 @@ impl PlanResolver<'_> {
                 argument_display_names
             };
         let service = self.ctx.extension::<PlanService>()?;
-        let name = service.plan_formatter().function_to_string(
-            &function_name,
-            argument_display_names.iter().map(|x| x.as_str()).collect(),
-            is_distinct,
-        )?;
+        // A single-field inline uses the scalar rewrite path, so preserve its
+        // default field name here. Explicit aliases are applied by the caller.
+        let name = if matches!(canonical_function_name.as_str(), "inline" | "inline_outer")
+            && let Expr::ScalarFunction(function) = &func
+            && function.func.inner().is::<Explode>()
+            && let DataType::Struct(fields) = func.get_type(schema)?
+            && let [field] = fields.as_ref()
+        {
+            field.name().to_string()
+        } else {
+            service.plan_formatter().function_to_string(
+                &function_name,
+                argument_display_names.iter().map(|x| x.as_str()).collect(),
+                is_distinct,
+            )?
+        };
 
         // Extract metadata from UDF if it implements return_field_from_args
         let metadata = if let expr::Expr::ScalarFunction(ScalarFunction {
@@ -285,9 +354,40 @@ impl PlanResolver<'_> {
         let mut exprs: Vec<expr::Expr> = vec![];
 
         for expression in expressions {
+            let is_named_reference = matches!(
+                &expression,
+                spec::Expr::UnresolvedAttribute { .. }
+                    | spec::Expr::UnresolvedNamedLambdaVariable(_)
+            );
+            // Preserve named references before resolution lowers field access to functions.
+            let field_name = match &expression {
+                spec::Expr::UnresolvedAttribute { name, .. }
+                | spec::Expr::UnresolvedNamedLambdaVariable(
+                    spec::UnresolvedNamedLambdaVariable { name },
+                ) => name.parts().last().map(|x| x.as_ref().to_string()),
+                spec::Expr::UnresolvedExtractValue { extraction, .. } => {
+                    match extraction.as_ref() {
+                        spec::Expr::Literal(spec::Literal::Utf8 { value }) => value.clone(),
+                        spec::Expr::UnresolvedAttribute { name, .. } => match name.parts() {
+                            [field] => Some(field.as_ref().to_string()),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
             let NamedExpr { name, expr, .. } = self
                 .resolve_named_expression(expression, schema, state)
                 .await?;
+            // A string map key is not a struct field name in the Column API.
+            let field_name = if is_named_reference
+                || matches!(&expr, Expr::ScalarFunction(f) if f.func.inner().is::<GetFieldFunc>())
+            {
+                field_name
+            } else {
+                None
+            };
 
             match expr {
                 // Expand wildcard inside `struct(...)` only, to match Spark behavior:
@@ -295,6 +395,7 @@ impl PlanResolver<'_> {
                 // - struct(alias.*) expands to all visible columns from that qualifier
                 #[expect(deprecated)]
                 Expr::Wildcard { qualifier, options } => {
+                    let schema = &Self::local_schema(schema, state);
                     let plan = LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row: false,
                         schema: schema.clone(),
@@ -321,7 +422,7 @@ impl PlanResolver<'_> {
                 // Nested-field wildcard expansion can produce a MultiExpr.
                 // Flatten it so `struct(a.*)` can become `struct(a.x, a.y, ...)`.
                 Expr::ScalarFunction(ScalarFunction { func, args })
-                    if func.inner().as_any().is::<MultiExpr>() =>
+                    if func.inner().is::<MultiExpr>() =>
                 {
                     if name.len() == args.len() {
                         for (n, arg) in name.into_iter().zip(args) {
@@ -344,12 +445,62 @@ impl PlanResolver<'_> {
 
                 other => {
                     names.push(name.one()?);
+                    // A reference may resolve to an alias with different casing.
+                    let other = match field_name {
+                        Some(field_name) if !matches!(other, Expr::Column(_)) => {
+                            other.alias(field_name)
+                        }
+                        _ => other,
+                    };
                     exprs.push(other);
                 }
             }
         }
 
         Ok((names, exprs))
+    }
+
+    /// For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression into the
+    /// argument list along with a tie-break sentinel literal derived from the sort
+    /// direction. Spark returns the lowest value among equally frequent values for
+    /// ascending order and the highest for descending order, so this canonicalizes
+    /// the WITHIN GROUP syntax to the same argument form as `mode(col, deterministic)`
+    /// for both the aggregate function and the output column name formatter.
+    fn convert_mode_within_group(
+        function_name: &str,
+        arguments: Vec<spec::Expr>,
+        order_by: Option<Vec<spec::SortOrder>>,
+    ) -> PlanResult<(Vec<spec::Expr>, Option<Vec<spec::SortOrder>>)> {
+        if function_name.trim().to_lowercase() != "mode" {
+            return Ok((arguments, order_by));
+        }
+        let Some(sorts) = order_by else {
+            // order_by on UnresolvedFunction is populated exclusively from the within_group clause.
+            return Ok((arguments, None));
+        };
+        if !arguments.is_empty() {
+            return Err(PlanError::invalid(
+                "mode() with WITHIN GROUP does not take arguments",
+            ));
+        }
+        let spec::SortOrder {
+            child,
+            direction,
+            null_ordering: _,
+        } = sorts.one()?;
+        let tie_break = match direction {
+            spec::SortDirection::Descending => "highest",
+            spec::SortDirection::Ascending | spec::SortDirection::Unspecified => "lowest",
+        };
+        Ok((
+            vec![
+                *child,
+                spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(tie_break.to_string()),
+                }),
+            ],
+            None,
+        ))
     }
 
     /// For functions that accept a date-part keyword as their first argument
@@ -359,15 +510,25 @@ impl PlanResolver<'_> {
         function_name: &str,
         mut arguments: Vec<spec::Expr>,
     ) -> Vec<spec::Expr> {
-        const DATE_PART_FUNCTIONS: &[&str] = &["datediff", "date_diff", "timestampdiff"];
-        if arguments.len() >= 3 && DATE_PART_FUNCTIONS.contains(&function_name) {
-            if let spec::Expr::UnresolvedAttribute { ref name, .. } = arguments[0] {
-                let parts: Vec<String> = name.clone().into();
-                if parts.len() == 1 {
-                    arguments[0] = spec::Expr::Literal(spec::Literal::Utf8 {
-                        value: Some(parts.into_iter().next().unwrap_or_default()),
-                    });
-                }
+        const DATE_PART_FUNCTIONS: &[&str] = &[
+            "date_add",
+            "dateadd",
+            "datediff",
+            "date_diff",
+            "timestampadd",
+            "timestamp_add",
+            "timestampdiff",
+            "timestamp_diff",
+        ];
+        if arguments.len() >= 3
+            && DATE_PART_FUNCTIONS.contains(&function_name.trim().to_lowercase().as_str())
+            && let spec::Expr::UnresolvedAttribute { ref name, .. } = arguments[0]
+        {
+            let parts: Vec<String> = name.clone().into();
+            if parts.len() == 1 {
+                arguments[0] = spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(parts.into_iter().next().unwrap_or_default()),
+                });
             }
         }
         arguments
@@ -418,13 +579,12 @@ fn extract_metadata_from_udf(
     };
 
     // Try to extract metadata, but don't fail if it doesn't work
-    if let Ok(field) = udf.return_field_from_args(return_field_args) {
-        Ok(field
+    match udf.return_field_from_args(return_field_args) {
+        Ok(field) => Ok(field
             .metadata()
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
-            .collect())
-    } else {
-        Ok(vec![])
+            .collect()),
+        _ => Ok(vec![]),
     }
 }

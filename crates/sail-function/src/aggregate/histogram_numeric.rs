@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -165,13 +164,13 @@ impl HistogramNumericFunction {
             | ScalarValue::UInt64(None) => {
                 return Err(DataFusionError::Plan(
                     "histogram_numeric requires a non-null integer literal for nbins".to_string(),
-                ))
+                ));
             }
             other => {
                 return Err(DataFusionError::Plan(format!(
                     "histogram_numeric requires an integer literal for nbins, got {}",
                     other.data_type()
-                )))
+                )));
             }
         };
         if nbins_i64 < 1 {
@@ -184,10 +183,6 @@ impl HistogramNumericFunction {
 }
 
 impl AggregateUDFImpl for HistogramNumericFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "histogram_numeric"
     }

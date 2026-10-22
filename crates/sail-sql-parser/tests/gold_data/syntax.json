@@ -144,6 +144,149 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "SnapshotReferenceCreateAction"
+                      },
+                      {
+                        "nonTerminal": "SnapshotReferenceKind"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(As), Keyword(Of), Keyword(Version), IntegerLiteral))"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Retain), ReferenceDuration))"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(With), Keyword(Snapshot), Keyword(Retention), ReferenceSnapshotRetention))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Drop)"
+                      },
+                      {
+                        "nonTerminal": "SnapshotReferenceKind"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Set)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Identifier)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Fields)"
+                      },
+                      {
+                        "nonTerminal": "Sequence(ObjectName, Operator(Comma))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Drop)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Identifier)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Fields)"
+                      },
+                      {
+                        "nonTerminal": "Sequence(ObjectName, Operator(Comma))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Add)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Partition)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Field)"
+                      },
+                      {
+                        "nonTerminal": "Expression"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(As), Identifier))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Drop)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Partition)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Field)"
+                      },
+                      {
+                        "nonTerminal": "Expression"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Replace)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Partition)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Field)"
+                      },
+                      {
+                        "nonTerminal": "Expression"
+                      },
+                      {
+                        "nonTerminal": "Keyword(With)"
+                      },
+                      {
+                        "nonTerminal": "Box(Expression)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(As), Identifier))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Write)"
+                      },
+                      {
+                        "nonTerminal": "Vector(TableWriteSpec)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Rename)"
                       },
                       {
@@ -180,6 +323,47 @@
                       },
                       {
                         "nonTerminal": "ColumnAlterationList"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Add)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Constraint)"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Check)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Expression"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Drop)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Constraint)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
                       }
                     ]
                   },
@@ -1474,6 +1658,47 @@
                         "nonTerminal": "Keyword(As)"
                       },
                       {
+                        "nonTerminal": "Keyword(Identity)"
+                      },
+                      {
+                        "nonTerminal": "Option(TableColumnIdentityOptions)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Generated)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(By)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Default)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(As)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Identity)"
+                      },
+                      {
+                        "nonTerminal": "Option(TableColumnIdentityOptions)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Generated)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Always)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(As)"
+                      },
+                      {
                         "nonTerminal": "Operator(LeftParenthesis)"
                       },
                       {
@@ -1592,6 +1817,12 @@
               }
             },
             {
+              "name": "ConfigValue",
+              "node": {
+                "terminal": "configValue"
+              }
+            },
+            {
               "name": "CreateDatabaseClause",
               "node": {
                 "choice": [
@@ -1660,7 +1891,7 @@
                         "nonTerminal": "IdentList"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Keyword(Sorted), Keyword(By), SortColumnList))"
+                        "nonTerminal": "Option(SortColumnClause)"
                       },
                       {
                         "nonTerminal": "Keyword(Into)"
@@ -1782,6 +2013,60 @@
                       },
                       {
                         "nonTerminal": "PropertyList"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "CreateViewDefinition",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Option(TemporaryViewClause)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(View)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(ViewColumnList)"
+                      },
+                      {
+                        "nonTerminal": "Vector(CreateViewClause)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(As)"
+                      },
+                      {
+                        "nonTerminal": "Query"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "TemporaryViewClause"
+                      },
+                      {
+                        "nonTerminal": "Keyword(View)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(ViewColumnList)"
+                      },
+                      {
+                        "nonTerminal": "ViewUsingClause"
                       }
                     ]
                   }
@@ -2233,6 +2518,62 @@
               }
             },
             {
+              "name": "DatabaseKeyword",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Database)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Schema)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Namespace)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "DatabasesKeyword",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Databases)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Schemas)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Namespaces)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "DecimalType",
               "node": {
                 "choice": [
@@ -2277,6 +2618,188 @@
               }
             },
             {
+              "name": "DescribeFunctionName",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "ObjectName"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(TripleGreaterThan)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(DoubleVerticalBar)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(DoubleGreaterThan)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(DoubleLessThan)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(GreaterThanEquals)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(LessThanEquals)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(LessThanGreaterThan)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Spaceship)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(NotEquals)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(DoubleEquals)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(ExclamationMark)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(GreaterThan)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(LessThan)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Plus)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Minus)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Asterisk)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Slash)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Percent)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Ampersand)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(VerticalBar)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Caret)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Tilde)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(Equals)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "DescribeItem",
               "node": {
                 "choice": [
@@ -2289,7 +2812,7 @@
                         "nonTerminal": "Option(Keyword(Extended))"
                       },
                       {
-                        "nonTerminal": "Either(ObjectName, StringLiteral)"
+                        "nonTerminal": "DescribeFunctionName"
                       }
                     ]
                   },
@@ -2309,7 +2832,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Keyword(Extended))"
@@ -2322,26 +2845,10 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Keyword(Table)"
+                        "nonTerminal": "Option(Keyword(Table))"
                       },
                       {
-                        "nonTerminal": "Option(Keyword(Extended))"
-                      },
-                      {
-                        "nonTerminal": "ObjectName"
-                      },
-                      {
-                        "nonTerminal": "Option(PartitionClause)"
-                      },
-                      {
-                        "nonTerminal": "Option(ObjectName)"
-                      }
-                    ]
-                  },
-                  {
-                    "sequence": [
-                      {
-                        "nonTerminal": "Keyword(Extended)"
+                        "nonTerminal": "Option(Either(Keyword(Extended), Keyword(Formatted)))"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -2351,6 +2858,9 @@
                       },
                       {
                         "nonTerminal": "Option(ObjectName)"
+                      },
+                      {
+                        "nonTerminal": "Unit"
                       }
                     ]
                   },
@@ -2467,32 +2977,6 @@
               }
             },
             {
-              "name": "Either(Keyword(Database), Keyword(Schema))",
-              "node": {
-                "choice": [
-                  {
-                    "nonTerminal": "Keyword(Database)"
-                  },
-                  {
-                    "nonTerminal": "Keyword(Schema)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Either(Keyword(Databases), Keyword(Schemas))",
-              "node": {
-                "choice": [
-                  {
-                    "nonTerminal": "Keyword(Databases)"
-                  },
-                  {
-                    "nonTerminal": "Keyword(Schemas)"
-                  }
-                ]
-              }
-            },
-            {
               "name": "Either(Keyword(Dbproperties), Keyword(Properties))",
               "node": {
                 "choice": [
@@ -2514,6 +2998,19 @@
                   },
                   {
                     "nonTerminal": "Keyword(Describe)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Either(Keyword(Extended), Keyword(Formatted))",
+              "node": {
+                "choice": [
+                  {
+                    "nonTerminal": "Keyword(Extended)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Formatted)"
                   }
                 ]
               }
@@ -2553,19 +3050,6 @@
                   },
                   {
                     "nonTerminal": "Keyword(Overwrite)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Either(Keyword(Local), StringLiteral)",
-              "node": {
-                "choice": [
-                  {
-                    "nonTerminal": "Keyword(Local)"
-                  },
-                  {
-                    "nonTerminal": "StringLiteral"
                   }
                 ]
               }
@@ -2644,19 +3128,6 @@
                   },
                   {
                     "nonTerminal": "Keyword(Temporary)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Either(ObjectName, StringLiteral)",
-              "node": {
-                "choice": [
-                  {
-                    "nonTerminal": "ObjectName"
-                  },
-                  {
-                    "nonTerminal": "StringLiteral"
                   }
                 ]
               }
@@ -3385,6 +3856,51 @@
               }
             },
             {
+              "name": "HintClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(HintStart)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(HintItem, Option(Operator(Comma)))"
+                  },
+                  {
+                    "nonTerminal": "Operator(HintEnd)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "HintItem",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Identifier"
+                  },
+                  {
+                    "nonTerminal": "Option(HintParameters)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "HintParameters",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(Expression, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "IdentList",
               "node": {
                 "sequence": [
@@ -4053,6 +4569,14 @@
               }
             },
             {
+              "name": "Keyword(Branch)",
+              "node": {
+                "terminal": {
+                  "keyword": "BRANCH"
+                }
+              }
+            },
+            {
               "name": "Keyword(Bucket)",
               "node": {
                 "terminal": {
@@ -4097,6 +4621,14 @@
               "node": {
                 "terminal": {
                   "keyword": "CACHE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Call)",
+              "node": {
+                "terminal": {
+                  "keyword": "CALL"
                 }
               }
             },
@@ -4161,6 +4693,14 @@
               "node": {
                 "terminal": {
                   "keyword": "CHARACTER"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Check)",
+              "node": {
+                "terminal": {
+                  "keyword": "CHECK"
                 }
               }
             },
@@ -4233,6 +4773,14 @@
               "node": {
                 "terminal": {
                   "keyword": "COMPUTE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Constraint)",
+              "node": {
+                "terminal": {
+                  "keyword": "CONSTRAINT"
                 }
               }
             },
@@ -4597,6 +5145,14 @@
               }
             },
             {
+              "name": "Keyword(Field)",
+              "node": {
+                "terminal": {
+                  "keyword": "FIELD"
+                }
+              }
+            },
+            {
               "name": "Keyword(Fields)",
               "node": {
                 "terminal": {
@@ -4797,6 +5353,14 @@
               }
             },
             {
+              "name": "Keyword(Identity)",
+              "node": {
+                "terminal": {
+                  "keyword": "IDENTITY"
+                }
+              }
+            },
+            {
               "name": "Keyword(If)",
               "node": {
                 "terminal": {
@@ -4833,6 +5397,14 @@
               "node": {
                 "terminal": {
                   "keyword": "INCLUDE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Increment)",
+              "node": {
+                "terminal": {
+                  "keyword": "INCREMENT"
                 }
               }
             },
@@ -5053,6 +5625,14 @@
               }
             },
             {
+              "name": "Keyword(Locally)",
+              "node": {
+                "terminal": {
+                  "keyword": "LOCALLY"
+                }
+              }
+            },
+            {
               "name": "Keyword(Location)",
               "node": {
                 "terminal": {
@@ -5173,6 +5753,22 @@
               }
             },
             {
+              "name": "Keyword(Namespace)",
+              "node": {
+                "terminal": {
+                  "keyword": "NAMESPACE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Namespaces)",
+              "node": {
+                "terminal": {
+                  "keyword": "NAMESPACES"
+                }
+              }
+            },
+            {
               "name": "Keyword(Natural)",
               "node": {
                 "terminal": {
@@ -5265,6 +5861,14 @@
               "node": {
                 "terminal": {
                   "keyword": "ORDER"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Ordered)",
+              "node": {
+                "terminal": {
+                  "keyword": "ORDERED"
                 }
               }
             },
@@ -5477,6 +6081,14 @@
               }
             },
             {
+              "name": "Keyword(Reset)",
+              "node": {
+                "terminal": {
+                  "keyword": "RESET"
+                }
+              }
+            },
+            {
               "name": "Keyword(Respect)",
               "node": {
                 "terminal": {
@@ -5489,6 +6101,22 @@
               "node": {
                 "terminal": {
                   "keyword": "RESTRICT"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Retain)",
+              "node": {
+                "terminal": {
+                  "keyword": "RETAIN"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Retention)",
+              "node": {
+                "terminal": {
+                  "keyword": "RETENTION"
                 }
               }
             },
@@ -5645,6 +6273,22 @@
               }
             },
             {
+              "name": "Keyword(Snapshot)",
+              "node": {
+                "terminal": {
+                  "keyword": "SNAPSHOT"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Snapshots)",
+              "node": {
+                "terminal": {
+                  "keyword": "SNAPSHOTS"
+                }
+              }
+            },
+            {
               "name": "Keyword(Some)",
               "node": {
                 "terminal": {
@@ -5673,6 +6317,14 @@
               "node": {
                 "terminal": {
                   "keyword": "SOURCE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Start)",
+              "node": {
+                "terminal": {
+                  "keyword": "START"
                 }
               }
             },
@@ -5725,6 +6377,14 @@
               }
             },
             {
+              "name": "Keyword(System)",
+              "node": {
+                "terminal": {
+                  "keyword": "SYSTEM"
+                }
+              }
+            },
+            {
               "name": "Keyword(SystemTime)",
               "node": {
                 "terminal": {
@@ -5761,6 +6421,14 @@
               "node": {
                 "terminal": {
                   "keyword": "TABLESAMPLE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Tag)",
+              "node": {
+                "terminal": {
+                  "keyword": "TAG"
                 }
               }
             },
@@ -5981,6 +6649,14 @@
               }
             },
             {
+              "name": "Keyword(Unordered)",
+              "node": {
+                "terminal": {
+                  "keyword": "UNORDERED"
+                }
+              }
+            },
+            {
               "name": "Keyword(Unpivot)",
               "node": {
                 "terminal": {
@@ -6017,6 +6693,14 @@
               "node": {
                 "terminal": {
                   "keyword": "USE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(User)",
+              "node": {
+                "terminal": {
+                  "keyword": "USER"
                 }
               }
             },
@@ -6153,6 +6837,14 @@
               "node": {
                 "terminal": {
                   "keyword": "WITHOUT"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Write)",
+              "node": {
+                "terminal": {
+                  "keyword": "WRITE"
                 }
               }
             },
@@ -6742,6 +7434,22 @@
               }
             },
             {
+              "name": "Operator(HintEnd)",
+              "node": {
+                "terminal": {
+                  "operator": "*/"
+                }
+              }
+            },
+            {
+              "name": "Operator(HintStart)",
+              "node": {
+                "terminal": {
+                  "operator": "/*+"
+                }
+              }
+            },
+            {
               "name": "Operator(LeftBracket)",
               "node": {
                 "terminal": {
@@ -6990,6 +7698,22 @@
               }
             },
             {
+              "name": "Option(ConfigValue)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ConfigValue"
+                }
+              }
+            },
+            {
+              "name": "Option(DataType)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "DataType"
+                }
+              }
+            },
+            {
               "name": "Option(DeleteTableAlias)",
               "node": {
                 "optional": {
@@ -7002,6 +7726,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "DuplicateTreatment"
+                }
+              }
+            },
+            {
+              "name": "Option(Either(Keyword(Extended), Keyword(Formatted)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Either(Keyword(Extended), Keyword(Formatted))"
                 }
               }
             },
@@ -7082,6 +7814,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "HavingClause"
+                }
+              }
+            },
+            {
+              "name": "Option(HintParameters)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "HintParameters"
                 }
               }
             },
@@ -7190,6 +7930,14 @@
               }
             },
             {
+              "name": "Option(Keyword(Locally))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Keyword(Locally)"
+                }
+              }
+            },
+            {
               "name": "Option(Keyword(Natural))",
               "node": {
                 "optional": {
@@ -7294,6 +8042,14 @@
               }
             },
             {
+              "name": "Option(Operator(Comma))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Operator(Comma)"
+                }
+              }
+            },
+            {
               "name": "Option(Operator(Equals))",
               "node": {
                 "optional": {
@@ -7350,10 +8106,18 @@
               }
             },
             {
-              "name": "Option(PropertyKeyValue)",
+              "name": "Option(PropertyKey)",
               "node": {
                 "optional": {
-                  "nonTerminal": "PropertyKeyValue"
+                  "nonTerminal": "PropertyKey"
+                }
+              }
+            },
+            {
+              "name": "Option(ReferenceDuration)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ReferenceDuration"
                 }
               }
             },
@@ -7382,10 +8146,42 @@
               }
             },
             {
+              "name": "Option(SetPropertyKeyValue)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "SetPropertyKeyValue"
+                }
+              }
+            },
+            {
               "name": "Option(SetQuantifier)",
               "node": {
                 "optional": {
                   "nonTerminal": "SetQuantifier"
+                }
+              }
+            },
+            {
+              "name": "Option(ShowFunctionScope)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ShowFunctionScope"
+                }
+              }
+            },
+            {
+              "name": "Option(ShowFunctionsClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ShowFunctionsClause"
+                }
+              }
+            },
+            {
+              "name": "Option(SortColumnClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "SortColumnClause"
                 }
               }
             },
@@ -7398,10 +8194,26 @@
               }
             },
             {
+              "name": "Option(TableColumnIdentityOptions)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "TableColumnIdentityOptions"
+                }
+              }
+            },
+            {
               "name": "Option(TableSampleRepeatable)",
               "node": {
                 "optional": {
                   "nonTerminal": "TableSampleRepeatable"
+                }
+              }
+            },
+            {
+              "name": "Option(TemporaryViewClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "TemporaryViewClause"
                 }
               }
             },
@@ -7430,10 +8242,26 @@
               }
             },
             {
+              "name": "Option(Tuple(Keyword(As), Identifier))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(As), Identifier)"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Keyword(As), Keyword(Of)))",
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(As), Keyword(Of))"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(Keyword(As), Keyword(Of), Keyword(Version), IntegerLiteral))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(As), Keyword(Of), Keyword(Version), IntegerLiteral)"
                 }
               }
             },
@@ -7534,10 +8362,10 @@
               }
             },
             {
-              "name": "Option(Tuple(Keyword(Sorted), Keyword(By), SortColumnList))",
+              "name": "Option(Tuple(Keyword(Retain), ReferenceDuration))",
               "node": {
                 "optional": {
-                  "nonTerminal": "Tuple(Keyword(Sorted), Keyword(By), SortColumnList)"
+                  "nonTerminal": "Tuple(Keyword(Retain), ReferenceDuration)"
                 }
               }
             },
@@ -7582,10 +8410,26 @@
               }
             },
             {
+              "name": "Option(Tuple(Keyword(With), Keyword(Snapshot), Keyword(Retention), ReferenceSnapshotRetention))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(With), Keyword(Snapshot), Keyword(Retention), ReferenceSnapshotRetention)"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Operator(Comma), IntegerLiteral))",
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Operator(Comma), IntegerLiteral)"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(Operator(Equals), ConfigValue))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Operator(Equals), ConfigValue)"
                 }
               }
             },
@@ -7622,10 +8466,10 @@
               }
             },
             {
-              "name": "Option(Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis)))",
+              "name": "Option(Tuple(Operator(LeftParenthesis), PropertyKey, Operator(RightParenthesis)))",
               "node": {
                 "optional": {
-                  "nonTerminal": "Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis))"
+                  "nonTerminal": "Tuple(Operator(LeftParenthesis), PropertyKey, Operator(RightParenthesis))"
                 }
               }
             },
@@ -7650,14 +8494,6 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Option(Keyword(As)), Sequence(Identifier, Operator(Comma)))"
-                }
-              }
-            },
-            {
-              "name": "Option(Tuple(Option(Keyword(Global)), Either(Keyword(Temp), Keyword(Temporary))))",
-              "node": {
-                "optional": {
-                  "nonTerminal": "Tuple(Option(Keyword(Global)), Either(Keyword(Temp), Keyword(Temporary)))"
                 }
               }
             },
@@ -7690,6 +8526,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "UpdateTableAlias"
+                }
+              }
+            },
+            {
+              "name": "Option(ViewColumnList)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ViewColumnList"
                 }
               }
             },
@@ -8240,6 +9084,74 @@
               }
             },
             {
+              "name": "ReferenceDuration",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "IntegerLiteral"
+                  },
+                  {
+                    "nonTerminal": "ReferenceTimeUnit"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ReferenceSnapshotRetention",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "IntegerLiteral"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Snapshots)"
+                      },
+                      {
+                        "nonTerminal": "Option(ReferenceDuration)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "ReferenceDuration"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ReferenceTimeUnit",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Days)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Hours)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Minutes)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "RowFormat",
               "node": {
                 "choice": [
@@ -8373,6 +9285,9 @@
                     "nonTerminal": "Keyword(Select)"
                   },
                   {
+                    "nonTerminal": "Vector(HintClause)"
+                  },
+                  {
                     "nonTerminal": "Option(DuplicateTreatment)"
                   },
                   {
@@ -8389,7 +9304,7 @@
                     "nonTerminal": "Assignment"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8411,7 +9326,7 @@
                     "nonTerminal": "ColumnAlteration"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8433,7 +9348,7 @@
                     "nonTerminal": "ColumnDefinition"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8455,7 +9370,7 @@
                     "nonTerminal": "Expression"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8477,7 +9392,7 @@
                     "nonTerminal": "FunctionArgument"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8499,7 +9414,7 @@
                     "nonTerminal": "GroupingExpr"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8521,13 +9436,35 @@
                     "nonTerminal": "GroupingSet"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
                         },
                         {
                           "nonTerminal": "GroupingSet"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Sequence(HintItem, Option(Operator(Comma)))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "HintItem"
+                  },
+                  {
+                    "zeroOrMore": {
+                      "sequence": [
+                        {
+                          "nonTerminal": "Option(Operator(Comma))"
+                        },
+                        {
+                          "nonTerminal": "HintItem"
                         }
                       ]
                     }
@@ -8543,7 +9480,7 @@
                     "nonTerminal": "Identifier"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8565,7 +9502,7 @@
                     "nonTerminal": "Identifier"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Period)"
@@ -8587,7 +9524,7 @@
                     "nonTerminal": "NamedExpr"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8609,7 +9546,7 @@
                     "nonTerminal": "NamedQuery"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8631,7 +9568,7 @@
                     "nonTerminal": "NamedWindow"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8653,7 +9590,7 @@
                     "nonTerminal": "ObjectName"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8675,7 +9612,7 @@
                     "nonTerminal": "OrderByExpr"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8697,7 +9634,7 @@
                     "nonTerminal": "PartitionByItem"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8719,7 +9656,7 @@
                     "nonTerminal": "PartitionValue"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8741,7 +9678,7 @@
                     "nonTerminal": "PropertyKey"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8763,7 +9700,7 @@
                     "nonTerminal": "PropertyKeyValue"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8785,7 +9722,7 @@
                     "nonTerminal": "SortColumn"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8807,7 +9744,7 @@
                     "nonTerminal": "StructField"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8829,7 +9766,7 @@
                     "nonTerminal": "TableWithJoins"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8851,7 +9788,7 @@
                     "nonTerminal": "Tuple(IdentList, Option(Tuple(Option(Keyword(As)), Identifier)))"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8873,7 +9810,7 @@
                     "nonTerminal": "Tuple(Identifier, Option(Tuple(Option(Keyword(As)), Identifier)))"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8895,7 +9832,7 @@
                     "nonTerminal": "ViewColumn"
                   },
                   {
-                    "oneOrMore": {
+                    "zeroOrMore": {
                       "sequence": [
                         {
                           "nonTerminal": "Operator(Comma)"
@@ -8958,6 +9895,22 @@
               }
             },
             {
+              "name": "SetPropertyKeyValue",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "PropertyKey"
+                  },
+                  {
+                    "nonTerminal": "Option(Tuple(Operator(Equals), ConfigValue))"
+                  },
+                  {
+                    "nonTerminal": "Option(ConfigValue)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "SetQuantifier",
               "node": {
                 "choice": [
@@ -9015,6 +9968,143 @@
               }
             },
             {
+              "name": "ShowFunctionScope",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(All)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(User)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(System)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ShowFunctionsClause",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Either(Keyword(From), Keyword(In))"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Like)"
+                      },
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Either(Keyword(From), Keyword(In))"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Option(Keyword(Like))"
+                      },
+                      {
+                        "nonTerminal": "ShowFunctionsPattern"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ShowFunctionsPattern",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "ObjectName"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SnapshotReferenceCreateAction",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Create)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Or), Keyword(Replace)))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Replace)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SnapshotReferenceKind",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Branch)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Tag)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "SortByClause",
               "node": {
                 "sequence": [
@@ -9032,10 +10122,26 @@
               "node": {
                 "sequence": [
                   {
-                    "nonTerminal": "Identifier"
+                    "nonTerminal": "Expression"
                   },
                   {
                     "nonTerminal": "Option(OrderDirection)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "SortColumnClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Sorted)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(By)"
+                  },
+                  {
+                    "nonTerminal": "SortColumnList"
                   }
                 ]
               }
@@ -9070,6 +10176,19 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Call)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "FunctionArgumentList"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Set)"
                       },
                       {
@@ -9086,7 +10205,7 @@
                         "nonTerminal": "Keyword(Use)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -9112,7 +10231,7 @@
                         "nonTerminal": "Keyword(Create)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
@@ -9131,7 +10250,7 @@
                         "nonTerminal": "Keyword(Alter)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -9147,7 +10266,7 @@
                         "nonTerminal": "Keyword(Drop)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                        "nonTerminal": "DatabaseKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Exists)))"
@@ -9166,7 +10285,7 @@
                         "nonTerminal": "Keyword(Show)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Databases), Keyword(Schemas))"
+                        "nonTerminal": "DatabasesKeyword"
                       },
                       {
                         "nonTerminal": "Option(Tuple(Either(Keyword(From), Keyword(In)), ObjectName))"
@@ -9233,6 +10352,9 @@
                     "sequence": [
                       {
                         "nonTerminal": "Keyword(Replace)"
+                      },
+                      {
+                        "nonTerminal": "Option(Keyword(External))"
                       },
                       {
                         "nonTerminal": "Keyword(Table)"
@@ -9321,6 +10443,22 @@
                         "nonTerminal": "Keyword(Show)"
                       },
                       {
+                        "nonTerminal": "Keyword(Tblproperties)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), PropertyKey, Operator(RightParenthesis)))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Show)"
+                      },
+                      {
                         "nonTerminal": "Keyword(Tables)"
                       },
                       {
@@ -9394,28 +10532,7 @@
                         "nonTerminal": "Option(Tuple(Keyword(Or), Keyword(Replace)))"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Option(Keyword(Global)), Either(Keyword(Temp), Keyword(Temporary))))"
-                      },
-                      {
-                        "nonTerminal": "Keyword(View)"
-                      },
-                      {
-                        "nonTerminal": "Option(Tuple(Keyword(If), Keyword(Not), Keyword(Exists)))"
-                      },
-                      {
-                        "nonTerminal": "ObjectName"
-                      },
-                      {
-                        "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis)))"
-                      },
-                      {
-                        "nonTerminal": "Vector(CreateViewClause)"
-                      },
-                      {
-                        "nonTerminal": "Keyword(As)"
-                      },
-                      {
-                        "nonTerminal": "Query"
+                        "nonTerminal": "CreateViewDefinition"
                       }
                     ]
                   },
@@ -9505,7 +10622,13 @@
                         "nonTerminal": "Keyword(Show)"
                       },
                       {
+                        "nonTerminal": "Option(ShowFunctionScope)"
+                      },
+                      {
                         "nonTerminal": "Keyword(Functions)"
+                      },
+                      {
+                        "nonTerminal": "Option(ShowFunctionsClause)"
                       }
                     ]
                   },
@@ -9524,6 +10647,9 @@
                   },
                   {
                     "sequence": [
+                      {
+                        "nonTerminal": "Option(WithClause)"
+                      },
                       {
                         "nonTerminal": "Keyword(Insert)"
                       },
@@ -9546,6 +10672,9 @@
                   },
                   {
                     "sequence": [
+                      {
+                        "nonTerminal": "Option(WithClause)"
+                      },
                       {
                         "nonTerminal": "Keyword(Insert)"
                       },
@@ -9571,6 +10700,9 @@
                   },
                   {
                     "sequence": [
+                      {
+                        "nonTerminal": "Option(WithClause)"
+                      },
                       {
                         "nonTerminal": "Keyword(Insert)"
                       },
@@ -9739,20 +10871,33 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Keyword(Set)"
+                        "nonTerminal": "Tuple(Keyword(Set), Keyword(Time), Keyword(Zone))"
                       },
                       {
-                        "nonTerminal": "Option(PropertyKeyValue)"
+                        "nonTerminal": "TimeZoneValue"
                       }
                     ]
                   },
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Tuple(Keyword(Set), Keyword(Time), Keyword(Zone))"
+                        "nonTerminal": "Keyword(Set)"
                       },
                       {
-                        "nonTerminal": "Either(Keyword(Local), StringLiteral)"
+                        "nonTerminal": "Option(SetPropertyKeyValue)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Reset)"
+                      },
+                      {
+                        "nonTerminal": "Option(PropertyKey)"
+                      },
+                      {
+                        "nonTerminal": "Option(ConfigValue)"
                       }
                     ]
                   },
@@ -9820,7 +10965,7 @@
                   {
                     "sequence": [
                       {
-                        "nonTerminal": "Tuple(Keyword(Comment), Keyword(On), Either(Keyword(Database), Keyword(Schema)))"
+                        "nonTerminal": "Tuple(Keyword(Comment), Keyword(On), DatabaseKeyword)"
                       },
                       {
                         "nonTerminal": "ObjectName"
@@ -9892,6 +11037,61 @@
                   },
                   {
                     "nonTerminal": "Option(Tuple(Keyword(Comment), StringLiteral))"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "TableColumnIdentityOption",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Start)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(With)"
+                      },
+                      {
+                        "nonTerminal": "Option(Either(Operator(Plus), Operator(Minus)))"
+                      },
+                      {
+                        "nonTerminal": "NumberLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Increment)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(By)"
+                      },
+                      {
+                        "nonTerminal": "Option(Either(Operator(Plus), Operator(Minus)))"
+                      },
+                      {
+                        "nonTerminal": "NumberLiteral"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "TableColumnIdentityOptions",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Vector(TableColumnIdentityOption)"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
                   }
                 ]
               }
@@ -10211,6 +11411,76 @@
               }
             },
             {
+              "name": "TableWriteOrderList",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Sequence(OrderByExpr, Operator(Comma))"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Sequence(OrderByExpr, Operator(Comma))"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "TableWriteSpec",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Distributed)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(By)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Partition)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Option(Keyword(Locally))"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Ordered)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(By)"
+                      },
+                      {
+                        "nonTerminal": "TableWriteOrderList"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Unordered)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "TemporalClause",
               "node": {
                 "choice": [
@@ -10243,6 +11513,50 @@
                       },
                       {
                         "nonTerminal": "Expression"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "TemporaryViewClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Option(Keyword(Global))"
+                  },
+                  {
+                    "nonTerminal": "Either(Keyword(Temp), Keyword(Temporary))"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "TimeZoneValue",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Local)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Interval)"
+                      },
+                      {
+                        "nonTerminal": "Box(IntervalExpr)"
                       }
                     ]
                   }
@@ -10471,6 +11785,19 @@
               }
             },
             {
+              "name": "Tuple(Keyword(As), Identifier)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(As)"
+                  },
+                  {
+                    "nonTerminal": "Identifier"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Keyword(As), Keyword(Of))",
               "node": {
                 "sequence": [
@@ -10479,6 +11806,25 @@
                   },
                   {
                     "nonTerminal": "Keyword(Of)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Keyword(As), Keyword(Of), Keyword(Version), IntegerLiteral)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(As)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Of)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Version)"
+                  },
+                  {
+                    "nonTerminal": "IntegerLiteral"
                   }
                 ]
               }
@@ -10549,7 +11895,7 @@
               }
             },
             {
-              "name": "Tuple(Keyword(Comment), Keyword(On), Either(Keyword(Database), Keyword(Schema)))",
+              "name": "Tuple(Keyword(Comment), Keyword(On), DatabaseKeyword)",
               "node": {
                 "sequence": [
                   {
@@ -10559,7 +11905,7 @@
                     "nonTerminal": "Keyword(On)"
                   },
                   {
-                    "nonTerminal": "Either(Keyword(Database), Keyword(Schema))"
+                    "nonTerminal": "DatabaseKeyword"
                   }
                 ]
               }
@@ -10918,6 +12264,19 @@
               }
             },
             {
+              "name": "Tuple(Keyword(Retain), ReferenceDuration)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Retain)"
+                  },
+                  {
+                    "nonTerminal": "ReferenceDuration"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Keyword(Row), Keyword(Format), RowFormat)",
               "node": {
                 "sequence": [
@@ -10958,22 +12317,6 @@
                   },
                   {
                     "nonTerminal": "Keyword(By)"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Tuple(Keyword(Sorted), Keyword(By), SortColumnList)",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Keyword(Sorted)"
-                  },
-                  {
-                    "nonTerminal": "Keyword(By)"
-                  },
-                  {
-                    "nonTerminal": "SortColumnList"
                   }
                 ]
               }
@@ -11079,6 +12422,25 @@
               }
             },
             {
+              "name": "Tuple(Keyword(With), Keyword(Snapshot), Keyword(Retention), ReferenceSnapshotRetention)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(With)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Snapshot)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Retention)"
+                  },
+                  {
+                    "nonTerminal": "ReferenceSnapshotRetention"
+                  }
+                ]
+              }
+            },
+            {
               "name": "Tuple(Keyword(Within), Keyword(Group))",
               "node": {
                 "sequence": [
@@ -11100,6 +12462,19 @@
                   },
                   {
                     "nonTerminal": "IntegerLiteral"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Operator(Equals), ConfigValue)",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(Equals)"
+                  },
+                  {
+                    "nonTerminal": "ConfigValue"
                   }
                 ]
               }
@@ -11166,14 +12541,14 @@
               }
             },
             {
-              "name": "Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis))",
+              "name": "Tuple(Operator(LeftParenthesis), PropertyKey, Operator(RightParenthesis))",
               "node": {
                 "sequence": [
                   {
                     "nonTerminal": "Operator(LeftParenthesis)"
                   },
                   {
-                    "nonTerminal": "Sequence(ViewColumn, Operator(Comma))"
+                    "nonTerminal": "PropertyKey"
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"
@@ -11216,19 +12591,6 @@
                   },
                   {
                     "nonTerminal": "Sequence(Identifier, Operator(Comma))"
-                  }
-                ]
-              }
-            },
-            {
-              "name": "Tuple(Option(Keyword(Global)), Either(Keyword(Temp), Keyword(Temporary)))",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Option(Keyword(Global))"
-                  },
-                  {
-                    "nonTerminal": "Either(Keyword(Temp), Keyword(Temporary))"
                   }
                 ]
               }
@@ -11299,6 +12661,12 @@
                     ]
                   }
                 ]
+              }
+            },
+            {
+              "name": "Unit",
+              "node": {
+                "sequence": []
               }
             },
             {
@@ -11494,6 +12862,14 @@
               }
             },
             {
+              "name": "Vector(HintClause)",
+              "node": {
+                "zeroOrMore": {
+                  "nonTerminal": "HintClause"
+                }
+              }
+            },
+            {
               "name": "Vector(IntervalValueWithUnit)",
               "node": {
                 "zeroOrMore": {
@@ -11550,6 +12926,14 @@
               }
             },
             {
+              "name": "Vector(TableColumnIdentityOption)",
+              "node": {
+                "zeroOrMore": {
+                  "nonTerminal": "TableColumnIdentityOption"
+                }
+              }
+            },
+            {
               "name": "Vector(TableJoin)",
               "node": {
                 "zeroOrMore": {
@@ -11562,6 +12946,14 @@
               "node": {
                 "zeroOrMore": {
                   "nonTerminal": "TableModifier"
+                }
+              }
+            },
+            {
+              "name": "Vector(TableWriteSpec)",
+              "node": {
+                "zeroOrMore": {
+                  "nonTerminal": "TableWriteSpec"
                 }
               }
             },
@@ -11581,7 +12973,45 @@
                     "nonTerminal": "Identifier"
                   },
                   {
+                    "nonTerminal": "Option(DataType)"
+                  },
+                  {
+                    "nonTerminal": "Option(Tuple(Keyword(Not), Keyword(Null)))"
+                  },
+                  {
                     "nonTerminal": "Option(Tuple(Keyword(Comment), StringLiteral))"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ViewColumnList",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(ViewColumn, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ViewUsingClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Using)"
+                  },
+                  {
+                    "nonTerminal": "Identifier"
+                  },
+                  {
+                    "nonTerminal": "Option(Tuple(Keyword(Options), PropertyList))"
                   }
                 ]
               }

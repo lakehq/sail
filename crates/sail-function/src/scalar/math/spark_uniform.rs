@@ -1,18 +1,17 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array,
+    Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+    Int32Array, Int64Array, new_null_array,
 };
 use datafusion::arrow::datatypes::{
-    DataType, Field, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, FieldRef,
 };
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use rand::{rng, RngExt};
+use rand::{RngExt, rng};
 
 use super::xorshift::SparkXorShiftRandom;
 use crate::error::{
@@ -144,10 +143,6 @@ impl SparkUniform {
 }
 
 impl ScalarUDFImpl for SparkUniform {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "uniform"
     }
@@ -157,7 +152,9 @@ impl ScalarUDFImpl for SparkUniform {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_field_from_args should be used instead")
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -256,7 +253,7 @@ impl ScalarUDFImpl for SparkUniform {
                         "uniform",
                         "INT or BIGINT type for seed",
                         &arg_types[2..],
-                    ))
+                    ));
                 }
             };
             coerced_types.push(seed_type);

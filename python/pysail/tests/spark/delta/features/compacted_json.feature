@@ -1,6 +1,5 @@
 Feature: Delta Lake Compacted JSON (Log Compaction)
 
-  @sail-only
   Rule: Automatic log compaction creates compacted JSON files at the configured interval
 
     Background:
@@ -40,6 +39,8 @@ Feature: Delta Lake Compacted JSON (Log Compaction)
         📄 00000000000000000001.json
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
         """
 
     Scenario: Reads all data correctly with auto-compacted JSON on driver path
@@ -53,7 +54,6 @@ Feature: Delta Lake Compacted JSON (Log Compaction)
         | 2  | two   |
         | 3  | three |
 
-  @sail-only
   Rule: Metadata-as-data read path works correctly with auto-compacted JSON
 
     Background:
@@ -95,7 +95,6 @@ Feature: Delta Lake Compacted JSON (Log Compaction)
         | 2  | two   |
         | 3  | three |
 
-  @sail-only
   Rule: Compaction and checkpoint coexist correctly
 
     Background:
@@ -145,6 +144,8 @@ Feature: Delta Lake Compacted JSON (Log Compaction)
         📄 00000000000000000003.checkpoint.parquet
         📄 00000000000000000003.crc
         📄 00000000000000000003.json
+        📄 00000000000000000004.crc
+        📄 00000000000000000004.json
         📄 _last_checkpoint
         """
 
@@ -160,7 +161,6 @@ Feature: Delta Lake Compacted JSON (Log Compaction)
         | 3  |
         | 4  |
 
-  @sail-only
   Rule: Table is still readable after individual commits covered by compaction are deleted
 
     Background:

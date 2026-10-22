@@ -2,8 +2,8 @@ use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_recursive_query_plan(

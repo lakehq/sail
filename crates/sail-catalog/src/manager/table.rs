@@ -1,11 +1,68 @@
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
+use crate::lakehouse::{
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest,
+    LakehouseResolvedTable, LakehouseScanPlanningRequest, LakehouseScanPlanningResponse,
+    ResolveLakehouseTableRequest, TableAccessSession, resolve_lakehouse_table_status,
+};
 use crate::manager::CatalogManager;
-use crate::provider::{AlterTableOptions, CreateTableOptions, DropTableOptions};
+use crate::provider::{
+    AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
+    Namespace,
+};
 use crate::utils::match_pattern;
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ResolvedCatalogTableReference {
+    catalog: Arc<str>,
+    database: Namespace,
+    table: Arc<str>,
+}
+
+impl ResolvedCatalogTableReference {
+    pub fn catalog(&self) -> &str {
+        &self.catalog
+    }
+}
+
 impl CatalogManager {
+    pub async fn rename_table(
+        &self,
+        table: &[String],
+        destination: &[String],
+    ) -> CatalogResult<()> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        let (target_provider, target_database, target_name) = match destination {
+            [] => {
+                return Err(CatalogError::InvalidArgument(
+                    "Empty rename destination".into(),
+                ));
+            }
+            [name] => (provider.clone(), database.clone(), name.as_str().into()),
+            [first, ..] if self.state()?.catalogs.contains_key(first.as_str()) => {
+                self.resolve_object(destination)?
+            }
+            [namespace @ .., name] => (
+                provider.clone(),
+                crate::provider::Namespace::try_from(namespace)?,
+                name.as_str().into(),
+            ),
+        };
+        if provider.get_name() != target_provider.get_name() {
+            return Err(CatalogError::NotSupported(
+                "Cannot rename a table across catalogs".into(),
+            ));
+        }
+        provider
+            .rename_table(&database, &name, &target_database, &target_name)
+            .await
+    }
+
     pub async fn create_table<T: AsRef<str>>(
         &self,
         table: &[T],
@@ -15,9 +72,107 @@ impl CatalogManager {
         provider.create_table(&database, &table, options).await
     }
 
+    pub fn create_table_metadata_requirement<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        provider.create_table_metadata_requirement(options)
+    }
+
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.get_table(&database, &table).await
+    }
+
+    /// Resolves a table reference using `catalog` when no registered catalog is named.
+    pub fn resolve_table_reference_with_default_catalog<T: AsRef<str>>(
+        &self,
+        catalog: &str,
+        table: &[T],
+    ) -> CatalogResult<ResolvedCatalogTableReference> {
+        let state = self.state()?;
+        let (catalog, database, table) =
+            state.resolve_object_reference_with_default_catalog(catalog, table)?;
+        state.get_catalog(&catalog)?;
+        Ok(ResolvedCatalogTableReference {
+            catalog,
+            database,
+            table,
+        })
+    }
+
+    pub async fn get_table_by_reference(
+        &self,
+        reference: &ResolvedCatalogTableReference,
+    ) -> CatalogResult<TableStatus> {
+        let provider = self.state()?.get_catalog(&reference.catalog)?;
+        provider
+            .get_table(&reference.database, &reference.table)
+            .await
+    }
+
+    pub async fn resolve_lakehouse_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .resolve_lakehouse_table(&database, &name, request)
+            .await
+    }
+
+    pub async fn resolve_lakehouse_table_status<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        status: &TableStatus,
+        operation: sail_common_datafusion::catalog::LakehouseOperation,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        let catalog_table = table
+            .iter()
+            .map(|part| part.as_ref().to_string())
+            .collect::<Vec<_>>();
+        Ok(resolve_lakehouse_table_status(
+            provider.get_name(),
+            catalog_table,
+            status,
+            operation,
+            &provider.lakehouse_capabilities(),
+        ))
+    }
+
+    pub async fn plan_lakehouse_create<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .plan_lakehouse_create(&database, &name, request)
+            .await
+    }
+
+    pub async fn begin_table_access<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider.begin_table_access(&database, &name, request).await
+    }
+
+    pub async fn plan_lakehouse_scan<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .plan_lakehouse_scan(&database, &name, request)
+            .await
     }
 
     pub async fn list_tables<T: AsRef<str>>(
@@ -59,7 +214,7 @@ impl CatalogManager {
             // list_views; treat that as "no views" so SHOW TABLES still works there.
             let views = match views_res {
                 Ok(v) => v,
-                Err(CatalogError::NotSupported(_)) => vec![],
+                Err(CatalogError::NotSupported(_)) | Err(CatalogError::NotFound(_, _)) => vec![],
                 Err(e) => return Err(e),
             };
             tables.extend(views);
@@ -80,6 +235,15 @@ impl CatalogManager {
         provider.drop_table(&database, &table, options).await
     }
 
+    pub fn validate_alter_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: &AlterTableOptions,
+    ) -> CatalogResult<()> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        provider.validate_alter_table(options)
+    }
+
     pub async fn alter_table<T: AsRef<str>>(
         &self,
         table: &[T],
@@ -87,6 +251,51 @@ impl CatalogManager {
     ) -> CatalogResult<()> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.alter_table(&database, &table, options).await
+    }
+
+    pub async fn alter_table_with_schema<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: AlterTableOptions,
+        schema: SchemaRef,
+    ) -> CatalogResult<()> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .alter_table_with_schema(&database, &table, options, schema)
+            .await
+    }
+
+    pub async fn alter_table_atomically<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .alter_table_atomically(&database, &table, options)
+            .await
+    }
+
+    pub async fn commit_lakehouse_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .commit_lakehouse_table(&database, &table, request)
+            .await
+    }
+
+    pub async fn get_delta_ratified_commits<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .get_delta_ratified_commits(&database, &table, request)
+            .await
     }
 
     pub async fn get_table_or_view<T: AsRef<str>>(
@@ -100,10 +309,10 @@ impl CatalogManager {
                 Err(e) => return Err(e),
             }
         }
-        if let [x @ .., name] = reference {
-            if self.state()?.is_global_temporary_view_database(x) {
-                return self.get_global_temporary_view(name.as_ref()).await;
-            }
+        if let [x @ .., name] = reference
+            && self.state()?.is_global_temporary_view_database(x)
+        {
+            return self.get_global_temporary_view(name.as_ref()).await;
         }
         match self.get_table(reference).await {
             Ok(x) => return Ok(x),
@@ -115,6 +324,13 @@ impl CatalogManager {
             Err(CatalogError::NotFound(_, name)) => Err(CatalogError::NotFound(
                 CatalogObject::Table,
                 format!("[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {name}"),
+            )),
+            Err(CatalogError::NotSupported(_)) => Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                format!(
+                    "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {}",
+                    reference.last().map(AsRef::as_ref).unwrap_or("<unknown>")
+                ),
             )),
             Err(e) => Err(e),
         }

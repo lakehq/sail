@@ -15,8 +15,10 @@ pub(crate) fn z85_encode(data: &[u8]) -> DeltaResult<String> {
         )));
     }
     let mut result = String::with_capacity(data.len() * 5 / 4);
-    for chunk in data.chunks(4) {
-        let mut value = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as u64;
+    let (chunks, remainder) = data.as_chunks::<4>();
+    debug_assert!(remainder.is_empty());
+    for chunk in chunks {
+        let mut value = u32::from_be_bytes(*chunk) as u64;
         let mut chars = [0u8; 5];
         for c in chars.iter_mut().rev() {
             *c = Z85_CHARS[(value % 85) as usize];
@@ -27,6 +29,21 @@ pub(crate) fn z85_encode(data: &[u8]) -> DeltaResult<String> {
         }
     }
     Ok(result)
+}
+
+/// Encode arbitrary binary data to a Z85 string.
+///
+/// Unaligned input is padded with trailing zero bytes.
+pub(crate) fn z85_encode_padded(data: &[u8]) -> DeltaResult<String> {
+    if data.len().is_multiple_of(4) {
+        return z85_encode(data);
+    }
+
+    let aligned_len = data.len().next_multiple_of(4);
+    let mut aligned = Vec::with_capacity(aligned_len);
+    aligned.extend_from_slice(data);
+    aligned.resize(aligned_len, 0);
+    z85_encode(&aligned)
 }
 
 /// Decode a Z85 string back to binary data.
@@ -42,7 +59,9 @@ pub(crate) fn z85_decode(encoded: &str) -> DeltaResult<Vec<u8>> {
     }
 
     let mut result = Vec::with_capacity(bytes.len() * 4 / 5);
-    for chunk in bytes.chunks(5) {
+    let (chunks, remainder) = bytes.as_chunks::<5>();
+    debug_assert!(remainder.is_empty());
+    for chunk in chunks {
         let mut value: u64 = 0;
         for &b in chunk {
             let idx = z85_char_to_value(b)?;
@@ -80,6 +99,14 @@ mod tests {
         let result = z85_encode(&[1, 2, 3]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("divisible by 4"));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn test_z85_encode_padded_accepts_unaligned_input() {
+        let encoded = z85_encode_padded(&[1, 2, 3]).unwrap();
+        let decoded = z85_decode(&encoded).unwrap();
+        assert_eq!(decoded, vec![1, 2, 3, 0]);
     }
 
     #[test]

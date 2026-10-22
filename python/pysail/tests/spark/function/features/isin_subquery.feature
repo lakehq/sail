@@ -58,6 +58,22 @@ Feature: IN subquery support
 
   Rule: Multi-column IN subquery
 
+    @sail-bug
+    Scenario: Nested tuple IN preserves references to the enclosing outer query
+      When query
+        """
+        SELECT o.a FROM VALUES (1), (2) AS o(a)
+        WHERE EXISTS (
+          SELECT 1 FROM VALUES (1), (2) AS i(b)
+          WHERE (o.a, o.a) IN (
+            SELECT x, y FROM VALUES (1, 1), (2, 3) AS t(x, y)
+          )
+        )
+        """
+      Then query result
+        | a |
+        | 1 |
+
     Scenario: multi-column IN subquery
       Given statement
         """

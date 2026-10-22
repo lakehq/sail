@@ -1,7 +1,6 @@
 ::: info
 
-LakeSail offers flexible enterprise support options, including managing Sail on Kubernetes.
-
-[Get in touch](https://lakesail.com/support/) to learn more.
+LakeSail offers a fully managed platform and enterprise support for running Sail in production, deployed in your own cloud account.
+[Get in touch](https://lakesail.com/contact/) to learn more.
 
 :::

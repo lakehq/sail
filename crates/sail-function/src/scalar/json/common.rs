@@ -6,18 +6,18 @@ use std::str::Utf8Error;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    downcast_array, AnyDictionaryArray, Array, ArrayAccessor, ArrayRef, AsArray, DictionaryArray,
-    LargeStringArray, PrimitiveArray, PrimitiveBuilder, RunArray, StringArray, StringViewArray,
+    AnyDictionaryArray, Array, ArrayAccessor, ArrayRef, AsArray, DictionaryArray, LargeStringArray,
+    PrimitiveArray, PrimitiveBuilder, RunArray, StringArray, StringViewArray, downcast_array,
 };
 use datafusion::arrow::compute::kernels::cast;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Int64Type, UInt64Type};
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use jiter::{Jiter, JiterError, Peek};
 
 use crate::scalar::json::common_union::{
-    is_json_union, json_from_union_scalar, nested_json_array, nested_json_array_ref, TYPE_ID_NULL,
+    TYPE_ID_NULL, is_json_union, json_from_union_scalar, nested_json_array, nested_json_array_ref,
 };
 
 /// General implementation of `ScalarUDFImpl::return_type`.
@@ -39,7 +39,9 @@ pub fn return_type_check(
     let first_dict_key_type = dict_key_type(first);
     if !(is_str(first) || is_json_union(first) || first_dict_key_type.is_some()) {
         // if !matches!(first, DataType::Utf8 | DataType::LargeUtf8) {
-        return plan_err!("Unexpected argument type to '{fn_name}' at position 1, expected a string, got {first:?}.");
+        return plan_err!(
+            "Unexpected argument type to '{fn_name}' at position 1, expected a string, got {first:?}."
+        );
     }
     args.iter().skip(1).enumerate().try_for_each(|(index, arg)| {
         if is_str(arg) || is_int(arg) || dict_key_type(arg).is_some() {
@@ -71,10 +73,10 @@ fn is_int(d: &DataType) -> bool {
 }
 
 fn dict_key_type(d: &DataType) -> Option<DataType> {
-    if let DataType::Dictionary(key, value) = d {
-        if is_str(value) || is_json_union(value) {
-            return Some(*key.clone());
-        }
+    if let DataType::Dictionary(key, value) = d
+        && (is_str(value) || is_json_union(value))
+    {
+        return Some(*key.clone());
     }
     None
 }

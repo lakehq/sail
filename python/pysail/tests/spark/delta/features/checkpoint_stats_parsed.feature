@@ -1,6 +1,5 @@
 Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
 
-  @sail-only
   Rule: Checkpoint parquet emits parsed stats fields by default
 
     Background:
@@ -43,7 +42,6 @@ Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
         | stats_parsed.maxValues.id | 3     |
       Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location does not contain add sub-field partitionValues_parsed
 
-  @sail-only
   Rule: Checkpoint parsed stats fields can be disabled
 
     Background:
@@ -85,7 +83,6 @@ Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
       Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location does not contain add sub-field stats_parsed
       Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location does not contain add sub-field partitionValues_parsed
 
-  @sail-only
   Rule: Checkpoint emits stats_parsed when writeStatsAsStruct is true
 
     Background:
@@ -131,7 +128,6 @@ Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
         | stats_parsed.maxValues.id | 100   |
       Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location does not contain add sub-field partitionValues_parsed
 
-  @sail-only
   Rule: Checkpoint emits partitionValues_parsed for partitioned struct-stats tables
 
     Background:
@@ -179,7 +175,6 @@ Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
         | partitionValues_parsed.year   | 2024   |
         | partitionValues_parsed.region | "us"   |
 
-  @sail-only
   Rule: Column-mapped parsed checkpoint fields use physical names
 
     Background:
@@ -223,7 +218,6 @@ Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
       Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location contains physical stats_parsed maxValues for column id with value 2
       Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location contains physical partitionValues_parsed for column region with value "us"
 
-  @sail-only
   Rule: Checkpoint stats JSON is omitted when writeStatsAsJson is false
 
     Background:
@@ -269,7 +263,6 @@ Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
         | stats_parsed.maxValues.id | 7     |
       Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location does not contain add sub-field stats
 
-  @sail-only
   Rule: Metadata-as-data and snapshot-materialized read paths produce matching results
 
     Background:
@@ -323,3 +316,67 @@ Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
         | 10  |
         | 50  |
         | 100 |
+
+  Rule: Typed checkpoint statistics survive Delta type widening
+
+    Scenario: SMALLINT checkpoint bounds are widened to the current INT schema
+      Given variable location for temporary directory delta_cp_stats_type_widening
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_cp_stats_type_widening_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_cp_stats_type_widening_test (id SMALLINT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES (
+          'delta.enableTypeWidening' = 'true',
+          'delta.checkpointInterval' = '1',
+          'delta.checkpoint.writeStatsAsStruct' = 'true',
+          'delta.checkpoint.writeStatsAsJson' = 'false'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_cp_stats_type_widening_test
+        VALUES (CAST(1 AS SMALLINT)), (CAST(2 AS SMALLINT))
+        """
+      Given statement
+        """
+        ALTER TABLE delta_cp_stats_type_widening_test
+        SET TBLPROPERTIES ('delta.checkpointInterval' = '100')
+        """
+      Given statement
+        """
+        ALTER TABLE delta_cp_stats_type_widening_test
+        ALTER COLUMN id TYPE INT
+        """
+      Given statement
+        """
+        INSERT INTO delta_cp_stats_type_widening_test VALUES (40000)
+        """
+      Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location contains add fields
+        | path                      | value |
+        | stats_parsed.minValues.id | 1     |
+        | stats_parsed.maxValues.id | 2     |
+      When query
+        """
+        SELECT id
+        FROM delta_cp_stats_type_widening_test
+        WHERE id >= 2
+        ORDER BY id
+        """
+      Then query result ordered
+        | id    |
+        | 2     |
+        | 40000 |
+      When query
+        """
+        SELECT MIN(id) AS min_id, MAX(id) AS max_id
+        FROM delta_cp_stats_type_widening_test
+        """
+      Then query result
+        | min_id | max_id |
+        | 1      | 40000  |

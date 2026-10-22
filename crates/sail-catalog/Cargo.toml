@@ -2,20 +2,28 @@
 name = "sail-catalog"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
-sail-common-datafusion = { path = "../sail-common-datafusion" }
-
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_arrow = { workspace = true }
 regex = { workspace = true }
 lazy_static = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+moka = { workspace = true }
+log = { workspace = true }
+
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-common = { path = "../sail-common" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

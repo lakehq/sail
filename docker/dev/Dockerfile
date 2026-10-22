@@ -1,9 +1,10 @@
-ARG RUST_VERSION=1.95.0
+ARG RUST_VERSION=1.98.1
 ARG RUST_PROFILE=dev
 ARG RUSTFLAGS=""
-ARG PYSPARK_VERSION=4.1.1
+ARG PYSPARK_VERSION=4.2.0
+ARG PYTHON_VERSION=3.14
 
-FROM python:3.14-slim AS builder
+FROM python:${PYTHON_VERSION}-slim AS builder
 
 ARG RUST_VERSION
 ARG RUST_PROFILE
@@ -24,7 +25,7 @@ RUN apt-get update && \
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup-init && \
     chmod a+x /tmp/rustup-init && \
-    /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain ${RUST_VERSION}
+    /tmp/rustup-init -y --no-modify-path --profile default --default-toolchain ${RUST_VERSION}
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
@@ -45,7 +46,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry/ \
     cargo build -p sail-cli --profile ${RUST_PROFILE} --bins && \
     cp /app/target/${RUST_TARGET_SUBDIR}/sail /usr/local/bin
 
-FROM python:3.14-slim
+FROM python:${PYTHON_VERSION}-slim
 
 ARG PYSPARK_VERSION
 

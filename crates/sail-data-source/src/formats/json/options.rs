@@ -6,7 +6,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::{DataSourceError, DataSourceResult};
-use crate::options::gen::{
+use crate::options::r#gen::{
     JsonReadOptions, JsonReadPartialOptions, JsonWriteOptions, JsonWritePartialOptions,
 };
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
@@ -16,6 +16,8 @@ impl BuildPartialOptions<JsonReadPartialOptions> for JsonOptions {
         Ok(JsonReadPartialOptions {
             schema_infer_max_records: self.schema_infer_max_rec,
             compression: Some(self.compression.to_string()),
+            drop_field_if_all_null: None,
+            path_glob_filter: None,
         })
     }
 }
@@ -33,6 +35,8 @@ impl JsonReadOptions {
         let JsonReadOptions {
             schema_infer_max_records,
             compression,
+            drop_field_if_all_null: _,
+            path_glob_filter: _,
         } = self;
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
@@ -93,8 +97,8 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
-    use crate::options::gen::{JsonReadOptions, JsonWriteOptions};
-    use crate::options::{option_list, ResolveOptions};
+    use crate::options::r#gen::{JsonReadOptions, JsonWriteOptions};
+    use crate::options::{ResolveOptions, option_list};
 
     #[test]
     fn test_resolve_json_read_options() -> datafusion_common::Result<()> {
@@ -104,9 +108,12 @@ mod tests {
         let kv = option_list(&[
             ("schema_infer_max_records", "100"),
             ("compression", "bzip2"),
+            ("dropFieldIfAllNull", "true"),
         ]);
-        let options = JsonReadOptions::resolve(&state, vec![kv])
-            .and_then(|o| o.into_table_options())
+        let options = JsonReadOptions::resolve(&state, vec![kv])?;
+        assert!(options.drop_field_if_all_null);
+        let options = options
+            .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.schema_infer_max_rec, Some(100));
         assert_eq!(options.compression, CompressionTypeVariant::BZIP2);

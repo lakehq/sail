@@ -94,7 +94,7 @@ enum OptionKeyKind {
 
 /// Generates structs and trait implementations for data source options.
 pub fn build_data_source_options(name: &str, kind: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let path = format!("src/options/data/{kind}.yaml");
+    let path = format!("data/options/{kind}.yaml");
     println!("cargo:rerun-if-changed={path}");
 
     let content = std::fs::read_to_string(path)?;

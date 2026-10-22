@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::LogicalPlan;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -33,6 +34,86 @@ pub struct TableStatus {
     pub kind: TableKind,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct FunctionStatus {
+    pub name: String,
+    pub catalog: Option<String>,
+    pub namespace: Option<Vec<String>>,
+    pub signatures: Vec<String>,
+    pub usage: Option<String>,
+    pub arguments: Option<String>,
+    pub examples: Option<String>,
+    pub note: Option<String>,
+    pub since: Option<String>,
+    pub deprecated: Option<String>,
+    pub class_name: String,
+    pub is_temporary: bool,
+}
+
+impl FunctionStatus {
+    pub fn temporary(name: String) -> Self {
+        Self {
+            name,
+            catalog: None,
+            namespace: None,
+            signatures: vec![],
+            usage: None,
+            arguments: None,
+            examples: None,
+            note: None,
+            since: None,
+            deprecated: None,
+            class_name: String::new(),
+            is_temporary: true,
+        }
+    }
+
+    pub fn list_description(&self) -> Option<String> {
+        self.usage.clone()
+    }
+
+    pub fn usage(&self) -> String {
+        self.usage.clone().unwrap_or_else(|| "N/A.".to_string())
+    }
+
+    pub fn extended_usage(&self) -> String {
+        let mut output = String::new();
+        if let Some(arguments) = self.arguments.as_deref().filter(|value| !value.is_empty()) {
+            output.push_str(arguments);
+        }
+        if let Some(examples) = self.examples.as_deref().filter(|value| !value.is_empty()) {
+            output.push_str(examples);
+        }
+        if output.is_empty() {
+            output.push('\n');
+            output.push_str("    No example/argument for ");
+            output.push_str(&self.name);
+            output.push_str(".\n");
+        }
+        if let Some(note) = self.note.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Note:\n");
+            output.push_str("      ");
+            output.push_str(note.trim());
+            output.push('\n');
+        }
+        if let Some(since) = self.since.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Since: ");
+            output.push_str(since);
+            output.push('\n');
+        }
+        if let Some(deprecated) = self.deprecated.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Deprecated:\n");
+            output.push_str("      ");
+            output.push_str(deprecated.trim());
+            output.push('\n');
+        }
+        output
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableKind {
     Table {
@@ -45,6 +126,15 @@ pub enum TableKind {
         sort_by: Vec<CatalogTableSort>,
         bucket_by: Option<CatalogTableBucketBy>,
         properties: Vec<(String, String)>,
+        /// Whether the table is external. When `false` the table is managed.
+        ///
+        /// This flag is purely informational at present: Sail always creates
+        /// tables as external (`EXTERNAL=TRUE`, `table_type = EXTERNAL_TABLE`)
+        /// and does not differentiate managed vs external behavior for
+        /// operations like `DROP TABLE` (metadata-only; data is preserved). The flag
+        /// exists so that `type_name()` correctly reports the table type that
+        /// was recorded in the HMS metastore by other engines (e.g. Spark).
+        is_external: bool,
     },
     View {
         definition: String,
@@ -57,13 +147,30 @@ pub enum TableKind {
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         properties: Vec<(String, String)>,
+        /// The data source backing the view, if it was created with `USING`.
+        source: Option<TemporaryViewSource>,
     },
     GlobalTemporaryView {
         plan: Arc<LogicalPlan>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         properties: Vec<(String, String)>,
+        /// The data source backing the view, if it was created with `USING`.
+        source: Option<TemporaryViewSource>,
     },
+}
+
+/// The data source backing a temporary view created with
+/// `CREATE TEMPORARY VIEW ... USING <format> OPTIONS (...)`.
+///
+/// This is the write target for `INSERT INTO`/`INSERT OVERWRITE` against the view:
+///   - The rows are written to the view's backing data source location, matching Spark behavior.
+///   - It is `None` for temporary views defined by an `AS` query, which are not insertable.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct TemporaryViewSource {
+    pub format: String,
+    /// The data source options, including the `path` entry.
+    pub options: Vec<(String, String)>,
 }
 
 impl TableKind {
@@ -87,7 +194,12 @@ impl TableKind {
 
     pub fn type_name(&self) -> &str {
         match self {
-            TableKind::Table { .. } => "MANAGED",
+            TableKind::Table {
+                is_external: true, ..
+            } => "EXTERNAL",
+            TableKind::Table {
+                is_external: false, ..
+            } => "MANAGED",
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
@@ -216,6 +328,7 @@ pub struct TableColumnStatus {
     pub comment: Option<String>,
     pub default: Option<String>,
     pub generated_always_as: Option<String>,
+    pub identity: Option<super::CatalogTableColumnIdentity>,
     pub is_partition: bool,
     pub is_bucket: bool,
     pub is_cluster: bool,
@@ -226,6 +339,14 @@ impl TableColumnStatus {
         let mut metadata = std::collections::HashMap::new();
         if let Some(expr) = &self.generated_always_as {
             let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(expr) = &self.default {
+            let builder = ColumnFeaturesBuilder::new().with_current_default(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(identity) = &self.identity {
+            let builder = ColumnFeaturesBuilder::new().with_identity(identity);
             metadata.extend(builder.build());
         }
         if let Some(comment) = &self.comment {
@@ -256,6 +377,21 @@ pub fn alter_column_type(
     } else {
         column.data_type = alter_nested_data_type(&column.data_type, nested_path, data_type)?;
     }
+    Ok(())
+}
+
+pub fn alter_column_default(
+    columns: &mut [TableColumnStatus],
+    path: &[String],
+    default: Option<String>,
+) -> Result<()> {
+    let [name] = path else {
+        return plan_err!("ALTER COLUMN DEFAULT only supports top-level columns");
+    };
+    let Some(column) = columns.iter_mut().find(|column| column.name == *name) else {
+        return plan_err!("column '{}' does not exist", path.join("."));
+    };
+    column.default = default;
     Ok(())
 }
 
@@ -364,4 +500,46 @@ pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionFiel
             transform: None,
         })
         .collect()
+}
+
+pub fn alter_columns(
+    columns: &mut Vec<TableColumnStatus>,
+    changes: &[sail_common::spec::ColumnChange<DataType>],
+    case_sensitive: bool,
+) -> Result<()> {
+    let schema = datafusion::arrow::datatypes::Schema::new(
+        columns
+            .iter()
+            .map(TableColumnStatus::field)
+            .collect::<Vec<_>>(),
+    );
+    let schema = crate::column_change::alter_schema(&schema, changes, case_sensitive)?;
+    replace_columns(columns, &schema);
+    Ok(())
+}
+
+pub fn replace_columns(
+    columns: &mut Vec<TableColumnStatus>,
+    schema: &datafusion::arrow::datatypes::Schema,
+) {
+    *columns = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let features = crate::column_features::ColumnFeatures::from_field(field);
+            let previous = columns.iter().find(|column| column.name == *field.name());
+            TableColumnStatus {
+                name: field.name().clone(),
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+                comment: field.metadata().get("comment").cloned(),
+                default: features.current_default(),
+                generated_always_as: features.generation_expression(),
+                identity: features.identity(),
+                is_partition: previous.is_some_and(|column| column.is_partition),
+                is_bucket: previous.is_some_and(|column| column.is_bucket),
+                is_cluster: previous.is_some_and(|column| column.is_cluster),
+            }
+        })
+        .collect();
 }

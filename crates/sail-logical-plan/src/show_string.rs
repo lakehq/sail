@@ -3,13 +3,15 @@ use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use comfy_table::{Cell, CellAlignment, ColumnConstraint, Table, Width};
+use comfy_table::{
+    Cell, CellAlignment, ColumnConstraint, ContentLineStyle, LineStyle, Table, TableStyle, Width,
+};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use sail_common::string::escape_meta_characters;
+use sail_common::utils::string::escape_meta_characters;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -81,7 +83,14 @@ impl ShowStringFormat {
         const PADDING: u16 = 0;
 
         let mut table = Table::new();
-        table.load_preset("||--+-++|    ++++++");
+        table.load_style(
+            TableStyle::new()
+                .top_border(LineStyle::new('+', '-', '+', '+'))
+                .header_lines(ContentLineStyle::new('|', '|', '|'))
+                .header_separator(LineStyle::new('+', '-', '+', '+'))
+                .content_lines(ContentLineStyle::new('|', '|', '|'))
+                .bottom_border(LineStyle::new('+', '-', '+', '+')),
+        );
 
         let header = batch
             .schema()
@@ -126,7 +135,7 @@ impl ShowStringFormat {
         const PADDING: u16 = 1;
 
         let mut table = Table::new();
-        table.load_preset("        |          ");
+        table.load_style(TableStyle::new().content_lines(ContentLineStyle::none().junction('|')));
         let formatters = self.get_formatters(batch)?;
         for row in 0..batch.num_rows() {
             for (formatter, field) in formatters.iter().zip(batch.schema().fields.iter()) {

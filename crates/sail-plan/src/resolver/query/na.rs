@@ -3,16 +3,16 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    cast, col, is_false, lit, when, Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast,
+    Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast, cast, col, is_false, lit, when,
 };
 use datafusion_functions::expr_fn::isnan;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_fill_na(
@@ -74,10 +74,8 @@ impl PlanResolver<'_> {
                 let expr = if let Some(value) = value {
                     let value_type = value.get_type(schema)?;
                     if self.can_cast_fill_na_types(&value_type, field.data_type()) {
-                        let value = Expr::TryCast(TryCast {
-                            expr: Box::new(value),
-                            data_type: field.data_type().clone(),
-                        });
+                        let value =
+                            Expr::TryCast(TryCast::new(Box::new(value), field.data_type().clone()));
                         let is_null_or_nan = column_expr
                             .clone()
                             .is_null()

@@ -5,7 +5,7 @@ rank: 8
 
 # Memory
 
-Sail provides an in-memory storage backend that stores data entirely in RAM. This is particularly useful for testing, development, and scenarios where you need temporary storage without persisting to disk.
+Sail provides an in-memory storage backend that stores data entirely in RAM. This is useful for testing, development, and scenarios where you need temporary storage without persisting to disk.
 
 ## URI Format
 

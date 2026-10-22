@@ -1,16 +1,16 @@
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion::common::Result;
+use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{ident, Expr, Extension, LogicalPlan};
+use datafusion_expr::{Expr, Extension, LogicalPlan, ident};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
+use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
 pub(crate) struct MonotonicIdRewriter<'s> {
     plan: LogicalPlan,
@@ -42,11 +42,7 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
         };
 
         let inner = func.inner();
-        if inner
-            .as_any()
-            .downcast_ref::<SparkMonotonicallyIncreasingId>()
-            .is_none()
-        {
+        if !inner.is::<SparkMonotonicallyIncreasingId>() {
             return Ok(Transformed::no(func.call(args)));
         }
 
@@ -56,8 +52,8 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
         let col = match &self.column_name {
             Some(c) => c.clone(),
             None => {
-                // Create an internal-only field id (external name is empty)
-                let col = self.state.register_field_name("");
+                // Create an internal-only field ID without a referenceable name.
+                let col = self.state.next_field_id();
 
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());
                 self.plan = LogicalPlan::Extension(Extension {
@@ -68,6 +64,6 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
             }
         };
 
-        Ok(Transformed::yes(ident(&col)))
+        Ok(Transformed::yes(ident(&col).alias(&col)))
     }
 }

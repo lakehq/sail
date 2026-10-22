@@ -1,8 +1,7 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::{
     ColumnarValue, LogicalPlan, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -28,10 +27,6 @@ impl TableInput {
 }
 
 impl ScalarUDFImpl for TableInput {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "table_input"
     }

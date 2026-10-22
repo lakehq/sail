@@ -17,6 +17,7 @@ use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 
+mod change_data;
 mod commit;
 pub mod context;
 mod log_scan;
@@ -28,11 +29,15 @@ mod op_delete;
 mod op_merge;
 mod op_update;
 mod op_write;
+mod row_level;
 
 pub use context::{DeltaPlannerConfig, PlannerContext};
 pub use op_delete::{build_delete_plan as plan_delete, build_delete_plan_mor as plan_delete_mor};
-pub use op_merge::{build_merge_plan as plan_merge, build_merge_plan_mor as plan_merge_mor};
-pub use op_update::build_update_plan as plan_update;
+pub use op_merge::{
+    RowLevelWriteInfo, build_merge_plan as plan_merge, build_merge_plan_mor as plan_merge_mor,
+};
+pub use op_update::{build_update_plan as plan_update, build_update_plan_mor as plan_update_mor};
+pub use row_level::create_row_level_write_physical_plan;
 
 pub struct DeltaPhysicalPlanner<'a> {
     ctx: PlannerContext<'a>,

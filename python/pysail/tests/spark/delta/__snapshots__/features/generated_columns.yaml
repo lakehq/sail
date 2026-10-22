@@ -33,3 +33,5 @@ data:
     minWriterVersion: 7
     writerFeatures:
     - generatedColumns
+    - appendOnly
+    - invariants

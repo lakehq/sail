@@ -14,14 +14,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Fields, IntervalUnit, TimeUnit,
 };
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+    SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
 };
 
-use crate::unity::types;
+use crate::r#gen;
 
 // There is no clarity on the expected format for `type_json` and `type_text`.
 // Open source code and docs have various inconsistencies and contradictions.
@@ -30,109 +31,270 @@ use crate::unity::types;
 pub(crate) struct UnityColumnType {
     pub type_text: String,
     pub type_json: serde_json::Value,
-    pub type_name: types::ColumnTypeName,
+    pub type_name: r#gen::ColumnTypeName,
+}
+
+pub(crate) fn unity_struct_field_type_json(
+    name: &str,
+    data_type: &DataType,
+    nullable: bool,
+    metadata: &HashMap<String, String>,
+) -> CatalogResult<serde_json::Value> {
+    let data_type_json = spark_data_type_json(data_type)?;
+    Ok(serde_json::json!({
+        "name": name,
+        "type": data_type_json,
+        "nullable": nullable,
+        "metadata": spark_field_metadata_json(metadata)?,
+    }))
+}
+
+fn spark_struct_field_json(field: &Field) -> CatalogResult<serde_json::Value> {
+    unity_struct_field_type_json(
+        field.name(),
+        field.data_type(),
+        field.is_nullable(),
+        field.metadata(),
+    )
+}
+
+fn spark_field_metadata_json(
+    metadata: &HashMap<String, String>,
+) -> CatalogResult<serde_json::Value> {
+    let mut out = if let Some(raw) = metadata.get(SPARK_METADATA_JSON_KEY) {
+        match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(serde_json::Value::Object(object)) => object,
+            Ok(other) => {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {other:?}",
+                )));
+            }
+            Err(e) => {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}",
+                )));
+            }
+        }
+    } else {
+        serde_json::Map::new()
+    };
+
+    for (key, value) in metadata {
+        if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
+            continue;
+        }
+        out.entry(key.clone())
+            .or_insert_with(|| serde_json::Value::String(value.clone()));
+    }
+
+    Ok(serde_json::Value::Object(out))
+}
+
+fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value> {
+    match data_type {
+        DataType::Null => Ok(serde_json::Value::String("void".to_string())),
+        DataType::Boolean => Ok(serde_json::Value::String("boolean".to_string())),
+        DataType::Int8 => Ok(serde_json::Value::String("byte".to_string())),
+        DataType::Int16 | DataType::UInt8 => Ok(serde_json::Value::String("short".to_string())),
+        DataType::Int32 | DataType::UInt16 => Ok(serde_json::Value::String("integer".to_string())),
+        DataType::Int64 | DataType::UInt32 => Ok(serde_json::Value::String("long".to_string())),
+        DataType::Float32 => Ok(serde_json::Value::String("float".to_string())),
+        DataType::Float64 => Ok(serde_json::Value::String("double".to_string())),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
+            Ok(serde_json::Value::String("timestamp".to_string()))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            Ok(serde_json::Value::String("timestamp_ntz".to_string()))
+        }
+        DataType::Date32 => Ok(serde_json::Value::String("date".to_string())),
+        DataType::Binary
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::BinaryView => Ok(serde_json::Value::String("binary".to_string())),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            Ok(serde_json::Value::String("string".to_string()))
+        }
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::DayTime) => {
+            Ok(serde_json::Value::String(
+                "interval day to second".to_string(),
+            ))
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => Ok(serde_json::Value::String(
+            "interval year to month".to_string(),
+        )),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Err(CatalogError::InvalidArgument(
+            "MonthDayNano interval is not supported in Unity Catalog".to_string(),
+        )),
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale) => Ok(serde_json::Value::String(format!(
+            "decimal({precision},{scale})"
+        ))),
+        DataType::Decimal256(precision, scale) => {
+            if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
+                Ok(serde_json::Value::String(format!(
+                    "decimal({precision},{scale})"
+                )))
+            } else {
+                Err(CatalogError::InvalidArgument(format!(
+                    "Decimal with precision > {DECIMAL128_MAX_PRECISION} and scale > {DECIMAL128_MAX_SCALE} is not supported in Unity Catalog"
+                )))
+            }
+        }
+        DataType::List(field)
+        | DataType::ListView(field)
+        | DataType::LargeList(field)
+        | DataType::LargeListView(field) => Ok(serde_json::json!({
+            "type": "array",
+            "elementType": spark_data_type_json(field.data_type())?,
+            "containsNull": field.is_nullable(),
+        })),
+        DataType::Map(field, _) => {
+            let DataType::Struct(fields) = field.data_type() else {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Map type must be a struct with key and value fields, found {field:?}"
+                )));
+            };
+            if fields.len() != 2 {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Map type struct must have exactly two fields, found {fields:?}"
+                )));
+            }
+            Ok(serde_json::json!({
+                "type": "map",
+                "keyType": spark_data_type_json(fields[0].data_type())?,
+                "valueType": spark_data_type_json(fields[1].data_type())?,
+                "valueContainsNull": fields[1].is_nullable(),
+            }))
+        }
+        DataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|field| spark_struct_field_json(field.as_ref()))
+                .collect::<CatalogResult<Vec<_>>>()?;
+            Ok(serde_json::json!({
+                "type": "struct",
+                "fields": fields,
+            }))
+        }
+        DataType::UInt64
+        | DataType::Float16
+        | DataType::Timestamp(TimeUnit::Second, _)
+        | DataType::Timestamp(TimeUnit::Millisecond, _)
+        | DataType::Timestamp(TimeUnit::Nanosecond, _)
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(TimeUnit::Second | TimeUnit::Millisecond | TimeUnit::Nanosecond)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Union(_, _)
+        | DataType::Dictionary(_, _)
+        | DataType::RunEndEncoded(_, _) => Err(CatalogError::NotSupported(format!(
+            "{data_type:?} type is not supported in Unity Catalog",
+        ))),
+    }
 }
 
 pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<UnityColumnType> {
     // TODO: UserDefinedType
     match data_type {
         DataType::Null => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Null.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Null.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Null.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Null.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Null,
+            type_name: r#gen::ColumnTypeName::Null,
         }),
         DataType::Boolean => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Boolean.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Boolean.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Boolean.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Boolean.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Boolean,
+            type_name: r#gen::ColumnTypeName::Boolean,
         }),
         DataType::Int8 => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Byte.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Byte.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Byte.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Byte.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Byte,
+            type_name: r#gen::ColumnTypeName::Byte,
         }),
         DataType::Int16 | DataType::UInt8 => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Short.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Short.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Short.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Short.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Short,
+            type_name: r#gen::ColumnTypeName::Short,
         }),
         DataType::Int32 | DataType::UInt16 => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Int.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Int.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Int.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Int.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Int,
+            type_name: r#gen::ColumnTypeName::Int,
         }),
         DataType::Int64 | DataType::UInt32 => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Long.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Long.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Long.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Long.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Long,
+            type_name: r#gen::ColumnTypeName::Long,
         }),
         DataType::Float32 => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Float.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Float.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Float.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Float.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Float,
+            type_name: r#gen::ColumnTypeName::Float,
         }),
         DataType::Float64 => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Double.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Double.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Double.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Double.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Double,
+            type_name: r#gen::ColumnTypeName::Double,
         }),
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Timestamp.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Timestamp.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Timestamp.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Timestamp.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Timestamp,
+            type_name: r#gen::ColumnTypeName::Timestamp,
         }),
         DataType::Timestamp(TimeUnit::Microsecond, None) => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::TimestampNtz
+            type_text: r#gen::ColumnTypeName::TimestampNtz
                 .to_string()
                 .to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::TimestampNtz
+                r#gen::ColumnTypeName::TimestampNtz
                     .to_string()
                     .to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::TimestampNtz,
+            type_name: r#gen::ColumnTypeName::TimestampNtz,
         }),
         DataType::Date32 => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Date.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Date.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Date.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Date.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Date,
+            type_name: r#gen::ColumnTypeName::Date,
         }),
         DataType::Binary
         | DataType::FixedSizeBinary(_)
         | DataType::LargeBinary
         | DataType::BinaryView => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::Binary.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::Binary.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::Binary.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::Binary.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::Binary,
+            type_name: r#gen::ColumnTypeName::Binary,
         }),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(UnityColumnType {
-            type_text: types::ColumnTypeName::String.to_string().to_lowercase(),
+            type_text: r#gen::ColumnTypeName::String.to_string().to_lowercase(),
             type_json: serde_json::Value::String(
-                types::ColumnTypeName::String.to_string().to_lowercase(),
+                r#gen::ColumnTypeName::String.to_string().to_lowercase(),
             ),
-            type_name: types::ColumnTypeName::String,
+            type_name: r#gen::ColumnTypeName::String,
         }),
         DataType::Duration(TimeUnit::Microsecond) => {
             let type_json = serde_json::json!({
@@ -144,9 +306,9 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
                 })
             });
             Ok(UnityColumnType {
-                type_text: types::ColumnTypeName::Interval.to_string().to_lowercase(),
+                type_text: r#gen::ColumnTypeName::Interval.to_string().to_lowercase(),
                 type_json,
-                type_name: types::ColumnTypeName::Interval,
+                type_name: r#gen::ColumnTypeName::Interval,
             })
         }
         DataType::Interval(interval_unit) => {
@@ -166,9 +328,9 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
                 })
             });
             Ok(UnityColumnType {
-                type_text: types::ColumnTypeName::Interval.to_string().to_lowercase(),
+                type_text: r#gen::ColumnTypeName::Interval.to_string().to_lowercase(),
                 type_json,
-                type_name: types::ColumnTypeName::Interval,
+                type_name: r#gen::ColumnTypeName::Interval,
             })
         }
         DataType::Decimal32(precision, scale)
@@ -185,7 +347,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
             Ok(UnityColumnType {
                 type_text,
                 type_json,
-                type_name: types::ColumnTypeName::Decimal,
+                type_name: r#gen::ColumnTypeName::Decimal,
             })
         }
         DataType::Decimal256(precision, scale) => {
@@ -201,7 +363,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
                 Ok(UnityColumnType {
                     type_text,
                     type_json,
-                    type_name: types::ColumnTypeName::Decimal,
+                    type_name: r#gen::ColumnTypeName::Decimal,
                 })
             } else {
                 Err(CatalogError::InvalidArgument(format!(
@@ -230,7 +392,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
             Ok(UnityColumnType {
                 type_text,
                 type_json,
-                type_name: types::ColumnTypeName::Array,
+                type_name: r#gen::ColumnTypeName::Array,
             })
         }
         DataType::Map(field, _) => {
@@ -255,7 +417,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
                     Ok(UnityColumnType {
                         type_text,
                         type_json,
-                        type_name: types::ColumnTypeName::Map,
+                        type_name: r#gen::ColumnTypeName::Map,
                     })
                 } else {
                     Err(CatalogError::InvalidArgument(format!(
@@ -295,7 +457,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
             Ok(UnityColumnType {
                 type_text,
                 type_json,
-                type_name: types::ColumnTypeName::Struct,
+                type_name: r#gen::ColumnTypeName::Struct,
             })
         }
         DataType::UInt64
@@ -317,7 +479,7 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
 }
 
 pub(crate) fn unity_type_to_data_type(
-    type_name: Option<types::ColumnTypeName>,
+    type_name: Option<r#gen::ColumnTypeName>,
     type_json: Option<String>,
     type_text: Option<String>,
     type_precision: Option<i32>,
@@ -330,25 +492,25 @@ pub(crate) fn unity_type_to_data_type(
     //  3. Parse interval type for `Interval` if type_interval_type and type_scale aren't provided.
     if let Some(type_name) = type_name {
         match type_name {
-            types::ColumnTypeName::Boolean => Ok(DataType::Boolean),
-            types::ColumnTypeName::Byte => Ok(DataType::Int8),
-            types::ColumnTypeName::Short => Ok(DataType::Int16),
-            types::ColumnTypeName::Int => Ok(DataType::Int32),
-            types::ColumnTypeName::Long => Ok(DataType::Int64),
-            types::ColumnTypeName::Float => Ok(DataType::Float32),
-            types::ColumnTypeName::Double => Ok(DataType::Float64),
-            types::ColumnTypeName::Date => Ok(DataType::Date32),
-            types::ColumnTypeName::Timestamp => Ok(DataType::Timestamp(
+            r#gen::ColumnTypeName::Boolean => Ok(DataType::Boolean),
+            r#gen::ColumnTypeName::Byte => Ok(DataType::Int8),
+            r#gen::ColumnTypeName::Short => Ok(DataType::Int16),
+            r#gen::ColumnTypeName::Int => Ok(DataType::Int32),
+            r#gen::ColumnTypeName::Long => Ok(DataType::Int64),
+            r#gen::ColumnTypeName::Float => Ok(DataType::Float32),
+            r#gen::ColumnTypeName::Double => Ok(DataType::Float64),
+            r#gen::ColumnTypeName::Date => Ok(DataType::Date32),
+            r#gen::ColumnTypeName::Timestamp => Ok(DataType::Timestamp(
                 TimeUnit::Microsecond,
                 Some(Arc::from("UTC".to_string())),
             )),
-            types::ColumnTypeName::TimestampNtz => {
+            r#gen::ColumnTypeName::TimestampNtz => {
                 Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
             }
-            types::ColumnTypeName::String | types::ColumnTypeName::Char => Ok(DataType::Utf8),
-            types::ColumnTypeName::Binary => Ok(DataType::Binary),
-            types::ColumnTypeName::Null => Ok(DataType::Null),
-            types::ColumnTypeName::Decimal => {
+            r#gen::ColumnTypeName::String | r#gen::ColumnTypeName::Char => Ok(DataType::Utf8),
+            r#gen::ColumnTypeName::Binary => Ok(DataType::Binary),
+            r#gen::ColumnTypeName::Null => Ok(DataType::Null),
+            r#gen::ColumnTypeName::Decimal => {
                 if let (Some(precision), Some(scale)) = (type_precision, type_scale) {
                     Ok(DataType::Decimal128(precision as u8, scale as i8))
                 } else if let Some(type_json) = type_json {
@@ -359,7 +521,7 @@ pub(crate) fn unity_type_to_data_type(
                     ))
                 }
             }
-            types::ColumnTypeName::Interval => {
+            r#gen::ColumnTypeName::Interval => {
                 if let Some(type_interval_type) = &type_interval_type {
                     match type_interval_type.trim().to_uppercase().as_str() {
                         "INTERVAL_YEAR_MONTH"
@@ -386,16 +548,16 @@ pub(crate) fn unity_type_to_data_type(
                     ))
                 }
             }
-            types::ColumnTypeName::Array
-            | types::ColumnTypeName::Struct
-            | types::ColumnTypeName::Map => {
+            r#gen::ColumnTypeName::Array
+            | r#gen::ColumnTypeName::Struct
+            | r#gen::ColumnTypeName::Map => {
                 parse_unity_type_json(type_json.as_deref().ok_or_else(|| {
                     CatalogError::InvalidArgument(
                         "type_json is required for complex types".to_string(),
                     )
                 })?)
             }
-            types::ColumnTypeName::UserDefinedType | types::ColumnTypeName::TableType => Err(
+            r#gen::ColumnTypeName::UserDefinedType | r#gen::ColumnTypeName::TableType => Err(
                 CatalogError::InvalidArgument(format!("{type_name:?} type is not supported yet",)),
             ),
         }
@@ -584,7 +746,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 _ => {
                     return Err(CatalogError::InvalidArgument(
                         "Invalid elementType format".to_string(),
-                    ))
+                    ));
                 }
             };
             Ok(DataType::List(Arc::new(
@@ -625,7 +787,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 _ => {
                     return Err(CatalogError::InvalidArgument(
                         "Invalid keyType format".to_string(),
-                    ))
+                    ));
                 }
             };
             let value_type = match value_type_json {
@@ -634,7 +796,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 _ => {
                     return Err(CatalogError::InvalidArgument(
                         "Invalid valueType format".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -692,7 +854,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                     _ => {
                         return Err(CatalogError::InvalidArgument(
                             "Invalid field type format".to_string(),
-                        ))
+                        ));
                     }
                 };
 

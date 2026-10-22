@@ -65,4 +65,6 @@ data:
     minWriterVersion: 7
     writerFeatures:
     - inCommitTimestamp
+    - appendOnly
+    - invariants
   tableSizeBytes: 1459

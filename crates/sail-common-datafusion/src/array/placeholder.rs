@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, ArrayData, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, BinaryArray,
-    BinaryViewArray, BooleanBuilder, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
-    LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-    ListViewArray, MapArray, NullArray, PrimitiveArray, PrimitiveBuilder, RunArray, StringArray,
-    StringViewArray, StructArray, UnionArray,
+    ArrayData, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, BinaryArray, BinaryViewArray,
+    BooleanBuilder, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, LargeBinaryArray,
+    LargeListArray, LargeListViewArray, LargeStringArray, ListArray, ListViewArray, MapArray,
+    NullArray, PrimitiveArray, PrimitiveBuilder, RunArray, StringArray, StringViewArray,
+    StructArray, UnionArray, new_null_array,
 };
 use datafusion::arrow::buffer::{Buffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{
-    ArrowTimestampType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    Decimal32Type, Decimal64Type, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    ArrowTimestampType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     UnionMode,
 };
 use datafusion_common::internal_err;

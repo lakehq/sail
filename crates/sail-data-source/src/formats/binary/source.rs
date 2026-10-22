@@ -1,7 +1,9 @@
-use std::any::Any;
 use std::sync::Arc;
 
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::projection::ProjectionExprs;
+use datafusion::physical_plan::apply_expression_roots;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file::FileSource;
@@ -17,31 +19,20 @@ use crate::formats::binary::reader::{BinaryFileMetadata, BinaryFileReader};
 #[derive(Debug, Clone)]
 pub struct BinarySource {
     table_schema: TableSchema,
-    path_glob_filter: Option<String>,
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projection: SplitProjection,
 }
 
 impl BinarySource {
-    pub fn new(table_schema: impl Into<TableSchema>, path_glob_filter: Option<String>) -> Self {
+    pub fn new(table_schema: impl Into<TableSchema>) -> Self {
         let table_schema = table_schema.into();
         Self {
             projection: SplitProjection::unprojected(&table_schema),
             table_schema,
-            path_glob_filter,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
         }
-    }
-
-    pub fn with_path_glob_filter(mut self, path_glob_filter: Option<String>) -> Self {
-        self.path_glob_filter = path_glob_filter;
-        self
-    }
-
-    pub fn path_glob_filter(&self) -> Option<&String> {
-        self.path_glob_filter.as_ref()
     }
 }
 
@@ -68,10 +59,6 @@ impl FileSource for BinarySource {
         )?;
 
         Ok(opener)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &TableSchema {
@@ -102,8 +89,20 @@ impl FileSource for BinarySource {
         Some(&self.projection.source)
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        apply_expression_roots(self.projection.source.iter(), f)
+    }
+
     fn file_type(&self) -> &str {
         "binary"
+    }
+
+    fn supports_repartitioning(&self) -> bool {
+        // Each file is read whole into one row, so a byte-range split would duplicate the row.
+        false
     }
 }
 
@@ -123,17 +122,6 @@ impl BinaryOpener {
 
 impl FileOpener for BinaryOpener {
     fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
-        if let Some(ref glob_pattern) = self.config.path_glob_filter {
-            let file_name = file.object_meta.location.filename().unwrap_or("");
-            let pattern = glob::Pattern::new(glob_pattern)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            if !pattern.matches(file_name) {
-                return Ok(Box::pin(
-                    async move { Ok(futures::stream::empty().boxed()) },
-                ));
-            }
-        }
-
         let store = Arc::clone(&self.object_store);
         let location = file.object_meta.location.clone();
         let last_modified = file.object_meta.last_modified;

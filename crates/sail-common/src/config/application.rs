@@ -1,3 +1,7 @@
+use std::fmt::{Display, Formatter};
+use std::num::NonZeroUsize;
+use std::str::FromStr;
+
 use figment::providers::Env;
 use figment::value::{Dict, Empty, Map, Tag, Value};
 use figment::{Error, Figment, Metadata, Profile, Provider};
@@ -5,7 +9,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::config::loader::{
-    deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, ConfigDefinition,
+    ConfigDefinition, deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit,
 };
 use crate::config::observer::{
     serialize_non_empty_string, serialize_non_zero, serialize_optional_secret,
@@ -36,6 +40,16 @@ pub struct AppConfig {
     /// Such environment variables are ignored by application configuration.
     #[serde(skip_serializing, deserialize_with = "deserialize_unknown_unit")]
     pub internal: (),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
 }
 
 /// A configuration provider that injects placeholder internal configuration.
@@ -170,16 +184,30 @@ mod memory_pool {
 pub struct TemporaryFilesConfig {
     pub paths: Vec<String>,
     pub max_size: usize,
+    pub compression: TemporaryFileCompression,
+}
+
+/// Compression for temporary Arrow IPC spill files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemporaryFileCompression {
+    Uncompressed,
+    Lz4Frame,
+    Zstd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     pub enable_tls: bool,
+    #[serde(skip_serializing)]
+    pub session_id: String,
     pub driver_listen_host: String,
     pub driver_listen_port: u16,
     pub driver_external_host: String,
     pub driver_external_port: u16,
+    #[serde(skip_serializing)]
+    pub driver_id: u64,
     #[serde(skip_serializing)]
     pub worker_id: u64,
     pub worker_listen_host: String,
@@ -192,12 +220,14 @@ pub struct ClusterConfig {
     pub worker_heartbeat_interval_secs: u64,
     pub worker_heartbeat_timeout_secs: u64,
     pub worker_launch_timeout_secs: u64,
+    pub worker_launch_retry_strategy: RetryStrategy,
     pub worker_task_slots: usize,
     pub task_launch_timeout_secs: u64,
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout_secs: u64,
     pub task_max_attempts: usize,
     pub rpc_retry_strategy: RetryStrategy,
+    pub shuffle_backend: ShuffleBackend,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +313,235 @@ mod retry_strategy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "shuffle_backend::ShuffleBackend",
+    from = "shuffle_backend::ShuffleBackend"
+)]
+pub enum ShuffleBackend {
+    Flight(FlightShuffleBackend),
+    Storage(StorageShuffleBackend),
+    Celeborn(CelebornShuffleBackend),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlightShuffleBackend {
+    pub compression: ShuffleCompression,
+    pub connection_count: NonZeroUsize,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_stream_window_size: Option<u32>,
+    #[serde(
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub initial_connection_window_size: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageShuffleBackend {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
+    pub max_file_size: usize,
+    pub compression: ShuffleCompression,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelebornShuffleBackend {
+    pub master_endpoints: Vec<String>,
+    pub compression: CelebornCompressionCodec,
+    pub heartbeat_interval_secs: u64,
+    pub endpoint_overrides: Vec<CelebornEndpointOverride>,
+    pub partition_split_threshold: i64,
+    pub partition_split_mode: CelebornPartitionSplitMode,
+}
+
+/// Compression applied to Celeborn push-data batches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum CelebornCompressionCodec {
+    None,
+    #[default]
+    Lz4,
+    Zstd {
+        level: i8,
+    },
+}
+
+impl Display for CelebornCompressionCodec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("none"),
+            Self::Lz4 => f.write_str("lz4"),
+            Self::Zstd { level } => write!(f, "zstd({level})"),
+        }
+    }
+}
+
+impl FromStr for CelebornCompressionCodec {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "lz4" => Ok(Self::Lz4),
+            value => value
+                .strip_circumfix("zstd(", ')')
+                .ok_or_else(|| format!("invalid Celeborn compression codec: {value}"))?
+                .parse::<i8>()
+                .map_err(|_| format!("invalid Celeborn zstd compression level: {value}"))
+                .and_then(|level| {
+                    (-5..=22)
+                        .contains(&level)
+                        .then_some(Self::Zstd { level })
+                        .ok_or_else(|| format!("invalid Celeborn zstd compression level: {value}"))
+                }),
+        }
+    }
+}
+
+impl TryFrom<String> for CelebornCompressionCodec {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<CelebornCompressionCodec> for String {
+    fn from(value: CelebornCompressionCodec) -> Self {
+        value.to_string()
+    }
+}
+
+/// The behavior a Celeborn worker uses when a partition exceeds its split threshold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CelebornPartitionSplitMode {
+    Soft,
+    Hard,
+}
+
+impl std::fmt::Display for CelebornPartitionSplitMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Soft => f.write_str("soft"),
+            Self::Hard => f.write_str("hard"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelebornEndpointOverride {
+    pub internal: String,
+    pub external: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShuffleCompression {
+    None,
+    Lz4,
+    Zstd,
+}
+
+mod shuffle_backend {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Type {
+        Flight,
+        Storage,
+        Celeborn,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ShuffleBackend {
+        pub r#type: Type,
+        pub flight: super::FlightShuffleBackend,
+        pub storage: super::StorageShuffleBackend,
+        pub celeborn: super::CelebornShuffleBackend,
+    }
+
+    impl From<ShuffleBackend> for super::ShuffleBackend {
+        fn from(value: ShuffleBackend) -> Self {
+            match value.r#type {
+                Type::Flight => super::ShuffleBackend::Flight(value.flight),
+                Type::Storage => super::ShuffleBackend::Storage(value.storage),
+                Type::Celeborn => super::ShuffleBackend::Celeborn(value.celeborn),
+            }
+        }
+    }
+
+    impl From<super::ShuffleBackend> for ShuffleBackend {
+        fn from(value: super::ShuffleBackend) -> Self {
+            match value {
+                super::ShuffleBackend::Flight(flight) => ShuffleBackend {
+                    r#type: Type::Flight,
+                    flight,
+                    storage: super::StorageShuffleBackend {
+                        path: None,
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                    celeborn: super::CelebornShuffleBackend {
+                        master_endpoints: vec![],
+                        compression: super::CelebornCompressionCodec::default(),
+                        heartbeat_interval_secs: 10,
+                        endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
+                    },
+                },
+                super::ShuffleBackend::Storage(storage) => ShuffleBackend {
+                    r#type: Type::Storage,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
+                    storage,
+                    celeborn: super::CelebornShuffleBackend {
+                        master_endpoints: vec![],
+                        compression: super::CelebornCompressionCodec::default(),
+                        heartbeat_interval_secs: 10,
+                        endpoint_overrides: vec![],
+                        partition_split_threshold: 1_i64 << 30,
+                        partition_split_mode: super::CelebornPartitionSplitMode::Soft,
+                    },
+                },
+                super::ShuffleBackend::Celeborn(celeborn) => ShuffleBackend {
+                    r#type: Type::Celeborn,
+                    flight: super::FlightShuffleBackend {
+                        compression: super::ShuffleCompression::None,
+                        connection_count: std::num::NonZeroUsize::MIN,
+                        initial_stream_window_size: None,
+                        initial_connection_window_size: None,
+                    },
+                    storage: super::StorageShuffleBackend {
+                        path: None,
+                        max_file_size: 0,
+                        compression: super::ShuffleCompression::None,
+                    },
+                    celeborn,
+                },
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub batch_size: usize,
@@ -290,6 +549,7 @@ pub struct ExecutionConfig {
     pub collect_statistics: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,
+    pub checkpoint: CheckpointConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -368,8 +628,18 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
+    pub content_defined_chunking: ParquetCdcConfig,
     pub file_statistics_cache: FileStatisticsCacheConfig,
     pub file_metadata_cache: FileMetadataCacheConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParquetCdcConfig {
+    pub enabled: bool,
+    pub min_chunk_size: usize,
+    pub max_chunk_size: usize,
+    pub norm_level: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -412,6 +682,73 @@ pub enum CacheType {
     Session,
 }
 
+fn default_catalog_cache_type() -> CacheType {
+    CacheType::None
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogCacheConfig {
+    #[serde(default = "default_catalog_cache_type")]
+    pub database_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub database_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub database_cache_ttl_secs: Option<u64>,
+    #[serde(default = "default_catalog_cache_type")]
+    pub table_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub table_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub table_cache_ttl_secs: Option<u64>,
+    #[serde(default = "default_catalog_cache_type")]
+    pub view_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub view_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub view_cache_ttl_secs: Option<u64>,
+}
+
+impl Default for CatalogCacheConfig {
+    fn default() -> Self {
+        Self {
+            database_cache_type: CacheType::None,
+            database_cache_size: None,
+            database_cache_ttl_secs: None,
+            table_cache_type: CacheType::None,
+            table_cache_size: None,
+            table_cache_ttl_secs: None,
+            view_cache_type: CacheType::None,
+            view_cache_size: None,
+            view_cache_ttl_secs: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
@@ -423,13 +760,94 @@ pub struct CatalogConfig {
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
+    pub system: SystemCatalogConfig,
+}
+
+/// Configuration for the local materialized system catalog store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    into = "system_catalog::SystemCatalog",
+    from = "system_catalog::SystemCatalog"
+)]
+pub struct SystemCatalogConfig {
+    pub store: SystemCatalogStore,
+}
+
+#[derive(Debug, Clone)]
+pub enum SystemCatalogStore {
+    Memory,
+    Disk { path: String },
+}
+
+mod system_catalog {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Store {
+        Memory,
+        Disk,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct Disk {
+        pub path: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct SystemCatalog {
+        pub store: Store,
+        pub disk: Disk,
+    }
+
+    impl From<SystemCatalog> for super::SystemCatalogConfig {
+        fn from(value: SystemCatalog) -> Self {
+            let store = match value.store {
+                Store::Memory => super::SystemCatalogStore::Memory,
+                Store::Disk => super::SystemCatalogStore::Disk {
+                    path: value.disk.path,
+                },
+            };
+            Self { store }
+        }
+    }
+
+    impl From<super::SystemCatalogConfig> for SystemCatalog {
+        fn from(value: super::SystemCatalogConfig) -> Self {
+            match value.store {
+                super::SystemCatalogStore::Memory => Self {
+                    store: Store::Memory,
+                    disk: Disk {
+                        path: String::new(),
+                    },
+                },
+                super::SystemCatalogStore::Disk { path } => Self {
+                    store: Store::Disk,
+                    disk: Disk { path },
+                },
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub enable_join_swap: bool,
+    pub prefer_hash_join: bool,
+    pub enable_window_topn: bool,
     pub expand_views_at_output: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OneLakeApi {
+    Delta,
+    #[default]
+    Iceberg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,6 +870,8 @@ pub enum CatalogType {
         warehouse: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        namespace_separator: Option<String>,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
@@ -462,6 +882,16 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
+        /// Path to a file holding the bearer token. When set, the token is
+        /// re-read from this file for every request, so a rotated token (for
+        /// example a kubelet-projected service account token) is picked up
+        /// without restarting the server. Takes precedence over
+        /// `bearer_access_token`. The path is not a secret, so it is kept as a
+        /// plain string.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bearer_access_token_file: Option<String>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     Unity {
         name: String,
@@ -474,23 +904,33 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     #[serde(alias = "onelake")]
     OneLake {
         name: String,
         url: String,
+        #[serde(default)]
+        api: OneLakeApi,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
         )]
         bearer_token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     Glue {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        catalog_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     #[serde(alias = "hms", alias = "hive-metastore")]
     HiveMetastore {
@@ -501,6 +941,8 @@ pub enum CatalogType {
         kerberos_service_principal: Option<String>,
         min_sasl_qop: Option<String>,
         connect_timeout_secs: Option<u64>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
 }
 
@@ -531,15 +973,38 @@ pub struct TelemetryConfig {
     pub export_traces: bool,
     pub export_metrics: bool,
     pub export_logs: bool,
-    pub otlp_endpoint: String,
-    pub otlp_protocol: OtlpProtocol,
-    pub otlp_timeout_secs: u64,
+    pub exporter: TelemetryExporterConfig,
     pub traces_export_interval_secs: u64,
     pub metrics_export_interval_secs: u64,
     pub metrics_collection_interval_secs: u64,
     pub logs_export_interval_secs: u64,
     pub logs_export_max_queue_size: u64,
     pub logs_export_batch_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryExporterConfig {
+    pub otlp: TelemetryOtlpExporterConfig,
+    pub system: TelemetrySystemExporterConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetrySystemExporterConfig {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryOtlpExporterConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub endpoint: Option<String>,
+    pub protocol: OtlpProtocol,
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -550,6 +1015,13 @@ pub enum OtlpProtocol {
     HttpBinary,
     #[serde(alias = "http-json")]
     HttpJson,
+}
+
+/// Environment variables for application execution configuration.
+pub struct ExecutionConfigEnv;
+
+impl ExecutionConfigEnv {
+    pub const BATCH_SIZE: &'static str = "SAIL_EXECUTION__BATCH_SIZE";
 }
 
 /// Environment variables for application cluster configuration.
@@ -564,8 +1036,10 @@ macro_rules! define_cluster_config_env {
 impl ClusterConfigEnv {
     define_cluster_config_env! {
         ENABLE_TLS,
+        SESSION_ID,
         DRIVER_EXTERNAL_HOST,
         DRIVER_EXTERNAL_PORT,
+        DRIVER_ID,
         WORKER_ID,
         WORKER_LISTEN_HOST,
         WORKER_EXTERNAL_HOST,
@@ -573,5 +1047,41 @@ impl ClusterConfigEnv {
         TASK_STREAM_BUFFER,
         TASK_STREAM_CREATION_TIMEOUT_SECS,
         RPC_RETRY_STRATEGY,
+        SHUFFLE_BACKEND__TYPE,
+        SHUFFLE_BACKEND__FLIGHT__COMPRESSION,
+        SHUFFLE_BACKEND__FLIGHT__CONNECTION_COUNT,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_STREAM_WINDOW_SIZE,
+        SHUFFLE_BACKEND__FLIGHT__INITIAL_CONNECTION_WINDOW_SIZE,
+        SHUFFLE_BACKEND__STORAGE__PATH,
+        SHUFFLE_BACKEND__STORAGE__MAX_FILE_SIZE,
+        SHUFFLE_BACKEND__STORAGE__COMPRESSION,
+        SHUFFLE_BACKEND__CELEBORN__MASTER_ENDPOINTS,
+        SHUFFLE_BACKEND__CELEBORN__COMPRESSION,
+        SHUFFLE_BACKEND__CELEBORN__HEARTBEAT_INTERVAL_SECS,
+        SHUFFLE_BACKEND__CELEBORN__ENDPOINT_OVERRIDES,
+        SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_THRESHOLD,
+        SHUFFLE_BACKEND__CELEBORN__PARTITION_SPLIT_MODE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CelebornCompressionCodec;
+
+    #[test]
+    fn parses_celeborn_compression() {
+        assert_eq!("none".parse(), Ok(CelebornCompressionCodec::None));
+        assert_eq!("lz4".parse(), Ok(CelebornCompressionCodec::Lz4));
+        assert_eq!(
+            "zstd(1)".parse(),
+            Ok(CelebornCompressionCodec::Zstd { level: 1 })
+        );
+        assert!("zstd".parse::<CelebornCompressionCodec>().is_err());
+        assert_eq!(
+            "zstd(-5)".parse(),
+            Ok(CelebornCompressionCodec::Zstd { level: -5 })
+        );
+        assert!("zstd(-6)".parse::<CelebornCompressionCodec>().is_err());
+        assert!("zstd(127)".parse::<CelebornCompressionCodec>().is_err());
     }
 }

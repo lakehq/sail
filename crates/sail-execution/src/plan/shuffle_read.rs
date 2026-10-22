@@ -1,39 +1,26 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{exec_datafusion_err, internal_err, Result};
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::common::{Result, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::coalesce::LimitedBatchCoalescer;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use futures::future::try_join_all;
-use futures::TryStreamExt;
-use log::warn;
+use futures::{StreamExt, TryStreamExt};
 
-use crate::plan::ListListDisplay;
-use crate::stream::merge::MergedRecordBatchStream;
-use crate::stream::reader::{TaskReadLocation, TaskStreamReader};
+use crate::stream::reader::TaskStreamReader;
 
 #[derive(Debug, Clone)]
 pub struct ShuffleReadExec {
-    /// For each output partition, a list of locations to read from.
-    locations: Vec<Vec<TaskReadLocation>>,
     properties: Arc<PlanProperties>,
     reader: Arc<dyn TaskStreamReader>,
 }
 
 impl ShuffleReadExec {
-    pub fn new(
-        locations: Vec<Vec<TaskReadLocation>>,
-        reader: Arc<dyn TaskStreamReader>,
-        properties: Arc<PlanProperties>,
-    ) -> Self {
-        Self {
-            locations,
-            properties,
-            reader,
-        }
+    pub fn new(reader: Arc<dyn TaskStreamReader>, properties: Arc<PlanProperties>) -> Self {
+        Self { properties, reader }
     }
 }
 
@@ -41,9 +28,8 @@ impl DisplayAs for ShuffleReadExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ShuffleReadExec: partitioning={}, locations={}",
+            "ShuffleReadExec: partitioning={}",
             self.properties.output_partitioning(),
-            ListListDisplay(&self.locations)
         )
     }
 }
@@ -53,16 +39,28 @@ impl ExecutionPlan for ShuffleReadExec {
         "ShuffleReadExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![]
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    #[expect(deprecated)]
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: datafusion::physical_plan::ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.with_new_children(children)
     }
 
     fn with_new_children(
@@ -78,40 +76,54 @@ impl ExecutionPlan for ShuffleReadExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let locations = self
-            .locations
-            .get(partition)
-            .ok_or_else(|| {
-                exec_datafusion_err!("read locations for partition {partition} not found")
-            })?
-            .clone();
-        if locations.is_empty() {
-            warn!("empty read locations for partition {partition}");
-        }
         let reader = self.reader.clone();
-        let output_schema = self.schema();
-        let output =
-            futures::stream::once(
-                async move { shuffle_read(reader, &locations, output_schema).await },
-            )
-            .try_flatten();
+        let output = futures::stream::once(async move {
+            let source = reader.open(partition).await?;
+            Ok::<_, datafusion::error::DataFusionError>(source.map(|item| {
+                item.map_err(|error| datafusion::error::DataFusionError::External(Box::new(error)))
+            }))
+        })
+        .try_flatten();
+        let output: SendableRecordBatchStream =
+            Box::pin(RecordBatchStreamAdapter::new(self.schema(), output));
+        // Unbounded inputs must emit partial batches promptly.
+        if self.properties.boundedness.is_unbounded() {
+            return Ok(output);
+        }
+        // The reader has merged the producers for this partition. Share one
+        // coalescer across them instead of buffering each producer separately.
+        let coalescer =
+            LimitedBatchCoalescer::new(self.schema(), context.session_config().batch_size(), None);
+        let output = futures::stream::try_unfold(
+            (output, coalescer, false),
+            |(mut input, mut coalescer, mut done)| async move {
+                loop {
+                    if let Some(batch) = coalescer.next_completed_batch() {
+                        return Ok::<_, datafusion::error::DataFusionError>(Some((
+                            batch,
+                            (input, coalescer, done),
+                        )));
+                    }
+                    if done {
+                        return Ok(None);
+                    }
+                    match input.try_next().await? {
+                        Some(batch) => {
+                            coalescer.push_batch(batch)?;
+                        }
+                        None => {
+                            coalescer.finish()?;
+                            done = true;
+                        }
+                    }
+                }
+            },
+        );
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             output,
         )))
     }
-}
-
-async fn shuffle_read(
-    reader: Arc<dyn TaskStreamReader>,
-    locations: &[TaskReadLocation],
-    schema: SchemaRef,
-) -> Result<SendableRecordBatchStream> {
-    let futures = locations
-        .iter()
-        .map(|location| reader.open(location, schema.clone()));
-    let streams = try_join_all(futures).await?;
-    Ok(Box::pin(MergedRecordBatchStream::new(schema, streams)))
 }

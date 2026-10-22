@@ -1,0 +1,957 @@
+// Licensed to the Apache Software Foundation (ASF) under one or more
+// contributor license agreements.  See the NOTICE file distributed with
+// this work for additional information regarding copyright ownership.
+// The ASF licenses this file to You under the Apache License, Version 2.0
+// (the "License"); you may not use this file except in compliance with
+// the License.  You may obtain a copy of the License at
+//
+//    http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+option java_package = "org.apache.celeborn.common.protocol";
+option java_multiple_files = true;
+
+enum MessageType {
+  UNKNOWN_MESSAGE = 0;
+  REGISTER_WORKER = 1;
+  HEARTBEAT_FROM_WORKER = 2;
+  HEARTBEAT_FROM_WORKER_RESPONSE = 3;
+  REGISTER_SHUFFLE = 4;
+  REGISTER_SHUFFLE_RESPONSE = 5;
+  REQUEST_SLOTS = 6;
+  // keep it for compatible with 0.3 client, will remove in 0.5
+  RELEASE_SLOTS = 7;
+  RELEASE_SLOTS_RESPONSE = 8;
+
+  REQUEST_SLOTS_RESPONSE = 9;
+  CHANGE_LOCATION = 10;
+  CHANGE_LOCATION_RESPONSE = 11;
+  MAPPER_END = 12;
+  MAPPER_END_RESPONSE = 13;
+  GET_REDUCER_FILE_GROUP = 14;
+  GET_REDUCER_FILE_GROUP_RESPONSE = 15;
+  UNREGISTER_SHUFFLE = 16;
+  UNREGISTER_SHUFFLE_RESPONSE = 17;
+  APPLICATION_LOST = 18;
+  APPLICATION_LOST_RESPONSE = 19;
+  HEARTBEAT_FROM_APPLICATION = 20;
+  // GET_BLACKLIST = 21;
+  // GET_BLACKLIST_RESPONSE = 22;
+  CHECK_QUOTA = 23;
+  CHECK_QUOTA_RESPONSE = 24;
+  REPORT_WORKER_FAILURE = 25;
+  REGISTER_WORKER_RESPONSE = 26;
+  // REREGISTER_WORKER_RESPONSE = 27;
+  RESERVE_SLOTS = 28;
+  RESERVE_SLOTS_RESPONSE = 29;
+  COMMIT_FILES = 30;
+  COMMIT_FILES_RESPONSE = 31;
+  DESTROY = 32;
+  DESTROY_RESPONSE = 33;
+  // SLAVE_LOST_RESPONSE = 34;
+  // GET_WORKER_INFO = 35;
+  // GET_WORKER_INFO_RESPONSE = 36;
+  // THREAD_DUMP = 37;
+  // THREAD_DUMP_RESPONSE = 38;
+  REMOVE_EXPIRED_SHUFFLE = 39;
+  ONE_WAY_MESSAGE_RESPONSE = 40;
+  CHECK_WORKER_TIMEOUT = 41;
+  CHECK_APPLICATION_TIMEOUT = 42;
+  WORKER_LOST = 43;
+  WORKER_LOST_RESPONSE = 44;
+  STAGE_END = 45;
+  STAGE_END_RESPONSE = 46;
+  PARTITION_SPLIT = 47;
+  REGISTER_MAP_PARTITION_TASK = 48;
+  HEARTBEAT_FROM_APPLICATION_RESPONSE = 49;
+  CHECK_FOR_DFS_EXPIRED_DIRS_TIMEOUT = 50;
+  OPEN_STREAM = 51;
+  STREAM_HANDLER = 52;
+  CHECK_WORKERS_AVAILABLE = 53;
+  CHECK_WORKERS_AVAILABLE_RESPONSE = 54;
+  REMOVE_WORKERS_UNAVAILABLE_INFO = 55;
+  PUSH_DATA_HAND_SHAKE = 56;
+  REGION_START = 57;
+  REGION_FINISH = 58;
+  BACKLOG_ANNOUNCEMENT = 59;
+  BUFFER_STREAM_END = 60;
+  READ_ADD_CREDIT = 61;
+  STREAM_CHUNK_SLICE = 62;
+  CHUNK_FETCH_REQUEST = 63;
+  TRANSPORTABLE_ERROR = 64;
+  WORKER_EXCLUDE = 65;
+  WORKER_EXCLUDE_RESPONSE = 66;
+  REPORT_SHUFFLE_FETCH_FAILURE = 67;
+  REPORT_SHUFFLE_FETCH_FAILURE_RESPONSE = 68;
+  GET_SHUFFLE_ID = 69;
+  GET_SHUFFLE_ID_RESPONSE = 70;
+  SASL_REQUEST = 71;
+  AUTHENTICATION_INITIATION_REQUEST = 72;
+  AUTHENTICATION_INITIATION_RESPONSE = 73;
+  REGISTER_APPLICATION_REQUEST = 74;
+  REGISTER_APPLICATION_RESPONSE = 75;
+  WORKER_EVENT_REQUEST = 76;
+  WORKER_EVENT_RESPONSE = 77;
+  APPLICATION_META = 78;
+  APPLICATION_META_REQUEST = 79;
+  BATCH_OPEN_STREAM = 80;
+  BATCH_OPEN_STREAM_RESPONSE = 81;
+  REPORT_WORKER_DECOMMISSION = 82;
+  REPORT_BARRIER_STAGE_ATTEMPT_FAILURE = 83;
+  REPORT_BARRIER_STAGE_ATTEMPT_FAILURE_RESPONSE = 84;
+  SEGMENT_START = 85;
+  NOTIFY_REQUIRED_SEGMENT = 86;
+  BATCH_UNREGISTER_SHUFFLES = 87;
+  BATCH_UNREGISTER_SHUFFLE_RESPONSE= 88;
+  REVISE_LOST_SHUFFLES = 89;
+  REVISE_LOST_SHUFFLES_RESPONSE = 90;
+  PUSH_MERGED_DATA_SPLIT_PARTITION_INFO = 91;
+  GET_STAGE_END = 92;
+  GET_STAGE_END_RESPONSE = 93;
+  READ_REDUCER_PARTITION_END = 94;
+  READ_REDUCER_PARTITION_END_RESPONSE = 95;
+  REGISTER_APPLICATION_INFO = 96;
+}
+
+enum StreamType {
+  ChunkStream = 0;
+  CreditStream = 1;
+}
+
+enum WorkerEventType {
+  None = 0;
+  Immediately = 1; // Immediately exit
+  Decommission = 2; // From normal to decommission, then exit
+  DecommissionThenIdle = 3; // From normal to decommission and keep as idle state
+  Graceful = 4; // From normal to graceful, then exit
+  Recommission = 5; // -> From InDecommissionThenIdle/Idle state to Normal
+}
+
+message PbStorageInfo {
+  int32 type = 1;
+  string mountPoint = 2;
+  bool finalResult = 3;
+  string filePath = 4;
+  int32 availableStorageTypes = 5;
+  int64 fileSize = 6;
+  repeated int64 chunkOffsets = 7;
+}
+
+message PbPartitionLocation {
+  enum Mode {
+    Primary = 0;
+    Replica = 1;
+  }
+  Mode mode = 1;
+  int32 id = 2;
+  int32 epoch = 3;
+  string host = 4;
+  int32 rpcPort = 5;
+  int32 pushPort = 6;
+  int32 fetchPort = 7;
+  int32 replicatePort = 8;
+  PbPartitionLocation peer = 9;
+  PbStorageInfo storageInfo = 10;
+  bytes mapIdBitmap = 11;
+}
+
+message PbWorkerResource {
+  repeated PbPartitionLocation primaryPartitions = 1;
+  repeated PbPartitionLocation replicaPartitions = 2;
+  string networkLocation = 3;
+}
+
+message PbDiskInfo {
+  string mountPoint = 1;
+  int64 usableSpace = 2;
+  int64 avgFlushTime = 3;
+  int64 usedSlots = 4;
+  int32 status = 5;
+  int64 avgFetchTime = 6;
+  int32 storageType = 7;
+  int64 totalSpace = 8;
+}
+
+message PbWorkerInfo {
+  string host = 1;
+  int32 rpcPort = 2;
+  int32 pushPort = 3;
+  int32 fetchPort = 4;
+  int32 replicatePort = 5;
+  repeated PbDiskInfo disks = 6;
+  map<string, PbResourceConsumption> userResourceConsumption = 7;
+  int32 internalPort = 8;
+  string networkLocation = 9;
+}
+
+message PbFileGroup {
+  repeated PbPartitionLocation locations = 1;
+  PbPackedPartitionLocationsPair partitionLocationsPair = 2;
+}
+
+message PbRegisterWorker {
+  string host = 1;
+  int32 rpcPort = 2;
+  int32 pushPort = 3;
+  int32 fetchPort = 4;
+  int32 replicatePort = 5;
+  repeated PbDiskInfo disks = 6;
+  string requestId = 9;
+  map<string, PbResourceConsumption> userResourceConsumption = 8;
+  int32 internalPort = 10;
+  string networkLocation = 11;
+}
+
+message PbHeartbeatFromWorker {
+  string host = 1;
+  int32 rpcPort = 2;
+  int32 pushPort = 3;
+  int32 fetchPort = 4;
+  int32 replicatePort = 5;
+  repeated PbDiskInfo disks = 6;
+  repeated string activeShuffleKeys = 7;
+  string requestId = 8;
+  map<string, PbResourceConsumption> userResourceConsumption = 9;
+  map<string, int64> estimatedAppDiskUsage = 10;
+  bool highWorkload = 11;
+  PbWorkerStatus workerStatus = 12;
+}
+
+message PbWorkerStatus {
+  enum State {
+    Normal = 0;
+    Idle = 1; // Can be recommissioned
+    Exit = 2;
+    InDecommissionThenIdle = 3; // Can be recommissioned
+    InDecommission = 4;
+    InGraceFul = 5;
+    InExit = 6;
+  }
+
+  State state = 1;
+  int64 stateStartTime = 2;
+}
+
+message PbHeartbeatFromWorkerResponse {
+  repeated string expiredShuffleKeys = 1;
+  bool registered = 2;
+  WorkerEventType workerEventType = 3;
+}
+
+message PbWorkerEventInfo {
+  WorkerEventType workerEventType = 1;
+  int64 eventStartTime = 2;
+}
+
+message PbWorkerEventRequest {
+  repeated PbWorkerInfo workers = 1;
+  WorkerEventType workerEventType = 2;
+  string requestId = 3;
+}
+
+message PbWorkerEventResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message PbRegisterShuffle {
+  int32 shuffleId = 1;
+  int32 numMappers = 2;
+  int32 numPartitions = 3;
+}
+
+message PbRegisterMapPartitionTask {
+  int32 shuffleId = 1;
+  int32 numMappers = 2;
+  int32 mapId = 3;
+  int32 attemptId = 4;
+  int32 partitionId = 5;
+  bool isSegmentGranularityVisible = 6;
+}
+
+message PbRegisterShuffleResponse {
+  int32 status = 1;
+  repeated PbPartitionLocation partitionLocations = 2;
+  PbPackedPartitionLocationsPair packedPartitionLocationsPair = 3;
+}
+
+message PbRequestSlots {
+  string applicationId = 1;
+  int32 shuffleId = 2;
+  repeated int32 partitionIdList = 3;
+  string hostname = 4;
+  bool shouldReplicate = 5;
+  string requestId = 6;
+  int32 storageType = 7;
+  PbUserIdentifier userIdentifier = 8;
+  bool shouldRackAware = 9;
+  int32 maxWorkers = 10;
+  int32 availableStorageTypes = 11;
+  repeated PbWorkerInfo excludedWorkerSet = 12;
+  bool packed = 13;
+  string tagsExpr = 14;
+}
+
+message PbSlotInfo {
+  map<string, int32> slot = 1;
+}
+
+// keep it for compatible reason
+message PbReleaseSlots {
+  string applicationId = 1;
+  int32 shuffleId = 2;
+  repeated string workerIds = 3;
+  repeated PbSlotInfo slots = 4;
+  string requestId = 6;
+}
+
+// keep it for compatible reason
+message PbReleaseSlotsResponse {
+  int32 status = 1;
+}
+
+
+message PbRequestSlotsResponse {
+  int32 status = 1;
+  map<string, PbWorkerResource> workerResource = 2;
+  map<string, PbPackedWorkerResource> packedWorkerResource = 3;
+}
+
+message PbRevivePartitionInfo {
+  int32 partitionId = 1;
+  int32 epoch = 2;
+  PbPartitionLocation partition = 3;
+  int32 status = 4;
+}
+
+message PbRevive {
+  int32 shuffleId = 1;
+  repeated int32 mapId = 2;
+  repeated PbRevivePartitionInfo partitionInfo = 3;
+}
+
+message PbChangeLocationPartitionInfo {
+  int32 partitionId = 1;
+  int32 status = 2;
+  PbPartitionLocation partition = 3;
+  bool oldAvailable = 4;
+}
+
+message PbChangeLocationResponse {
+  repeated int32 endedMapId = 1;
+  repeated PbChangeLocationPartitionInfo partitionInfo = 2;
+}
+
+message PbPartitionSplit {
+  int32 shuffleId = 1;
+  int32 partitionId = 2;
+  int32 epoch = 3;
+  PbPartitionLocation oldPartition = 4;
+}
+
+message PbMapperEnd {
+  int32 shuffleId = 1;
+  int32 mapId = 2;
+  int32 attemptId = 3;
+  int32 numMappers = 4;
+  int32 partitionId = 5;
+  map<string, PbLocationPushFailedBatches> pushFailureBatches= 6;
+  int32 numPartitions = 7;
+  repeated int32 crc32PerPartition = 8;
+  repeated int64 bytesWrittenPerPartition = 9;
+}
+
+message PbLocationPushFailedBatches {
+  map<string, PbFailedBatches> failedBatches = 1;
+}
+
+message PbFailedBatches{
+  repeated int32 failedBatches = 1;
+}
+
+message PbMapperEndResponse {
+  int32 status = 1;
+}
+
+message PbGetReducerFileGroup {
+  int32 shuffleId = 1;
+  bool isSegmentGranularityVisible = 2;
+}
+
+message PbGetReducerFileGroupResponse {
+  int32 status = 1;
+  // PartitionId -> Partition FileGroup
+  map<int32, PbFileGroup> fileGroups = 2;
+
+  // only reduce partition mode need know valid attempts
+  repeated int32 attempts = 3;
+
+  // only map partition mode has succeed partitionIds
+  repeated int32 partitionIds = 4;
+
+  map<string, PbLocationPushFailedBatches> pushFailedBatches = 5;
+
+  bytes broadcast = 6;
+}
+
+message PbGetShuffleId {
+  int32 appShuffleId = 1;
+  string appShuffleIdentifier = 2;
+  bool isShuffleWriter = 3;
+  bool isBarrierStage = 4;
+}
+
+message PbGetShuffleIdResponse {
+  int32 shuffleId = 1;
+  bool success = 2;
+}
+
+message PbReportShuffleFetchFailure {
+  int32 appShuffleId = 1;
+  int32 shuffleId = 2;
+  int64 taskId = 3;
+}
+
+message PbReportShuffleFetchFailureResponse {
+  bool success = 1;
+}
+
+message PbReportBarrierStageAttemptFailure {
+  int32 appShuffleId = 1;
+  string appShuffleIdentifier = 2;
+}
+
+message PbReportBarrierStageAttemptFailureResponse {
+  bool success = 1;
+}
+
+message PbUnregisterShuffle {
+  string appId = 1;
+  int32 shuffleId = 2;
+  string requestId = 3;
+}
+
+message PbBatchUnregisterShuffles {
+  string appId = 1;
+  string requestId = 2;
+  repeated int32 shuffleIds = 3;
+}
+
+message PbUnregisterShuffleResponse {
+  int32 status = 1;
+}
+
+message PbBatchUnregisterShuffleResponse {
+  int32 status = 1;
+  repeated int32 shuffleIds = 2;
+}
+
+message PbApplicationLost {
+  string appId = 1;
+  string requestId = 2;
+}
+
+message PbApplicationLostResponse {
+  int32 status = 1;
+}
+
+message PbHeartbeatFromApplication {
+  string appId = 1;
+  int64 totalWritten = 2;
+  int64 fileCount = 3 ;
+  string requestId = 4;
+  repeated PbWorkerInfo needCheckedWorkerList = 5;
+  bool shouldResponse = 6;
+  int64 shuffleCount = 7;
+  map<string, int64> shuffleFallbackCounts = 8;
+  int64 applicationCount = 9;
+  map<string, int64> applicationFallbackCounts = 10;
+}
+
+message PbHeartbeatFromApplicationResponse {
+  int32 status = 1;
+  repeated PbWorkerInfo excludedWorkers = 2;
+  repeated PbWorkerInfo unknownWorkers = 3;
+  repeated PbWorkerInfo shuttingWorkers = 4;
+  repeated int32 registeredShuffles = 5;
+  PbCheckQuotaResponse checkQuotaResponse = 6;
+}
+
+message PbCheckQuota {
+  PbUserIdentifier userIdentifier = 1;
+}
+
+message PbCheckQuotaResponse {
+  bool available = 1;
+  string reason = 2;
+}
+
+message PbCheckWorkersAvailable {
+}
+
+message PbCheckWorkersAvailableResponse {
+  bool available = 1;
+}
+
+message PbReportWorkerUnavailable {
+  repeated PbWorkerInfo unavailable = 1;
+  string requestId = 2;
+}
+
+message PbRegisterWorkerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message PbReserveSlots {
+  string applicationId = 1;
+  int32 shuffleId = 2;
+  repeated PbPartitionLocation primaryLocations = 3;
+  repeated PbPartitionLocation replicaLocations = 4;
+  int64 splitThreshold = 5;
+  int32 splitMode = 6;
+  int32 partitionType = 7;
+  bool rangeReadFilter = 8;
+  PbUserIdentifier userIdentifier = 9;
+  int64 pushDataTimeout = 10;
+  bool partitionSplitEnabled = 11;
+  int32 availableStorageTypes = 12;
+  PbPackedPartitionLocationsPair partitionLocationsPair = 13;
+  bool isSegmentGranularityVisible = 14;
+}
+
+message PbReserveSlotsResponse {
+  int32 status = 1;
+  string reason = 2;
+}
+
+message PbCommitFiles {
+  string applicationId = 1;
+  int32 shuffleId = 2;
+  repeated string primaryIds = 3;
+  repeated string replicaIds = 4;
+  repeated int32 mapAttempts = 5;
+  int64 epoch = 6;
+  bool mockFailure = 7;
+}
+
+message PbCommitFilesResponse {
+  int32 status = 1;
+  repeated string committedPrimaryIds = 2;
+  repeated string committedReplicaIds = 3;
+  repeated string failedPrimaryIds = 4;
+  repeated string failedReplicaIds = 5;
+  map<string, PbStorageInfo> committedPrimaryStorageInfos = 6;
+  map<string, PbStorageInfo> committedReplicaStorageInfos = 7;
+  map<string, bytes> mapIdBitmap = 10;
+  int64 totalWritten = 8;
+  int32 fileCount = 9;
+}
+
+message PbDestroyWorkerSlots {
+  string shuffleKey = 1;
+  repeated string primaryLocations = 2;
+  repeated string replicaLocation = 3;
+  bool mockFailure = 4;
+}
+
+message PbDestroyWorkerSlotsResponse {
+  int32 status = 1;
+  repeated string failedPrimaries = 2;
+  repeated string failedReplicas = 3;
+}
+
+message PbCheckForWorkerTimeout {
+}
+
+message PbRemoveWorkersUnavailableInfo {
+  repeated PbWorkerInfo workerInfo = 1;
+  string requestId = 2;
+}
+
+message PbRemoveWorkersUnavailableInfoResponse {
+  bool success = 1;
+}
+
+message PbWorkerExclude {
+  repeated PbWorkerInfo workersToAdd = 1;
+  repeated PbWorkerInfo workersToRemove = 2;
+  string requestId = 3;
+}
+
+message PbWorkerExcludeResponse {
+  bool success = 1;
+}
+
+message PbWorkerLost {
+  string host = 1;
+  int32 rpcPort = 2;
+  int32 pushPort = 3;
+  int32 fetchPort = 4;
+  int32 replicatePort = 5;
+  string requestId = 6;
+}
+
+message PbWorkerLostResponse {
+  bool success = 1;
+}
+
+message PbStageEnd {
+  int32 shuffleId = 1;
+}
+
+message PbStageEndResponse {
+  int32 status = 1;
+}
+
+message PbSortedShuffleFileSet {
+  repeated string files = 1;
+}
+
+message PbStoreVersion {
+  int32 major = 1;
+  int32 minor = 2;
+}
+
+// keep it for compatible reason
+message PbFileInfo {
+  string filePath = 1;
+  repeated int64 chunkOffsets = 2;
+  PbUserIdentifier userIdentifier = 3;
+  int32 partitionType = 4;
+  int32 bufferSize = 5;
+  int32 numSubpartitions = 6;
+  int64 bytesFlushed = 7;
+  bool partitionSplitEnabled = 8;
+  bool isSegmentGranularityVisible = 9;
+  map<int32, int32> partitionWritingSegment = 10;
+  repeated PbSegmentIndex segmentIndex = 11;
+}
+
+message PbSegmentIndex {
+  map<int32, int32> firstBufferIndexToSegment = 1;
+}
+
+message PbMapFileMeta {
+  int32 bufferSize = 1;
+  int32 numSubPartitions = 2;
+}
+
+message PbReduceFileMeta {
+  repeated int64 chunkOffsets = 1;
+  bool sorted = 2;
+}
+
+message PbDiskFileInfo {
+  PbUserIdentifier userIdentifier = 1;
+  bool partitionSplitEnabled = 2;
+  PbMapFileMeta mapFileMeta = 3;
+  PbReduceFileMeta reduceFileMeta = 4;
+  PbStorageInfo storageInfo = 5;
+  int64 bytesFlushed = 6;
+}
+
+message PbFileInfoMap {
+  map<string, PbFileInfo> values = 1;
+}
+
+message PbUserIdentifier {
+  string tenantId = 1;
+  string name = 2;
+}
+
+message PbResourceConsumption {
+  int64 diskBytesWritten = 1;
+  int64 diskFileCount = 2;
+  int64 hdfsBytesWritten = 3;
+  int64 hdfsFileCount = 4;
+  map<string, PbResourceConsumption> subResourceConsumptions = 5;
+}
+
+// deprecated
+message PbAppDiskUsage {
+  string appId = 1;
+  int64 estimatedUsage = 2;
+}
+
+// deprecated
+message PbAppDiskUsageSnapshot {
+  int32 topItemCount = 1;
+  repeated PbAppDiskUsage topNItems = 2;
+  int64 startSnapShotTime = 3;
+  int64 endSnapshotTime = 4;
+}
+
+message PbSnapshotMetaInfo {
+  int64 estimatedPartitionSize = 1;
+  repeated string registeredShuffle = 2;
+  repeated string hostnameSet = 3;
+  repeated PbWorkerInfo excludedWorkers = 4;
+  repeated PbWorkerInfo workerLostEvents = 5;
+  map<string, int64> appHeartbeatTime = 6;
+  repeated PbWorkerInfo workers = 7;
+  int64 partitionTotalWritten = 8;
+  int64 partitionTotalFileCount = 9;
+  repeated PbAppDiskUsageSnapshot appDiskUsageMetricSnapshots = 10; // deprecated
+  PbAppDiskUsageSnapshot currentAppDiskUsageMetricsSnapshot = 11; // deprecated
+  map<string, int64> lostWorkers = 12;
+  repeated PbWorkerInfo shutdownWorkers = 13;
+  repeated PbWorkerInfo manuallyExcludedWorkers = 14;
+  map<string, PbWorkerEventInfo> workerEventInfos = 15;
+  map<string, PbApplicationMeta> applicationMetas = 16;
+  repeated PbWorkerInfo decommissionWorkers = 17;
+  int64 shuffleTotalCount = 18;
+  map<string, int64> shuffleFallbackCounts = 19;
+  int64 applicationTotalCount = 20;
+  map<string, int64> applicationFallbackCounts = 21;
+  map<string, PbApplicationInfo> applicationInfos = 22;
+}
+
+message PbOpenStream {
+  string shuffleKey = 1;
+  string fileName = 2;
+  int32 startIndex = 3;
+  int32 endIndex = 4;
+  int32 initialCredit = 5;
+  bool readLocalShuffle = 6;
+}
+
+message PbStreamHandler {
+  int64 streamId = 1;
+  int32 numChunks = 2;
+  repeated int64 chunkOffsets = 3;
+  string fullPath = 4;
+}
+
+message PbOpenStreamList {
+  string shuffleKey = 1;
+  repeated string fileName = 2;
+  repeated int32 startIndex = 3;
+  repeated int32 endIndex = 4;
+  repeated int32 initialCredit = 5;
+  repeated bool readLocalShuffle = 6;
+}
+
+message PbStreamHandlerOpt {
+  int32 status = 1;
+  PbStreamHandler streamHandler = 2;
+  string errorMsg = 3;
+}
+
+message PbOpenStreamListResponse {
+  repeated PbStreamHandlerOpt streamHandlerOpt = 2;
+}
+
+message PbPushDataHandShake {
+  PbPartitionLocation.Mode mode = 1;
+  string shuffleKey = 2;
+  string partitionUniqueId = 3;
+  int32 attemptId = 4;
+  int32 numPartitions = 5;
+  int32 bufferSize = 6;
+}
+
+message PbRegionStart {
+  PbPartitionLocation.Mode mode = 1;
+  string shuffleKey = 2;
+  string partitionUniqueId = 3;
+  int32 attemptId = 4;
+  int32 currentRegionIndex = 5;
+  bool isBroadcast = 6;
+}
+
+message PbRegionFinish {
+  PbPartitionLocation.Mode mode = 1;
+  string shuffleKey = 2;
+  string partitionUniqueId = 3;
+  int32 attemptId = 4;
+}
+
+message PbBacklogAnnouncement {
+  int64 streamId = 1;
+  int32 backlog = 2;
+}
+
+message PbBufferStreamEnd {
+  StreamType streamType = 1;
+  int64 streamId = 2;
+}
+
+message PbReadAddCredit {
+  int64 streamId = 1;
+  int32 credit = 2;
+}
+
+message PbStreamChunkSlice {
+  int64 streamId = 1;
+  int32 chunkIndex = 2;
+  int32 offset = 3;
+  int32 len = 4;
+}
+
+message PbChunkFetchRequest {
+  PbStreamChunkSlice streamChunkSlice = 1;
+}
+
+message PbTransportableError {
+  int64 streamId = 1;
+  string message = 2;
+}
+
+enum PbAuthType {
+  UNDEFINED_AUTH = 0;
+  CLIENT_AUTH = 1;
+  CONNECTION_AUTH = 2;
+}
+
+message PbSaslMechanism {
+  string mechanism = 1;
+  repeated PbAuthType authTypes = 2;
+}
+
+message PbSaslRequest {
+  string method = 1;
+  PbAuthType authType = 2;
+  bytes payload = 3;
+}
+
+message PbAuthenticationInitiationRequest {
+  string version = 1;
+  bool authEnabled = 2;
+  repeated PbSaslMechanism saslMechanisms = 3;
+}
+
+message PbSegmentStart {
+  PbPartitionLocation.Mode mode = 1;
+  string shuffleKey = 2;
+  string partitionUniqueId = 3;
+  int32 attemptId = 4;
+  int32 subPartitionId = 5;
+  int32 segmentId = 6;
+}
+
+message PbNotifyRequiredSegment {
+  int64 streamId = 1;
+  int32 requiredSegmentId = 2;
+  int32 subPartitionId = 3;
+}
+
+message PbAuthenticationInitiationResponse {
+  string version = 1;
+  bool authEnabled = 2;
+  repeated PbSaslMechanism saslMechanisms = 3;
+}
+
+message PbRegisterApplicationRequest {
+  string id = 1;
+  string secret = 2;
+}
+
+message PbRegisterApplicationResponse {
+  bool status = 1;
+}
+
+message PbApplicationMeta {
+  string appId = 1;
+  string secret = 2;
+}
+
+message PbApplicationInfo {
+  string appId = 1;
+  PbUserIdentifier userIdentifier = 2;
+  map<string, string> extraInfo = 3;
+  int64 registrationTime = 4;
+}
+
+message PbApplicationMetaRequest {
+  string appId = 1;
+}
+
+message PbPackedPartitionLocations {
+  repeated int32 ids = 1;
+  repeated int32 epoches = 2;
+  repeated int32 workerIds = 3;
+  repeated string workerIdsSet = 4;
+  repeated bytes mapIdBitMap = 5;
+  repeated int32 types = 6;
+  repeated int32 mountPoints = 7;
+  repeated string mountPointsSet = 8;
+  repeated bool finalResult = 9 ;
+  repeated string filePaths = 10;
+  repeated int32 availableStorageTypes = 11;
+  repeated int32 modes = 12;
+  repeated int64 fileSizes = 13;
+  repeated PbChunkOffsets chunksOffsets = 14;
+}
+
+message PbPackedPartitionLocationsPair {
+  PbPackedPartitionLocations locations = 1;
+  repeated int32 peerIndexes = 2;
+  int32 inputLocationSize = 3;
+}
+
+message PbPackedWorkerResource {
+  PbPackedPartitionLocationsPair locationPairs = 1;
+  string networkLocation = 2;
+}
+
+message PbReportWorkerDecommission {
+  repeated PbWorkerInfo workers = 1;
+  string requestId = 2;
+}
+
+message PbReviseLostShuffles{
+  string appId = 1;
+  repeated int32 lostShuffles = 2;
+  string requestId = 3;
+}
+
+message PbReviseLostShufflesResponse{
+  bool success = 1;
+  string message = 2;
+}
+
+message PbPushMergedDataSplitPartitionInfo {
+  repeated int32 splitPartitionIndexes = 1;
+  repeated int32 statusCodes = 2;
+}
+
+message PbGetStageEnd {
+  int32 shuffleId = 1;
+}
+
+message PbGetStageEndResponse {
+  bool stageEnd = 1;
+}
+
+message PbChunkOffsets {
+  repeated int64 chunkOffset = 1;
+}
+
+
+message PbRegisterApplicationInfo {
+  string appId = 1;
+  PbUserIdentifier userIdentifier = 2;
+  map<string, string> extraInfo = 3;
+  string requestId = 4;
+}
+
+message PbReadReducerPartitionEnd {
+  int32 shuffleId = 1;
+  int32 partitionId = 2;
+  int32 startMaxIndex = 3;
+  int32 endMapIndex = 4;
+  int32 crc32 = 5;
+  int64 bytesWritten = 6;
+}
+
+message PbReadReducerPartitionEndResponse {
+  int32 status = 1;
+  string errorMsg = 2;
+}
