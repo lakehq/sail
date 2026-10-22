@@ -391,23 +391,16 @@ Feature: unary DOUBLE math functions (acos and siblings)
         | asin    | tinyint     | CAST(1 AS TINYINT)          | 1.5707963267948966    |
         | asin    | str_padded  | ' 1 '                       | 1.5707963267948966    |
         | asinh   | zero        | 0                           | 0.0                   |
-        | asinh   | one         | 1                           | 0.881373587019543     |
-        | asinh   | neg_one     | -1                          | -0.881373587019543    |
         | asinh   | half        | 0.5                         | 0.48121182505960347   |
         | asinh   | two         | 2                           | 1.4436354751788103    |
-        | asinh   | neg_two     | -2                          | -1.4436354751788103   |
-        | asinh   | neg_half    | -0.5                        | -0.48121182505960347  |
         | asinh   | nan         | CAST('NaN' AS DOUBLE)       | NaN                   |
         | asinh   | inf         | CAST('Infinity' AS DOUBLE)  | Infinity              |
         | asinh   | neg_inf     | CAST('-Infinity' AS DOUBLE) | -Infinity             |
         | asinh   | neg_zero    | CAST(-0.0 AS DOUBLE)        | 0.0                   |
         | asinh   | null_double | CAST(NULL AS DOUBLE)        | NULL                  |
         | asinh   | null_int    | CAST(NULL AS INT)           | NULL                  |
-        | asinh   | tinyint     | CAST(1 AS TINYINT)          | 0.881373587019543     |
         | asinh   | float       | CAST(0.5 AS FLOAT)          | 0.48121182505960347   |
-        | asinh   | dec_small   | CAST(-0.5 AS DECIMAL(10,2)) | -0.48121182505960347  |
         | asinh   | str_ok      | '0.5'                       | 0.48121182505960347   |
-        | asinh   | str_padded  | ' 1 '                       | 0.881373587019543     |
         | atan    | zero        | 0                           | 0.0                   |
         | atan    | one         | 1                           | 0.7853981633974483    |
         | atan    | neg_one     | -1                          | -0.7853981633974483   |
@@ -723,6 +716,28 @@ Feature: unary DOUBLE math functions (acos and siblings)
         | tanh    | str_ok      | '0.5'                       | 0.46211715726000974   |
         | tanh    | str_padded  | ' 1 '                       | 0.7615941559557649    |
 
+    # Spark 4.2 rewrote `Asinh` with the fdlibm algorithm. 3.5, 4.0 and 4.1 use
+    # `log(x + sqrt(x * x + 1))`, which differs in the last digits for these inputs.
+    @spark-4.2
+    Scenario Outline: <fn>(<input>) = <result> (<what>, Spark 4.2 formula)
+      When query
+        """
+        SELECT <fn>(<input>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | fn    | what       | input                       | result                |
+        | asinh | one        | 1                           | 0.881373587019543     |
+        | asinh | neg_one    | -1                          | -0.881373587019543    |
+        | asinh | neg_two    | -2                          | -1.4436354751788103   |
+        | asinh | neg_half   | -0.5                        | -0.48121182505960347  |
+        | asinh | tinyint    | CAST(1 AS TINYINT)          | 0.881373587019543     |
+        | asinh | dec_small  | CAST(-0.5 AS DECIMAL(10,2)) | -0.48121182505960347  |
+        | asinh | str_padded | ' 1 '                       | 0.881373587019543     |
+
     # Last-digit differences: Java's StrictMath is fdlibm, Sail calls the platform libm.
     # Fixing them needs an fdlibm port, tracked as its own change. Only the rows that differ on
     # glibc (Linux) as well as on macOS are listed: the result of the others depends on the platform.
@@ -938,7 +953,6 @@ Feature: unary DOUBLE math functions (acos and siblings)
       Examples:
         | fn      | result    |
         | asin    | -0.0      |
-        | asinh   | -0.0      |
         | atan    | -0.0      |
         | atanh   | -0.0      |
         | cbrt    | -0.0      |
@@ -951,6 +965,17 @@ Feature: unary DOUBLE math functions (acos and siblings)
         | sinh    | -0.0      |
         | tan     | -0.0      |
         | tanh    | -0.0      |
+
+    # Spark 4.2 returns `copySign(w, x)`; 3.5, 4.0 and 4.1 return +0.0 for -0.0.
+    @spark-4.2
+    Scenario: asinh of a real negative zero keeps the sign
+      When query
+        """
+        SELECT asinh(-CAST(0.0 AS DOUBLE)) AS result
+        """
+      Then query result
+        | result |
+        | -0.0   |
 
   Rule: A typed NULL keeps its Spark type
 
@@ -1349,3 +1374,39 @@ Feature: unary DOUBLE math functions (acos and siblings)
         | call    | column  |
         | LN(1)   | ln(1)   |
         | RINT(1) | rint(1) |
+
+  Rule: A malformed string that reaches the function through a mixed-type expression
+
+    # The type of the argument is the one DataFusion gives it AFTER it coerces the branches, so the
+    # conversion to DOUBLE cannot depend on the type the resolver sees first.
+    Scenario Outline: <fn> of <what> is NULL for the malformed row under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT <fn>(<expr>) AS result FROM range(2)
+        """
+      Then query result
+        | result   |
+        | <value>  |
+        | NULL     |
+
+      Examples:
+        | fn   | what                                | expr                                                           | value |
+        | sqrt | a CASE with an int THEN             | CASE WHEN id = 0 THEN 4 ELSE 'abc' END                         | 2.0   |
+        | sqrt | a CASE with a string THEN           | CASE WHEN id = 0 THEN 'abc' ELSE 4 END                         | 2.0   |
+        | sqrt | an IF with an int first             | IF(id = 0, 4, 'abc')                                           | 2.0   |
+        | sqrt | an IF with a string first           | IF(id = 0, 'abc', 4)                                           | 2.0   |
+        | sqrt | a nested CASE                       | CASE WHEN id = 0 THEN 4 ELSE CASE WHEN id = 1 THEN 'abc' END END | 2.0 |
+        | ln   | a CASE with an int THEN             | CASE WHEN id = 0 THEN 1 ELSE 'abc' END                         | 0.0   |
+        | rint | a CASE with a double THEN           | CASE WHEN id = 0 THEN 2.5D ELSE 'abc' END                      | 2.0   |
+
+    Scenario: sqrt of a UNION of an int and a malformed string is NULL under ANSI=false
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT sqrt(c) AS result FROM (SELECT 4 AS c UNION ALL SELECT 'abc')
+        """
+      Then query result
+        | result |
+        | 2.0    |
+        | NULL   |

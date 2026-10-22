@@ -608,11 +608,16 @@ fn unary_double(
             DataType::Dictionary(_, value_type) => value_type.as_ref(),
             other => other,
         };
+        // The type seen here can still change: DataFusion coerces the branches of a CASE, IF or
+        // UNION later, so a numeric argument may end up as a string. Every accepted type therefore
+        // takes the same conversion (`try_cast` under ANSI off). For a number it never fails.
         let arg = match value_type {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            t if t.is_numeric()
+                || t.is_null()
+                || matches!(t, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) =>
+            {
                 string_to_double(arg, function_context.plan_config.ansi_mode)
             }
-            t if t.is_numeric() || t.is_null() => cast(arg, DataType::Float64),
             other => {
                 let service = function_context
                     .session_context
