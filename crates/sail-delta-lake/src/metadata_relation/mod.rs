@@ -91,11 +91,14 @@ pub(crate) async fn load_state(
             kind.name()
         );
     }
+    // CRCs may omit transaction and domain metadata state, so these relations need full replay.
     let metadata_only = !matches!(
         kind,
         DeltaMetadataRelationType::Detail
             | DeltaMetadataRelationType::Files
             | DeltaMetadataRelationType::Tombstones
+            | DeltaMetadataRelationType::Transactions
+            | DeltaMetadataRelationType::DomainMetadata
     );
     // Reuse the read path so catalog-ratified, unpublished commits participate in the snapshot.
     let (snapshot, log_store, _) = load_delta_read_state(

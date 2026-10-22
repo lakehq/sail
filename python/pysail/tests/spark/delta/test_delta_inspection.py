@@ -194,6 +194,53 @@ def test_history_optional_fields_and_reconciled_actions(spark, tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("relation", "action", "checksum_field", "value"),
+    [
+        ("transactions", "txn", "setTransactions", {"appId": "writer", "version": 7, "lastUpdated": 1700000000000}),
+        (
+            "domain_metadata",
+            "domainMetadata",
+            "domainMetadata",
+            {"domain": "custom", "configuration": '{"value":1}', "removed": False},
+        ),
+    ],
+)
+@pytest.mark.parametrize("include_optional_state", [False, True], ids=["omitted", "included"])
+@pytest.mark.parametrize("newer_commit", [False, True], ids=["current-crc", "older-crc"])
+def test_state_relations_replay_optional_checksum_fields(
+    spark, tmp_path, relation, action, checksum_field, value, include_optional_state, newer_commit
+):
+    path = tmp_path / "optional_checksum_state"
+    commits = [[{action: value}]]
+    if newer_commit:
+        commits.append([{"commitInfo": {"operation": "SET TBLPROPERTIES"}}])
+    _write_log(
+        path,
+        commits,
+        protocol={"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": ["domainMetadata"]},
+    )
+    actions = _actions(path, 0)
+    checksum = {
+        "tableSizeBytes": 0,
+        "numFiles": 0,
+        "numMetadata": 1,
+        "numProtocol": 1,
+        "metadata": next(item["metaData"] for item in actions if "metaData" in item),
+        "protocol": next(item["protocol"] for item in actions if "protocol" in item),
+    }
+    if include_optional_state:
+        checksum[checksum_field] = [value]
+    # Delta 4.4 permits these CRC fields to be omitted even when the log has live actions.
+    (path / "_delta_log" / f"{0:020d}.crc").write_text(json.dumps(checksum))
+    spark.sql(f"CREATE TABLE inspection_crc_state USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
+    try:
+        actual = [row.asDict(recursive=True) for row in spark.table(f"inspection_crc_state.{relation}").collect()]
+        assert actual == [value], f"{relation} must retain log state regardless of optional CRC fields"
+    finally:
+        spark.sql("DROP TABLE inspection_crc_state")
+
+
+@pytest.mark.parametrize(
     "relation", ["partitions", "changes", "log_entries", "checkpoints", "sidecars", "checksums", "log_compactions"]
 )
 def test_recognized_relations_report_unsupported(spark, inspection_table, relation):
