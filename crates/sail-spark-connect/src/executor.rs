@@ -469,9 +469,9 @@ pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     {
         let batch = if record_batch_has_views(batch) {
             // Fallback incase view types weren't handled in planning/execution.
-            // TODO: Look into passing the session's `spark.sql.execution.arrow.useLargeVarTypes` value.
-            //  For now, enable large variable-width types because narrowing offsets requires careful overflow handling.
-            &normalize_record_batch(batch, true)?
+            // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+            //  Keep it false for now: narrowing 64-bit offsets to 32-bit offsets requires careful overflow handling.
+            &normalize_record_batch(batch, false)?
         } else {
             batch
         };
