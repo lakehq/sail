@@ -8,10 +8,10 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{
     DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field, FieldRef, Float16Type,
-    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion::common::cast::{as_list_array, as_primitive_array, as_string_array};
 use datafusion::common::{HashMap, exec_err, not_impl_err};
@@ -147,12 +147,12 @@ impl AggregateUDFImpl for ModeFunction {
                 ))
             }
 
-            DataType::Decimal128(_, _) => Box::new(PrimitiveModeAccumulator::<Decimal128Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::Decimal256(_, _) => Box::new(PrimitiveModeAccumulator::<Decimal256Type>::new(
-                data_type, tie_break,
-            )),
+            DataType::Decimal128(_, _) => Box::new(
+                PrimitiveModeAccumulator::<Decimal128Type>::new(data_type, tie_break),
+            ),
+            DataType::Decimal256(_, _) => Box::new(
+                PrimitiveModeAccumulator::<Decimal256Type>::new(data_type, tie_break),
+            ),
 
             DataType::Float16 => Box::new(FloatModeAccumulator::<Float16Type>::new(
                 data_type, tie_break,

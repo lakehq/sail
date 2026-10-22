@@ -79,14 +79,13 @@ impl ScalarUDFImpl for SparkConv {
                     DataType::Utf8 => Arc::clone(array),
                     DataType::LargeUtf8 | DataType::Utf8View => cast(array, &DataType::Utf8)?,
                     other => {
-                        return Err(unsupported_data_type_exec_err(
-                            "spark_conv",
-                            "Utf8",
-                            other,
-                        ));
+                        return Err(unsupported_data_type_exec_err("spark_conv", "Utf8", other));
                     }
                 };
-                let result: StringArray = as_string_array(&array)?.iter().map(convert_number).collect();
+                let result: StringArray = as_string_array(&array)?
+                    .iter()
+                    .map(convert_number)
+                    .collect();
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             other => Err(unsupported_data_type_exec_err(
@@ -236,15 +235,30 @@ mod tests {
             conv("-10", 10, 2).as_deref(),
             Some("1111111111111111111111111111111111111111111111111111111111110110")
         );
-        assert_eq!(conv("-9223372036854775808", 10, -2).map(|s| s.len()), Some(65));
+        assert_eq!(
+            conv("-9223372036854775808", 10, -2).map(|s| s.len()),
+            Some(65)
+        );
     }
 
     #[test]
     fn test_convert_overflow_is_the_largest_unsigned_value() {
-        assert_eq!(conv("18446744073709551615", 10, 16).as_deref(), Some("FFFFFFFFFFFFFFFF"));
-        assert_eq!(conv("18446744073709551616", 10, 16).as_deref(), Some("FFFFFFFFFFFFFFFF"));
-        assert_eq!(conv("99999999999999999999999", 10, 10).as_deref(), Some("18446744073709551615"));
-        assert_eq!(conv("99999999999999999999999", 10, -10).as_deref(), Some("-1"));
+        assert_eq!(
+            conv("18446744073709551615", 10, 16).as_deref(),
+            Some("FFFFFFFFFFFFFFFF")
+        );
+        assert_eq!(
+            conv("18446744073709551616", 10, 16).as_deref(),
+            Some("FFFFFFFFFFFFFFFF")
+        );
+        assert_eq!(
+            conv("99999999999999999999999", 10, 10).as_deref(),
+            Some("18446744073709551615")
+        );
+        assert_eq!(
+            conv("99999999999999999999999", 10, -10).as_deref(),
+            Some("-1")
+        );
     }
 
     #[test]
