@@ -59,49 +59,31 @@ def _write_log(path, commits, *, configuration=None, protocol=None):
         os.utime(file, ns=(1700000000000000000, 1700000000000000000))
 
 
-def test_state_relations_and_procedures(spark, inspection_table):
+def test_native_detail_and_history(spark, inspection_table):
     name, path = inspection_table
-    initial = _actions(path, 0)
-    protocol = next(action["protocol"] for action in initial if "protocol" in action)
-    metadata = next(action["metaData"] for action in initial if "metaData" in action)
-    assert spark.table(f"{name}.files").collect() == []
-    assert spark.table(f"{name}.tombstones").collect() == []
-    assert spark.table(f"{name}.transactions").collect() == []
-    assert spark.table(f"{name}.domain_metadata").collect() == []
-    assert spark.table(f"{name}.MeTaDaTa").first().asDict(recursive=True) == metadata
-    actual_protocol = spark.table(f"{name}.PROTOCOL").first().asDict()
-    assert {key: value for key, value in actual_protocol.items() if value is not None} == protocol
+    metadata = next(action["metaData"] for action in _actions(path, 0) if "metaData" in action)
+    empty = spark.sql(f"DESCRIBE DETAIL {name}").first()
+    assert empty.id == metadata["id"]
+    assert empty.numFiles == 0
+    assert empty.sizeInBytes == 0
 
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a b'), (2, NULL)")  # noqa: S608
-    files = spark.table(f"{name}.files").collect()
     adds = [action["add"] for action in _actions(path, 1) if "add" in action]
-    assert sorted(row.path for row in files) == sorted(add["path"] for add in adds)
-    assert {row.partitionValues["part"] for row in files} == {"a b", None}
-    assert sum(row.size for row in files) == sum(add["size"] for add in adds)
-    assert all(json.loads(row.stats)["numRecords"] == 1 for row in files)
-    assert spark.sql(f"SELECT count(*) FROM {name}.files").first()[0] == len(files)  # noqa: S608
-    filtered = spark.sql(f"SELECT path FROM {name}.files WHERE partitionValues['part'] IS NULL LIMIT 1")  # noqa: S608
-    assert filtered.first().path in {row.path for row in files if row.partitionValues["part"] is None}
-
-    detail = spark.table(f"{name}.detail").first()
-    assert detail.numFiles == len(files)
-    assert detail.sizeInBytes == sum(row.size for row in files)
+    detail = spark.sql(f"DESCRIBE DETAIL {name}").first()
+    assert detail.numFiles == len(adds)
+    assert detail.sizeInBytes == sum(add["size"] for add in adds)
     assert detail.partitionColumns == ["part"]
     assert detail.clusteringColumns == []
     assert detail.tableFeatures == ["appendOnly", "invariants"]
-    assert spark.sql(f"CALL delta.describe_detail('{name}')").collect() == [detail]
-    history = spark.sql(f"CALL sail.delta.describe_history(table => '{name}', limit => 1 + 1)").collect()
+    assert spark.sql(f"DESC DETAIL sail.default.{name}").collect() == [detail]
+    history = spark.sql(f"DESCRIBE HISTORY {name} LIMIT 2").collect()
     assert [row.version for row in history] == [1, 0]
-    assert spark.sql(f"CALL delta.describe_history('{name}', 0)").collect() == []
-    assert history == spark.table(f"sail.default.{name}.HiStOrY").orderBy("version", ascending=False).collect()
-    assert spark.sql(
-        f"SELECT d.numFiles, count(f.path) AS actual FROM {name}.detail d CROSS JOIN {name}.files f GROUP BY d.numFiles"  # noqa: S608
-    ).first().asDict() == {"numFiles": len(files), "actual": len(files)}
+    assert spark.sql(f"DESCRIBE HISTORY {name} LIMIT 0").collect() == []
 
     spark.sql(f"INSERT OVERWRITE {name} VALUES (3, 'new')")  # noqa: S608
-    assert {row.path for row in spark.table(f"{name}.tombstones").collect()} == {row.path for row in files}
-    assert {row.partitionValues["part"] for row in spark.table(f"{name}.files").collect()} == {"new"}
-    assert spark.sql(f"CALL delta.describe_history('{name}', 1)").first().version == 2  # noqa: PLR2004
+    current = [action["add"] for action in _actions(path, 2) if "add" in action]
+    assert spark.sql(f"DESCRIBE DETAIL {name}").first().numFiles == len(current)
+    assert spark.sql(f"DESCRIBE HISTORY {name} LIMIT 1").first().version == 2  # noqa: PLR2004
 
 
 @pytest.mark.parametrize("checkpoint_policy", ["classic", "v2"])
@@ -114,24 +96,19 @@ def test_checkpoint_state_and_retained_history(spark, inspection_table, checkpoi
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a')")  # noqa: S608
     spark.sql(f"INSERT OVERWRITE {name} VALUES (2, 'b')")  # noqa: S608
     assert (path / "_delta_log" / "_last_checkpoint").exists()
-    before_files = spark.table(f"{name}.files").orderBy("path").collect()
-    before_tombstones = spark.table(f"{name}.tombstones").select("path", "deletionVector").orderBy("path").collect()
+    before = spark.sql(f"DESCRIBE DETAIL {name}").collect()
     latest = max(int(file.stem) for file in (path / "_delta_log").glob("*.json") if file.stem.isdigit())
     for file in (path / "_delta_log").glob("*.json"):
         if file.stem.isdigit() and int(file.stem) < latest:
             file.unlink()
-    assert spark.table(f"{name}.files").orderBy("path").collect() == before_files
-    assert (
-        spark.table(f"{name}.tombstones").select("path", "deletionVector").orderBy("path").collect()
-        == before_tombstones
-    )
+    assert spark.sql(f"DESCRIBE DETAIL {name}").collect() == before
     # Checkpoints preserve state, not commitInfo; history must not synthesize earlier commits.
-    assert [row.version for row in spark.table(f"{name}.history").collect()] == [latest]
+    assert [row.version for row in spark.sql(f"DESCRIBE HISTORY {name}").collect()] == [latest]
 
 
 @pytest.mark.parametrize("local_timezone", ["UTC", "Asia/Shanghai"], indirect=True)
 @pytest.mark.usefixtures("local_timezone")
-def test_history_optional_fields_and_reconciled_actions(spark, tmp_path):
+def test_history_optional_fields(spark, tmp_path):
     path = tmp_path / "raw"
     _write_log(
         path,
@@ -164,7 +141,7 @@ def test_history_optional_fields_and_reconciled_actions(spark, tmp_path):
     )
     spark.sql(f"CREATE TABLE raw_inspection USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
     try:
-        history = spark.sql("CALL delta.describe_history('raw_inspection')").collect()
+        history = spark.sql("DESCRIBE HISTORY raw_inspection").collect()
         assert [row.version for row in history] == [2, 1, 0]
         assert [row.timestamp for row in reversed(history)] == [
             datetime.fromtimestamp(1700000000 + offset / 1000, tz=timezone.utc).astimezone().replace(tzinfo=None)
@@ -177,81 +154,48 @@ def test_history_optional_fields_and_reconciled_actions(spark, tmp_path):
         assert history[1].operationParameters == {"mode": "Append", "partitionBy": '["x"]', "count": "1", "empty": None}
         assert history[1].operationMetrics == {"numOutputRows": "1"}
         assert history[1].userMetadata == "audit"
-        assert spark.table("raw_inspection.transactions").first().asDict() == {
-            "appId": "job",
-            "version": 2,
-            "lastUpdated": None,
-        }
-        assert [row.asDict() for row in spark.table("raw_inspection.domain_metadata").collect()] == [
-            {"domain": "retained", "configuration": '{"value":2}', "removed": False},
-        ]
-        limited = spark.sql("CALL delta.describe_history('raw_inspection', 1)").first()
+        limited = spark.sql("DESCRIBE HISTORY raw_inspection LIMIT 1").first()
         assert limited.version == 2  # noqa: PLR2004
         assert limited.timestamp == history[-1].timestamp
-        assert spark.table("raw_inspection.detail").first().tableFeatures == ["domainMetadata"]
+        assert spark.sql("DESCRIBE DETAIL raw_inspection").first().tableFeatures == ["domainMetadata"]
     finally:
         spark.sql("DROP TABLE raw_inspection")
 
 
 @pytest.mark.parametrize(
-    ("relation", "action", "checksum_field", "value"),
+    "relation",
     [
-        ("transactions", "txn", "setTransactions", {"appId": "writer", "version": 7, "lastUpdated": 1700000000000}),
-        (
-            "domain_metadata",
-            "domainMetadata",
-            "domainMetadata",
-            {"domain": "custom", "configuration": '{"value":1}', "removed": False},
-        ),
+        "detail",
+        "history",
+        "files",
+        "tombstones",
+        "metadata",
+        "protocol",
+        "transactions",
+        "domain_metadata",
+        "partitions",
+        "changes",
+        "log_entries",
+        "checkpoints",
+        "sidecars",
+        "checksums",
+        "log_compactions",
     ],
 )
-@pytest.mark.parametrize("include_optional_state", [False, True], ids=["omitted", "included"])
-@pytest.mark.parametrize("newer_commit", [False, True], ids=["current-crc", "older-crc"])
-def test_state_relations_replay_optional_checksum_fields(
-    spark, tmp_path, relation, action, checksum_field, value, include_optional_state, newer_commit
-):
-    path = tmp_path / "optional_checksum_state"
-    commits = [[{action: value}]]
-    if newer_commit:
-        commits.append([{"commitInfo": {"operation": "SET TBLPROPERTIES"}}])
-    _write_log(
-        path,
-        commits,
-        protocol={"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": ["domainMetadata"]},
-    )
-    actions = _actions(path, 0)
-    checksum = {
-        "tableSizeBytes": 0,
-        "numFiles": 0,
-        "numMetadata": 1,
-        "numProtocol": 1,
-        "metadata": next(item["metaData"] for item in actions if "metaData" in item),
-        "protocol": next(item["protocol"] for item in actions if "protocol" in item),
-    }
-    if include_optional_state:
-        checksum[checksum_field] = [value]
-    # Delta 4.4 permits these CRC fields to be omitted even when the log has live actions.
-    (path / "_delta_log" / f"{0:020d}.crc").write_text(json.dumps(checksum))
-    spark.sql(f"CREATE TABLE inspection_crc_state USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
-    try:
-        actual = [row.asDict(recursive=True) for row in spark.table(f"inspection_crc_state.{relation}").collect()]
-        assert actual == [value], f"{relation} must retain log state regardless of optional CRC fields"
-    finally:
-        spark.sql("DROP TABLE inspection_crc_state")
-
-
-@pytest.mark.parametrize(
-    "relation", ["partitions", "changes", "log_entries", "checkpoints", "sidecars", "checksums", "log_compactions"]
-)
-def test_recognized_relations_report_unsupported(spark, inspection_table, relation):
+def test_custom_metadata_relations_are_not_registered(spark, inspection_table, relation):
     name, _ = inspection_table
-    with pytest.raises(Exception, match=f"Delta metadata table '{relation}' is recognized but not implemented"):
+    with pytest.raises(Exception, match=r"(?i)(not found|does not exist|table_or_view_not_found)"):
         spark.table(f"{name}.{relation}").collect()
 
 
+@pytest.mark.parametrize("namespace", ["delta", "sail.delta"])
 @pytest.mark.parametrize(
     "procedure",
     [
+        "describe_detail",
+        "describe_history",
+        "optimize",
+        "vacuum",
         "restore",
         "convert_to_delta",
         "generate",
@@ -264,40 +208,29 @@ def test_recognized_relations_report_unsupported(spark, inspection_table, relati
         "compact_log",
     ],
 )
-def test_recognized_procedures_report_unsupported(spark, procedure):
-    with pytest.raises(Exception, match=f"Delta procedure '{procedure}' is recognized but not implemented"):
-        spark.sql(f"CALL delta.{procedure}()").collect()
+def test_custom_procedures_are_not_registered(spark, inspection_table, namespace, procedure):
+    name, path = inspection_table
+    before = sorted(file.name for file in (path / "_delta_log").iterdir())
+    with pytest.raises(Exception, match="Procedure not found"):
+        spark.sql(f"CALL {namespace}.{procedure}('{name}')").collect()
+    assert sorted(file.name for file in (path / "_delta_log").iterdir()) == before
 
 
-def test_resolution_and_argument_validation(spark, inspection_table):
+def test_native_target_resolution(spark, inspection_table):
     name, _ = inspection_table
-    for call, message in [
-        ("CALL delta.unknown()", "Procedure not found"),
-        ("CALL missing.delta.describe_detail()", "Catalog not found"),
-        ("CALL delta.describe_detail()", "Missing required argument"),
-        (f"CALL delta.describe_history('{name}', -1)", "non-negative integer"),
-        (f"CALL delta.describe_detail(table => '{name}', typo => 1)", "Unknown argument"),
-        (
-            f"CALL delta.describe_detail('{name}', table => '{name}')",
-            "(Duplicate|multiple|already|provided more than once)",
-        ),
-    ]:
-        with pytest.raises(Exception, match=message):
-            spark.sql(call).collect()
     spark.sql("CREATE TEMPORARY VIEW inspection_view AS SELECT 1 AS id")
-    with pytest.raises(Exception, match=r"(not a table|not found|does not exist)"):
-        spark.sql("CALL delta.describe_detail('inspection_view')").collect()
-    spark.sql("DROP VIEW inspection_view")
-    with pytest.raises(Exception, match=r"(?i)(not found|table_or_view_not_found)"):
-        spark.table(f"{name}.unknown").collect()
-    with pytest.raises(Exception, match="time travel is not supported"):
-        spark.sql(f"SELECT * FROM {name}.history VERSION AS OF 0").collect()  # noqa: S608
+    try:
+        with pytest.raises(Exception, match=r"(not a table|not found|does not exist)"):
+            spark.sql("DESCRIBE DETAIL inspection_view").collect()
+    finally:
+        spark.sql("DROP VIEW inspection_view")
     spark.sql("CREATE TABLE inspection_parquet (id INT) USING parquet")
     try:
         with pytest.raises(Exception, match=r"cannot target table.*format 'parquet'"):
-            spark.sql("CALL delta.describe_detail('inspection_parquet')").collect()
+            spark.sql("DESCRIBE DETAIL inspection_parquet").collect()
     finally:
         spark.sql("DROP TABLE inspection_parquet")
+    # A real table named history remains an ordinary catalog lookup.
     spark.sql(f"CREATE DATABASE {name}")
     try:
         spark.sql(f"CREATE TABLE {name}.history (marker INT) USING parquet")
@@ -310,13 +243,12 @@ def test_resolution_and_argument_validation(spark, inspection_table):
 def test_inspection_does_not_read_data_files(spark, inspection_table):
     name, path = inspection_table
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a')")  # noqa: S608
-    files = spark.table(f"{name}.files").orderBy("path").collect()
+    before = spark.sql(f"DESCRIBE DETAIL {name}").collect()
     for file in path.rglob("*.parquet"):
         if "_delta_log" not in file.parts:
             file.unlink()
-    assert spark.table(f"{name}.files").orderBy("path").collect() == files
-    assert spark.sql(f"CALL delta.describe_detail('{name}')").first().numFiles == len(files)
-    assert [row.version for row in spark.sql(f"CALL delta.describe_history('{name}')").collect()] == [1, 0]
+    assert spark.sql(f"DESCRIBE DETAIL {name}").collect() == before
+    assert [row.version for row in spark.sql(f"DESCRIBE HISTORY {name}").collect()] == [1, 0]
 
 
 @pytest.mark.yamlsnapshot(group="plan")
@@ -324,8 +256,8 @@ def test_inspection_plans(spark, inspection_table, snapshot):
     name, _ = inspection_table
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a')")  # noqa: S608
     statements = [
-        f"CALL delta.describe_history('{name}', 1)",
-        f"SELECT count(*) FROM {name}.files WHERE size > 0",  # noqa: S608
+        f"DESCRIBE HISTORY {name} LIMIT 1",
+        f"DESCRIBE DETAIL {name}",
     ]
     plans = {}
     for statement in statements:
@@ -346,7 +278,7 @@ def test_inspection_distributed_plan(tmp_path, snapshot):
             f"CREATE TABLE delta_distributed (id BIGINT) USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'"
         )
         try:
-            statement = "CALL delta.describe_history('delta_distributed')"
+            statement = "DESCRIBE HISTORY delta_distributed"
             plan = spark.sql(f"EXPLAIN CODEGEN {statement}").first().plan
             distributed = plan[plan.index("== Distributed Plan ==") :]
             assert normalize_plan_text(distributed) == snapshot
@@ -391,7 +323,7 @@ def test_inspection_matches_delta_spark(spark, delta_jvm_spark, tmp_path, ict):
         spark.sql("DROP TABLE inspection_interop")
 
 
-def test_file_metadata_preserves_mapping_and_deletion_vectors(spark, delta_jvm_spark, tmp_path):
+def test_detail_preserves_mapping_and_deletion_vectors(spark, delta_jvm_spark, tmp_path):
     path = tmp_path / "mapped_dv"
     jvm = delta_jvm_spark
     jvm.sql(
@@ -405,18 +337,12 @@ def test_file_metadata_preserves_mapping_and_deletion_vectors(spark, delta_jvm_s
         current = [action["add"] for action in _actions(path, 2) if "add" in action]
         assert current
         assert any(add.get("deletionVector") for add in current)
-        files = spark.table("inspection_mapped.files").collect()
-        assert len(files) == len(current)
-        for row, add in zip(
-            sorted(files, key=lambda row: row.path), sorted(current, key=lambda add: add["path"]), strict=True
-        ):
-            assert row.path == add["path"]
-            assert row.partitionValues == add["partitionValues"]
-            assert "part" not in row.partitionValues
-            assert row.deletionVector.asDict() == add["deletionVector"]
-            assert json.loads(row.stats) == json.loads(add["stats"])
-        assert spark.table("inspection_mapped.detail").first().partitionColumns == ["part"]
-        assert spark.table("inspection_mapped.tombstones").count() == 1
+        expected = jvm.sql(f"DESCRIBE DETAIL delta.`{path}`").first()
+        actual = spark.sql("DESCRIBE DETAIL inspection_mapped").first()
+        assert actual.numFiles == expected.numFiles == len(current)
+        assert actual.sizeInBytes == expected.sizeInBytes == sum(add["size"] for add in current)
+        assert actual.partitionColumns == expected.partitionColumns == ["part"]
+        assert actual.tableFeatures == expected.tableFeatures
         assert spark.table("inspection_mapped").count() == 2  # noqa: PLR2004
     finally:
         spark.sql("DROP TABLE inspection_mapped")
@@ -432,10 +358,8 @@ def test_detail_resolves_logical_clustering_columns(spark, delta_jvm_spark, tmp_
     spark.sql(f"CREATE TABLE inspection_clustered USING delta LOCATION '{escape_sql_string_literal(path.as_uri())}'")
     try:
         expected = jvm.sql(f"DESCRIBE DETAIL delta.`{path}`").first()
-        actual = spark.table("inspection_clustered.detail").first()
+        actual = spark.sql("DESCRIBE DETAIL inspection_clustered").first()
         assert actual.clusteringColumns == expected.clusteringColumns == ["`sp ace`"]
         assert actual.tableFeatures == expected.tableFeatures
-        domain = spark.table("inspection_clustered.domain_metadata").where("domain = 'delta.clustering'").first()
-        assert json.loads(domain.configuration)["clusteringColumns"] != [["sp ace"]]
     finally:
         spark.sql("DROP TABLE inspection_clustered")

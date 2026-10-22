@@ -7,6 +7,7 @@ import time
 from urllib.parse import unquote
 
 import pytest
+from pyspark.sql import Row
 from pyspark.sql.connect import proto
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
@@ -21,6 +22,23 @@ def _commits(path):
         for file in (path / "_delta_log").glob("*.json")
         if file.stem.isdigit()
     }
+
+
+def _active_files(path):
+    # These bounded fixtures retain every JSON commit, so file state can be checked directly.
+    def identity(action):
+        dv = action.get("deletionVector")
+        return action["path"], None if dv is None else (dv["storageType"], dv["pathOrInlineDv"], dv.get("offset"))
+
+    files = {}
+    for _, actions in sorted(_commits(path).items()):
+        for action in actions:
+            if "remove" in action:
+                files.pop(identity(action["remove"]), None)
+        for action in actions:
+            if "add" in action:
+                files[identity(action["add"])] = action["add"]
+    return [Row(**{"deletionVector": None, **add}) for add in files.values()]
 
 
 def _paths(rows):
@@ -85,9 +103,8 @@ def test_native_inspection_sql(spark, maintenance_table):
     name, path = maintenance_table
     spark.sql(f"INSERT INTO {name} VALUES (1, 'x')")  # noqa: S608
     detail = spark.sql(f"DESCRIBE DETAIL sail.default.{name}").first()
-    assert detail == spark.table(f"{name}.detail").first()
     assert spark.sql(f"DESC DETAIL {name}").first() == detail
-    expected = spark.table(f"{name}.history").orderBy("version", ascending=False).collect()
+    expected = spark.sql(f"DESCRIBE HISTORY sail.default.{name}").collect()
     assert spark.sql(f"DESCRIBE HISTORY {name}").collect() == expected
     assert spark.sql(f"DESC HISTORY {name} LIMIT 1").collect() == expected[:1]
     assert spark.sql(f"DESCRIBE HISTORY {name} LIMIT 0").collect() == []
@@ -118,14 +135,14 @@ def test_optimize_partition_compaction_and_idempotence(spark, maintenance_table,
         assert max(_commits(path)) == before_version
     finally:
         spark.conf.unset(key)
-    files = spark.table(f"{name}.files").collect()
+    files = _active_files(path)
     selected = {row.path for row in files if "a b" in row.partitionValues.values()}
     untouched = {row.path for row in files} - selected
     result = spark.sql(f"OPTIMIZE {name} WHERE part = 'a b'").first()
     assert result.metrics.numFilesRemoved == len(selected)
     assert result.metrics.numFilesAdded == 1
     assert result.metrics.partitionsOptimized == 1
-    assert untouched <= {row.path for row in spark.table(f"{name}.files").collect()}
+    assert untouched <= {row.path for row in _active_files(path)}
     assert spark.table(name).orderBy("id", "part").collect() == rows
     commits = _commits(path)
     assert max(commits) == before_version + 1
@@ -145,7 +162,7 @@ def test_optimize_partition_compaction_and_idempotence(spark, maintenance_table,
     assert max(_commits(path)) == max(commits)
     # All remaining partitions are compacted independently, including the null partition.
     spark.sql(f"OPTIMIZE delta.`{path}`").collect()
-    assert spark.table(f"{name}.files").count() == 3  # noqa: PLR2004
+    assert len(_active_files(path)) == 3  # noqa: PLR2004
     assert spark.table(name).orderBy("id", "part").collect() == rows
     with pytest.raises(Exception, match="only partition columns"):
         spark.sql(f"OPTIMIZE {name} WHERE id = 0").collect()
@@ -167,7 +184,7 @@ def test_optimize_matches_jvm_schema_and_artifacts(spark, delta_jvm_spark, tmp_p
         assert metrics.numFilesAdded == expected.first().metrics.numFilesAdded == 1
         assert metrics.totalConsideredFiles == metrics.numFilesRemoved
         assert metrics.totalFilesSkipped == 0
-        files = spark.table("optimize_interop.files").collect()
+        files = _active_files(path)
         assert metrics.filesAdded.totalSize == sum(row.size for row in files)
         assert metrics.filesAdded.totalFiles == len(files)
         assert sorted(jvm.read.format("delta").load(str(path)).collect()) == jvm.range(40).collect()
@@ -199,14 +216,14 @@ def test_optimize_failed_bin_does_not_commit(spark, maintenance_table):
     name, path = maintenance_table
     for i in range(2):
         spark.sql(f"INSERT INTO {name} VALUES ({i}, 'a'), ({i}, 'b')")  # noqa: S608
-    files = spark.table(f"{name}.files").collect()
+    files = _active_files(path)
     missing = next(row for row in files if "b" in row.partitionValues.values())
     (path / unquote(missing.path)).unlink()
     before = _commits(path)
     with pytest.raises(Exception, match=r"(?i)(not found|no such file)"):
         spark.sql(f"OPTIMIZE {name}").collect()
     assert _commits(path) == before
-    assert {row.path for row in spark.table(f"{name}.files").collect()} == {row.path for row in files}
+    assert {row.path for row in _active_files(path)} == {row.path for row in files}
 
 
 def test_optimize_materializes_dvs_and_vacuum_protects_them(spark, delta_jvm_spark, tmp_path):
@@ -228,7 +245,7 @@ def test_optimize_materializes_dvs_and_vacuum_protects_them(spark, delta_jvm_spa
         result = spark.sql("OPTIMIZE optimize_dv").first()
         assert result.metrics.deletionVectorStats.numDeletionVectorsRemoved == 1
         assert result.metrics.deletionVectorStats.numDeletionVectorRowsRemoved == 1
-        assert all(row.deletionVector is None for row in spark.table("optimize_dv.files").collect())
+        assert all(row.deletionVector is None for row in _active_files(path))
         assert sorted(row.id for row in jvm.read.format("delta").load(str(path)).collect()) == [2, 3]
         # Recent tombstones continue to protect the old data file and bitmap despite old mtimes.
         assert spark.sql("VACUUM optimize_dv DRY RUN").collect() == []
@@ -241,9 +258,9 @@ def test_vacuum_retention_dry_run_and_audit(spark, delta_jvm_spark, maintenance_
     name, path = maintenance_table
     spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('delta.deletedFileRetentionDuration' = 'interval 1 hours')")
     spark.sql(f"INSERT INTO {name} VALUES (1, 'a b')")  # noqa: S608
-    removed = path / unquote(spark.table(f"{name}.files").first().path)
+    removed = path / unquote(_active_files(path)[0].path)
     spark.sql(f"INSERT OVERWRITE {name} VALUES (2, 'new')")  # noqa: S608
-    active = path / unquote(spark.table(f"{name}.files").first().path)
+    active = path / unquote(_active_files(path)[0].path)
     orphan = path / "orphan % #.parquet"
     orphan.write_bytes(b"orphan")
     cdf = path / "_change_data" / "expired.parquet"

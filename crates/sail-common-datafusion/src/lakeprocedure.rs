@@ -530,6 +530,12 @@ pub enum LakeProcedureResolution {
 
 #[async_trait]
 pub trait LakeProcedureProvider: Send + Sync {
+    /// Whether this provider exposes its procedures through SQL CALL.
+    /// Native format commands may reuse procedure planning without exposing CALL aliases.
+    fn supports_sql_call(&self) -> bool {
+        true
+    }
+
     fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution;
 
     /// Plans the format-owned implementation of a fully bound procedure call.

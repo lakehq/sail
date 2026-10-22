@@ -1,204 +1,42 @@
-//! Delta inspection and maintenance schemas.
+//! Delta Spark inspection and maintenance command schemas.
 //!
-//! Relation suffixes and the `delta` procedure namespace are Sail SQL extensions, not names
-//! prescribed by PROTOCOL.md. State relations use the protocol action schemas; `detail` and
-//! `history` use the DESCRIBE DETAIL and DESCRIBE HISTORY result schemas.
+//! TODO: Consider Sail-only `SELECT ... FROM <table>.detail` / `.history` relations.
+//! TODO: Consider `.files`, `.tombstones`, `.metadata`, `.protocol`, `.transactions`, and
+//! `.domain_metadata` relations for reconciled snapshot state, with optional time travel.
+//! TODO: Consider `.partitions` and version-bounded `.changes` relations for statistics and CDF.
+//! TODO: Consider `.log_entries`, `.checkpoints`, `.sidecars`, `.checksums`, and
+//! `.log_compactions` relations for retained log artifacts. These extensions are deferred;
+//! no Delta metadata-relation suffixes are currently registered.
 
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
-use super::{
-    DeltaResult, add_struct_type, domain_metadata_struct_type, metadata_struct_type,
-    protocol_struct_type, remove_struct_type, transaction_struct_type,
-};
-
-/// The inspection surface includes both reconciled state and retained log artifacts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DeltaMetadataRelationType {
-    /// Table details returned by DESCRIBE DETAIL.
+pub(crate) enum DeltaInspectionType {
     Detail,
-    /// Retained commit provenance, not snapshot state or a data-change feed.
     History,
-    /// Active logical AddFile actions, including deletion-vector identities.
-    Files,
-    /// Retained, reconciled RemoveFile actions; retention can remove old tombstones.
-    Tombstones,
-    /// Current metaData action, including schema and table configuration.
-    Metadata,
-    /// Current protocol action; feature lists are explicit, not inferred.
-    Protocol,
-    /// Latest retained SetTransaction per application ID.
-    Transactions,
-    /// Latest live domainMetadata per domain; removed domains are absent.
-    DomainMetadata,
-    /// File statistics grouped by logical partition values.
-    // TODO: Aggregate active-file statistics by logical partition for this relation.
-    Partitions,
-    /// Row-level change data over a version/timestamp range (including inferred changes).
-    // TODO: Expose the change-data reader through a relation with version/timestamp bounds.
-    Changes,
-    /// Retained JSON commit actions, with their commit versions.
-    // TODO: Expose retained commit actions without losing their original versions.
-    LogEntries,
-    /// Complete classic, multipart, or v2 checkpoints and the last-checkpoint hint.
-    // TODO: Expose complete checkpoint metadata and the last-checkpoint hint.
-    Checkpoints,
-    /// Sidecars referenced by retained v2 checkpoints, not arbitrary directory contents.
-    // TODO: Resolve sidecar references from retained v2 checkpoints for this relation.
-    Sidecars,
-    /// Per-version .crc statistics; these are optional and are not commit authority.
-    // TODO: Expose optional checksum artifacts with their source versions.
-    Checksums,
-    /// Compacted JSON log ranges, which do not preserve commit provenance.
-    // TODO: Expose retained log-compaction ranges without synthesizing commit history.
-    LogCompactions,
 }
 
-impl DeltaMetadataRelationType {
-    pub const ALL: &'static [Self] = &[
-        Self::Detail,
-        Self::History,
-        Self::Files,
-        Self::Tombstones,
-        Self::Metadata,
-        Self::Protocol,
-        Self::Transactions,
-        Self::DomainMetadata,
-        Self::Partitions,
-        Self::Changes,
-        Self::LogEntries,
-        Self::Checkpoints,
-        Self::Sidecars,
-        Self::Checksums,
-        Self::LogCompactions,
-    ];
-
-    pub fn parse(name: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|kind| kind.name().eq_ignore_ascii_case(name))
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Detail => "detail",
-            Self::History => "history",
-            Self::Files => "files",
-            Self::Tombstones => "tombstones",
-            Self::Metadata => "metadata",
-            Self::Protocol => "protocol",
-            Self::Transactions => "transactions",
-            Self::DomainMetadata => "domain_metadata",
-            Self::Partitions => "partitions",
-            Self::Changes => "changes",
-            Self::LogEntries => "log_entries",
-            Self::Checkpoints => "checkpoints",
-            Self::Sidecars => "sidecars",
-            Self::Checksums => "checksums",
-            Self::LogCompactions => "log_compactions",
-        }
-    }
-
-    pub fn is_supported(self) -> bool {
-        matches!(
-            self,
-            Self::Detail
-                | Self::History
-                | Self::Files
-                | Self::Tombstones
-                | Self::Metadata
-                | Self::Protocol
-                | Self::Transactions
-                | Self::DomainMetadata
-        )
-    }
-
-    pub fn unsupported_reason(self) -> String {
-        format!(
-            "Delta metadata table '{}' is recognized but not implemented",
-            self.name()
-        )
-    }
-
-    pub(crate) fn schema(self) -> DeltaResult<SchemaRef> {
-        let action = match self {
-            Self::Detail => return Ok(detail_schema()),
-            Self::History => return Ok(history_schema()),
-            Self::Files => add_struct_type(),
-            Self::Tombstones => remove_struct_type(),
-            Self::Metadata => metadata_struct_type(),
-            Self::Protocol => protocol_struct_type(),
-            Self::Transactions => transaction_struct_type(),
-            Self::DomainMetadata => domain_metadata_struct_type(),
-            _ => return Err(super::DeltaError::generic(self.unsupported_reason())),
-        };
-        Ok(Arc::new(Schema::try_from(&action)?))
-    }
-}
-
-/// Table utilities and protocol checkpoint/log-compaction maintenance.
-/// Ordinary CREATE/ALTER/DROP and row-level DML keep their existing SQL interfaces.
+/// Internal descriptors for Delta Spark SQL commands, not public CALL procedures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DeltaProcedureType {
+pub(crate) enum DeltaCommandType {
     DescribeDetail,
     DescribeHistory,
-    /// FULL candidate discovery, retention checks, dry run, and deletion.
     Vacuum,
-    /// Bin packing and partition-predicate selection.
     Optimize,
-    /// Restore a version or timestamp by committing new add/remove actions.
-    // TODO: Implement RESTORE SQL and procedure planning, validation, and commits.
-    Restore,
-    /// Convert a supported external format in place.
-    // TODO: Implement CONVERT TO DELTA SQL and the conversion procedure.
-    ConvertToDelta,
-    /// Generate symlink-format manifests for external readers.
-    // TODO: Implement GENERATE SQL and the manifest-generation procedure.
-    Generate,
-    /// Clone a source snapshot into a separate target table.
-    // TODO: Implement SHALLOW CLONE SQL and procedure planning with source time travel.
-    Clone,
-    /// PURGE rewrites and UniForm compatibility upgrades.
-    // TODO: Implement REORG SQL and procedure execution for PURGE and UniForm upgrades.
-    Reorg,
-    // TODO: Expose validated protocol upgrades through delta.upgrade_table_protocol.
-    UpgradeTableProtocol,
-    // TODO: Expose feature enablement through delta.add_feature_support.
-    AddFeatureSupport,
-    /// Feature removal, checkpoint protection, and optional history truncation.
-    // TODO: Implement feature removal and history protection through delta.drop_feature.
-    DropFeature,
-    // TODO: Expose explicit checkpoint creation through delta.checkpoint.
-    Checkpoint,
-    // TODO: Expose validated log-compaction ranges through delta.compact_log.
-    CompactLog,
 }
 
-impl DeltaProcedureType {
-    pub const ALL: &'static [Self] = &[
-        Self::DescribeDetail,
-        Self::DescribeHistory,
-        Self::Vacuum,
-        Self::Optimize,
-        Self::Restore,
-        Self::ConvertToDelta,
-        Self::Generate,
-        Self::Clone,
-        Self::Reorg,
-        Self::UpgradeTableProtocol,
-        Self::AddFeatureSupport,
-        Self::DropFeature,
-        Self::Checkpoint,
-        Self::CompactLog,
-    ];
-
+impl DeltaCommandType {
     pub fn parse(name: &str) -> Option<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|kind| kind.name().eq_ignore_ascii_case(name))
+        [
+            Self::DescribeDetail,
+            Self::DescribeHistory,
+            Self::Vacuum,
+            Self::Optimize,
+        ]
+        .into_iter()
+        .find(|kind| kind.name().eq_ignore_ascii_case(name))
     }
 
     pub fn name(self) -> &'static str {
@@ -207,24 +45,7 @@ impl DeltaProcedureType {
             Self::DescribeHistory => "describe_history",
             Self::Vacuum => "vacuum",
             Self::Optimize => "optimize",
-            Self::Restore => "restore",
-            Self::ConvertToDelta => "convert_to_delta",
-            Self::Generate => "generate",
-            Self::Clone => "clone",
-            Self::Reorg => "reorg",
-            Self::UpgradeTableProtocol => "upgrade_table_protocol",
-            Self::AddFeatureSupport => "add_feature_support",
-            Self::DropFeature => "drop_feature",
-            Self::Checkpoint => "checkpoint",
-            Self::CompactLog => "compact_log",
         }
-    }
-
-    pub fn unsupported_reason(self) -> String {
-        format!(
-            "Delta procedure '{}' is recognized but not implemented",
-            self.name()
-        )
     }
 }
 

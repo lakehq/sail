@@ -7,7 +7,7 @@ use object_store::{Error as ObjectStoreError, ObjectStoreExt};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{MetadataState, timestamp_micros};
+use super::{InspectionState, timestamp_micros};
 use crate::delta_log::{
     list_delta_log_entries_from, parse_commit_version_from_location,
     version_uses_in_commit_timestamps,
@@ -25,7 +25,7 @@ struct HistoryRow {
 
 /// Prefer a published commit, then a catalog-ratified staged commit. Never discover staged
 /// commits by directory listing: unpublished files may not have been ratified.
-pub(super) fn staged_commit(state: &MetadataState, version: i64) -> Option<Path> {
+pub(super) fn staged_commit(state: &InspectionState, version: i64) -> Option<Path> {
     state
         .snapshot
         .load_config()
@@ -37,7 +37,7 @@ pub(super) fn staged_commit(state: &MetadataState, version: i64) -> Option<Path>
         .map(|commit| catalog_managed_commit_path(&commit.file_name))
 }
 
-pub(super) async fn last_modified(state: &MetadataState) -> DeltaResult<i64> {
+pub(super) async fn last_modified(state: &InspectionState) -> DeltaResult<i64> {
     let version = state.snapshot.version();
     let store = state.log_store.object_store(None);
     let meta = match store.head(&commit_path(version)).await {
@@ -52,7 +52,10 @@ pub(super) async fn last_modified(state: &MetadataState) -> DeltaResult<i64> {
     timestamp_micros(meta.last_modified.timestamp_millis())
 }
 
-pub(super) async fn batch(state: &MetadataState, limit: Option<usize>) -> DeltaResult<RecordBatch> {
+pub(super) async fn batch(
+    state: &InspectionState,
+    limit: Option<usize>,
+) -> DeltaResult<RecordBatch> {
     let schema = history_schema();
     if limit == Some(0) {
         return Ok(RecordBatch::new_empty(schema));

@@ -467,7 +467,7 @@ mod tests {
     use super::*;
     use crate::delta_log::{StorageConfig, default_logstore};
     use crate::snapshot::DeltaSnapshotConfig;
-    use crate::spec::inspection::DeltaProcedureType;
+    use crate::spec::inspection::DeltaCommandType;
     use crate::spec::{DataType, Metadata, Protocol, SaveMode, StructField, StructType};
 
     #[tokio::test]
@@ -551,7 +551,7 @@ mod tests {
                     },
                 )
                 .await?;
-            let procedure = super::super::descriptor(DeltaProcedureType::Optimize).unwrap();
+            let procedure = super::super::descriptor(DeltaCommandType::Optimize);
             let invocation = LakeProcedureInvocation {
                 arguments: vec![
                     sail_common_datafusion::lakeprocedure::LakeProcedureValue::Null;

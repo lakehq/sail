@@ -15,7 +15,27 @@ data:
 ---
 name: "test_inspection_plans"
 data:
-  CALL delta.describe_history('delta_inspection', 1): |-
+  DESCRIBE DETAIL delta_inspection: |-
+    == Parsed Logical Plan ==
+    LakeProcedure: delta.describe_detail
+      Projection: delta_inspection.format AS format, delta_inspection.id AS id, delta_inspection.name AS name, delta_inspection.description AS description, delta_inspection.location AS location, delta_inspection.createdAt AS createdAt, delta_inspection.lastModified AS lastModified, delta_inspection.partitionColumns AS partitionColumns, delta_inspection.clusteringColumns AS clusteringColumns, delta_inspection.numFiles AS numFiles, delta_inspection.sizeInBytes AS sizeInBytes, delta_inspection.properties AS properties, delta_inspection.minReaderVersion AS minReaderVersion, delta_inspection.minWriterVersion AS minWriterVersion, delta_inspection.tableFeatures AS tableFeatures
+        TableScan: delta_inspection
+
+    == Analyzed Logical Plan ==
+    format: Utf8, id: Utf8, name: Utf8, description: Utf8, location: Utf8, createdAt: Timestamp(µs, "UTC"), lastModified: Timestamp(µs, "UTC"), partitionColumns: List(Utf8, field: 'element'), clusteringColumns: List(Utf8, field: 'element'), numFiles: Int64, sizeInBytes: Int64, properties: Map("entries": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), minReaderVersion: Int32, minWriterVersion: Int32, tableFeatures: List(Utf8, field: 'element')
+    LakeProcedure: delta.describe_detail
+      Projection: delta_inspection.format AS format, delta_inspection.id AS id, delta_inspection.name AS name, delta_inspection.description AS description, delta_inspection.location AS location, delta_inspection.createdAt AS createdAt, delta_inspection.lastModified AS lastModified, delta_inspection.partitionColumns AS partitionColumns, delta_inspection.clusteringColumns AS clusteringColumns, delta_inspection.numFiles AS numFiles, delta_inspection.sizeInBytes AS sizeInBytes, delta_inspection.properties AS properties, delta_inspection.minReaderVersion AS minReaderVersion, delta_inspection.minWriterVersion AS minWriterVersion, delta_inspection.tableFeatures AS tableFeatures
+        TableScan: delta_inspection
+
+    == Optimized Logical Plan ==
+    LakeProcedure: delta.describe_detail
+      Projection: delta_inspection.format AS format, delta_inspection.id AS id, delta_inspection.name AS name, delta_inspection.description AS description, delta_inspection.location AS location, delta_inspection.createdAt AS createdAt, delta_inspection.lastModified AS lastModified, delta_inspection.partitionColumns AS partitionColumns, delta_inspection.clusteringColumns AS clusteringColumns, delta_inspection.numFiles AS numFiles, delta_inspection.sizeInBytes AS sizeInBytes, delta_inspection.properties AS properties, delta_inspection.minReaderVersion AS minReaderVersion, delta_inspection.minWriterVersion AS minWriterVersion, delta_inspection.tableFeatures AS tableFeatures
+        TableScan: delta_inspection projection=[format, id, name, description, location, createdAt, lastModified, partitionColumns, clusteringColumns, numFiles, sizeInBytes, properties, minReaderVersion, minWriterVersion, tableFeatures]
+
+    == Physical Plan ==
+    LakeProcedureExec: lake_source=delta, procedure=describe_detail, invocation_id=<invocation_id>
+      DataSourceExec: partitions=1, partition_sizes=[1]
+  DESCRIBE HISTORY delta_inspection LIMIT 1: |-
     == Parsed Logical Plan ==
     LakeProcedure: delta.describe_history
       Projection: delta_inspection.version AS version, delta_inspection.timestamp AS timestamp, delta_inspection.userId AS userId, delta_inspection.userName AS userName, delta_inspection.operation AS operation, delta_inspection.operationParameters AS operationParameters, delta_inspection.job AS job, delta_inspection.notebook AS notebook, delta_inspection.clusterId AS clusterId, delta_inspection.readVersion AS readVersion, delta_inspection.isolationLevel AS isolationLevel, delta_inspection.isBlindAppend AS isBlindAppend, delta_inspection.operationMetrics AS operationMetrics, delta_inspection.userMetadata AS userMetadata, delta_inspection.engineInfo AS engineInfo
@@ -38,35 +58,3 @@ data:
     == Physical Plan ==
     LakeProcedureExec: lake_source=delta, procedure=describe_history, invocation_id=<invocation_id>
       DataSourceExec: partitions=1, partition_sizes=[1]
-  SELECT count(*) FROM delta_inspection.files WHERE size > 0: |-
-    == Parsed Logical Plan ==
-    Projection: count(Int64(1)) AS #11
-      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-        Filter: delta_inspection.files.#2 > Int32(0)
-          Projection: delta_inspection.files.path AS #0, delta_inspection.files.partitionValues AS #1, delta_inspection.files.size AS #2, delta_inspection.files.modificationTime AS #3, delta_inspection.files.dataChange AS #4, delta_inspection.files.stats AS #5, delta_inspection.files.tags AS #6, delta_inspection.files.deletionVector AS #7, delta_inspection.files.baseRowId AS #8, delta_inspection.files.defaultRowCommitVersion AS #9, delta_inspection.files.clusteringProvider AS #10
-            TableScan: delta_inspection.files
-
-    == Analyzed Logical Plan ==
-    #11: Int64
-    Projection: count(Int64(1)) AS #11
-      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-        Filter: delta_inspection.files.#2 > CAST(Int32(0) AS Int64)
-          Projection: delta_inspection.files.path AS #0, delta_inspection.files.partitionValues AS #1, delta_inspection.files.size AS #2, delta_inspection.files.modificationTime AS #3, delta_inspection.files.dataChange AS #4, delta_inspection.files.stats AS #5, delta_inspection.files.tags AS #6, delta_inspection.files.deletionVector AS #7, delta_inspection.files.baseRowId AS #8, delta_inspection.files.defaultRowCommitVersion AS #9, delta_inspection.files.clusteringProvider AS #10
-            TableScan: delta_inspection.files
-
-    == Optimized Logical Plan ==
-    Projection: count(Int64(1)) AS #11
-      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-        Projection:
-          Filter: delta_inspection.files.size > Int64(0)
-            TableScan: delta_inspection.files projection=[size]
-
-    == Physical Plan ==
-    ProjectionExec: expr=[#11@0 as count(1)]
-      ProjectionExec: expr=[count(Int64(1))@0 as #11]
-        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
-          CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
-              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                FilterExec: size@0 > 0, projection=[]
-                  DataSourceExec: partitions=1, partition_sizes=[1]

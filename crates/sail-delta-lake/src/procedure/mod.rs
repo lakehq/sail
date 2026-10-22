@@ -1,3 +1,16 @@
+//! Native Delta Spark commands reuse the shared procedure execution machinery.
+//!
+//! TODO: Consider Sail-only `CALL delta.describe_detail(...)`, `CALL delta.describe_history(...)`,
+//! `CALL delta.optimize(...)`, and `CALL delta.vacuum(...)` aliases for the native SQL commands.
+//! TODO: Consider `CALL delta.checkpoint(...)` and `CALL delta.compact_log(...)` for explicit
+//! log maintenance, `CALL delta.upgrade_table_protocol(...)` for validated protocol upgrades,
+//! and `CALL delta.add_feature_support(...)` / `CALL delta.drop_feature(...)` for feature changes.
+//! TODO: Implement native RESTORE, CONVERT TO DELTA, GENERATE, SHALLOW CLONE, and REORG before
+//! considering `CALL delta.restore(...)`, `CALL delta.convert_to_delta(...)`,
+//! `CALL delta.generate(...)`, `CALL delta.clone(...)`, and `CALL delta.reorg(...)` aliases.
+//! Native ALTER TABLE DROP FEATURE also needs feature-removal and history-protection support.
+//! All CALL aliases above are intentionally deferred and are not registered.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -11,9 +24,9 @@ use sail_common_datafusion::lakeprocedure::{
 };
 
 use crate::DeltaLakeSource;
-use crate::metadata_relation::{load_state, memory_source, record_batch};
+use crate::inspection::{load_state, memory_source, record_batch};
 use crate::spec::inspection::{
-    DeltaMetadataRelationType, DeltaProcedureType, detail_schema, history_schema, optimize_schema,
+    DeltaCommandType, DeltaInspectionType, detail_schema, history_schema, optimize_schema,
     vacuum_schema,
 };
 
@@ -28,20 +41,19 @@ pub use rewrite_exec::DeltaOptimizeRewriteExec;
 
 #[async_trait]
 impl LakeProcedureProvider for DeltaLakeSource {
+    fn supports_sql_call(&self) -> bool {
+        false
+    }
+
     fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution {
         // A format-owned namespace keeps overlapping utility names independent of provider order.
         if namespace.len() != 1 || !namespace[0].eq_ignore_ascii_case("delta") {
             return LakeProcedureResolution::Unrecognized;
         }
-        let Some(kind) = DeltaProcedureType::parse(name) else {
+        let Some(kind) = DeltaCommandType::parse(name) else {
             return LakeProcedureResolution::Unrecognized;
         };
-        match descriptor(kind) {
-            Some(procedure) => LakeProcedureResolution::Supported(procedure),
-            None => LakeProcedureResolution::Unsupported {
-                reason: kind.unsupported_reason(),
-            },
-        }
+        LakeProcedureResolution::Supported(descriptor(kind))
     }
 
     async fn plan_procedure(
@@ -80,9 +92,9 @@ impl LakeProcedureProvider for DeltaLakeSource {
                 },
             )));
         }
-        let kind = match DeltaProcedureType::parse(&call.invocation.procedure.name) {
-            Some(DeltaProcedureType::DescribeDetail) => DeltaMetadataRelationType::Detail,
-            Some(DeltaProcedureType::DescribeHistory) => DeltaMetadataRelationType::History,
+        let kind = match DeltaCommandType::parse(&call.invocation.procedure.name) {
+            Some(DeltaCommandType::DescribeDetail) => DeltaInspectionType::Detail,
+            Some(DeltaCommandType::DescribeHistory) => DeltaInspectionType::History,
             _ => {
                 return not_impl_err!(
                     "Delta procedure '{}' is not implemented",
@@ -101,7 +113,7 @@ impl LakeProcedureProvider for DeltaLakeSource {
         let state = load_state(session, *info, kind).await?;
         let source = memory_source(record_batch(&state, kind, limit).await?)?;
         let mut builder = LogicalPlanBuilder::scan("delta_inspection", source, None)?;
-        if kind == DeltaMetadataRelationType::History {
+        if kind == DeltaInspectionType::History {
             builder = builder.sort(vec![col("version").sort(false, false)])?;
         }
         // The scan qualifier is internal; a procedure's result has unqualified fields.
@@ -117,21 +129,21 @@ impl LakeProcedureProvider for DeltaLakeSource {
     }
 }
 
-fn descriptor(kind: DeltaProcedureType) -> Option<LakeProcedure> {
+fn descriptor(kind: DeltaCommandType) -> LakeProcedure {
     let mut parameters = vec![LakeProcedureParameter::required(
         "table",
         LakeProcedureDataType::Utf8,
     )];
     let schema = match kind {
-        DeltaProcedureType::DescribeDetail => detail_schema(),
-        DeltaProcedureType::DescribeHistory => {
+        DeltaCommandType::DescribeDetail => detail_schema(),
+        DeltaCommandType::DescribeHistory => {
             parameters.push(LakeProcedureParameter::optional(
                 "limit",
                 LakeProcedureDataType::Int32,
             ));
             history_schema()
         }
-        DeltaProcedureType::Optimize => {
+        DeltaCommandType::Optimize => {
             parameters.extend([
                 LakeProcedureParameter::optional("predicate", LakeProcedureDataType::SqlPredicate),
                 LakeProcedureParameter::optional("full", LakeProcedureDataType::Boolean),
@@ -139,7 +151,7 @@ fn descriptor(kind: DeltaProcedureType) -> Option<LakeProcedure> {
             ]);
             optimize_schema()
         }
-        DeltaProcedureType::Vacuum => {
+        DeltaCommandType::Vacuum => {
             parameters.extend([
                 LakeProcedureParameter::optional("retention_hours", LakeProcedureDataType::Utf8),
                 LakeProcedureParameter::optional("dry_run", LakeProcedureDataType::Boolean),
@@ -147,9 +159,8 @@ fn descriptor(kind: DeltaProcedureType) -> Option<LakeProcedure> {
             ]);
             vacuum_schema()
         }
-        _ => return None,
     };
-    Some(LakeProcedure {
+    LakeProcedure {
         name: kind.name().to_string(),
         parameters,
         output: schema
@@ -163,10 +174,7 @@ fn descriptor(kind: DeltaProcedureType) -> Option<LakeProcedure> {
                 )
             })
             .collect(),
-        access: if matches!(
-            kind,
-            DeltaProcedureType::Optimize | DeltaProcedureType::Vacuum
-        ) {
+        access: if matches!(kind, DeltaCommandType::Optimize | DeltaCommandType::Vacuum) {
             LakeProcedureAccess::MetadataCommit
         } else {
             LakeProcedureAccess::MetadataRead
@@ -174,7 +182,7 @@ fn descriptor(kind: DeltaProcedureType) -> Option<LakeProcedure> {
         target: LakeProcedureTarget::TableOrPath {
             parameter: "table".to_string(),
         },
-    })
+    }
 }
 
 fn optional_string<'a>(

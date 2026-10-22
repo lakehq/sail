@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use datafusion::arrow::array::RecordBatch;
 use serde::{Deserialize, Serialize};
 
-use super::{MetadataState, history, timestamp_micros};
+use super::{InspectionState, history, timestamp_micros};
 use crate::schema::logical_to_physical_arrow_paths;
 use crate::spec::inspection::detail_schema;
 use crate::spec::{DeltaError, DeltaResult, TableFeature};
@@ -28,7 +28,7 @@ struct DetailRow<'a> {
     table_features: BTreeSet<&'a str>,
 }
 
-pub(super) async fn batch(state: &MetadataState) -> DeltaResult<RecordBatch> {
+pub(super) async fn batch(state: &InspectionState) -> DeltaResult<RecordBatch> {
     let snapshot = &state.snapshot;
     let metadata = snapshot.metadata();
     let protocol = snapshot.protocol();
@@ -62,7 +62,7 @@ pub(super) async fn batch(state: &MetadataState) -> DeltaResult<RecordBatch> {
     serde_arrow::to_record_batch(detail_schema().fields(), &[row]).map_err(DeltaError::generic_err)
 }
 
-fn clustering_columns(state: &MetadataState) -> DeltaResult<Vec<String>> {
+fn clustering_columns(state: &InspectionState) -> DeltaResult<Vec<String>> {
     let snapshot = &state.snapshot;
     if !snapshot
         .protocol()

@@ -29,12 +29,36 @@ use crate::procedure::LakeProcedureNode;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
+#[derive(Clone, Copy)]
+enum ProcedureSyntax {
+    Call,
+    NativeCommand,
+}
+
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_call_procedure(
         &self,
         procedure_name: spec::ObjectName,
         arguments: Vec<spec::Expr>,
         named_arguments: Vec<(spec::Identifier, spec::Expr)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        self.resolve_lake_procedure(
+            procedure_name,
+            arguments,
+            named_arguments,
+            ProcedureSyntax::Call,
+            state,
+        )
+        .await
+    }
+
+    async fn resolve_lake_procedure(
+        &self,
+        procedure_name: spec::ObjectName,
+        arguments: Vec<spec::Expr>,
+        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
+        syntax: ProcedureSyntax,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let procedure_parts = procedure_name
@@ -61,9 +85,17 @@ impl PlanResolver<'_> {
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let mut resolved_procedure = None;
         for (lake_source_name, lake_source) in registry.lake_sources()? {
+            if matches!(syntax, ProcedureSyntax::NativeCommand)
+                && !lake_source_name.eq_ignore_ascii_case(procedure_namespace[0].as_str())
+            {
+                continue;
+            }
             let Some(provider) = lake_source.procedure_provider() else {
                 continue;
             };
+            if matches!(syntax, ProcedureSyntax::Call) && !provider.supports_sql_call() {
+                continue;
+            }
             match provider.resolve_procedure(&procedure_namespace, procedure_leaf) {
                 LakeProcedureResolution::Supported(procedure) => {
                     resolved_procedure = Some((lake_source_name, provider, procedure));
@@ -337,12 +369,13 @@ impl PlanResolver<'_> {
             .map(|part| format!("`{}`", part.replace('`', "``")))
             .collect::<Vec<_>>()
             .join(".");
-        self.resolve_command_call_procedure(
+        self.resolve_lake_procedure(
             spec::ObjectName::from([catalog, format, procedure]),
             vec![spec::Expr::Literal(spec::Literal::Utf8 {
                 value: Some(table),
             })],
             arguments,
+            ProcedureSyntax::NativeCommand,
             state,
         )
         .await
