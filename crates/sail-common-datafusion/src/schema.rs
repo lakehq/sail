@@ -8,13 +8,13 @@ use crate::array::record_batch::{
     cast_array_positionally_recursively, cast_record_batch_positionally,
 };
 
-pub fn normalize_field_with_options(field: &FieldRef, large_var_types: bool) -> FieldRef {
-    Arc::new(
-        field
-            .as_ref()
-            .clone()
-            .with_data_type(normalize_data_type(field.data_type(), large_var_types)),
-    )
+pub fn normalize_record_batch(batch: &RecordBatch, large_var_types: bool) -> Result<RecordBatch> {
+    let schema = Arc::new(normalize_schema(batch.schema().as_ref(), large_var_types));
+    if schema.as_ref() == batch.schema().as_ref() {
+        Ok(batch.clone())
+    } else {
+        cast_record_batch_positionally(batch.clone(), schema)
+    }
 }
 
 pub fn normalize_schema(schema: &Schema, large_var_types: bool) -> Schema {
@@ -28,20 +28,20 @@ pub fn normalize_schema(schema: &Schema, large_var_types: bool) -> Schema {
     )
 }
 
+pub fn normalize_field_with_options(field: &FieldRef, large_var_types: bool) -> FieldRef {
+    Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(normalize_data_type(field.data_type(), large_var_types)),
+    )
+}
+
 pub fn normalize_array(array: &ArrayRef, large_var_types: bool) -> Result<ArrayRef> {
     cast_array_positionally_recursively(
         array,
         &normalize_data_type(array.data_type(), large_var_types),
     )
-}
-
-pub fn normalize_record_batch(batch: &RecordBatch, large_var_types: bool) -> Result<RecordBatch> {
-    let schema = Arc::new(normalize_schema(batch.schema().as_ref(), large_var_types));
-    if schema.as_ref() == batch.schema().as_ref() {
-        Ok(batch.clone())
-    } else {
-        cast_record_batch_positionally(batch.clone(), schema)
-    }
 }
 
 pub fn normalize_data_type(data_type: &DataType, large_var_types: bool) -> DataType {
