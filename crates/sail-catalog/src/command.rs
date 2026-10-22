@@ -828,7 +828,9 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::TruncateTable { table } => {
-                let status = manager.get_table(&table).await?;
+                // Resolve views first, as Spark does, so that a temporary view cannot
+                // redirect the command to a table of the same name.
+                let status = manager.get_table_or_view(&table).await?;
                 let TableKind::Table {
                     columns,
                     comment,
@@ -842,24 +844,43 @@ impl CatalogCommand {
                     is_external,
                 } = status.kind
                 else {
-                    return Err(CatalogError::NotSupported(
-                        "TRUNCATE TABLE is only supported on tables, not views".to_string(),
-                    ));
+                    return Err(CatalogError::NotSupported(format!(
+                        "[EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE] 'TRUNCATE TABLE' expects a table but `{}` is a view.",
+                        status.name
+                    )));
                 };
+                // Like Spark's `TruncateTableCommand` (`CANNOT_TRUNCATE_EXTERNAL_TABLE`), the data
+                // of an external table, which includes every table with a `LOCATION`, is never
+                // deleted.
+                if is_external {
+                    return Err(CatalogError::NotSupported(format!(
+                        "[CANNOT_TRUNCATE_EXTERNAL_TABLE] Operation not allowed: TRUNCATE TABLE on external tables: `{}`.",
+                        status.name
+                    )));
+                }
+                if is_lakehouse_format(&format) {
+                    return Err(CatalogError::NotSupported(
+                        "TRUNCATE TABLE is not supported for tables with \
+                         transaction logs (Delta Lake, Iceberg). \
+                         Use format-specific overwrite operations instead."
+                            .to_string(),
+                    ));
+                }
+                let partition_columns = partition_by
+                    .iter()
+                    .map(|field| field.column.clone())
+                    .collect::<Vec<_>>();
                 if let Some(ref loc) = location {
+                    // Like Spark, the location is not percent-decoded: `file:/a%20b` is
+                    // the directory literally named `a%20b`.
                     let local_path = loc
                         .strip_prefix("file://")
                         .or_else(|| loc.strip_prefix("file:"))
-                        .or_else(|| {
-                            if loc.starts_with('/') {
-                                Some(loc.as_str())
-                            } else {
-                                None
-                            }
-                        });
+                        .or_else(|| loc.starts_with('/').then_some(loc.as_str()))
+                        .map(str::to_string);
                     match local_path {
                         Some(path) => {
-                            let dir = std::path::Path::new(path);
+                            let dir = std::path::Path::new(&path);
                             if !dir.is_absolute() || path.is_empty() {
                                 return Err(CatalogError::External(format!(
                                     "TRUNCATE TABLE requires an absolute local path, got: {path}"
@@ -870,10 +891,18 @@ impl CatalogCommand {
                                     "TRUNCATE TABLE on filesystem root is not allowed: {path}"
                                 )));
                             }
-                            if dir.exists() {
+                            {
                                 let dir = dir.to_path_buf();
-                                let path = path.to_string();
+                                let path = path.clone();
                                 tokio::task::spawn_blocking(move || -> CatalogResult<()> {
+                                    // Like Spark, recreate the directory if it is gone.
+                                    if !dir.exists() {
+                                        return std::fs::create_dir_all(&dir).map_err(|e| {
+                                            CatalogError::External(format!(
+                                                "failed to create table directory at {path}: {e}"
+                                            ))
+                                        });
+                                    }
                                     let has_delta = dir.join("_delta_log").exists();
                                     // Iceberg tables have a `metadata/version-hint.text` file
                                     // (or `.iceberg` marker). A plain `metadata/` subdirectory
@@ -889,17 +918,20 @@ impl CatalogCommand {
                                                 .to_string(),
                                         ));
                                     }
-                                    std::fs::remove_dir_all(&dir).map_err(|e| {
+                                    // Like Spark's `TruncateTableCommand`, a partitioned table only
+                                    // loses its partition directories; otherwise the table
+                                    // directory is replaced by an empty one with the same
+                                    // permissions.
+                                    if partition_columns.is_empty() {
+                                        replace_with_empty_dir(&dir)
+                                    } else {
+                                        clear_partition_dirs(&dir, &partition_columns)
+                                    }
+                                    .map_err(|e| {
                                         CatalogError::External(format!(
-                                            "failed to remove table directory at {path}: {e}"
+                                            "failed to truncate table directory at {path}: {e}"
                                         ))
-                                    })?;
-                                    std::fs::create_dir_all(&dir).map_err(|e| {
-                                        CatalogError::External(format!(
-                                            "failed to recreate table directory at {path}: {e}"
-                                        ))
-                                    })?;
-                                    Ok(())
+                                    })
                                 })
                                 .await
                                 .map_err(|e| {
@@ -1259,6 +1291,58 @@ impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatu
     fn identity(&self) -> Option<&sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
         self.identity.as_ref()
     }
+}
+
+/// Empties the partition directories of a Hive-partitioned table (`col=value/...`, one level per
+/// partition column) and leaves everything else under `dir` in place, as Spark's
+/// `TruncateTableCommand` does with the partition locations it gets from the catalog.
+fn clear_partition_dirs(dir: &std::path::Path, columns: &[String]) -> std::io::Result<()> {
+    let Some((column, rest)) = columns.split_first() else {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(entry.path())?;
+            } else {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        return Ok(());
+    };
+    let prefix = format!("{column}=");
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let is_partition = entry.file_type()?.is_dir()
+            && name
+                .to_str()
+                .and_then(|n| n.get(..prefix.len()))
+                .is_some_and(|head| head.eq_ignore_ascii_case(&prefix));
+        if is_partition {
+            clear_partition_dirs(&entry.path(), rest)?;
+        }
+    }
+    Ok(())
+}
+
+/// Replaces `dir` with an empty directory that has the same permissions. The old contents are
+/// only deleted once the new directory is in place, so a failure leaves the data where it was.
+fn replace_with_empty_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    let permissions = std::fs::metadata(dir)?.permissions();
+    let backup = {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        dir.with_file_name(format!(".{name}.truncate-{}-{nanos}", std::process::id()))
+    };
+    std::fs::rename(dir, &backup)?;
+    let created = std::fs::create_dir(dir).and_then(|()| std::fs::set_permissions(dir, permissions));
+    if let Err(e) = created {
+        let _ = std::fs::remove_dir(dir);
+        std::fs::rename(&backup, dir)?;
+        return Err(e);
+    }
+    std::fs::remove_dir_all(&backup)
 }
 
 fn catalog_sync_alter_options(

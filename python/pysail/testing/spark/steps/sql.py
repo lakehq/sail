@@ -64,6 +64,18 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
     return variables
 
 
+@given(parsers.parse("variable {name} for location of table {table}"), target_fixture="variables")
+def variable_for_table_location(name: str, table: str, spark, variables: dict) -> dict:
+    """Defines a variable for the directory of a table, taken from `DESCRIBE EXTENDED`.
+
+    The location is used as is, without percent-decoding, as Spark does.
+    """
+    rows = spark.sql(f"DESCRIBE EXTENDED {table}").collect()
+    location = next(r.data_type for r in rows if r.col_name == "Location")
+    variables[name] = PathWrapper(Path(location.removeprefix("file:")))
+    return variables
+
+
 @given(parsers.parse("variable {name} for delta log of {location_var}"), target_fixture="variables")
 def variable_for_delta_log(name: str, location_var: str, variables: dict) -> dict:
     """Defines a variable pointing to the _delta_log subdirectory of a Delta table location."""
