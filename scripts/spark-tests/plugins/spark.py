@@ -280,6 +280,8 @@ _PARTITIONING_DIFFERENCE = (
     "while Sail keeps range and local relations in one partition by default"
 )
 
+_PERSISTENT_FUNCTIONS = "Creates a persistent function backed by a JVM class, which Sail cannot run"
+
 SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_can_create_multiple_sessions_to_different_remotes"],
@@ -740,6 +742,48 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["pyspark.sql.catalog.Catalog.refreshByPath"],
         reason=_CACHE_MATERIALIZATION,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_time_window_functions"],
+        reason=(
+            "Shows the window_time of a grouping by window without ordering the rows, "
+            "so the row order depends on the hash aggregation of Spark"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_dataframe.py", "DataFrameParityTests", "test_input_files"],
+        reason=(
+            "Expects one written file per partition of the input range, "
+            "while the Sail writer writes one file per partition of the default parallelism"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_readwriter.py", "ReadwriterParityTests", "test_bucketed_write"],
+        reason="Bucketed writes are not supported",
+        spark_major_version_less_than=4,
+    ),
+    *(
+        TestMarker(
+            keywords=["test_parity_catalog.py", "CatalogParityTests", test_name],
+            reason=_PERSISTENT_FUNCTIONS,
+            spark_major_version_less_than=4,
+        )
+        for test_name in ["test_function_exists", "test_get_function", "test_list_functions"]
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.getFunction"],
+        reason=_PERSISTENT_FUNCTIONS,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.recoverPartitions"],
+        reason=(
+            "Expects the partitions to be missing until they are recovered, "
+            "while Sail discovers the partitions from the files when the table is read"
+        ),
         spark_major_version_less_than=4,
     ),
 ]

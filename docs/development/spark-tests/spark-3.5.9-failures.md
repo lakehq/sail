@@ -114,15 +114,7 @@ No persistent function can exist, so this matches Spark.
 Qualified names are still rejected for `DROP TEMPORARY FUNCTION`.
 `test_list_functions` now fails with the same `CREATE FUNCTION` parse error as the other tests.
 
-**Proposed fix.** The tests only check function metadata (`functionExists`, `getFunction`, and `listFunctions`), and they never call the function.
-Sail cannot run JVM classes, so there are two options:
-
-1. Parse `CREATE [OR REPLACE] [TEMPORARY] FUNCTION [IF NOT EXISTS] name AS 'class' [USING JAR ...]` and return a clear "not supported" error that names JVM function classes.
-   The tests keep failing, but with an accurate message.
-2. Store persistent function metadata (name, database, and class name) in the memory catalog and report it from the catalog APIs, while invoking such a function fails.
-   This makes the four tests pass, but it lets users create functions that cannot be called.
-
-Option 1 is the smaller change, and option 2 needs a decision on whether metadata-only functions are acceptable.
+**Decision.** Sail cannot run JVM classes, so the four tests are skipped as known differences.
 
 ### Recovering Partitions
 
@@ -131,9 +123,14 @@ Option 1 is the smaller change, and option 2 needs a decision on whether metadat
 | doctest `recoverPartitions` | `PlanNode::RecoverPartitions` |
 
 **Root cause.** `CommandNode::RecoverPartitions` is not implemented in the plan resolver.
+The table in the doctest is also created with `OPTIONS (path ...)`, which Spark uses as the location of the table, while Sail ignored the option and created the table in the default location, so it had no data.
 
-**Proposed fix.** For the memory catalog, partitions are discovered from the file listing when the table is read, so the command could succeed as a no-op after checking that the table exists and is partitioned.
+**Fix (in this pull request).** For the memory catalog, partitions are discovered from the file listing when the table is read, so `recoverPartitions` (and `ALTER TABLE ... RECOVER PARTITIONS`) does nothing after checking that the table exists and is partitioned.
+A view or a table without partitions is rejected with an `AnalysisException`, as in Spark.
+`CREATE TABLE` uses the `path` option as the location when there is no `LOCATION` clause.
 For catalogs that store partitions (Hive Metastore and Glue), the command would need to list the table location and register the partitions it finds.
+
+The doctest is skipped as a known difference: it reads the table before recovering the partitions and expects no rows, while Sail finds the partitions from the files and returns the row.
 
 ## Statistics
 
@@ -353,6 +350,7 @@ The session is the earliest start and the latest end of its rows, and the rows w
 More than one time or session window in a grouping is rejected with Spark's error.
 The `session_window` checks of `test_time_window_functions` then pass.
 The test still fails in its last check, which shows the `window_time` of a grouping by `window` without ordering the rows, so the result depends on the order of Spark's hash aggregation.
+This is a known difference, and the test is skipped.
 
 ## Input Files and Hints
 
@@ -372,6 +370,7 @@ All four tests use `first()`.
 **Fix (in this pull request).** The rule passes the input file metadata through limits, and the `input_file_name` tests pass.
 
 For the file count, the writer would have to keep the number of partitions given to `range`, as Spark does.
+This is a known difference, and `test_input_files` is skipped.
 
 ### Join Hints
 
@@ -404,6 +403,7 @@ Sail plans the hinted join as DataFusion's `HashJoinExec: mode=CollectLeft`, whi
 The JDBC tests depend on a JVM JDBC driver, so they cannot pass with Sail's Python JDBC data source and are skipped.
 
 **Fix (in this pull request).** Inferred JSON fields are sorted by name, and `test_multi_paths` passes. ORC and bucketed writes are larger features.
+Bucketed writes are a known difference, and `test_bucketed_write` is skipped.
 
 `test_write_operations` failed because the CSV writer ignored `lineSep` (the reader supported it already). Fixed in this pull request: the CSV writer uses `lineSep` as the line terminator.
 The ORC data source is left for future work, and `test_orc` and `test_read_multiple_orc_file` are marked as skipped in `scripts/spark-tests/plugins/spark.py`.
@@ -441,8 +441,11 @@ A Python UDF whose return type is a UDT is rejected, because a UDT is only accep
 The reader now keeps the UDT of a field, and restores the UDTs from the Spark schema in the `org.apache.spark.sql.parquet.row.metadata` key of the file, which is how files written by Spark describe them (including UDTs in arrays, maps, and structs).
 `test_simple_udt_from_read` and `test_parquet_with_udt` pass. Sail does not write the Spark schema key yet, so Spark reads the UDT column of a file written by Sail as its SQL type.
 
-**Proposed fix (for Python UDFs).** Pass UDT input types to Python UDF workers, and allow a UDT as the return type of a Python UDF.
-The UDT of an argument is only in the Arrow field metadata, so it has to be passed to the UDF when it is created, and the plan codec for distributed execution has to carry it.
+**Fix (in this pull request, for Python UDFs).** A Python UDF receives the UDT object for an argument of a UDT, including UDTs in arrays, maps, and structs, as in Spark.
+The UDT of an argument is only in the Arrow field metadata, so the UDF gets the fields of its arguments when it is called, and the input schema sent to the PySpark 4 worker for Arrow-optimized UDFs is built from these fields.
+A UDT is also accepted as the return type of a Python UDF, including a UDF registered with `spark.udf.register`. The UDT of the result is kept in the metadata of the output field, which the plan codec carries for distributed execution.
+`collect_list` and `collect_set` keep the UDT of the collected values, which `test_complex_nested_udt_in_df` passes to a UDF.
+`test_udf_with_udt`, `test_complex_nested_udt_in_df`, and `test_udt_with_none` pass.
 
 ### Other Schema Differences
 
@@ -457,7 +460,12 @@ The UDT of an argument is only in the Arrow field metadata, so it has to be pass
 Microsecond timestamps are intentional in Sail, as noted in `normalize_datetime_dtypes` in the test utilities, so `test_to_pandas` is skipped.
 For `test_schema`, the types and nullability of all the queries are the same as in Spark. The difference is in the field metadata: Spark (both the classic session and Spark Connect) names an unaliased SQL expression that is not a column or a literal, such as `STRUCT(a, b)`, with the metadata `__autoGeneratedAlias: true`, which Sail does not set, and `StructType` equality compares the metadata.
 
-**Proposed fix (for `test_schema`).** Set the metadata on the fields of unaliased SQL select expressions, as Spark's `ResolveAliases` does, and remove it when a table is written, as Spark does, so that it does not reach the files and catalogs.
+**Fix (in this pull request, for `test_schema`).** An unaliased projection has the metadata `__autoGeneratedAlias: true`, as Spark's `ResolveAliases` sets it, unless the projection is a column, a field of a column, a cast of a column, a literal, or a generator.
+With Spark Connect, this applies to DataFrame projections and aggregations as well as SQL.
+The plan resolver marks the field, and the mark follows the field through subqueries and other projections of the field, and through the first input of a union, as the metadata does in Spark.
+The metadata is only added to the schema of the result, since a projection with field metadata in the logical plan prevents the physical optimizer from merging projections (and from pushing `input_file_name()` down to the file scan).
+`test_schema` passes.
+The metadata is not kept in temporary views, and not in Parquet files written with `DataFrame.write`, where Spark keeps it. As in Spark, it is not kept in tables.
 
 **Fix (in this pull request).** `to()` fills missing nullable fields with `NULL`, raises `NULLABLE_COLUMN_OR_FIELD` when a nullable column is assigned to a non-nullable field, and raises `INVALID_COLUMN_OR_FIELD_DATA_TYPE` when a column cannot be assigned to a field of that type.
 Spark's rule for the last check is `Cast.canANSIStoreAssign`: numeric types are converted to each other (including narrowing, such as `bigint` to `int`), every atomic type to a string, and date and timestamp types to each other, but a string is not converted to any other type.
