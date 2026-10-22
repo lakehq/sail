@@ -211,7 +211,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::SparkDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -273,6 +273,7 @@ use sail_function::scalar::vector::cosine_similarity::VectorCosineSimilarity;
 use sail_function::scalar::vector::inner_product::VectorInnerProduct;
 use sail_function::scalar::vector::l2_distance::VectorL2Distance;
 use sail_function::scalar::vector::norm::VectorNorm;
+use sail_function::scalar::vector::normalize::VectorNormalize;
 use sail_function::scalar::xml::from_xml::SparkFromXml;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
@@ -3684,6 +3685,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "vector_inner_product" => Ok(Arc::new(ScalarUDF::from(VectorInnerProduct::new()))),
             "vector_l2_distance" => Ok(Arc::new(ScalarUDF::from(VectorL2Distance::new()))),
             "vector_norm" => Ok(Arc::new(ScalarUDF::from(VectorNorm::new()))),
+            "vector_normalize" => Ok(Arc::new(ScalarUDF::from(VectorNormalize::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "coalesce" => Ok(Arc::new(ScalarUDF::from(CoalesceFunc::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
@@ -3765,7 +3767,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "xpath" => Ok(Arc::new(ScalarUDF::from(Xpath::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
-            "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
+            "spark_div" => Ok(Arc::new(ScalarUDF::from(SparkDiv::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
@@ -3804,7 +3806,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
             }
-            "spark_make_interval" | "make_interval" => {
+            "spark_make_interval" | "make_interval" | "try_make_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
             }
             "spark_make_ym_interval" | "make_ym_interval" => {
@@ -3894,6 +3896,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()
             || node_inner.is::<VectorNorm>()
+            || node_inner.is::<VectorNormalize>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
             || node_inner.is::<FormatStringFunc>()
@@ -3947,7 +3950,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
             || node_inner.is::<SparkHex>()
-            || node_inner.is::<SparkIntervalDiv>()
+            || node_inner.is::<SparkDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkVariantExplodeUdf>()
@@ -7373,6 +7376,16 @@ mod tests {
 
         assert!(decoded.inner().downcast_ref::<VectorNorm>().is_some());
         assert_eq!(decoded.name(), "vector_norm");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_normalize_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(VectorNormalize::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorNormalize>().is_some());
+        assert_eq!(decoded.name(), "vector_normalize");
 
         Ok(())
     }

@@ -315,12 +315,8 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
         assert rollback_by_time.current_snapshot_id == snapshot_ids[1]
         assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [1, 2]
 
-        def add_branches(metadata):
-            refs = metadata.setdefault("refs", {})
-            refs["audit"] = {"snapshot-id": snapshot_ids[0], "type": "branch"}
-            refs["tip"] = {"snapshot-id": snapshot_ids[2], "type": "branch"}
-
-        _edit_latest_metadata(table_path, add_branches)
+        spark.sql(f"ALTER TABLE {table_name} CREATE BRANCH audit AS OF VERSION {snapshot_ids[0]}")
+        spark.sql(f"ALTER TABLE {table_name} CREATE BRANCH tip AS OF VERSION {snapshot_ids[2]}")
         forwarded = spark.sql(
             f"CALL system.fast_forward(table => '{table_name}', branch => 'audit', to => 'tip')"
         ).first()

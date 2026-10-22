@@ -338,10 +338,7 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
     let trimmed = lower.trim();
 
     // Handle parameterized types: decimal(p,s)
-    if let Some(params) = trimmed
-        .strip_prefix("decimal(")
-        .and_then(|s| s.strip_suffix(')'))
-    {
+    if let Some(params) = trimmed.strip_circumfix("decimal(", ')') {
         let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
         return match parts.as_slice() {
             [p, s] => {

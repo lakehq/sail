@@ -513,8 +513,11 @@
 - key: partition_overwrite_mode
   description: |
     Controls the partition overwrite behavior when `overwrite` mode is `true`.
-  supported: false
+  supported: true
   rust_type: String
+  default:
+    value: "static"
+    parser: crate::options::parsers::parse_string
   scopes:
     - write
   origins:

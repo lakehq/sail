@@ -28,8 +28,7 @@ impl MetricsMode {
             _ => {}
         }
         if let Some(width) = mode
-            .strip_prefix("truncate(")
-            .and_then(|value| value.strip_suffix(')'))
+            .strip_circumfix("truncate(", ')')
             .filter(|value| !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit()))
             .and_then(|value| value.parse::<i32>().ok())
             .filter(|width| *width > 0)

@@ -17,7 +17,7 @@ mod arguments;
 mod descriptor;
 mod logical;
 mod rewrite_data_files;
-mod snapshot;
+pub(crate) mod snapshot;
 pub(crate) mod table;
 
 use arguments::{

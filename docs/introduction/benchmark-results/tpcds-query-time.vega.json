@@ -1,0 +1,119 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v6.json",
+  "width": 600,
+  "height": 200,
+  "data": [
+    {
+      "name": "table",
+      "url": {
+        "signal": "'_data/tpcds-query-time-' + replace(lower(dataset), ' ', '') + '.json'"
+      }
+    },
+    {
+      "name": "longest",
+      "source": "table",
+      "transform": [
+        {
+          "type": "window",
+          "sort": { "field": "time", "order": "descending" },
+          "ops": ["row_number"],
+          "as": ["rank"]
+        },
+        { "type": "filter", "expr": "datum.rank <= 3" }
+      ]
+    }
+  ],
+  "signals": [
+    {
+      "name": "ymax",
+      "update": "extent(pluck(data('table'), 'time'))[1] * 1.12"
+    }
+  ],
+  "title": {
+    "text": { "signal": "'Query Time (' + dataset + ')'" },
+    "frame": "group"
+  },
+  "scales": [
+    {
+      "name": "xscale",
+      "type": "band",
+      "domain": { "data": "table", "field": "query" },
+      "range": "width",
+      "padding": 0.2
+    },
+    {
+      "name": "yscale",
+      "type": "linear",
+      "domain": { "signal": "[0, ymax]" },
+      "range": "height",
+      "nice": true
+    }
+  ],
+  "axes": [
+    {
+      "orient": "bottom",
+      "scale": "xscale",
+      "values": [
+        "q1",
+        "q10",
+        "q20",
+        "q30",
+        "q40",
+        "q50",
+        "q60",
+        "q70",
+        "q80",
+        "q90",
+        "q99"
+      ],
+      "title": "Query"
+    },
+    {
+      "orient": "left",
+      "scale": "yscale",
+      "grid": true,
+      "title": "Query Time (s)"
+    }
+  ],
+  "marks": [
+    {
+      "type": "rect",
+      "from": { "data": "table" },
+      "encode": {
+        "enter": {
+          "x": { "scale": "xscale", "field": "query" },
+          "width": { "scale": "xscale", "band": 1 },
+          "y": { "scale": "yscale", "field": "time" },
+          "y2": { "scale": "yscale", "value": 0 },
+          "fill": { "value": "#3762E0" }
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": { "data": "longest" },
+      "encode": {
+        "enter": {
+          "x": { "scale": "xscale", "field": "query", "band": 0.5 },
+          "y": { "scale": "yscale", "field": "time", "offset": -3 },
+          "text": { "field": "query" },
+          "align": { "value": "center" },
+          "baseline": { "value": "bottom" },
+          "fontSize": { "value": 10 }
+        }
+      }
+    },
+    {
+      "type": "rect",
+      "encode": {
+        "enter": {
+          "x": { "value": 0.5 },
+          "x2": { "signal": "width", "offset": 0.5 },
+          "y": { "value": 0.5 },
+          "y2": { "signal": "height", "offset": 0.5 },
+          "stroke": { "value": "#888" }
+        }
+      }
+    }
+  ]
+}
