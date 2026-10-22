@@ -124,6 +124,8 @@ fn udt_metadata(spark_type: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used, clippy::panic)]
+
     use super::*;
 
     fn udt(field: &Field) -> Option<SparkUdtMetadata> {
