@@ -1,16 +1,347 @@
 use std::sync::Arc;
 
-use datafusion_common::DFSchemaRef;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_expr::logical_plan::{Filter, Projection};
-use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, expr_fn};
+use datafusion::functions::core::expr_fn::{get_field, named_struct};
+use datafusion::functions_aggregate::expr_fn::{count, first_value};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue};
+use datafusion_expr::logical_plan::{Filter, Limit, Projection, Sort};
+use datafusion_expr::{
+    BinaryExpr, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Operator, ScalarUDF,
+    SortExpr, expr_fn, ident, lit, when,
+};
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
+use sail_logical_plan::correlation::decorrelates;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::coerce_timestamp_in_subquery_pair;
 use crate::resolver::state::PlanResolverState;
+
+/// Projects the computed inner side of a correlated equality (e.g. `CAST(i.k AS BIGINT) = o.id`)
+/// below the filter so that the correlation key is a plain column. DataFusion groups the
+/// decorrelated subquery by the inner columns of the predicate, so inner values that are only
+/// equal after the computation would otherwise form separate groups and duplicate the outer row.
+fn project_correlated_keys(
+    plan: LogicalPlan,
+    state: &mut PlanResolverState,
+) -> PlanResult<LogicalPlan> {
+    let output = plan
+        .schema()
+        .columns()
+        .into_iter()
+        .map(Expr::Column)
+        .collect::<Vec<_>>();
+    let keep_output = !matches!(plan, LogicalPlan::Projection(_));
+    let plan = plan.transform_up(|plan| {
+        let LogicalPlan::Filter(filter) = plan else {
+            return Ok(Transformed::no(plan));
+        };
+        if !filter.predicate.contains_outer() {
+            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+        }
+        let mut keys = vec![];
+        let predicate = filter
+            .predicate
+            .clone()
+            .transform_up(|expr| {
+                let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                }) = &expr
+                else {
+                    return Ok(Transformed::no(expr));
+                };
+                let inner_is_left = match (left.contains_outer(), right.contains_outer()) {
+                    (false, true) => true,
+                    (true, false) => false,
+                    _ => return Ok(Transformed::no(expr)),
+                };
+                let inner = if inner_is_left { left } else { right };
+                if matches!(inner.as_ref(), Expr::Column(_)) || !inner.any_column_refs() {
+                    return Ok(Transformed::no(expr));
+                }
+                let name = state.register_field_name("");
+                keys.push(inner.as_ref().clone().alias(&name));
+                let key = Box::new(Expr::Column(Column::from_name(name)));
+                let (left, right) = if inner_is_left {
+                    (key, right.clone())
+                } else {
+                    (left.clone(), key)
+                };
+                Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                })))
+            })?
+            .data;
+        if keys.is_empty() {
+            return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+        }
+        let columns = filter
+            .input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        let input = LogicalPlanBuilder::from(Arc::unwrap_or_clone(filter.input))
+            .project(columns.into_iter().chain(keys))?
+            .build()?;
+        Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
+            predicate,
+            Arc::new(input),
+        )?)))
+    })?;
+    if plan.transformed && keep_output {
+        Ok(LogicalPlanBuilder::from(plan.data)
+            .project(output)?
+            .build()?)
+    } else {
+        Ok(plan.data)
+    }
+}
+
+/// Wraps a resolved scalar subquery so that it reports Spark's nullability.
+fn nullable_scalar_subquery(plan: LogicalPlan) -> Expr {
+    ScalarUDF::from(SparkScalarSubquery::new()).call(vec![expr_fn::scalar_subquery(Arc::new(plan))])
+}
+
+fn scalar_subquery_error() -> Expr {
+    ScalarUDF::from(RaiseError::new()).call(vec![lit("Scalar subquery returned more than one row")])
+}
+
+/// A LIMIT or ORDER BY found above the projection of an inlined subquery.
+enum RowBound {
+    Limit(Option<Box<Expr>>, Option<Box<Expr>>),
+    Sort(Vec<SortExpr>, Option<usize>),
+}
+
+/// Returns the input column selected by each output of a projection that only
+/// selects (and possibly renames) columns, or `None` for any other projection.
+fn selected_columns(projection: &Projection) -> Option<Vec<(String, Column)>> {
+    projection
+        .expr
+        .iter()
+        .map(|expr| match expr {
+            Expr::Column(column) => Some((column.name().to_string(), column.clone())),
+            Expr::Alias(alias) => match alias.expr.as_ref() {
+                Expr::Column(column) => Some((alias.name.clone(), column.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// Inlines a subquery whose only outer references sit in a projection over an
+/// uncorrelated input (e.g. `(SELECT o.id FROM range(1))`), which DataFusion cannot
+/// decorrelate. The input is evaluated once by an uncorrelated scalar subquery that
+/// returns the row count together with every referenced inner column, and the projected
+/// expression is evaluated in the outer scope against that single result.
+fn inline_outer_projection(
+    plan: &LogicalPlan,
+    state: &mut PlanResolverState,
+) -> PlanResult<Option<Expr>> {
+    // Walk down through LIMIT, ORDER BY and column selections to the projection that
+    // carries the outer references, tracking which of its outputs the subquery returns.
+    let mut bounds = vec![];
+    let mut selected: Option<Column> = None;
+    let mut node = plan;
+    let (projection, expr) = loop {
+        node = match node {
+            LogicalPlan::Limit(limit) => {
+                bounds.push(RowBound::Limit(limit.skip.clone(), limit.fetch.clone()));
+                limit.input.as_ref()
+            }
+            LogicalPlan::Sort(sort) => {
+                bounds.push(RowBound::Sort(sort.expr.clone(), sort.fetch));
+                sort.input.as_ref()
+            }
+            LogicalPlan::Projection(projection) => {
+                if let Some(columns) = selected_columns(projection) {
+                    let column = match &selected {
+                        None => match columns.as_slice() {
+                            [(_, column)] => column.clone(),
+                            _ => return Ok(None),
+                        },
+                        Some(selected) => match columns
+                            .into_iter()
+                            .find(|(name, _)| name == selected.name())
+                        {
+                            Some((_, column)) => column,
+                            None => return Ok(None),
+                        },
+                    };
+                    selected = Some(column);
+                    projection.input.as_ref()
+                } else {
+                    let expr = match &selected {
+                        None => match projection.expr.as_slice() {
+                            [expr] => expr,
+                            _ => return Ok(None),
+                        },
+                        Some(selected) => match projection
+                            .expr
+                            .iter()
+                            .find(|expr| expr.schema_name().to_string() == selected.name())
+                        {
+                            Some(expr) => expr,
+                            None => return Ok(None),
+                        },
+                    };
+                    break (projection, expr);
+                }
+            }
+            _ => return Ok(None),
+        };
+    };
+    if !expr.contains_outer() || !projection.input.all_out_ref_exprs().is_empty() {
+        return Ok(None);
+    }
+    // A sort only matters below a LIMIT (or its own fetch); otherwise the single row the
+    // subquery may return makes the order irrelevant. A sort that matters moves below the
+    // projection, so it may only refer to the projection's input.
+    let input_columns = projection.input.schema().columns();
+    let mut limited = false;
+    let mut kept = vec![];
+    for bound in bounds {
+        match bound {
+            RowBound::Limit(..) => {
+                limited = true;
+                kept.push(bound);
+            }
+            RowBound::Sort(ref exprs, fetch) => {
+                if !limited && fetch.is_none() {
+                    continue;
+                }
+                let on_input = exprs.iter().all(|sort| {
+                    !sort.expr.contains_outer()
+                        && sort
+                            .expr
+                            .column_refs()
+                            .iter()
+                            .all(|column| input_columns.contains(column))
+                });
+                if !on_input {
+                    return Ok(None);
+                }
+                limited |= fetch.is_some();
+                kept.push(bound);
+            }
+        }
+    }
+    let mut input = projection.input.as_ref().clone();
+    for bound in kept.into_iter().rev() {
+        input = match bound {
+            RowBound::Limit(skip, fetch) => LogicalPlan::Limit(Limit {
+                skip,
+                fetch,
+                input: Arc::new(input),
+            }),
+            RowBound::Sort(expr, fetch) => LogicalPlan::Sort(Sort {
+                expr,
+                input: Arc::new(input),
+                fetch,
+            }),
+        };
+    }
+    let expr = match expr {
+        Expr::Alias(alias) => alias.expr.as_ref().clone(),
+        expr => expr.clone(),
+    };
+    let mut columns: Vec<Column> = vec![];
+    expr.apply(|expr| {
+        if let Expr::Column(column) = expr
+            && !columns.contains(column)
+        {
+            columns.push(column.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    let rows = state.register_field_name("");
+    let values = columns
+        .iter()
+        .map(|_| state.register_field_name(""))
+        .collect::<Vec<_>>();
+    let aggregates =
+        std::iter::once(count(lit(1_i64)).alias(&rows))
+            .chain(columns.iter().zip(&values).map(|(column, name)| {
+                first_value(Expr::Column(column.clone()), vec![]).alias(name)
+            }))
+            .collect::<Vec<_>>();
+    let fields = std::iter::once(&rows)
+        .chain(&values)
+        .flat_map(|name| [lit(name.as_str()), ident(name)])
+        .collect::<Vec<_>>();
+    let producer = LogicalPlanBuilder::from(input)
+        .aggregate(Vec::<Expr>::new(), aggregates)?
+        .project(vec![
+            named_struct(fields).alias(state.register_field_name("")),
+        ])?
+        .build()?;
+    let producer = expr_fn::scalar_subquery(Arc::new(producer));
+    let expr = expr
+        .transform(|expr| match expr {
+            Expr::OuterReferenceColumn(_, column) => Ok(Transformed::yes(Expr::Column(column))),
+            Expr::Column(column) => match columns.iter().position(|c| c == &column) {
+                Some(index) => Ok(Transformed::yes(get_field(
+                    producer.clone(),
+                    values[index].as_str(),
+                ))),
+                None => Ok(Transformed::no(Expr::Column(column))),
+            },
+            expr => Ok(Transformed::no(expr)),
+        })?
+        .data;
+    let rows = get_field(producer, rows.as_str());
+    Ok(Some(
+        when(rows.clone().eq(lit(0_i64)), lit(ScalarValue::Null))
+            .when(rows.gt(lit(1_i64)), scalar_subquery_error())
+            .otherwise(expr)?,
+    ))
+}
+
+fn is_aggregated(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Projection(projection) => is_aggregated(&projection.input),
+        LogicalPlan::SubqueryAlias(alias) => is_aggregated(&alias.input),
+        LogicalPlan::Aggregate(_) => true,
+        LogicalPlan::Filter(filter) => matches!(filter.input.as_ref(), LogicalPlan::Aggregate(_)),
+        _ => false,
+    }
+}
+
+/// Spark lets a correlated scalar subquery return at most one row and fails at runtime when it
+/// returns more, while DataFusion only decorrelates aggregated correlated subqueries. Aggregate
+/// the rows into the single value and raise Spark's error when more than one row is produced.
+fn enforce_single_row(plan: LogicalPlan, state: &mut PlanResolverState) -> PlanResult<LogicalPlan> {
+    if is_aggregated(&plan) || plan.max_rows().is_some_and(|rows| rows <= 1) {
+        return Ok(plan);
+    }
+    let column = plan.schema().columns().one()?;
+    let value = state.register_field_name("");
+    let rows = state.register_field_name("");
+    Ok(LogicalPlanBuilder::from(plan)
+        .aggregate(
+            Vec::<Expr>::new(),
+            vec![
+                first_value(Expr::Column(column.clone()), vec![]).alias(&value),
+                count(lit(1_i64)).alias(&rows),
+            ],
+        )?
+        .project(vec![
+            when(ident(&rows).gt(lit(1_i64)), scalar_subquery_error())
+                .otherwise(ident(&value))?
+                .alias(column.name()),
+        ])?
+        .build()?)
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_in_subquery(
@@ -91,10 +422,27 @@ impl PlanResolver<'_> {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             self.resolve_query_plan(subquery, scope.state()).await?
         };
-        Ok(NamedExpr::new(
-            vec!["subquery".to_string()],
-            expr_fn::scalar_subquery(Arc::new(subquery)),
-        ))
+        // Spark reports every scalar subquery as nullable since an empty result is NULL.
+        // DataFusion 55 derives nullability from the projected field, so wrap the expression.
+        let subquery = if subquery.all_out_ref_exprs().is_empty() {
+            nullable_scalar_subquery(subquery)
+        } else if let Some(inlined) = inline_outer_projection(&subquery, state)? {
+            inlined
+        } else {
+            // DataFusion's `ScalarSubqueryToJoin` can only plan a correlated subquery whose
+            // outer references all sit in equality filter conjuncts. Any other correlated
+            // subquery keeps the plan it had before scalar subqueries were nullable, so it
+            // behaves exactly as before: a null check on it folds, COUNT drops it, and any
+            // other position fails to plan.
+            let rewritten =
+                enforce_single_row(project_correlated_keys(subquery.clone(), state)?, state)?;
+            if decorrelates(&rewritten) {
+                nullable_scalar_subquery(rewritten)
+            } else {
+                expr_fn::scalar_subquery(Arc::new(subquery))
+            }
+        };
+        Ok(NamedExpr::new(vec!["subquery".to_string()], subquery))
     }
 
     pub(super) async fn resolve_expression_exists(

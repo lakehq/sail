@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
 use datafusion_common::arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+};
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
@@ -19,6 +21,7 @@ use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
+use sail_function::scalar::misc::spark_scalar_subquery::SparkScalarSubquery;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -59,6 +62,70 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
         Ok(TreeNodeRecursion::Continue)
     });
     found_name
+}
+
+fn is_correlated_scalar_subquery(expr: &Expr) -> bool {
+    SparkScalarSubquery::subquery(expr).is_some_and(|subquery| {
+        !subquery.outer_ref_columns.is_empty() || subquery.subquery.contains_outer_reference()
+    })
+}
+
+/// Removes the nullability wrapper from every correlated scalar subquery in the expression.
+fn unwrap_correlated_scalar_subqueries(expr: Expr) -> PlanResult<Expr> {
+    Ok(expr
+        .transform_up(|expr| {
+            if !is_correlated_scalar_subquery(&expr) {
+                return Ok(Transformed::no(expr));
+            }
+            let Some(subquery) = SparkScalarSubquery::subquery(&expr).cloned() else {
+                return Ok(Transformed::no(expr));
+            };
+            Ok(Transformed::yes(Expr::ScalarSubquery(subquery)))
+        })?
+        .data)
+}
+
+fn contains_correlated_scalar_subquery(expr: &Expr) -> bool {
+    expr.exists(|expr| Ok(is_correlated_scalar_subquery(expr)))
+        .unwrap_or(false)
+}
+
+/// Replaces correlated scalar subqueries inside aggregate function arguments with
+/// columns that are projected below the aggregate.
+struct AggregateSubqueryExtractor<'s> {
+    aggregate_depth: usize,
+    extracted: Vec<(String, Expr)>,
+    state: &'s mut PlanResolverState,
+}
+
+impl TreeNodeRewriter for AggregateSubqueryExtractor<'_> {
+    type Node = Expr;
+
+    fn f_down(&mut self, expr: Expr) -> DataFusionResult<Transformed<Expr>> {
+        if matches!(expr, Expr::AggregateFunction(_)) {
+            self.aggregate_depth += 1;
+        }
+        Ok(Transformed::no(expr))
+    }
+
+    fn f_up(&mut self, expr: Expr) -> DataFusionResult<Transformed<Expr>> {
+        if matches!(expr, Expr::AggregateFunction(_)) {
+            self.aggregate_depth -= 1;
+            return Ok(Transformed::no(expr));
+        }
+        if self.aggregate_depth == 0 || !is_correlated_scalar_subquery(&expr) {
+            return Ok(Transformed::no(expr));
+        }
+        let name = match self.extracted.iter().find(|(_, e)| e == &expr) {
+            Some((name, _)) => name.clone(),
+            None => {
+                let name = self.state.register_field_name("");
+                self.extracted.push((name.clone(), expr));
+                name
+            }
+        };
+        Ok(Transformed::yes(Expr::Column(Column::from_name(name))))
+    }
 }
 
 impl PlanResolver<'_> {
@@ -203,6 +270,46 @@ impl PlanResolver<'_> {
             .collect()
     }
 
+    /// DataFusion only decorrelates scalar subqueries in filters and projections, so a
+    /// correlated scalar subquery inside an aggregate argument is projected below the
+    /// aggregate first, as Spark's `RewriteCorrelatedScalarSubquery` does for `Aggregate`.
+    fn project_aggregated_subqueries(
+        input: LogicalPlan,
+        projections: Vec<NamedExpr>,
+        having: Option<Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, Option<Expr>)> {
+        let mut extractor = AggregateSubqueryExtractor {
+            aggregate_depth: 0,
+            extracted: vec![],
+            state,
+        };
+        let projections = projections
+            .into_iter()
+            .map(|named| {
+                Ok(NamedExpr {
+                    expr: named.expr.rewrite(&mut extractor)?.data,
+                    ..named
+                })
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let having = having
+            .map(|having| having.rewrite(&mut extractor).map(|having| having.data))
+            .transpose()?;
+        if extractor.extracted.is_empty() {
+            return Ok((input, projections, having));
+        }
+        let columns = input.schema().columns().into_iter().map(Expr::Column);
+        let subqueries = extractor
+            .extracted
+            .into_iter()
+            .map(|(name, expr)| expr.alias(name));
+        let input = LogicalPlanBuilder::from(input)
+            .project(columns.chain(subqueries))?
+            .build()?;
+        Ok((input, projections, having))
+    }
+
     pub(super) fn rewrite_aggregate(
         &self,
         input: LogicalPlan,
@@ -213,6 +320,36 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
+        // DataFusion cannot plan a correlated scalar subquery in a grouping key (its
+        // `ScalarSubqueryToJoin` rewrites filters and projections only), so an aggregate
+        // grouped by one keeps the plan it had before scalar subqueries were nullable: null
+        // checks on the key fold and COUNT drops it, exactly as before.
+        let (grouping, projections, having) = if grouping
+            .iter()
+            .any(|x| contains_correlated_scalar_subquery(&x.expr))
+        {
+            let unwrap = |named: NamedExpr| -> PlanResult<NamedExpr> {
+                Ok(NamedExpr {
+                    expr: unwrap_correlated_scalar_subqueries(named.expr)?,
+                    ..named
+                })
+            };
+            (
+                grouping
+                    .into_iter()
+                    .map(unwrap)
+                    .collect::<PlanResult<Vec<_>>>()?,
+                projections
+                    .into_iter()
+                    .map(unwrap)
+                    .collect::<PlanResult<Vec<_>>>()?,
+                having
+                    .map(unwrap_correlated_scalar_subqueries)
+                    .transpose()?,
+            )
+        } else {
+            (grouping, projections, having)
+        };
         let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let has_grouping_set = Self::has_grouping_set(&group_exprs);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
@@ -223,6 +360,8 @@ impl PlanResolver<'_> {
         let having = having
             .map(|having| Self::rewrite_grouping_expr(having, &grouping_exprs, has_grouping_set))
             .transpose()?;
+        let (input, projections, having) =
+            Self::project_aggregated_subqueries(input, projections, having, state)?;
         let mut aggregate_candidates = projections
             .iter()
             .map(|x| x.expr.clone())

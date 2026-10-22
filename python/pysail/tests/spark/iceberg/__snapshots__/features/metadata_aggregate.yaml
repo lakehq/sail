@@ -202,7 +202,7 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#21@0 as x, #22@1 as y, #23@2 as z]
       ScalarSubqueryExec: subqueries=3
-        ProjectionExec: expr=[scalar_subquery(<pending>) as #21, scalar_subquery(<pending>) as #22, scalar_subquery(<pending>) as #23]
+        ProjectionExec: expr=[spark_scalar_subquery(scalar_subquery(<pending>)) as #21, spark_scalar_subquery(scalar_subquery(<pending>)) as #22, spark_scalar_subquery(scalar_subquery(<pending>)) as #23]
           PlaceholderRowExec
         ProjectionExec: expr=[3 as #6]
           PlaceholderRowExec
