@@ -1,14 +1,9 @@
-use std::sync::Arc;
-
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion::functions::encoding::expr_fn::decode;
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::functions::encoding::inner::DecodeFunc;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::{Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, expr};
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
-use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::math::spark_unhex::SparkUnHex;
 use crate::scalar::string::spark_base64::SparkUnbase64;
@@ -45,7 +40,7 @@ impl ScalarUDFImpl for SparkToBinary {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Binary)
+        sail_type_system::policies::scalar_string_spark_to_binary_typing::spark_to_binary_return_type(_arg_types)
     }
 
     // This will only be called by TryToBinary
@@ -113,63 +108,6 @@ impl ScalarUDFImpl for SparkToBinary {
             }
         }
     }
-
-    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        if args.len() != 1 && args.len() != 2 {
-            return exec_err!(
-                "Spark `to_binary` function requires 1 or 2 arguments, got {}",
-                args.len()
-            );
-        }
-        if args.len() == 1 {
-            let expr = args.one()?;
-            Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-                expr::ScalarFunction {
-                    func: Arc::new(ScalarUDF::from(SparkUnHex::new())),
-                    args: vec![expr],
-                },
-            )))
-        } else {
-            let (expr, format) = args.two()?;
-            match &format {
-                Expr::Literal(ScalarValue::Utf8(Some(s)), _metadata)
-                | Expr::Literal(ScalarValue::Utf8View(Some(s)), _metadata)
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _metadata)
-                    if s.trim().to_lowercase() == "utf-8" || s.trim().to_lowercase() == "utf8" =>
-                {
-                    Ok(ExprSimplifyResult::Simplified(Expr::Cast(expr::Cast::new(
-                        Box::new(expr),
-                        DataType::Binary,
-                    ))))
-                }
-                Expr::Literal(ScalarValue::Utf8(Some(s)), _metadata)
-                | Expr::Literal(ScalarValue::Utf8View(Some(s)), _metadata)
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _metadata)
-                    if s.trim().to_lowercase() == "hex" =>
-                {
-                    Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-                        expr::ScalarFunction {
-                            func: Arc::new(ScalarUDF::from(SparkUnHex::new())),
-                            args: vec![expr],
-                        },
-                    )))
-                }
-                Expr::Literal(ScalarValue::Utf8(Some(s)), _metadata)
-                | Expr::Literal(ScalarValue::Utf8View(Some(s)), _metadata)
-                | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _metadata)
-                    if s.trim().to_lowercase() == "base64" =>
-                {
-                    Ok(ExprSimplifyResult::Simplified(Expr::ScalarFunction(
-                        expr::ScalarFunction {
-                            func: Arc::new(ScalarUDF::from(SparkUnbase64::new())),
-                            args: vec![expr],
-                        },
-                    )))
-                }
-                _ => Ok(ExprSimplifyResult::Simplified(decode(expr, format))),
-            }
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -204,16 +142,14 @@ impl ScalarUDFImpl for SparkTryToBinary {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+        sail_type_system::policies::scalar_string_spark_to_binary_typing::spark_try_to_binary_return_type(_arg_types)
     }
 
     /// Spark: `TryToBinary` is `RuntimeReplaceable` over `TryEval`, whose
     /// `nullable = true` is unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
+        sail_type_system::policies::scalar_string_spark_to_binary_typing::spark_try_to_binary_return_field_from_args(self.name(), _args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

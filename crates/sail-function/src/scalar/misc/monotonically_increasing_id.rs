@@ -38,7 +38,14 @@ impl ScalarUDFImpl for SparkMonotonicallyIncreasingId {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        sail_type_system::policies::misc_monotonically_increasing_id::return_type(_arg_types)
+    }
+
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<datafusion::arrow::datatypes::FieldRef> {
+        sail_type_system::policies::misc_monotonically_increasing_id::return_field(args)
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

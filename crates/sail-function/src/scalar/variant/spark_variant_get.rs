@@ -1,86 +1,24 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/main/src/variant_get.rs>
-use arrow_schema::{ArrowError, DataType, Field, FieldRef};
+use arrow_schema::{DataType, Field, FieldRef};
 use chumsky::prelude::*;
-use datafusion::arrow::datatypes::TimeUnit;
-use datafusion_common::{Result, ScalarValue, arrow_datafusion_err, exec_datafusion_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use parquet_variant::{VariantPath, VariantPathElement};
-use parquet_variant_compute::{GetOptions, VariantType, variant_get};
+use parquet_variant_compute::{GetOptions, variant_get};
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
-use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+use crate::error::generic_exec_err;
 use crate::scalar::variant::utils::helper::{try_field_as_variant_array, try_parse_string_scalar};
-
-/// Converts a scalar type-hint value to an Arrow [`FieldRef`].
-///
-/// First tries Spark-compatible type names (e.g. `"int"`, `"string"`, `"decimal(10,2)"`),
-/// then falls back to Arrow's `DataType::parse()` for full type coverage.
-fn type_hint_from_scalar(field_name: &str, scalar: &ScalarValue) -> Result<FieldRef> {
-    let type_name = match scalar {
-        ScalarValue::Utf8(Some(value))
-        | ScalarValue::Utf8View(Some(value))
-        | ScalarValue::LargeUtf8(Some(value)) => value.as_str(),
-        other => {
-            return Err(generic_exec_err(
-                field_name,
-                &format!(
-                    "type must be a non-null string literal, got {}",
-                    other.data_type()
-                ),
-            ));
-        }
-    };
-
-    let dt = spark_type_to_arrow(type_name)?;
-    Ok(Arc::new(Field::new(field_name, dt, true)))
-}
 
 fn build_get_options<'a>(path: VariantPath<'a>, as_type: &Option<FieldRef>) -> GetOptions<'a> {
     match as_type {
         Some(field) => GetOptions::new_with_path(path).with_as_type(Some(field.clone())),
         None => GetOptions::new_with_path(path),
     }
-}
-
-/// Shared return-field logic for variant_get / try_variant_get.
-///
-/// - 3-arg form: resolves the type hint to a concrete Arrow DataType.
-/// - 2-arg form: returns a Variant struct (Binary for PySpark compat).
-fn return_field_for_variant_get(name: &str, args: &ReturnFieldArgs) -> Result<FieldRef> {
-    // Validate path (arg 1) is a constant non-null string
-    if let Some(path_opt) = args.scalar_arguments.get(1)
-        && let Some(sv) = path_opt.as_ref()
-        && sv.try_as_str().flatten().is_none()
-    {
-        return Err(generic_exec_err(name, "path must be a non-null string"));
-    }
-
-    // 3-arg form: variant_get(variant, path, type) → typed result
-    if args.scalar_arguments.len() >= 3 {
-        if let Some(type_sv) = args.scalar_arguments.get(2).and_then(|opt| opt.as_ref()) {
-            return type_hint_from_scalar(name, type_sv);
-        }
-        return Err(generic_exec_err(
-            name,
-            "type must be a non-null constant string",
-        ));
-    }
-
-    // 2-arg form: return Variant struct with extension metadata.
-    // Use Binary (not BinaryView) for PySpark compatibility.
-    let variant_struct = DataType::Struct(
-        vec![
-            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, true),
-            variant_metadata_field(DataType::Binary, false),
-        ]
-        .into(),
-    );
-    let field = Field::new(name, variant_struct, true).with_extension_type(VariantType);
-    Ok(Arc::new(field))
 }
 
 /// Shared invoke logic for `variant_get` / `try_variant_get`.
@@ -277,51 +215,15 @@ impl ScalarUDFImpl for SparkVariantGet {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        datafusion_common::internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+        sail_type_system::policies::scalar_variant_spark_variant_get_typing::spark_variant_get_return_type(_arg_types)
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        return_field_for_variant_get(self.name(), &args)
+        sail_type_system::policies::scalar_variant_spark_variant_get_typing::spark_variant_get_return_field_from_args(self.name(), args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 && arg_types.len() != 3 {
-            return Err(invalid_arg_count_exec_err(
-                self.name(),
-                (2, 3),
-                arg_types.len(),
-            ));
-        }
-        // arg[0]: variant (struct), arg[1]: path (string), arg[2]: type (string, optional)
-        let mut result = vec![arg_types[0].clone()];
-        // Coerce path to Utf8
-        result.push(match &arg_types[1] {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => arg_types[1].clone(),
-            DataType::Null => DataType::Utf8,
-            _ => {
-                return Err(unsupported_data_type_exec_err(
-                    self.name(),
-                    "string",
-                    &arg_types[1],
-                ));
-            }
-        });
-        if arg_types.len() == 3 {
-            result.push(match &arg_types[2] {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => arg_types[2].clone(),
-                DataType::Null => DataType::Utf8,
-                _ => {
-                    return Err(unsupported_data_type_exec_err(
-                        self.name(),
-                        "string",
-                        &arg_types[2],
-                    ));
-                }
-            });
-        }
-        Ok(result)
+        sail_type_system::policies::scalar_variant_spark_variant_get_typing::spark_variant_get_coerce_types(self.name(), arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -333,63 +235,7 @@ impl ScalarUDFImpl for SparkVariantGet {
 ///
 /// Supports Spark-compatible names first, then falls back to Arrow's `DataType::parse()`
 /// for full type coverage (e.g. `"Int64"`, `"Decimal128(10,2)"`).
-fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
-    let lower = type_str.to_lowercase();
-    let trimmed = lower.trim();
-
-    // Handle parameterized types: decimal(p,s)
-    if let Some(params) = trimmed.strip_circumfix("decimal(", ')') {
-        let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
-        return match parts.as_slice() {
-            [p, s] => {
-                let precision = p.parse::<u8>().map_err(|_| {
-                    generic_exec_err(
-                        "spark_type_to_arrow",
-                        &format!("invalid decimal precision: '{p}'"),
-                    )
-                })?;
-                let scale = s.parse::<i8>().map_err(|_| {
-                    generic_exec_err(
-                        "spark_type_to_arrow",
-                        &format!("invalid decimal scale: '{s}'"),
-                    )
-                })?;
-                Ok(DataType::Decimal128(precision, scale))
-            }
-            _ => Err(generic_exec_err(
-                "spark_type_to_arrow",
-                &format!("invalid decimal type: '{type_str}'. Expected: decimal(precision, scale)"),
-            )),
-        };
-    }
-
-    // Spark-compatible type names
-    match trimmed {
-        "boolean" => return Ok(DataType::Boolean),
-        "byte" | "tinyint" => return Ok(DataType::Int8),
-        "short" | "smallint" => return Ok(DataType::Int16),
-        "int" | "integer" => return Ok(DataType::Int32),
-        "long" | "bigint" => return Ok(DataType::Int64),
-        "float" => return Ok(DataType::Float32),
-        "double" => return Ok(DataType::Float64),
-        "decimal" => return Ok(DataType::Decimal128(10, 0)),
-        "string" => return Ok(DataType::Utf8),
-        "binary" => return Ok(DataType::Binary),
-        "date" => return Ok(DataType::Date32),
-        "timestamp" | "timestamp_ntz" => {
-            return Ok(DataType::Timestamp(TimeUnit::Microsecond, None));
-        }
-        _ => {}
-    }
-
-    // Fallback to Arrow's DataType::parse() for full type coverage.
-    // Use original (non-lowercased) string since Arrow type names are case-sensitive.
-    match type_str.trim().parse::<DataType>() {
-        Ok(data_type) => Ok(data_type),
-        Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
-        Err(e) => Err(arrow_datafusion_err!(e)),
-    }
-}
+use sail_type_system::policies::scalar_variant_spark_variant_get_typing::spark_type_to_arrow;
 
 fn spark_path_to_variant_path(path: &str, name: &str) -> Result<VariantPath<'static>> {
     spark_variant_path_parser()

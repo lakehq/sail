@@ -37,7 +37,7 @@ impl ScalarUDFImpl for NegateDuration {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        sail_type_system::policies::datetime_negate_duration::return_type(arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

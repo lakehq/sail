@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BooleanArray, ListArray, MapArray};
 use datafusion::arrow::compute::{cast, take_arrays};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::utils::{
     adjust_offsets_for_slice, list_values, list_values_row_number, remove_list_null_values,
 };
@@ -67,34 +67,15 @@ impl HigherOrderUDFImpl for SparkMapFilter {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let (map, _) = value_lambda_pair(self.name(), fields)?;
-        // TODO: Fix mixed empty-map/NULL VALUES inference upstream; its Null
-        // column type currently prevents map lambda binding (see the sail-bug test).
-        let DataType::Map(entries, _) = map.data_type() else {
-            return plan_err!("map_filter expected a map, got {}", map.data_type());
-        };
-        let DataType::Struct(fields) = entries.data_type() else {
-            return plan_err!("map_filter expected key and value fields");
-        };
-        Ok(LambdaParametersProgress::Complete(vec![fields.to_vec()]))
+        sail_type_system::higher_order::map_parameters(self.name(), fields)
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (map, predicate) = value_lambda_pair(self.name(), args.arg_fields)?;
-        if !matches!(predicate.data_type(), DataType::Boolean | DataType::Null) {
-            return plan_err!(
-                "map_filter lambda must return boolean, got {}",
-                predicate.data_type()
-            );
-        }
-        // TODO: map() currently reports a nullable field even for non-null
-        // constructors. Fix constructor nullability upstream so it is also
-        // inherited correctly here (see the map_filter schema sail-bug test).
-        Ok(Arc::new(Field::new(
-            "",
-            map.data_type().clone(),
-            map.is_nullable(),
-        )))
+        sail_type_system::higher_order::map_result(
+            self.name(),
+            args,
+            sail_type_system::higher_order::MapResult::Filter,
+        )
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {

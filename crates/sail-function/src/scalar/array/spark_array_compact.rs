@@ -7,7 +7,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -46,14 +46,7 @@ impl ScalarUDFImpl for SparkArrayCompact {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::List(_) | DataType::LargeList(_) => Ok(arg_types[0].clone()),
-            DataType::Null => Ok(DataType::Null),
-            _ => plan_err!(
-                "spark_array_compact can only accept List or LargeList, got {:?}",
-                arg_types[0]
-            ),
-        }
+        sail_type_system::policies::array_spark_array_compact::return_type(arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

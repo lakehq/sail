@@ -10,16 +10,7 @@ data:
     initial_logical_plan:
     RowLevelWrite: command=Delete, mode=CopyOnWrite, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
 
-    logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_grouping_function:
-    SAME TEXT AS ABOVE
-
-    logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -104,9 +95,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after rewrite_binary_grouping:
-    SAME TEXT AS ABOVE
-
-    logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
     logical_plan:

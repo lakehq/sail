@@ -9,7 +9,7 @@ use datafusion::arrow::array::{
     LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 const SPARK_BASE64_DECODE: GeneralPurpose = GeneralPurpose::new(
@@ -48,26 +48,10 @@ impl ScalarUDFImpl for SparkBase64 {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
-            return plan_err!(
-                "{} expects 1 argument, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        }
-        match arg_types[0] {
-            DataType::Utf8
-            | DataType::Utf8View
-            | DataType::Binary
-            | DataType::FixedSizeBinary(_)
-            | DataType::BinaryView => Ok(DataType::Utf8),
-            DataType::LargeUtf8 | DataType::LargeBinary => Ok(DataType::LargeUtf8),
-            DataType::Null => Ok(DataType::Utf8),
-            _ => plan_err!(
-                "1st argument should be String or Binary, got {}",
-                arg_types[0]
-            ),
-        }
+        sail_type_system::policies::scalar_string_spark_base64_typing::spark_base64_return_type(
+            self.name(),
+            arg_types,
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -349,19 +333,10 @@ impl ScalarUDFImpl for SparkUnbase64 {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [arg_type] = arg_types else {
-            return plan_err!(
-                "{} expects 1 argument, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        };
-        match arg_type {
-            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
-            DataType::LargeUtf8 => Ok(DataType::LargeBinary),
-            DataType::Null => Ok(DataType::Binary),
-            _ => plan_err!("1st argument should be String, got {}", arg_types[0]),
-        }
+        sail_type_system::policies::scalar_string_spark_base64_typing::spark_unbase64_return_type(
+            self.name(),
+            arg_types,
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

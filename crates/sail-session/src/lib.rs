@@ -25,10 +25,10 @@ mod tests {
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::datasource::DataSourceRegistry;
     use sail_common_datafusion::session::plan::PlanService;
+    use sail_plan::analysis::QueryAnalyzer;
     use sail_plan::catalog::SparkCatalogObjectDisplay;
     use sail_plan::config::PlanConfig;
     use sail_plan::formatter::SparkPlanFormatter;
-    use sail_plan::resolver::PlanResolver;
     use sail_sql_analyzer::data_type::from_ast_data_type;
     use sail_sql_analyzer::parser::{parse_data_type, parse_one_statement};
     use sail_sql_analyzer::statement::from_ast_statement;
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn test_system_table_schema_validity() -> Result<(), Box<dyn std::error::Error>> {
         let session = create_session()?;
-        let resolver = PlanResolver::new(&session, Arc::new(PlanConfig::default()));
+        let resolver = QueryAnalyzer::new(&session, Arc::new(PlanConfig::default()));
         for db in SystemCatalog::databases() {
             for t in db.tables() {
                 let columns = t.columns();
@@ -83,7 +83,7 @@ mod tests {
                     // of each column (for documentation purposes). Here we ensure that the SQL
                     // data type matches the Arrow data type used for table row struct serde.
                     let data_type = parse_data_type(col.sql_type).and_then(from_ast_data_type)?;
-                    let data_type = resolver.resolve_data_type_for_plan(&data_type)?;
+                    let data_type = resolver.data_type(&data_type)?;
                     assert_eq!(data_type, col.arrow_type);
                 }
             }
@@ -100,7 +100,7 @@ mod tests {
         }
 
         let session = create_session()?;
-        let resolver = PlanResolver::new(&session, Arc::new(PlanConfig::default()));
+        let resolver = QueryAnalyzer::new(&session, Arc::new(PlanConfig::default()));
 
         for (predicate, values) in [
             (
@@ -115,7 +115,7 @@ mod tests {
             let plan = from_ast_statement(parse_one_statement(&format!(
                 "SELECT * FROM system.telemetry.metrics WHERE {predicate}"
             ))?)?;
-            let plan = resolver.resolve_named_plan(plan).await?.plan;
+            let plan = resolver.plan(plan).await?.plan;
             let LogicalPlan::Projection(ref projection) = plan else {
                 return Err("projection plan expected".into());
             };

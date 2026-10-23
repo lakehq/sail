@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ListArray, StructArray, TimestampMicrosecondArray};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::as_timestamp_microsecond_array;
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 /// Computes Spark `window` candidates at execute time, so the plan stays bounded
@@ -52,20 +52,7 @@ impl ScalarUDFImpl for SparkWindowBuckets {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let tz = match arg_types {
-            [DataType::Timestamp(TimeUnit::Microsecond, tz)] => tz.clone(),
-            other => {
-                return plan_err!(
-                    "window_buckets expects a single Timestamp(Microsecond, *) argument, got {other:?}"
-                );
-            }
-        };
-        let field_type = DataType::Timestamp(TimeUnit::Microsecond, tz);
-        let item = DataType::Struct(Fields::from(vec![
-            Field::new("start", field_type.clone(), true),
-            Field::new("end", field_type, true),
-        ]));
-        Ok(DataType::List(Arc::new(Field::new("item", item, true))))
+        sail_type_system::policies::datetime_spark_window_buckets::return_type(arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

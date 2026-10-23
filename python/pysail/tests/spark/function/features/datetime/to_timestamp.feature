@@ -274,7 +274,6 @@ Feature: to_timestamp (strict variant)
         """
       Then query error Unrecognized datetime pattern
 
-    @sail-bug
     Scenario: a NULL value with an unrecognized pattern is NULL, not an error
       When query
         """

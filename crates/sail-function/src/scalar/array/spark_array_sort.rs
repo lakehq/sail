@@ -22,9 +22,9 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, Int32Array, LargeListArray, ListArray, UInt32Array,
 };
 use datafusion::arrow::compute::{take, take_arrays};
-use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{ArrowNativeType, DataType, FieldRef};
 use datafusion_common::utils::adjust_offsets_for_slice;
-use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err, plan_err};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
@@ -97,43 +97,11 @@ impl HigherOrderUDFImpl for SparkArraySort {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
-
-        let element = match list.data_type() {
-            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
-            other => return plan_err!("{} expected a list, got {other}", self.name()),
-        };
-
-        // The comparator takes two elements of the array. Both parameters share
-        // the element type, so the `[left, right]` / `[right, left]` ordering is
-        // irrelevant for typing (it only matters for evaluation in `swapped`).
-        let params = vec![Arc::clone(&element), element];
-        Ok(LambdaParametersProgress::Complete(vec![params]))
+        sail_type_system::higher_order::sort_parameters(fields)
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
-
-        // Spark requires the comparator to return exactly `IntegerType` (Int32);
-        // bigint/double/etc. raise `UNEXPECTED_RETURN_TYPE` at analysis.
-        if lambda.data_type() != &DataType::Int32 {
-            return plan_err!(
-                "{} comparator must return INT, got {}",
-                self.name(),
-                lambda.data_type()
-            );
-        }
-
-        // `array_sort` preserves the input array type (element type and
-        // nullability are unchanged by sorting).
-        match list.data_type() {
-            DataType::List(_) | DataType::LargeList(_) => Ok(Arc::new(Field::new(
-                "",
-                list.data_type().clone(),
-                list.is_nullable(),
-            ))),
-            other => plan_err!("{} expected a list, got {other}", self.name()),
-        }
+        sail_type_system::higher_order::sort_result(args)
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
@@ -283,6 +251,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
 mod tests {
     use std::collections::HashMap;
 
+    use arrow_schema::Field;
     use datafusion::arrow::array::{Int32Array, RecordBatch};
     use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
     use datafusion_common::{DFSchema, ScalarValue};

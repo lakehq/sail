@@ -5,9 +5,9 @@ use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::{GapInfo, Tz};
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array, new_null_array};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, FieldRef, TimeUnit};
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
@@ -95,32 +95,13 @@ impl HigherOrderUDFImpl for ConvertTzLazy {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        check_lazy_convert_tz_args(fields)?;
-        let dummy = Arc::new(Field::new("", DataType::Null, true));
-        Ok(LambdaParametersProgress::Complete(
-            fields.iter().map(|_| vec![Arc::clone(&dummy)]).collect(),
-        ))
+        sail_type_system::policies::timezone_lazy_arguments::lambda_parameters(_step, fields)
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        check_lazy_convert_tz_args(args.arg_fields)?;
-        let fields = args
-            .arg_fields
-            .iter()
-            .map(|arg| match arg {
-                ValueOrLambda::Lambda(field) => Ok(Arc::clone(field)),
-                ValueOrLambda::Value(_) => {
-                    exec_err!("convert_timezone expected lambda arguments")
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        ScalarUDFImpl::return_field_from_args(
+        sail_type_system::policies::timezone_lazy_arguments::return_field_from_args(
             &self.convert_tz,
-            ReturnFieldArgs {
-                arg_fields: &fields,
-                scalar_arguments: args.scalar_arguments,
-            },
+            args,
         )
     }
 
@@ -182,21 +163,7 @@ impl HigherOrderUDFImpl for ConvertTzLazy {
     }
 }
 
-fn check_lazy_convert_tz_args<V, L>(args: &[ValueOrLambda<V, L>]) -> Result<()> {
-    if args.len() != 3 {
-        return exec_err!(
-            "convert_timezone takes 3 internal arguments, got {}",
-            args.len()
-        );
-    }
-    if args
-        .iter()
-        .any(|arg| matches!(arg, ValueOrLambda::Value(_)))
-    {
-        return exec_err!("convert_timezone expected lambda arguments");
-    }
-    Ok(())
-}
+use sail_type_system::policies::timezone_lazy_arguments::check_lazy_convert_tz_args;
 
 impl ScalarUDFImpl for ConvertTz {
     fn name(&self) -> &str {
@@ -208,24 +175,13 @@ impl ScalarUDFImpl for ConvertTz {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let [_, _, ts] = arg_types else {
-            return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
-        };
-        match ts {
-            DataType::Timestamp(unit, None) => Ok(DataType::Timestamp(*unit, None)),
-            _ => plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
-        }
+        sail_type_system::policies::scalar_datetime_convert_tz_typing::convert_tz_return_type(
+            arg_types,
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let arg_types = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect::<Vec<_>>();
-        let data_type = self.return_type(&arg_types)?;
-        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
-        Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
+        sail_type_system::policies::scalar_datetime_convert_tz_typing::convert_tz_return_field_from_args(self.name(), args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

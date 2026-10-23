@@ -18,7 +18,7 @@ data:
                           MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                             RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@3], 4), input_partitions=1
                               HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], projection=[id@3, value@4, __sail_file_path@5, __sail_merge_target_row_id@6, __sail_merge_target_row_present@7, __sail_src_id@0, __sail_src_value@1, __sail_merge_source_row_present@2]
-                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, true as __sail_merge_source_row_present]
+                                ProjectionExec: expr=[__sail_attribute_6@0 as __sail_src_id, __sail_attribute_7@1 as __sail_src_value, true as __sail_merge_source_row_present]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                                 ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_id@3 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                   MonotonicIdExec: col=__sail_merge_target_row_id
@@ -36,7 +36,7 @@ data:
                             MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                               RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@3], 4), input_partitions=1
                                 HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], projection=[id@3, value@4, __sail_file_path@5, __sail_merge_target_row_id@6, __sail_merge_target_row_present@7, __sail_src_id@0, __sail_src_value@1, __sail_merge_source_row_present@2]
-                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, true as __sail_merge_source_row_present]
+                                  ProjectionExec: expr=[__sail_attribute_6@0 as __sail_src_id, __sail_attribute_7@1 as __sail_src_value, true as __sail_merge_source_row_present]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_id@3 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                     MonotonicIdExec: col=__sail_merge_target_row_id
@@ -50,7 +50,7 @@ data:
                             MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                               RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@3], 4), input_partitions=1
                                 HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], projection=[id@3, value@4, __sail_file_path@5, __sail_merge_target_row_id@6, __sail_merge_target_row_present@7, __sail_src_id@0, __sail_src_value@1, __sail_merge_source_row_present@2]
-                                  ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, true as __sail_merge_source_row_present]
+                                  ProjectionExec: expr=[__sail_attribute_6@0 as __sail_src_id, __sail_attribute_7@1 as __sail_src_value, true as __sail_merge_source_row_present]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                   ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_id@3 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                     MonotonicIdExec: col=__sail_merge_target_row_id
@@ -70,7 +70,7 @@ data:
                               MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
                                 RepartitionExec: partitioning=Hash([__sail_merge_target_row_id@3], 4), input_partitions=1
                                   HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], projection=[id@3, value@4, __sail_file_path@5, __sail_merge_target_row_id@6, __sail_merge_target_row_present@7, __sail_src_id@0, __sail_src_value@1, __sail_merge_source_row_present@2]
-                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, true as __sail_merge_source_row_present]
+                                    ProjectionExec: expr=[__sail_attribute_6@0 as __sail_src_id, __sail_attribute_7@1 as __sail_src_value, true as __sail_merge_source_row_present]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                     ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_id@3 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                       MonotonicIdExec: col=__sail_merge_target_row_id

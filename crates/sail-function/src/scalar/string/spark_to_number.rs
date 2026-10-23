@@ -1,21 +1,17 @@
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::ops::Deref;
-use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StringArray, *};
 use datafusion::arrow::datatypes::{DataType, *};
-use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
-};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use lazy_static::lazy_static;
 use regex::{Captures, Regex};
+use sail_type_system::number_format::match_regex;
+pub use sail_type_system::number_format::{NumberComponents, RegexSpec};
 
-use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_nested_utils::downcast_arg;
 use crate::functions_utils::make_scalar_function;
 
@@ -23,18 +19,6 @@ use crate::functions_utils::make_scalar_function;
 pub struct SparkToNumber {
     safe: bool,
     signature: Signature,
-}
-
-lazy_static! {
-    static ref FORMAT_REGEX: Regex = {
-        #[expect(clippy::unwrap_used)]
-        // `numbers` uses `*` (not `+`) so "no integer part" formats like `.99`
-        // are accepted; the fully-empty case (no digits anywhere) is rejected
-        // explicitly in `RegexSpec::try_from(&Captures)`.
-        Regex::new(r"^(?<sign_left>MI|S)?(?<currency_left>L|\$)?(?<numbers>[09G,]*)(?<dot>[.D])?(?<decimals>[09]+)?(?<currency_right>L|\$)?(?<sign_right>PR|MI|S)?$")
-            .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
-            .unwrap()
-    };
 }
 
 impl SparkToNumber {
@@ -70,9 +54,7 @@ impl ScalarUDFImpl for SparkToNumber {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+        sail_type_system::policies::scalar_string_spark_to_number_typing::spark_to_number_return_type(_arg_types)
     }
 
     /// Spark: `TryToNumber.nullable = true`, unconditional. `ToNumber` declares none and
@@ -83,42 +65,7 @@ impl ScalarUDFImpl for SparkToNumber {
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/numberFormatExpressions.scala#L145>
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/Expression.scala#L720>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let ReturnFieldArgs {
-            scalar_arguments, ..
-        } = args;
-        let format: &str = match scalar_arguments.get(1) {
-            Some(Some(format)) => match format {
-                ScalarValue::Utf8(Some(format))
-                | ScalarValue::LargeUtf8(Some(format))
-                | ScalarValue::Utf8View(Some(format)) => Ok(format.deref()),
-                // NULL format: safe mode returns all-NULL, strict mode errors at runtime
-                ScalarValue::Utf8(None)
-                | ScalarValue::LargeUtf8(None)
-                | ScalarValue::Utf8View(None)
-                | ScalarValue::Null => {
-                    return Ok(Arc::new(Field::new(
-                        self.name(),
-                        DataType::Decimal256(38, 18),
-                        true,
-                    )));
-                }
-                _ => internal_err!("Expected UTF-8 format string"),
-            }?,
-            Some(None) | None => {
-                return Ok(Arc::new(Field::new(
-                    self.name(),
-                    DataType::Decimal256(38, 18),
-                    true,
-                )));
-            }
-        };
-
-        let format_spec: RegexSpec = RegexSpec::try_from(format)?;
-        let NumberComponents {
-            precision, scale, ..
-        } = NumberComponents::try_from(&format_spec)?;
-        let return_type = DataType::Decimal256(precision, scale);
-        Ok(Arc::new(Field::new(self.name(), return_type, true)))
+        sail_type_system::policies::scalar_string_spark_to_number_typing::spark_to_number_return_field_from_args(self.name(), args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -128,25 +75,7 @@ impl ScalarUDFImpl for SparkToNumber {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let func_name = self.name();
-        if arg_types.len() != 2 {
-            return Err(invalid_arg_count_exec_err(
-                func_name,
-                (2, 2),
-                arg_types.len(),
-            ));
-        }
-        for arg_type in arg_types {
-            match arg_type {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
-                _ => {
-                    return Err(unsupported_data_type_exec_err(
-                        func_name, "STRING", arg_type,
-                    ));
-                }
-            }
-        }
-        Ok(vec![DataType::Utf8, DataType::Utf8])
+        sail_type_system::policies::scalar_string_spark_to_number_typing::spark_to_number_coerce_types(self.name(), arg_types)
     }
 }
 
@@ -191,46 +120,6 @@ fn spark_to_number_impl(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
     ScalarValue::iter_to_array(scalars?)
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct NumberComponents {
-    pub numbers: String,
-    pub decimals: Option<String>,
-    pub precision: u8,
-    pub scale: i8,
-}
-
-impl TryFrom<&RegexSpec> for NumberComponents {
-    type Error = DataFusionError;
-
-    fn try_from(format_spec: &RegexSpec) -> Result<Self, Self::Error> {
-        let numbers: String = format_spec.numbers.replace(",", "").replace("G", "");
-        let decimals: Option<String> = format_spec.decimals.clone();
-        let scale = decimals.as_ref().map_or(0, |d| d.len()) as i8;
-        let precision = numbers.len() as u8 + scale as u8;
-
-        Ok(Self {
-            numbers,
-            decimals,
-            precision,
-            scale,
-        })
-    }
-}
-
-impl TryFrom<&Captures<'_>> for NumberComponents {
-    type Error = DataFusionError;
-
-    fn try_from(captures: &Captures<'_>) -> Result<Self, Self::Error> {
-        // This is semantically incorrect, because captures can be from a different regex than the format pattern.
-        // And RegexSpec is a struct assumed to be used with the format pattern.
-        // However, in this case, we will use just numbers and decimals parts. So, it's ok.
-        // Just keep in mind this in the future.
-        let spec = RegexSpec::try_from(captures)?;
-        let spec: NumberComponents = NumberComponents::try_from(&spec)?;
-        Ok(spec)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ParsedNumber {
     pub value: i256,
@@ -263,25 +152,6 @@ impl ParsedNumber {
     }
 }
 
-macro_rules! get_opt_capture_group {
-    ($captures:expr_2021, $group_name:expr_2021) => {
-        $captures
-            .name($group_name)
-            .map(|m| m.as_str().trim().to_string())
-    };
-}
-
-macro_rules! get_capture_group {
-    ($captures:expr_2021, $group_name:expr_2021) => {
-        get_opt_capture_group!($captures, $group_name).ok_or_else(|| {
-            exec_datafusion_err!(
-                "Missing '{}' group in the format regex or not well formed.",
-                $group_name
-            )
-        })
-    };
-}
-
 // Borrowing variants of the `get_*_capture_group` macros: return `&str` instead
 // of an owned `String`. Used on the per-row value-parsing path where the capture
 // is only inspected (compared, measured), never stored — avoiding an allocation
@@ -301,95 +171,6 @@ macro_rules! get_capture_str {
             )
         })
     };
-}
-
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct RegexSpec {
-    left_sign: Option<String>,
-    currency_left: Option<String>,
-    numbers: String,
-    dot: Option<String>,
-    decimals: Option<String>,
-    currency_right: Option<String>,
-    right_sign: Option<String>,
-}
-impl TryFrom<&str> for RegexSpec {
-    type Error = DataFusionError;
-
-    fn try_from(format: &str) -> Result<Self, Self::Error> {
-        // Spark uppercases the format before parsing, making the format tokens
-        // (G, D, L, MI, PR, S) case-insensitive (e.g. `9g999` == `9G999`).
-        let format = format.to_uppercase();
-        let captures: Captures = match_regex(&format, &FORMAT_REGEX)?;
-        RegexSpec::try_from(&captures)
-    }
-}
-
-impl TryFrom<&Captures<'_>> for RegexSpec {
-    type Error = DataFusionError;
-
-    fn try_from(captures: &Captures<'_>) -> Result<Self, Self::Error> {
-        let numbers: String = get_capture_group!(captures, "numbers")?;
-        let decimals: Option<String> = get_opt_capture_group!(captures, "decimals");
-
-        // Spark rejects formats with no digit at all (`S`, `.`, `$`, …).
-        // `numbers` may be empty (e.g. `.99`), but then `decimals` must be present.
-        if numbers.is_empty() && decimals.is_none() {
-            return exec_err!(
-                "The format is invalid. The format string requires at least one number digit."
-            );
-        }
-
-        // Thousands separators (`,` / `G`) must have digits on both sides
-        // (`INVALID_FORMAT.CONT_THOUSANDS_SEPS`): reject `,999`, `999,`, `9,,9`.
-        validate_thousands_separator_positions(&numbers)?;
-
-        // Spark: currency characters must appear BEFORE digits. `$999` is valid;
-        // `999$` raises `INVALID_FORMAT.CUR_MUST_BEFORE_DIGIT`. The FORMAT_REGEX
-        // accepts a trailing currency because the grammar is shared with other
-        // SQL dialects, so reject it explicitly here for Spark compatibility.
-        let currency_right: Option<String> = get_opt_capture_group!(captures, "currency_right");
-        if currency_right.is_some() {
-            return exec_err!(
-                "The format is invalid. Currency characters must appear before digits in the number format."
-            );
-        }
-
-        Ok(Self {
-            left_sign: get_opt_capture_group!(captures, "sign_left"),
-            currency_left: get_opt_capture_group!(captures, "currency_left"),
-            numbers,
-            dot: get_opt_capture_group!(captures, "dot"),
-            decimals,
-            currency_right,
-            right_sign: get_opt_capture_group!(captures, "sign_right"),
-        })
-    }
-}
-
-/// Reject thousands-separator positions that Spark classifies as
-/// `INVALID_FORMAT.CONT_THOUSANDS_SEPS` — separators (`,` or `G`) must have
-/// digits on both sides. Rejects leading (`,999`), trailing (`999,`), and
-/// consecutive (`9,,9`) separators.
-fn validate_thousands_separator_positions(numbers: &str) -> Result<()> {
-    let bytes = numbers.as_bytes();
-    if bytes.is_empty() {
-        return Ok(());
-    }
-    let is_sep = |b: u8| b == b',' || b == b'G';
-    if is_sep(bytes[0]) || is_sep(bytes[bytes.len() - 1]) {
-        return exec_err!(
-            "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits on both sides."
-        );
-    }
-    for &[left, right] in bytes.array_windows::<2>() {
-        if is_sep(left) && is_sep(right) {
-            return exec_err!(
-                "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits between them."
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Parses a numeric value from a string using a specified format string.
@@ -675,16 +456,4 @@ fn create_regex_expression(format_spec: &RegexSpec) -> Result<Regex> {
     // Create a Regex instance
     Regex::new(pattern_string.as_str())
         .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
-}
-
-/// Compiles a regex pattern and matches it against a given string, capturing groups.
-fn match_regex<'a>(value: &'a str, regex: &Regex) -> Result<Captures<'a>> {
-    // Check if the format matches the regex pattern
-    if regex.is_match(value) {
-        regex
-            .captures(value)
-            .ok_or_else(|| exec_datafusion_err!("Value '{value}' does not match the format"))
-    } else {
-        exec_err!("String '{value}' does not match the expected regex pattern.")
-    }
 }

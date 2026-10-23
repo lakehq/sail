@@ -5,7 +5,7 @@
 use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::array::{ArrayRef, ListBuilder, StringBuilder};
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -13,7 +13,7 @@ use datafusion_expr::{
 use jiter::Peek;
 
 use crate::scalar::json::common::{
-    GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find, return_type_check,
+    GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -47,11 +47,7 @@ impl ScalarUDFImpl for JsonObjectKeys {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        return_type_check(
-            arg_types,
-            self.name(),
-            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-        )
+        sail_type_system::policies::scalar_json_json_object_keys_typing::json_object_keys_return_type(self.name(), arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

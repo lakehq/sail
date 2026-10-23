@@ -71,20 +71,7 @@ pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
 /// - Map keys are non-nullable
 /// - Map entries are non-nullable
 /// - Map values can be null
-pub fn map_type_from_key_value_types(key_type: &DataType, value_type: &DataType) -> DataType {
-    DataType::Map(
-        Arc::new(Field::new(
-            SAIL_MAP_FIELD_NAME,
-            DataType::Struct(Fields::from(vec![
-                // the key must not be nullable
-                Field::new(SAIL_MAP_KEY_FIELD_NAME, key_type.clone(), false),
-                Field::new(SAIL_MAP_VALUE_FIELD_NAME, value_type.clone(), true),
-            ])),
-            false, // the entry is not nullable
-        )),
-        false, // the keys are not sorted
-    )
-}
+pub use sail_type_system::policies::map_typing::map_type_from_key_value_types;
 
 /// Helper function to construct MapArray from flattened ListArrays and OffsetBuffer
 ///

@@ -48,6 +48,13 @@ impl ScalarUDFImpl for SparkStructRename {
         Ok(self.target_type.clone())
     }
 
+    fn return_field_from_args(
+        &self,
+        args: datafusion_expr::ReturnFieldArgs,
+    ) -> Result<datafusion::arrow::datatypes::FieldRef> {
+        sail_type_system::cast::renamed_field(&self.target_type, args)
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.len() != 1 {
             return exec_err!("spark_struct_rename expects exactly one argument");

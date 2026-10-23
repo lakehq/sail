@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, plan_err};
-use datafusion_expr::LogicalPlan;
+use sail_query::ir::LogicalPlan;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
@@ -114,7 +114,7 @@ impl FunctionStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum TableKind {
     Table {
         columns: Vec<TableColumnStatus>,

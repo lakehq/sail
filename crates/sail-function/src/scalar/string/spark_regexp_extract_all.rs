@@ -4,7 +4,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringArray, Int64Array, ListArray, ListBuilder, OffsetSizeTrait,
     StringBuilder,
 };
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::Hint;
@@ -13,7 +13,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 use regex::Regex;
 
-use crate::error::{generic_exec_err, generic_internal_err, unsupported_data_types_exec_err};
+use crate::error::{generic_exec_err, generic_internal_err};
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::{StrMemo, make_scalar_function};
 
@@ -48,11 +48,11 @@ impl ScalarUDFImpl for SparkRegexpExtract {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        sail_type_system::policies::scalar_string_spark_regexp_extract_all_typing::spark_regexp_extract_return_type(_arg_types)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        coerce_regexp_extract_types(Self::NAME, arg_types)
+        sail_type_system::policies::scalar_string_spark_regexp_extract_all_typing::spark_regexp_extract_coerce_types(self.name(), arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -98,14 +98,11 @@ impl ScalarUDFImpl for SparkRegexpExtractAll {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            DataType::Utf8,
-            true,
-        ))))
+        sail_type_system::policies::scalar_string_spark_regexp_extract_all_typing::spark_regexp_extract_all_return_type(_arg_types)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        coerce_regexp_extract_types(Self::NAME, arg_types)
+        sail_type_system::policies::scalar_string_spark_regexp_extract_all_typing::spark_regexp_extract_all_coerce_types(self.name(), arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -252,46 +249,6 @@ fn regexp_extract_all_downcast<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<
             "Could not downcast arguments to arrow arrays",
         )),
     }
-}
-
-fn coerce_regexp_extract_types(
-    function_name: &str,
-    arg_types: &[DataType],
-) -> Result<Vec<DataType>> {
-    if !(2..=3).contains(&arg_types.len()) {
-        return Err(unsupported_data_types_exec_err(
-            function_name,
-            "Expected (STRING, STRING) or (STRING, STRING, INT)",
-            arg_types,
-        ));
-    }
-
-    let mut res_types = vec![];
-    for i in 0..=1 {
-        res_types.push(match arg_types.get(i) {
-            Some(DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8) => {
-                Ok(arg_types[i].clone())
-            }
-            Some(DataType::Null) => Ok(DataType::Utf8),
-            _ => Err(unsupported_data_types_exec_err(
-                function_name,
-                "Expected (STRING, STRING) or (STRING, STRING, INT)",
-                arg_types,
-            )),
-        });
-    }
-    if arg_types.len() == 3 {
-        res_types.push(if arg_types[2].is_null() || arg_types[2].is_integer() {
-            Ok(DataType::Int64)
-        } else {
-            Err(unsupported_data_types_exec_err(
-                function_name,
-                "Expected (STRING, STRING) or (STRING, STRING, INT)",
-                arg_types,
-            ))
-        });
-    }
-    res_types.into_iter().collect::<Result<Vec<_>>>()
 }
 
 trait StringArrayLike {

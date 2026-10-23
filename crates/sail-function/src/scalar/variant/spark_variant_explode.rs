@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Builder, ListArray, StringBuilder, StructArray};
 use arrow::buffer::OffsetBuffer;
-use arrow_schema::{DataType, Field, Fields};
+use arrow_schema::{DataType, Field};
 use datafusion::common::exec_datafusion_err;
 use datafusion::error::Result;
 use datafusion::logical_expr::{
@@ -10,42 +10,13 @@ use datafusion::logical_expr::{
 };
 use datafusion::scalar::ScalarValue;
 use parquet_variant::Variant;
-use parquet_variant_compute::{VariantArray, VariantArrayBuilder, VariantType};
-use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
+use parquet_variant_compute::{VariantArray, VariantArrayBuilder};
+/// Returns the output struct fields for variant_explode: `{pos: int, key: string, value: variant}`.
+use sail_type_system::policies::scalar_variant_spark_variant_explode_typing::variant_explode_fields;
+use sail_type_system::policies::scalar_variant_spark_variant_explode_typing::variant_explode_item_field;
 
-use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::spark_parse_json::convert_variant_binaryview_to_binary;
 use crate::scalar::variant::utils::helper::try_field_as_variant_array;
-
-fn variant_explode_value_field() -> Field {
-    Field::new(
-        VARIANT_VALUE_FIELD_NAME,
-        DataType::Struct(Fields::from(vec![
-            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
-            variant_metadata_field(DataType::Binary, false),
-        ])),
-        true,
-    )
-    .with_extension_type(VariantType)
-}
-
-/// Returns the output struct fields for variant_explode: `{pos: int, key: string, value: variant}`.
-fn variant_explode_fields() -> Fields {
-    Fields::from(vec![
-        Field::new("pos", DataType::Int32, false),
-        Field::new("key", DataType::Utf8, true),
-        variant_explode_value_field(),
-    ])
-}
-
-fn variant_explode_item_field() -> Arc<Field> {
-    Arc::new(Field::new_struct("item", variant_explode_fields(), true))
-}
-
-/// Returns the full output type: `List<Struct<pos, key, value>>`.
-fn variant_explode_return_type() -> DataType {
-    DataType::List(variant_explode_item_field())
-}
 
 /// Converts a single variant value into a list of `(pos, key, value)` tuples.
 ///
@@ -118,26 +89,15 @@ impl ScalarUDFImpl for SparkVariantExplodeUdf {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(variant_explode_return_type())
+        sail_type_system::policies::scalar_variant_spark_variant_explode_typing::spark_variant_explode_udf_return_type(_arg_types)
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Arc<Field>> {
-        Ok(Arc::new(Field::new(
-            self.name(),
-            variant_explode_return_type(),
-            true,
-        )))
+        sail_type_system::policies::scalar_variant_spark_variant_explode_typing::spark_variant_explode_udf_return_field_from_args(self.name(), _args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err(
-                self.name(),
-                (1, 1),
-                arg_types.len(),
-            ));
-        }
-        Ok(vec![arg_types[0].clone()])
+        sail_type_system::policies::scalar_variant_spark_variant_explode_typing::spark_variant_explode_udf_coerce_types(self.name(), arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

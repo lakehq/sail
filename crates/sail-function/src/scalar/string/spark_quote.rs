@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
-use datafusion_common::{Result, exec_err, internal_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -39,19 +39,13 @@ impl ScalarUDFImpl for SparkQuote {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+        sail_type_system::policies::string_spark_quote::return_type(_arg_types)
     }
 
     /// Spark: `Quote.nullable = true`, unconditional (class body, beats `RuntimeReplaceable`).
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala#L3787>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_type = match args.arg_fields.first().map(|f| f.data_type()) {
-            Some(DataType::LargeUtf8) => DataType::LargeUtf8,
-            _ => DataType::Utf8,
-        };
-        Ok(Arc::new(Field::new(self.name(), data_type, true)))
+        sail_type_system::policies::string_spark_quote::return_field_from_args(args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

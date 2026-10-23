@@ -5,7 +5,7 @@ use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -194,15 +194,16 @@ impl ScalarUDFImpl for SparkToXml {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+        sail_type_system::policies::scalar_xml_to_xml_typing::spark_to_xml_return_type(_arg_types)
     }
 
     /// Spark: `StructsToXml.nullable = true`, unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L236>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+        sail_type_system::policies::scalar_xml_to_xml_typing::spark_to_xml_return_field_from_args(
+            self.name(),
+            _args,
+        )
     }
 
     fn schema_name(&self, args: &[datafusion_expr::Expr]) -> Result<String> {
@@ -210,30 +211,7 @@ impl ScalarUDFImpl for SparkToXml {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        match arg_types.len() {
-            1 => match &arg_types[0] {
-                DataType::Struct(_) => Ok(arg_types.to_vec()),
-                other => plan_err!("`to_xml` first argument must be a struct, got {other}"),
-            },
-            2 => {
-                match &arg_types[0] {
-                    DataType::Struct(_) => {}
-                    other => {
-                        return plan_err!("`to_xml` first argument must be a struct, got {other}");
-                    }
-                }
-                match &arg_types[1] {
-                    DataType::Map(_, _) | DataType::Null => {}
-                    other => {
-                        return plan_err!(
-                            "`to_xml` second argument must be a map of options, got {other}"
-                        );
-                    }
-                }
-                Ok(arg_types.to_vec())
-            }
-            n => plan_err!("`to_xml` takes 1 or 2 arguments, got {n}"),
-        }
+        sail_type_system::policies::scalar_xml_to_xml_typing::spark_to_xml_coerce_types(arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

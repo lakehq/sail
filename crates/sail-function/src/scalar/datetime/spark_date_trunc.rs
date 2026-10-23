@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::{Result, internal_err};
+use datafusion_common::Result;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -37,16 +35,13 @@ impl ScalarUDFImpl for SparkDateTrunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+        sail_type_system::policies::scalar_datetime_spark_date_trunc_typing::spark_date_trunc_return_type(_arg_types)
     }
 
     /// Spark: `TruncInstant.nullable = true`, unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/datetimeExpressions.scala#L2287>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let field = self.inner.return_field_from_args(args)?;
-        Ok(Arc::new(field.as_ref().clone().with_nullable(true)))
+        sail_type_system::policies::date_trunc::return_field_from_args(&self.inner, args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

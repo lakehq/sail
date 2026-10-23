@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{NullArray, UInt64Array, make_array, new_null_array};
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::{CastOptions, cast, cast_with_options, take_arrays};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{Result, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
@@ -46,19 +46,11 @@ impl HigherOrderUDFImpl for SparkRegexpInstr {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        regexp_instr_arguments(fields)?;
-        Ok(LambdaParametersProgress::Complete(vec![vec![Arc::new(
-            Field::new("", DataType::Null, true),
-        )]]))
+        sail_type_system::policies::regexp_instr_arguments::lambda_parameters(_step, fields)
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (string, pattern, index) = regexp_instr_arguments(args.arg_fields)?;
-        let nullable = string.is_nullable()
-            || pattern.is_nullable()
-            || index.is_nullable()
-            || index.data_type().is_string();
-        Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
+        sail_type_system::policies::regexp_instr_arguments::return_field_from_args(args)
     }
 
     fn short_circuits(&self) -> bool {
@@ -137,13 +129,4 @@ impl HigherOrderUDFImpl for SparkRegexpInstr {
     }
 }
 
-fn regexp_instr_arguments<V, L>(args: &[ValueOrLambda<V, L>]) -> Result<(&V, &V, &L)> {
-    match args {
-        [
-            ValueOrLambda::Value(string),
-            ValueOrLambda::Value(pattern),
-            ValueOrLambda::Lambda(index),
-        ] => Ok((string, pattern, index)),
-        _ => exec_err!("regexp_instr requires two search arguments and an index lambda"),
-    }
-}
+use sail_type_system::policies::regexp_instr_arguments::regexp_instr_arguments;

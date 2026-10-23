@@ -3,8 +3,7 @@ use std::sync::Arc;
 use chrono::{Datelike, NaiveDate};
 use datafusion::arrow::array::{ArrayRef, AsArray, Int32Array};
 use datafusion::arrow::datatypes::{DataType, Date32Type};
-use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
@@ -45,7 +44,7 @@ impl ScalarUDFImpl for SparkYear {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        sail_type_system::policies::datetime_spark_year::return_type(_arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -80,21 +79,7 @@ impl ScalarUDFImpl for SparkYear {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("year", (1, 1), arg_types.len()));
-        }
-        let native: NativeType = (&arg_types[0]).into();
-        if matches!(
-            native,
-            NativeType::Date | NativeType::String | NativeType::Null | NativeType::Timestamp(_, _)
-        ) {
-            Ok(vec![DataType::Date32])
-        } else {
-            plan_err!(
-                "The argument of the Spark `year` function can only be a date, string or timestamp, but got {}",
-                &arg_types[0]
-            )
-        }
+        sail_type_system::policies::datetime_spark_year::coerce_types(arg_types)
     }
 
     fn preimage(

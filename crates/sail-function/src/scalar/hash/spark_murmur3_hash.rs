@@ -38,7 +38,7 @@ impl ScalarUDFImpl for SparkMurmur3Hash {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        sail_type_system::policies::hash_spark_murmur3_hash::return_type(_arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

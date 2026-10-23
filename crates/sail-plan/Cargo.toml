@@ -8,6 +8,8 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-query = { path = "../sail-query" }
+sail-type-system = { path = "../sail-type-system" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-python-udf = { path = "../sail-python-udf" }

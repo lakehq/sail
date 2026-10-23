@@ -60,10 +60,14 @@ impl ScalarUDFImpl for TimestampNow {
             TimeUnit::Microsecond => Some(now.timestamp_micros()),
             TimeUnit::Nanosecond => now.timestamp_nanos_opt(),
         };
-        let expr = Expr::Cast(datafusion_expr::Cast::new(
-            Box::new(Expr::Literal(ScalarValue::Int64(now), None)),
-            DataType::Timestamp(*self.time_unit(), Some(self.session_timezone().into())),
-        ));
+        let timezone = Some(self.session_timezone().into());
+        let value = match self.time_unit() {
+            TimeUnit::Second => ScalarValue::TimestampSecond(now, timezone),
+            TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(now, timezone),
+            TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(now, timezone),
+            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(now, timezone),
+        };
+        let expr = Expr::Literal(value, None);
         Ok(ExprSimplifyResult::Simplified(expr))
     }
 }

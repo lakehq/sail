@@ -12,12 +12,7 @@ pub enum DefaultTimestampType {
     TimestampNtz,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
-pub enum StoreAssignmentPolicy {
-    Ansi,
-    Strict,
-    Legacy,
-}
+pub use sail_type_system::store_assignment::StoreAssignmentPolicy;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
 pub enum MapKeyDedupPolicy {

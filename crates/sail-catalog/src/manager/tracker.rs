@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use datafusion_expr::{LogicalPlan, ScalarUDF};
+use datafusion_expr::ScalarUDF;
+use sail_query::ir::LogicalPlan;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};

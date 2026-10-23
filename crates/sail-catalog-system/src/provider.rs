@@ -1,8 +1,5 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use datafusion::common::{DFSchema, TableReference};
-use datafusion::logical_expr::{LogicalPlan, TableScan};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
@@ -10,6 +7,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_query::deferred::Deferred;
+use sail_query::ir::{Attribute, ExpressionType, IdGenerator, LogicalPlan, PlanNode, PlanSchema};
 use sail_system_store::catalog::{SystemCatalog, SystemDatabase, SystemTable};
 
 use crate::table_source::SystemTableSource;
@@ -58,20 +57,38 @@ impl SystemCatalogProvider {
             database: database.clone().into(),
             name: table.to_string(),
             kind: TableKind::TemporaryView {
-                plan: Arc::new(LogicalPlan::TableScan(TableScan {
-                    table_name: TableReference::Full {
-                        catalog: Arc::from(SYSTEM_CATALOG_NAME),
-                        // The tail of the namespace is always empty for system databases.
-                        schema: database.head.clone(),
-                        table: Arc::from(t.name()),
-                    },
-                    source: Arc::new(SystemTableSource::new(t)),
-                    projection: None,
-                    projected_schema: Arc::new(DFSchema::try_from(t.schema())?),
-                    filters: vec![],
-                    fetch: None,
-                    statistics_requests: BTreeSet::new(),
-                })),
+                plan: Arc::new(LogicalPlan {
+                    node: Deferred::Resolved(PlanNode::Scan {
+                        name: format!("{SYSTEM_CATALOG_NAME}.{}.{}", database.head, t.name()),
+                        source: Arc::new(SystemTableSource::new(t)),
+                        projection: None,
+                    }),
+                    schema: Deferred::Resolved(PlanSchema {
+                        attributes: {
+                            let mut ids = IdGenerator::default();
+                            t.schema()
+                                .fields()
+                                .iter()
+                                .enumerate()
+                                .map(|(position, field)| {
+                                    let id = ids.attribute();
+                                    Attribute {
+                                        id,
+                                        origin: id,
+                                        name: field.name().clone(),
+                                        qualifier: vec![],
+                                        qualified_position: position,
+                                        plan_ids: vec![],
+                                        hidden: false,
+                                        result_type: Deferred::Resolved(
+                                            ExpressionType::from_field(field),
+                                        ),
+                                    }
+                                })
+                                .collect()
+                        },
+                    }),
+                }),
                 columns,
                 comment: Some(t.description().to_string()),
                 properties: vec![],

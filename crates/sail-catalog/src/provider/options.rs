@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
-use datafusion_expr::LogicalPlan;
 pub use sail_common::spec::{ColumnChange, CreateTableMode};
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
     TemporaryViewSource,
 };
+use sail_query::ir::LogicalPlan;
 use serde::{Deserialize, Serialize};
 
 /// Options for creating a database in a catalog.

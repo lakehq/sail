@@ -791,7 +791,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(result)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: spec::ObjectName::bare("when"),
+                function_name: spec::ObjectName::bare("case"),
                 arguments,
                 named_arguments: vec![],
                 is_distinct: false,

@@ -18,7 +18,7 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Join, JoinConstraint, JoinType, LogicalPlan, Operator,
-    ScalarUDF, UserDefinedLogicalNodeCore, cast, col, lit, when,
+    ScalarUDF, UserDefinedLogicalNodeCore, col, lit, when,
 };
 use educe::Educe;
 use log::trace;
@@ -28,9 +28,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
 use crate::monotonic_id::MonotonicIdNode;
-use crate::row_level::{
-    RowLevelEffectRequirements, StructFieldAlignment, align_row_level_value, evolve_row_level_field,
-};
+use crate::row_level::RowLevelEffectRequirements;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
@@ -309,81 +307,15 @@ pub fn expand_merge(
         target_scan_fields
     );
 
-    let evolves_star_columns = options.with_schema_evolution && merge_has_star_action(&options);
     let mut target_proj_exprs = target_plan
         .schema()
         .fields()
         .iter()
         .zip(desired_target_names.iter())
-        .enumerate()
-        .map(|(index, (field, desired))| -> Result<Expr> {
-            let target_field = options
-                .resolved_target_schema
-                .fields()
-                .get(index)
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "MERGE target field is missing during schema evolution".to_string(),
-                    )
-                })?;
-            let evolved_target = if evolves_star_columns {
-                desired_source_names
-                    .iter()
-                    .position(|source_name| {
-                        merge_names_equal(source_name, desired, options.case_sensitive)
-                    })
-                    .and_then(|source_index| {
-                        options.resolved_source_schema.fields().get(source_index)
-                    })
-                    .map(|source_field| {
-                        evolve_row_level_field(target_field, source_field, options.case_sensitive)
-                    })
-            } else {
-                None
-            };
-            let target_type = evolved_target
-                .as_ref()
-                .map(|field| field.data_type())
-                .unwrap_or_else(|| field.data_type());
-            // Use unqualified column to avoid alias-mismatch when upstream qualifiers differ.
-            Ok(align_row_level_value(
-                Expr::Column(Column::from_name(field.name().clone())),
-                field.data_type(),
-                target_type,
-                options.case_sensitive,
-                StructFieldAlignment::FillMissingWithNull,
-            )?
-            .alias(desired.clone()))
+        .map(|(field, desired)| {
+            Expr::Column(Column::from_name(field.name().clone())).alias(desired.clone())
         })
-        .collect::<Result<Vec<_>>>()?;
-
-    if evolves_star_columns {
-        for (source_field, source_name) in options
-            .resolved_source_schema
-            .fields()
-            .iter()
-            .zip(&desired_source_names)
-        {
-            if desired_target_names.iter().any(|target_name| {
-                merge_names_equal(target_name, source_name, options.case_sensitive)
-            }) {
-                continue;
-            }
-            if is_reserved_merge_column(
-                source_name,
-                path_column,
-                row_index_column,
-                row_delete_metadata_columns,
-                options.case_sensitive,
-            ) {
-                return plan_err!(
-                    "MERGE schema evolution cannot add reserved internal column '{source_name}'"
-                );
-            }
-            let null_value = ScalarValue::try_new_null(source_field.data_type())?;
-            target_proj_exprs.push(lit(null_value).alias(source_name.clone()));
-        }
-    }
+        .collect::<Vec<_>>();
 
     // Ensure MERGE metadata columns are preserved even when desired_target_names was shorter.
     let path_already_present = target_proj_exprs
@@ -1226,17 +1158,6 @@ fn can_fast_append_insert_only(
     Ok(true)
 }
 
-fn merge_has_star_action(options: &MergeIntoOptions) -> bool {
-    options
-        .matched_clauses
-        .iter()
-        .any(|clause| matches!(clause.action, MergeMatchedAction::UpdateAll))
-        || options
-            .not_matched_by_target_clauses
-            .iter()
-            .any(|clause| matches!(clause.action, MergeNotMatchedByTargetAction::InsertAll))
-}
-
 fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
     let preds = options
         .not_matched_by_target_clauses
@@ -1368,27 +1289,6 @@ fn is_merge_metadata_column(
         || name == TARGET_ROW_ID_COLUMN
 }
 
-fn is_reserved_merge_column(
-    name: &str,
-    path_column: &str,
-    row_index_column: Option<&str>,
-    row_delete_metadata_columns: &[&str],
-    case_sensitive: bool,
-) -> bool {
-    [
-        path_column,
-        TARGET_PRESENT_COLUMN,
-        SOURCE_PRESENT_COLUMN,
-        TARGET_ROW_ID_COLUMN,
-        OPERATION_COLUMN,
-        MERGE_SOURCE_METRIC_COLUMN,
-    ]
-    .into_iter()
-    .chain(row_index_column)
-    .chain(row_delete_metadata_columns.iter().copied())
-    .any(|reserved| merge_names_equal(name, reserved, case_sensitive))
-}
-
 fn merge_source_expr(options: &MergeIntoOptions, target_name: &str) -> Option<Expr> {
     options
         .source_column_aliases
@@ -1417,19 +1317,17 @@ fn align_merge_value(
     value: Expr,
     target_field: &datafusion_common::arrow::datatypes::Field,
     value_schema: &DFSchemaRef,
-    case_sensitive: bool,
+    _case_sensitive: bool,
 ) -> Result<Expr> {
     let source_type = value.get_type(value_schema)?;
-    if &source_type == target_field.data_type() {
-        return Ok(cast(value, target_field.data_type().clone()));
+    if &source_type != target_field.data_type() {
+        return plan_err!(
+            "MERGE value for '{}' reached execution with type {source_type}, expected {}",
+            target_field.name(),
+            target_field.data_type()
+        );
     }
-    align_row_level_value(
-        value,
-        &source_type,
-        target_field.data_type(),
-        case_sensitive,
-        StructFieldAlignment::FillMissingWithNull,
-    )
+    Ok(value)
 }
 
 fn build_insert_only_projection(
@@ -1492,7 +1390,7 @@ fn build_insert_only_projection(
         let expr = Expr::Case(Case {
             expr: None,
             when_then_expr,
-            else_expr: Some(Box::new(lit(ScalarValue::Null))),
+            else_expr: Some(Box::new(lit(ScalarValue::try_new_null(field.data_type())?))),
         });
         projections.push(expr.alias(name));
     }
