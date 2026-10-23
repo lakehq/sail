@@ -115,6 +115,7 @@ use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::csv::CsvSource;
 use sail_data_source::formats::noop::NoopSinkExec;
+use sail_data_source::formats::parquet::ParquetWriterExec;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
     PythonDataSourceWriteExec,
@@ -1343,6 +1344,40 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     options,
                     Arc::new(schema),
                     projection,
+                )?))
+            }
+            NodeKind::ParquetWriter(r#gen::ParquetWriterExecNode {
+                input,
+                base_config,
+                options,
+                input_ordering,
+                max_rows_per_file,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let config =
+                    try_decode_message::<datafusion_proto::protobuf::FileSinkConfig>(&base_config)?;
+                let config = FileSinkConfig::try_from(&config)?;
+                let options =
+                    try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
+                let options = TableParquetOptions::try_from(&options)?;
+                let input_ordering = input_ordering
+                    .map(|ordering| {
+                        self.try_decode_lex_ordering(
+                            &ordering,
+                            &input.schema(),
+                            ctx,
+                            proto_converter,
+                        )
+                    })
+                    .transpose()?;
+                Ok(Arc::new(ParquetWriterExec::try_new(
+                    input,
+                    config,
+                    options,
+                    input_ordering,
+                    usize::try_from(max_rows_per_file)
+                        .map_err(|e| plan_datafusion_err!("invalid Parquet file row limit: {e}"))?,
                 )?))
             }
             NodeKind::TextSink(r#gen::TextSinkExecNode {
@@ -2754,6 +2789,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 num_partitions,
                 schema,
                 projection,
+            })
+        } else if let Some(writer) = node.downcast_ref::<ParquetWriterExec>() {
+            NodeKind::ParquetWriter(r#gen::ParquetWriterExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    writer.input().clone(),
+                )?,
+                base_config: try_encode_message(
+                    datafusion_proto::protobuf::FileSinkConfig::try_from(writer.config())?,
+                )?,
+                options: try_encode_message(gen_datafusion_common::TableParquetOptions::try_from(
+                    writer.options(),
+                )?)?,
+                input_ordering: writer
+                    .input_ordering()
+                    .map(|ordering| self.try_encode_lex_ordering(ordering, proto_converter))
+                    .transpose()?,
+                max_rows_per_file: u64::try_from(writer.max_rows_per_file())
+                    .map_err(|e| plan_datafusion_err!("invalid Parquet file row limit: {e}"))?,
             })
         } else if let Some(data_sink) = node.downcast_ref::<DataSinkExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -5999,6 +6054,95 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
         codec.try_decode_udf(&name, &buf)
+    }
+
+    #[test]
+    fn test_parquet_writer_round_trip_preserves_partitioning_options_and_order() -> Result<()> {
+        use datafusion::datasource::listing::ListingTableUrl;
+        use datafusion::datasource::physical_plan::FileOutputMode;
+        use datafusion::logical_expr::dml::InsertOp;
+        use datafusion::physical_plan::ExecutionPlanProperties;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        use crate::job_graph::{JobGraph, JobGraphOptions, TaskPlacement};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("part", DataType::Utf8, false),
+            Field::new("id", DataType::Int64, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(schema.clone()).with_partitions(4));
+        let url = ListingTableUrl::parse("s3://bucket/output/")?;
+        let config = FileSinkConfig {
+            original_url: url.to_string(),
+            object_store_url: url.object_store(),
+            table_paths: vec![url],
+            file_group: Default::default(),
+            output_schema: schema,
+            table_partition_cols: vec![("part".into(), DataType::Utf8)],
+            insert_op: InsertOp::Append,
+            keep_partition_by_columns: false,
+            file_extension: "zst.parquet".into(),
+            file_output_mode: FileOutputMode::Directory,
+        };
+        let mut options = TableParquetOptions::default();
+        options.global.compression = Some("zstd(3)".into());
+        options.global.skip_arrow_metadata = true;
+        options.global.max_row_group_size = 11;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new(
+            Arc::new(Column::new("id", 1)),
+            datafusion::arrow::compute::SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )]);
+        let plan = Arc::new(ParquetWriterExec::try_new(
+            input,
+            config,
+            options.clone(),
+            ordering,
+            17,
+        )?);
+        let bytes = try_encode_physical_plan(&RemoteExecutionCodec, plan.clone())?;
+        let decoded =
+            try_decode_physical_plan(&TaskContext::default(), &RemoteExecutionCodec, &bytes)?;
+        let writer = decoded
+            .downcast_ref::<ParquetWriterExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected ParquetWriterExec"))?;
+        assert_eq!(writer.options(), &options);
+        assert_eq!(writer.input_ordering(), plan.input_ordering());
+        assert_eq!(
+            writer.config().table_partition_cols,
+            plan.config().table_partition_cols
+        );
+        assert_eq!(writer.config().table_paths, plan.config().table_paths);
+        assert_eq!(writer.config().file_extension, "zst.parquet");
+        assert_eq!(writer.max_rows_per_file(), 17);
+        assert_eq!(
+            writer.properties().output_partitioning().partition_count(),
+            4
+        );
+        let graph = JobGraph::try_new(
+            decoded,
+            JobGraphOptions {
+                shuffle_backend: crate::shuffle::ShuffleBackendKind::Flight {
+                    compression: crate::shuffle::ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )
+        .map_err(|e| plan_datafusion_err!("{e}"))?;
+        assert_eq!(graph.stages().len(), 1);
+        assert_eq!(graph.stages()[0].placement, TaskPlacement::Worker);
+        assert_eq!(
+            graph.stages()[0]
+                .plan
+                .output_partitioning()
+                .partition_count(),
+            4
+        );
+        Ok(())
     }
 
     #[test]

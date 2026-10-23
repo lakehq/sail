@@ -7285,12 +7285,14 @@ dependencies = [
  "memchr",
  "object_store",
  "once_cell",
+ "parquet",
  "percent-encoding",
  "pyo3",
  "regex",
  "sail-build-scripts",
  "sail-common",
  "sail-common-datafusion",
+ "sail-parquet",
  "sail-physical-plan",
  "sail-sql-analyzer",
  "serde",
@@ -7298,6 +7300,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -7612,6 +7615,21 @@ dependencies = [
  "tokio-util",
  "tonic",
  "url",
+]
+
+[[package]]
+name = "sail-parquet"
+version = "0.7.2"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "bytes",
+ "futures",
+ "log",
+ "object_store",
+ "parquet",
+ "tokio",
 ]
 
 [[package]]

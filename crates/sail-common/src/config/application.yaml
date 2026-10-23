@@ -736,26 +736,25 @@
   type: boolean
   default: "true"
   description: |
-    (Writing) Whether to parallelize writing for each single Parquet file.
-    If the value is `true`, each column in each row group in each file are serialized in parallel.
+    (Writing) Legacy DataFusion single-file parallelism option, accepted for compatibility.
+    Sail writes files in parallel across execution partitions; this option does not
+    change the Sail Parquet writer's concurrency.
   experimental: true
 
 - key: parquet.maximum_parallel_row_group_writers
   type: number
   default: "2"
   description: |
-    (Writing) The maximum number of row group writers to use for the Parquet writer.
-    This may improve performance when writing large Parquet files,
-    at the expense of higher memory usage.
+    (Writing) Legacy DataFusion row-group concurrency option, accepted for compatibility.
+    Sail writes one row group at a time in each execution partition.
   experimental: true
 
 - key: parquet.maximum_buffered_record_batches_per_stream
   type: number
   default: "16"
   description: |
-    (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
-    This may improve performance when writing large Parquet files,
-    at the expense of higher memory usage.
+    (Writing) Legacy DataFusion demux buffering option, accepted for compatibility.
+    Sail consumes each execution partition directly without per-file batch queues.
   experimental: true
 
 - key: parquet.content_defined_chunking.enabled
