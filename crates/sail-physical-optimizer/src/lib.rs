@@ -36,6 +36,7 @@ mod collect_left;
 mod explicit_repartition;
 mod filter_pushdown;
 mod input_file_name;
+mod join_hint;
 mod join_reorder;
 mod projection_pushdown;
 mod scan_partitions;
@@ -61,6 +62,7 @@ pub fn get_physical_optimizers(
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(SelectSemiJoinBuildSide));
+    rules.push(Arc::new(join_hint::ApplyJoinHints));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(FilterPushdown::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because

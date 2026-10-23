@@ -236,6 +236,12 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
+        if let Some(value) = config.get_option("spark.sql.optimizer.disableHints") {
+            output.disable_hints = value.trim().to_ascii_lowercase().parse()?;
+        }
+        if let Some(value) = config.get_option("spark.sql.adaptive.enabled") {
+            output.adaptive_enabled = value.trim().to_ascii_lowercase().parse()?;
+        }
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_REDACTION_OPTIONS_REGEX) {
             output.redaction_options_regex = value.to_string();
         }

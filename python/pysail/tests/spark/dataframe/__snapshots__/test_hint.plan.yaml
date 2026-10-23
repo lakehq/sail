@@ -1,0 +1,256 @@
+# serializer version: 1
+---
+name: "test_dataframe_join_hint_survives_unary_operators"
+data:
+  BROADCAST: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as a, #8@1 as b]
+      ProjectionExec: expr=[#4@0 as #7, #6@1 as #8]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#3@0, #6@0)], projection=[#4@1, #6@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#2@1 as #3, #1@0 as #4]
+              FilterExec: #1@0 > 2
+                ProjectionExec: expr=[#0@0 as #1, #0@0 % 4 as #2]
+                  RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+          ProjectionExec: expr=[#5@0 as #6]
+            CooperativeExec
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+  MERGE: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as a, #8@1 as b]
+      ProjectionExec: expr=[#4@2 as #7, #6@0 as #8]
+        SortMergeJoinExec: join_type=Inner, on=[(#6@0, #3@0)]
+          SortExec: expr=[#6@0 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=2
+              ProjectionExec: expr=[#5@0 as #6]
+                RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          SortExec: expr=[#3@0 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=3
+              ProjectionExec: expr=[#2@1 as #3, #1@0 as #4]
+                FilterExec: #1@0 > 2
+                  ProjectionExec: expr=[#0@0 as #1, #0@0 % 4 as #2]
+                    RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  SHUFFLE_HASH: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as a, #8@1 as b]
+      ProjectionExec: expr=[#4@0 as #7, #6@1 as #8]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#3@0, #6@0)], projection=[#4@1, #6@2]
+          RepartitionExec: partitioning=Hash([#3@0], 4), input_partitions=3
+            ProjectionExec: expr=[#2@1 as #3, #1@0 as #4]
+              FilterExec: #1@0 > 2
+                ProjectionExec: expr=[#0@0 as #1, #0@0 % 4 as #2]
+                  RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+          RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=2
+            ProjectionExec: expr=[#5@0 as #6]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+  SHUFFLE_REPLICATE_NL: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as a, #8@1 as b]
+      ProjectionExec: expr=[#4@0 as #7, #6@1 as #8]
+        NestedLoopJoinExec: join_type=Inner, filter=#6@0 = #3@1, projection=[#4@1, #6@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#2@1 as #3, #1@0 as #4]
+              FilterExec: #1@0 > 2
+                ProjectionExec: expr=[#0@0 as #1, #0@0 % 4 as #2]
+                  RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+          ProjectionExec: expr=[#5@0 as #6]
+            CooperativeExec
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+---
+name: "test_join_hint_strategy_precedence_and_scope"
+data:
+  BROADCAST(hint_left): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #1@1)], projection=[#0@1, #2@0]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #2]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+            CooperativeExec
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  BROADCAST(l): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@1, #2@0)], projection=[#0@0, #2@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+          ProjectionExec: expr=[#0@0 as #2]
+            CooperativeExec
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+  BROADCAST(l), MERGE(l): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@1, #2@0)], projection=[#0@0, #2@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+          ProjectionExec: expr=[#0@0 as #2]
+            CooperativeExec
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+  BROADCAST(l, r): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #1@1)], projection=[#0@1, #2@0]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #2]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+            CooperativeExec
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  BROADCAST(missing): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #1@1)], projection=[#0@1, #2@0]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #2]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+            CooperativeExec
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  BROADCAST(r): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #1@1)], projection=[#0@1, #2@0]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #2]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+            CooperativeExec
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  MERGE(l): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@1 as #3, #2@0 as #4]
+        SortMergeJoinExec: join_type=Inner, on=[(#2@0, #1@1)]
+          SortExec: expr=[#2@0 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
+              ProjectionExec: expr=[#0@0 as #2]
+                RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          SortExec: expr=[#1@1 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#1@1], 4), input_partitions=3
+              ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+                RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  MERGE(l), BROADCAST(l): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@1 as #3, #2@0 as #4]
+        SortMergeJoinExec: join_type=Inner, on=[(#2@0, #1@1)]
+          SortExec: expr=[#2@0 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
+              ProjectionExec: expr=[#0@0 as #2]
+                RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          SortExec: expr=[#1@1 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#1@1], 4), input_partitions=3
+              ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+                RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  MERGE(l), BROADCAST(r): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#2@0, #1@1)], projection=[#0@1, #2@0]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #2]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+            CooperativeExec
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  SHUFFLE_HASH(l): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#1@1, #2@0)], projection=[#0@0, #2@2]
+          RepartitionExec: partitioning=Hash([#1@1], 4), input_partitions=3
+            ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
+            ProjectionExec: expr=[#0@0 as #2]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+  SHUFFLE_HASH(l), MERGE(r): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@1 as #3, #2@0 as #4]
+        SortMergeJoinExec: join_type=Inner, on=[(#2@0, #1@1)]
+          SortExec: expr=[#2@0 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
+              ProjectionExec: expr=[#0@0 as #2]
+                RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          SortExec: expr=[#1@1 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#1@1], 4), input_partitions=3
+              ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+                RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  SHUFFLE_HASH(r): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#2@0, #1@1)], projection=[#0@1, #2@0]
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
+            ProjectionExec: expr=[#0@0 as #2]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          RepartitionExec: partitioning=Hash([#1@1], 4), input_partitions=3
+            ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  SHUFFLE_REPLICATE_NL(l): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        NestedLoopJoinExec: join_type=Inner, filter=#2@0 = #1@2, projection=[#0@0, #2@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+          ProjectionExec: expr=[#0@0 as #2]
+            CooperativeExec
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+  SHUFFLE_REPLICATE_NL(l), SHUFFLE_HASH(r): |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
+        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#2@0, #1@1)], projection=[#0@1, #2@0]
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
+            ProjectionExec: expr=[#0@0 as #2]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          RepartitionExec: partitioning=Hash([#1@1], 4), input_partitions=3
+            ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  'cte: c': |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as a, #6@1 as b]
+      ProjectionExec: expr=[#2@0 as #5, #4@1 as #6]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#3@1, #4@0)], projection=[#2@0, #4@2]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #2, #0@0 % 4 as #3]
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+          ProjectionExec: expr=[#0@0 as #4]
+            CooperativeExec
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+  'cte: hint_left': |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as a, #6@1 as b]
+      ProjectionExec: expr=[#2@0 as #5, #4@1 as #6]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #3@1)], projection=[#2@1, #4@0]
+          CoalescePartitionsExec
+            ProjectionExec: expr=[#0@0 as #4]
+              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          ProjectionExec: expr=[#0@0 as #2, #0@0 % 4 as #3]
+            CooperativeExec
+              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
+  unaliased temporary view: |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#3@0 as a, #4@1 as b]
+      ProjectionExec: expr=[#0@1 as #3, #2@0 as #4]
+        SortMergeJoinExec: join_type=Inner, on=[(#2@0, #1@1)]
+          SortExec: expr=[#2@0 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=2
+              ProjectionExec: expr=[#0@0 as #2]
+                RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          SortExec: expr=[#1@1 ASC], preserve_partitioning=[true]
+            RepartitionExec: partitioning=Hash([#1@1], 4), input_partitions=3
+              ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
+                RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]

@@ -31,6 +31,7 @@ def normalized_plan(df):
     return normalize_plan_text(df._explain_string())  # noqa: SLF001
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail defaults DataFrame.repartition to the input partition count")
 def test_explicit_repartition(spark):
     assert partition_count(spark.range(0, 10, 1, 2)) == 2  # noqa: PLR2004
     assert (
@@ -55,12 +56,6 @@ def test_range_repartition_preserves_rows_and_partition_count(spark, descending)
 
 # Regression extending Spark 3 (3.5.9): pyspark/sql/dataframe.py, DataFrame.repartitionByRange doctest.
 # Uses Connect partition IDs/counts instead of the RDD API.
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="repartitionByRange currently uses hash partitioning instead of ordered range boundaries",
-    raises=AssertionError,
-    strict=True,
-)
 @pytest.mark.parametrize("descending", [False, True])
 def test_range_repartition_has_nonoverlapping_ordered_boundaries(spark, descending):
     source = spark.range(0, 36, 1, 4).withColumn("key", F.col("id") % 12)
@@ -117,6 +112,7 @@ def test_repartition_assigns_rows_round_robin(spark):
     ]
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="different plans in JVM Spark")
 def test_explicit_repartition_plan_shape_uses_expected_physical_nodes(spark):
     round_robin_plan = normalized_plan(spark.sql("SELECT 1 AS a, 'foo' AS b").repartition(5))
     repartition_one_plan = normalized_plan(spark.range(0, 8, 1, 2).repartition(1))
@@ -209,7 +205,12 @@ def test_coalesce_hint(spark):
 
 
 def test_coalesce_hint_rejects_zero_partitions(spark):
-    with pytest.raises(Exception, match="COALESCE hint requires at least one partition"):
+    message = (
+        "Number of partitions .* must be positive"
+        if is_jvm_spark()
+        else "COALESCE hint requires at least one partition"
+    )
+    with pytest.raises(Exception, match=message):
         partition_count(spark.range(0, 10, 1, 2).hint("COALESCE", 0))
 
 

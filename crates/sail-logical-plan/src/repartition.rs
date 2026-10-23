@@ -10,6 +10,7 @@ pub enum ExplicitRepartitionKind {
     Coalesce,
     RoundRobin,
     Hash,
+    Range,
 }
 
 impl ExplicitRepartitionKind {
@@ -18,6 +19,7 @@ impl ExplicitRepartitionKind {
             Self::Coalesce => "coalesce",
             Self::RoundRobin => "round_robin",
             Self::Hash => "hash",
+            Self::Range => "range",
         }
     }
 }

@@ -27,7 +27,9 @@ use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
-use datafusion_physical_expr::{Partitioning, RangePartitioning, create_physical_sort_exprs};
+use datafusion_physical_expr::{
+    Partitioning, RangePartitioning, SplitPoint, create_physical_sort_exprs,
+};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -44,6 +46,7 @@ use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
+use sail_logical_plan::join_hint::JoinHintNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
@@ -62,6 +65,7 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::join_hint::JoinHintExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -464,6 +468,14 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.names().to_vec(),
                 node.schema().inner().clone(),
             ))
+        } else if let Some(node) = node.as_any().downcast_ref::<JoinHintNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("JoinHint requires exactly one physical input");
+            };
+            Arc::new(JoinHintExec {
+                input: Arc::clone(input),
+                strategy: node.strategy,
+            })
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {
                 return internal_err!(
@@ -656,7 +668,7 @@ fn plan_explicit_partitioning(
                 internal_err!("explicit round-robin repartition requires a target partition count")
             }
         },
-        ExplicitRepartitionKind::Hash => {
+        ExplicitRepartitionKind::Hash | ExplicitRepartitionKind::Range => {
             if expressions.is_empty() {
                 return internal_err!(
                     "explicit hash repartitioning requires at least one partitioning expression"
@@ -672,7 +684,26 @@ fn plan_explicit_partitioning(
                 .iter()
                 .map(|e| planner.create_physical_expr(e, schema, session, planning_ctx))
                 .collect::<datafusion_common::Result<Vec<_>>>()?;
-            Ok(Partitioning::Hash(expressions, num_partitions))
+            if kind == ExplicitRepartitionKind::Range {
+                let ordering =
+                    LexOrdering::new(expressions.into_iter().map(PhysicalSortExpr::new_default))
+                        .ok_or_else(|| {
+                            internal_datafusion_err!("range partitioning requires an expression")
+                        })?;
+                let split_points = (1..num_partitions)
+                    .map(|i| {
+                        SplitPoint::new(vec![datafusion_common::ScalarValue::Float64(Some(
+                            i as f64 / num_partitions as f64,
+                        ))])
+                    })
+                    .collect();
+                Ok(Partitioning::Range(RangePartitioning::try_new(
+                    ordering,
+                    split_points,
+                )?))
+            } else {
+                Ok(Partitioning::Hash(expressions, num_partitions))
+            }
         }
     }
 }

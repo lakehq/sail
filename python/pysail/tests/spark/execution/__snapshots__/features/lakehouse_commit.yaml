@@ -253,6 +253,9 @@ data:
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
+    physical_plan after ApplyJoinHints:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -629,6 +632,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -1042,6 +1048,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
@@ -1704,6 +1713,9 @@ data:
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
+    physical_plan after ApplyJoinHints:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -2258,6 +2270,9 @@ data:
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
 
+    physical_plan after ApplyJoinHints:
+    SAME TEXT AS ABOVE
+
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
@@ -2709,6 +2724,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after SelectSemiJoinBuildSide:
+    SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
