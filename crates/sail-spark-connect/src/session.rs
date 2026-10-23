@@ -5,8 +5,10 @@ use std::time::Duration;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
+use datafusion::prelude::SessionContext;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
+use sail_common_datafusion::session::delta::DeltaSessionConfig;
 use sail_plan::config::PlanConfig;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
@@ -82,7 +84,29 @@ impl SparkSession {
 
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
         let state = self.state.lock()?;
-        let mut config = PlanConfig::try_from(&state.config)?;
+        self.resolve_plan_config(&state.config)
+    }
+
+    /// Captures planning and storage settings while sharing session services.
+    pub(crate) fn operation_context(
+        &self,
+        ctx: &SessionContext,
+    ) -> SparkResult<(SessionContext, Arc<PlanConfig>)> {
+        let mut operation_state = ctx.state();
+        let (plan_config, delta_config) = {
+            let state = self.state.lock()?;
+            let plan_config = self.resolve_plan_config(&state.config)?;
+            let delta_config = DeltaSessionConfig::from(&state.config);
+            (plan_config, delta_config)
+        };
+        operation_state
+            .config_mut()
+            .set_extension(Arc::new(delta_config));
+        Ok((SessionContext::new_with_state(operation_state), plan_config))
+    }
+
+    fn resolve_plan_config(&self, config: &SparkRuntimeConfig) -> SparkResult<Arc<PlanConfig>> {
+        let mut config = PlanConfig::try_from(config)?;
         config.session_user_id = self.user_id().to_string();
         Ok(Arc::new(config))
     }

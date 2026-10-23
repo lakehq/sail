@@ -35,7 +35,8 @@ use crate::spark::connect::{StorageLevel, plan};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let (ctx, config) = spark.operation_context(ctx)?;
+    let resolver = PlanResolver::new(&ctx, config);
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
@@ -69,13 +70,9 @@ pub(crate) async fn handle_analyze_explain(
     let explain_mode = ExplainMode::try_from(explain_mode)?;
     let spec_mode = explain_mode.try_into()?;
     let options = ExplainOptions::from_mode(spec_mode);
-    let explain = explain_string(
-        ctx,
-        spark.plan_config()?,
-        spec::Plan::Query(plan.try_into()?),
-        options,
-    )
-    .await?;
+    let (ctx, config) = spark.operation_context(ctx)?;
+    let explain =
+        explain_string(&ctx, config, spec::Plan::Query(plan.try_into()?), options).await?;
     Ok(ExplainResponse {
         explain_string: explain.output,
     })
@@ -120,11 +117,12 @@ pub(crate) async fn handle_analyze_input_files(
     let InputFilesRequest { plan } = request;
     let plan = plan.required("plan")?;
     let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let (ctx, config) = spark.operation_context(ctx)?;
+    let resolver = PlanResolver::new(&ctx, config);
     let NamedPlan { plan, .. } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
-    let files = sail_data_source::listing::input_files::input_files(ctx, plan).await?;
+    let files = sail_data_source::listing::input_files::input_files(&ctx, plan).await?;
     Ok(InputFilesResponse { files })
 }
 

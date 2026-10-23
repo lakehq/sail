@@ -6,6 +6,7 @@ use datafusion::catalog::Session;
 use datafusion::execution::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
@@ -188,9 +189,10 @@ pub trait LakeSource: DataSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<RuntimeEnv>,
+        config: &SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
-        let _ = (runtime_env, info);
+        let _ = (runtime_env, config, info);
         Ok(LakeSourceCreateTableResult::default())
     }
 

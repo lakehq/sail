@@ -10,6 +10,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
@@ -63,7 +64,7 @@ use crate::table::{
     create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
 };
-use crate::transaction::CommitBuilder;
+use crate::transaction::{CommitBuilder, CommitProperties};
 use crate::{DeltaTableError, create_delta_source};
 
 /// Delta Lake implementation of [`LakeSource`].
@@ -210,6 +211,7 @@ impl LakeSource for DeltaLakeSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<RuntimeEnv>,
+        config: &SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
         let LakeSourceCreateTableInfo {
@@ -453,7 +455,7 @@ impl LakeSource for DeltaLakeSource {
             );
         }
 
-        CommitBuilder::default()
+        CommitBuilder::from(CommitProperties::from_session_config(config))
             .with_actions(actions)
             .build(replace_snapshot, log_store, operation)
             .await
@@ -482,6 +484,7 @@ impl LakeSource for DeltaLakeSource {
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         let runtime_env = ctx.runtime_env();
+        let commit_properties = CommitProperties::from_session_config(ctx.session_config());
         match operation {
             LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
                 not_impl_err!("Snapshot references require an Iceberg table")
@@ -568,7 +571,7 @@ impl LakeSource for DeltaLakeSource {
                 .await
             }
             LakeSourceAlterTableOperation::AddCheckConstraint { name, expression } => {
-                self.add_check_constraint(runtime_env, path, &name, &expression)
+                self.add_check_constraint(runtime_env, path, &name, &expression, commit_properties)
                     .await
             }
         }?;
@@ -1090,9 +1093,8 @@ impl DeltaLakeSource {
         path: &str,
         name: &str,
         expression: &str,
+        commit_properties: CommitProperties,
     ) -> Result<()> {
-        use crate::transaction::CommitBuilder;
-
         let url = parse_location_to_url(path)?;
         let object_store = runtime_env
             .object_store_registry
@@ -1145,7 +1147,7 @@ impl DeltaLakeSource {
         }
         actions.push(CommitAction::Metadata(new_metadata));
 
-        CommitBuilder::default()
+        CommitBuilder::from(commit_properties)
             .with_actions(actions)
             .build(
                 Some(snapshot),
