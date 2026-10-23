@@ -17,6 +17,17 @@ INTEGRATION_TEST_PATHS = [
     Path(__file__).parent / "spark" / "catalog" / "unity",
 ]
 
+# Keep these names in sync with the catalog-tests.yml job matrix. Group by service
+# so related tests can reuse their containers and session-scoped fixtures.
+INTEGRATION_TEST_SUITES = {
+    "hms": ("catalog/hms", "spark/catalog/hms"),
+    "unity": ("catalog/unity", "spark/catalog/unity"),
+    "iceberg-rest": ("catalog/iceberg_rest", "spark/catalog/iceberg_rest"),
+    "delta": ("spark/delta",),
+    "celeborn": ("celeborn", "spark/execution/test_shuffle_celeborn.py"),
+    "other": (),
+}
+
 
 def pytest_configure(config: pytest.Config) -> None:
     """Configure pytest.
@@ -26,6 +37,11 @@ def pytest_configure(config: pytest.Config) -> None:
     We must customize the configuration here instead of using `pytest.ini` or `pyproject.toml`
     since these files are not part of the installed package.
     """
+
+    suite = os.environ.get("PYSAIL_INTEGRATION_SUITE")
+    if suite is not None and suite not in INTEGRATION_TEST_SUITES:
+        msg = f"Unknown PYSAIL_INTEGRATION_SUITE {suite!r}; expected one of: {', '.join(INTEGRATION_TEST_SUITES)}"
+        raise pytest.UsageError(msg)
 
     config.pluginmanager.import_plugin("pysail.testing.containers.celeborn")
     config.pluginmanager.import_plugin("pysail.testing.containers.glue")
@@ -79,12 +95,29 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if any(item_path.is_relative_to(path.resolve()) for path in INTEGRATION_TEST_PATHS):
             item.add_marker(pytest.mark.integration)
 
-    if not config.getoption("markexpr"):
-        deselected = [item for item in items if item.get_closest_marker("integration")]
+    suite = os.environ.get("PYSAIL_INTEGRATION_SUITE")
+    if suite is not None or not config.getoption("markexpr"):
+        remaining = []
+        deselected = []
+        for item in items:
+            integration = item.get_closest_marker("integration") is not None
+            if suite is None:
+                selected = not integration
+            else:
+                path = item.path.resolve().relative_to(package_root / "tests")
+                selected = integration and integration_test_suite(path) == suite
+            (remaining if selected else deselected).append(item)
         if deselected:
-            remaining = [item for item in items if item not in deselected]
             config.hook.pytest_deselected(items=deselected)
             items[:] = remaining
+
+
+def integration_test_suite(path: Path) -> str:
+    """Assign a path relative to pysail/tests to exactly one integration suite."""
+    for suite, prefixes in INTEGRATION_TEST_SUITES.items():
+        if any(path.is_relative_to(prefix) for prefix in prefixes):
+            return suite
+    return "other"
 
 
 def configure_sail_environment():
