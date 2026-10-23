@@ -1854,3 +1854,399 @@ Feature: Scalar subqueries in distributed execution
         | 0  | 4 |
         | 1  | 1 |
         | 2  | 0 |
+
+  Rule: Cast correlation keys are computed on the rows that Spark casts
+    Scenario: An outer filter on the correlated column keeps a guarded cast safe
+      When query
+        """
+        SELECT o.id FROM VALUES (0L), (1L), (2L) AS o(id)
+        WHERE o.id >= 0
+          AND (SELECT count(*) FROM VALUES ('0', 1), ('1', 3), ('bad', 4) AS i(k, v)
+               WHERE i.k <> 'bad' AND CAST(i.k AS BIGINT) = o.id) >= 0
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id |
+        | 0  |
+        | 1  |
+        | 2  |
+
+    Scenario: A lateral view generator drops rows before the cast correlation
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM VALUES ('0', 1), ('1', 3), ('bad', 4) AS i(k, v)
+           LATERAL VIEW explode(IF(i.v = 4, CAST(array() AS ARRAY<INT>), array(i.v))) e AS x
+           WHERE CAST(i.k AS BIGINT) = o.id) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 1 |
+        | 1  | 1 |
+        | 2  | 0 |
+
+    Scenario: An explode of an empty array drops rows before the cast correlation
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM (SELECT explode(a) AS x
+             FROM VALUES ('0', array(1, 2)), ('bad', CAST(array() AS ARRAY<INT>)), ('1', array(3)) AS i(k, a)
+             WHERE CAST(i.k AS BIGINT) = o.id)) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 2 |
+        | 1  | 1 |
+        | 2  | 0 |
+
+    Scenario: A semi join above an inner join drops rows before the cast correlation
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM (SELECT t.v FROM (SELECT * FROM VALUES ('0', 1), ('00', 2), ('1', 3), ('bad', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id) t JOIN VALUES (1), (2), (3), (4) AS j(w) ON t.v = j.w) q
+           LEFT SEMI JOIN VALUES (1), (2), (3) AS s(w) ON q.v = s.w) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 2 |
+        | 1  | 1 |
+        | 2  | 0 |
+
+    Scenario: A posexplode of a map above an inner join drops rows before the cast correlation
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM (SELECT posexplode(t.m) FROM (SELECT * FROM VALUES ('0', map('a', 1, 'b', 2)),
+             ('bad', CAST(map() AS MAP<STRING, INT>)), ('1', map('c', 4)) AS i(k, m)
+             WHERE CAST(i.k AS BIGINT) = o.id) t JOIN VALUES ('0'), ('1'), ('bad') AS j(kk) ON t.k = j.kk)) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 2 |
+        | 1  | 1 |
+        | 2  | 0 |
+
+    # Spark 4.2 casts every input row of the inner join here and fails on 'bad', which
+    # the join removes; it returns rows when its optimizer infers a filter that removes
+    # the row first. Sail consistently casts only the rows that reach the aggregate.
+    @sail-only
+    Scenario: An inner join drops rows before the cast correlation
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM (SELECT * FROM VALUES ('0', 1), ('00', 2), ('1', 3), ('bad', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id) t
+           JOIN VALUES (1), (2), (3) AS j(w) ON t.v = j.w) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 2 |
+        | 1  | 1 |
+        | 2  | 0 |
+
+  Rule: Cast correlation keys keep correct groups around aggregates and windows
+    Scenario: A cast of a directly compared column keeps windows above a grouped aggregate
+      When query
+        """
+        SELECT o.id, o.s,
+          (SELECT max(w) FROM (SELECT row_number() OVER (PARTITION BY k ORDER BY count(*)) AS w
+             FROM VALUES ('0', 1), ('0', 2), ('00', 3), ('1', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id AND i.k = o.s GROUP BY k)) AS n
+        FROM VALUES (0L, '0'), (0L, '00'), (1L, '1'), (2L, '2') AS o(id, s)
+        ORDER BY o.id, o.s
+        """
+      Then query result collected ordered
+        | id | s  | n    |
+        | 0  | 0  | 1    |
+        | 0  | 00 | 1    |
+        | 1  | 1  | 1    |
+        | 2  | 2  | NULL |
+
+    Scenario Outline: A cast of a directly compared column keeps <operator> above a grouped aggregate
+      When query
+        """
+        SELECT o.id, o.s,
+          (SELECT <consumer> FROM (
+            SELECT <projection> AS z
+            FROM VALUES ('0', 1), ('0', 2), ('00', 3), ('1', 4),
+                        (CAST(NULL AS STRING), 5) AS i(k, v)
+            WHERE CAST(i.k AS BIGINT) = o.id AND i.k = o.s
+            GROUP BY k
+          )) AS n
+        FROM VALUES (0L, '0'), (0L, '00'), (1L, '1'), (2L, '2'), (0L, '0'),
+                    (CAST(NULL AS BIGINT), CAST(NULL AS STRING)),
+                    (0L, CAST(NULL AS STRING)) AS o(id, s)
+        ORDER BY o.id NULLS FIRST, o.s NULLS FIRST, n NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | s    | n         |
+        | NULL | NULL | <missing> |
+        | 0    | NULL | <missing> |
+        | 0    | 0    | <zero>    |
+        | 0    | 0    | <zero>    |
+        | 0    | 00   | <other>   |
+        | 1    | 1    | <other>   |
+        | 2    | 2    | <missing> |
+
+      Examples:
+        | operator                  | projection                                                                                          | consumer | zero | other | missing |
+        | a window counted          | row_number() OVER (PARTITION BY k ORDER BY count(*))                                                | count(*) | 1    | 1     | 0       |
+        | a running window          | sum(count(*)) OVER (PARTITION BY k ORDER BY max(v) ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) | max(z)   | 2    | 1     | NULL    |
+        | a generator               | explode(array(count(*), count(*) + 1))                                                              | max(z)   | 3    | 2     | NULL    |
+        | a generator counted       | explode(array(count(*), count(*) + 1))                                                              | count(*) | 2    | 2     | 0       |
+        | an empty generator        | explode(IF(count(*) = 2, CAST(array() AS ARRAY<BIGINT>), array(count(*))))                          | count(*) | 0    | 1     | 0       |
+        | an outer null generator   | explode_outer(IF(count(*) = 2, CAST(NULL AS ARRAY<BIGINT>), array(count(*))))                       | count(*) | 1    | 1     | 0       |
+
+    Scenario: A correlated cast in HAVING over a grouped aggregate
+      When query
+        """
+        SELECT o.id, o.g,
+          (SELECT count(*) FROM VALUES ('0', 10), ('00', 10), ('1', 20) AS i(k, g)
+           WHERE i.g = o.g GROUP BY i.g HAVING CAST(max(i.k) AS BIGINT) = o.id) AS n
+        FROM VALUES (0L, 10), (1L, 20), (0L, 20) AS o(id, g)
+        ORDER BY o.id, o.g
+        """
+      Then query result collected ordered
+        | id | g  | n    |
+        | 0  | 10 | 2    |
+        | 0  | 20 | NULL |
+        | 1  | 20 | 1    |
+
+    Scenario: A window above the grouped aggregate keeps the grouped cast correlation
+      When query
+        """
+        SELECT o.id,
+          (SELECT max(w) FROM (SELECT sum(count(*)) OVER (PARTITION BY k) AS w
+             FROM VALUES ('0', 1), ('0', 2), ('1', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id GROUP BY k)) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n    |
+        | 0  | 2    |
+        | 1  | 1    |
+        | 2  | NULL |
+
+    Scenario: A cast correlation below a nested aggregate combines colliding groups
+      When query
+        """
+        SELECT o.id,
+          (SELECT sum(c) FROM (SELECT count(*) AS c
+             FROM VALUES ('0', 1), ('0', 2), ('00', 3), ('1', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id GROUP BY k)) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n    |
+        | 0  | 3    |
+        | 1  | 1    |
+        | 2  | NULL |
+
+    Scenario: A cast correlation above a grouped derived table combines colliding groups
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM (SELECT k, sum(v) AS s FROM VALUES ('0', 1), ('00', 2), ('1', 3) AS i(k, v) GROUP BY k) t
+           WHERE CAST(t.k AS BIGINT) = o.id) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 2 |
+        | 1  | 1 |
+        | 2  | 0 |
+
+    Scenario: A cast correlation decorrelated in a later optimizer pass keeps its key
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM VALUES ('0'), ('00'), ('1') AS i(k) WHERE CAST(i.k AS BIGINT) = o.id) AS a,
+          (SELECT count(*) FROM (SELECT * FROM VALUES ('0'), ('00'), ('1') AS j(k)
+             WHERE CAST(j.k AS BIGINT) = o.id OFFSET 0)) AS b
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | a | b |
+        | 0  | 2 | 2 |
+        | 1  | 1 | 1 |
+        | 2  | 0 | 0 |
+
+    # Spark 4.2 pulls the DOUBLE -> STRING up-cast over the aggregate and groups by the
+    # raw value, which merges -0.0 and 0.0. Sail groups by the compared string.
+    @sail-only
+    Scenario: A cast of a floating-point column compared directly keeps signed zeros apart
+      When query
+        """
+        SELECT o.d2, o.s,
+          (SELECT count(*) FROM VALUES (CAST('-0.0' AS DOUBLE), 1), (0.0D, 2) AS i(d, v)
+           WHERE i.d = o.d2 AND CAST(i.d AS STRING) = o.s) AS n
+        FROM VALUES (0.0D, '-0.0'), (0.0D, '0.0') AS o(d2, s)
+        ORDER BY o.s
+        """
+      Then query result collected ordered
+        | d2  | s    | n |
+        | 0.0 | -0.0 | 1 |
+        | 0.0 | 0.0  | 1 |
+
+    # Spark 4.2 treats INT -> FLOAT as a lossless up-cast and groups by the raw value,
+    # returning (16777216.0, 1) twice. Sail groups by the compared FLOAT value.
+    @sail-only
+    Scenario: A lossy up-cast correlation groups the compared value
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM VALUES (16777216), (16777217) AS i(k)
+           WHERE CAST(i.k AS FLOAT) = o.id) AS n
+        FROM VALUES (CAST(0 AS FLOAT)), (CAST(16777216 AS FLOAT)) AS o(id)
+        ORDER BY o.id, n
+        """
+      Then query result collected ordered
+        | id         | n |
+        | 0.0        | 0 |
+        | 16777216.0 | 2 |
+
+  # Spark rejects outer references in a grouping-set subquery, which Sail already ran before
+  # cast keys. Expected values come from running each outer row's query uncorrelated on Spark.
+  Rule: Cast correlation keys keep the GROUPING results of grouping sets
+    @sail-only
+    Scenario Outline: A cast correlation keeps <function> of a rolled-up column
+      When query
+        """
+        SELECT o.id,
+          (SELECT sum(z) FROM (SELECT <function> AS z
+             FROM VALUES ('1', 1), ('1', 2), ('2', 3) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id GROUP BY GROUPING SETS ((k, v), (k)))) AS n
+        FROM VALUES (1L), (2L), (3L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n    |
+        | 1  | 1    |
+        | 2  | 1    |
+        | 3  | NULL |
+
+      Examples:
+        | function                                                       |
+        | CAST(grouping(v) AS BIGINT)                                    |
+        | grouping_id(k, v)                                              |
+        | CAST(grouping(k) AS BIGINT) * 10 + CAST(grouping(v) AS BIGINT) |
+
+    @sail-only
+    Scenario: A cast correlation keeps a HAVING filter on GROUPING of a rolled-up column
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM (SELECT v FROM VALUES ('1', 1), ('1', 2), ('2', 3) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id GROUP BY GROUPING SETS ((k, v), (k)) HAVING grouping(v) = 1)) AS n
+        FROM VALUES (1L), (2L), (3L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 1  | 1 |
+        | 2  | 1 |
+        | 3  | 0 |
+
+    @sail-only
+    Scenario: A cast of a floating-point column compared directly keeps GROUPING of a rolled-up column
+      When query
+        """
+        SELECT o.id,
+          (SELECT sum(z) FROM (SELECT CAST(grouping(v) AS BIGINT) AS z
+             FROM VALUES (1.0D, 1), (1.0D, 2), (2.0D, 3) AS i(k, v)
+             WHERE CAST(i.k AS STRING) = o.id AND i.k = o.d GROUP BY GROUPING SETS ((k, v), (k)))) AS n
+        FROM VALUES ('1.0', 1.0D), ('2.0', 2.0D), ('3.0', 3.0D) AS o(id, d)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id  | n    |
+        | 1.0 | 1    |
+        | 2.0 | 1    |
+        | 3.0 | NULL |
+
+    @sail-only
+    Scenario: A cast correlation keeps GROUPING above a correlated inner aggregate
+      When query
+        """
+        SELECT o.id, o.g,
+          (SELECT sum(z) FROM (SELECT CAST(grouping(c1) AS BIGINT) AS z
+             FROM (SELECT k, c1, c2, c3, c4, c5, count(*) AS n
+                   FROM VALUES ('1', 1, 1, 1, 1, 1, 10), ('1', 1, 1, 1, 1, 1, 10), ('2', 1, 1, 1, 1, 1, 20)
+                     AS i(k, c1, c2, c3, c4, c5, g)
+                   WHERE i.g = o.g GROUP BY k, c1, c2, c3, c4, c5)
+             WHERE CAST(k AS BIGINT) = o.id
+             GROUP BY GROUPING SETS ((k, c1, c2, c3, c4, c5), (k, c1, c2, c3, c4, c5)))) AS n
+        FROM VALUES (1L, 10), (2L, 20), (3L, 10), (1L, 20) AS o(id, g)
+        ORDER BY o.id, o.g
+        """
+      Then query result collected ordered
+        | id | g  | n    |
+        | 1  | 10 | 0    |
+        | 1  | 20 | NULL |
+        | 2  | 20 | 0    |
+        | 3  | 10 | NULL |
+
+    @sail-only
+    Scenario: A lossy up-cast correlation groups the compared value in grouping sets
+      When query
+        """
+        SELECT o.id,
+          (SELECT sum(z) FROM (SELECT count(*) * 10 + CAST(grouping(v) AS BIGINT) AS z
+             FROM VALUES (16777216, 1), (16777217, 1), (33554432, 2) AS i(k, v)
+             WHERE CAST(i.k AS FLOAT) = o.id GROUP BY GROUPING SETS ((v), ()))) AS n
+        FROM VALUES (CAST(16777216 AS FLOAT)), (CAST(33554432 AS FLOAT)), (CAST(1 AS FLOAT)) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id         | n    |
+        | 1.0        | NULL |
+        | 16777216.0 | 41   |
+        | 33554432.0 | 21   |
+
+    @sail-only
+    Scenario Outline: A cast of a directly compared column keeps <operator> above <grouping>
+      When query
+        """
+        SELECT o.id, o.s,
+          (SELECT max(z) FROM (
+             SELECT <producer> AS z
+             FROM VALUES ('0', 1), ('0', 2), ('00', 3), ('1', 4),
+                         (CAST(NULL AS STRING), 5) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id AND i.k = o.s
+             GROUP BY <grouping>
+           )) AS n
+        FROM VALUES (0L, '0'), (0L, '00'), (1L, '1'), (2L, '2'), (0L, '0'),
+                    (CAST(NULL AS BIGINT), CAST(NULL AS STRING)) AS o(id, s)
+        ORDER BY o.id NULLS FIRST, o.s NULLS FIRST, n NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | s    | n     |
+        | NULL | NULL | NULL  |
+        | 0    | 0    | <n0>  |
+        | 0    | 0    | <n0>  |
+        | 0    | 00   | <n00> |
+        | 1    | 1    | <n1>  |
+        | 2    | 2    | NULL  |
+
+      Examples:
+        | grouping                 | operator    | producer                                             | n0 | n00 | n1 |
+        | GROUPING SETS ((k), ())  | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  |
+        | ROLLUP(k)                | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  |
+        | CUBE(k)                  | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  |
+        | GROUPING SETS ((k), (k)) | a window    | row_number() OVER (PARTITION BY k ORDER BY count(*)) | 2  | 2   | 2  |
+        | GROUPING SETS ((k), (k)) | a generator | explode(array(count(*), count(*) + 1))               | 3  | 2   | 2  |
