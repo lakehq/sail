@@ -71,10 +71,10 @@ def test_list_offset_widths_preserve_values_and_field_ids(spark, sql_catalog, tm
             {"id": 4, "tags": [None], "items": [None]},
         ]
         assert [tuple(row) for row in frame.selectExpr("id", "CAST(tags AS STRING)").orderBy("id").collect()] == [
-            (1, "[alpha, NULL, 中文]"),
+            (1, "[alpha, null, 中文]"),
             (2, "[]"),
             (3, None),
-            (4, "[NULL]"),
+            (4, "[null]"),
         ]
         assert [row.id for row in frame.filter("array_contains(tags, 'alpha')").collect()] == [1]
         assert frame.selectExpr("get(items, 0).value AS value").filter("value = 10").collect()[0].value == 10  # noqa: PLR2004

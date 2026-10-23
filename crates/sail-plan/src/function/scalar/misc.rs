@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit, when};
@@ -112,6 +112,12 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let expr = arguments.one()?;
+    if let Some(type_of) = spark_interval_type_name(&expr, function_context.schema)? {
+        return Ok(lit(type_of));
+    }
+    if let Some(type_of) = spark_time_type_name(&expr, function_context.schema)? {
+        return Ok(lit(type_of));
+    }
     let data_type = expr.get_type(function_context.schema)?;
     let service = function_context
         .session_context
@@ -120,6 +126,65 @@ fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .plan_formatter()
         .data_type_to_simple_string(&data_type)?;
     Ok(lit(type_of))
+}
+
+/// A TIME is stored as microseconds whatever its declared precision, which travels as field
+/// metadata; the plain Arrow type would always print `time(6)`.
+fn spark_time_type_name(
+    expr: &expr::Expr,
+    schema: &datafusion_common::DFSchemaRef,
+) -> PlanResult<Option<String>> {
+    let field = expr.to_field(schema.as_ref())?.1;
+    // Metadata can leak through a later cast to an unrelated type: trust it only on a TIME.
+    if !matches!(field.data_type(), DataType::Time64(TimeUnit::Microsecond)) {
+        return Ok(None);
+    }
+    let Some(precision) = field
+        .metadata()
+        .get(sail_common::spec::SAIL_SPARK_TIME_PRECISION_METADATA_KEY)
+    else {
+        return Ok(None);
+    };
+    Ok(precision
+        .parse::<u8>()
+        .ok()
+        .map(|precision| format!("time({precision})")))
+}
+
+/// `data_type_to_simple_string` only sees the plain Arrow `DataType`, so it always
+/// prints a YearMonth/DayTime interval as its widest (default) field range. Spark's
+/// `YearMonthIntervalType.typeName`/`DayTimeIntervalType.typeName` instead reflect the
+/// declared start/end fields (e.g. "interval year", not "interval year to month"),
+/// which Sail tracks separately as field metadata on the expression.
+fn spark_interval_type_name(
+    expr: &expr::Expr,
+    schema: &datafusion_common::DFSchemaRef,
+) -> PlanResult<Option<String>> {
+    use sail_common::spec::{IntervalFieldType, SparkIntervalMetadata};
+
+    let field = expr.to_field(schema.as_ref())?.1;
+    let Some(metadata) = field
+        .metadata()
+        .get(sail_common::spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
+    else {
+        return Ok(None);
+    };
+    let metadata = SparkIntervalMetadata::from_json(metadata)?;
+    let field_name = |field: IntervalFieldType| match field {
+        IntervalFieldType::Year => "year",
+        IntervalFieldType::Month => "month",
+        IntervalFieldType::Day => "day",
+        IntervalFieldType::Hour => "hour",
+        IntervalFieldType::Minute => "minute",
+        IntervalFieldType::Second => "second",
+    };
+    let start = field_name(metadata.start_field());
+    let end = field_name(metadata.end_field());
+    Ok(Some(if start == end {
+        format!("interval {start}")
+    } else {
+        format!("interval {start} to {end}")
+    }))
 }
 
 fn bitmap_bit_position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

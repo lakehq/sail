@@ -354,7 +354,8 @@
       "output": {
         "success": {
           "time64": {
-            "timeUnit": "microsecond"
+            "timeUnit": "microsecond",
+            "precision": 6
           }
         }
       }
@@ -392,7 +393,8 @@
       "output": {
         "success": {
           "time64": {
-            "timeUnit": "microsecond"
+            "timeUnit": "microsecond",
+            "precision": 6
           }
         }
       }
@@ -717,7 +719,7 @@
       "input": "time(-1)",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '-'. SQLSTATE: 42601 (line 1, pos 5)\n\n== SQL ==\ntime(-1)\n-----^^^\n",
       "output": {
-        "failure": "parse error: error in SQL parser: found ( at 11:12 expected ':', or data type"
+        "failure": "parse error: invalid argument: [UNSUPPORTED_TIME_PRECISION] The seconds precision -1 of the TIME data type is out of the supported range [0, 6]."
       }
     },
     {
@@ -731,8 +733,9 @@
       "input": "time(0)",
       "output": {
         "success": {
-          "time32": {
-            "timeUnit": "second"
+          "time64": {
+            "timeUnit": "microsecond",
+            "precision": 0
           }
         }
       }
@@ -768,11 +771,7 @@
       "input": "time(9)",
       "exception": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 9 of the TIME data type is out of the supported range [0, 6]. SQLSTATE: 0A001",
       "output": {
-        "success": {
-          "time64": {
-            "timeUnit": "nanosecond"
-          }
-        }
+        "failure": "parse error: invalid argument: [UNSUPPORTED_TIME_PRECISION] The seconds precision 9 of the TIME data type is out of the supported range [0, 6]."
       }
     },
     {

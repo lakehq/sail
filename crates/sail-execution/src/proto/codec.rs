@@ -170,20 +170,23 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::int64_floor_div::Int64FloorDiv;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
-    SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalToCalendarInterval,
-    SparkYearMonthInterval, YearMonthIntervalMonths,
+    SparkCalendarInterval, SparkDayTimeInterval, SparkDayTimeIntervalFromInt64,
+    SparkDayTimeIntervalToCalendarInterval, SparkYearMonthInterval,
+    SparkYearMonthIntervalFromInt64, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_string_to_time::SparkStringToTime;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -234,7 +237,10 @@ use sail_function::scalar::misc::theta_sketch::{
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_cast_decimal_to_float::SparkCastDecimalToFloat;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
+use sail_function::scalar::spark_decimal_to_timestamp_micros::SparkDecimalToTimestampMicros;
+use sail_function::scalar::spark_integral_to_binary::SparkIntegralToBinary;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::string::format_number::FormatNumber;
@@ -3447,6 +3453,34 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkMapFromArrays::new(last_value_wins);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkYearMonthIntervalFromInt64(
+                r#gen::SparkYearMonthIntervalFromInt64Udf { multiplier, is_try },
+            ) => {
+                let udf = SparkYearMonthIntervalFromInt64::new(multiplier, is_try);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkDayTimeIntervalFromInt64(r#gen::SparkDayTimeIntervalFromInt64Udf {
+                multiplier,
+                is_try,
+            }) => {
+                let udf = SparkDayTimeIntervalFromInt64::new(multiplier, is_try);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkStringToTime(r#gen::SparkStringToTimeUdf { is_try }) => {
+                let udf = SparkStringToTime::new(is_try);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::Int64FloorDiv(r#gen::Int64FloorDivUdf { divisor }) => {
+                let udf = Int64FloorDiv::new(divisor);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkDayTimeInterval(r#gen::SparkDayTimeIntervalUdf { qualifier, is_try }) => {
+                let metadata = sail_common::spec::SparkIntervalMetadata::from_json(&qualifier)
+                    .map_err(|e| plan_datafusion_err!("{e}"))?;
+                let udf =
+                    SparkDayTimeInterval::new(metadata.start_field(), metadata.end_field(), is_try);
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
                 let udf = SparkMapFromEntries::new(last_value_wins);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -3590,6 +3624,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_string_to_int32" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())))
             }
+            "spark_cast_decimal_to_double" => Ok(Arc::new(ScalarUDF::from(
+                SparkCastDecimalToFloat::new_float64(),
+            ))),
+            "spark_cast_decimal_to_float" => Ok(Arc::new(ScalarUDF::from(
+                SparkCastDecimalToFloat::new_float32(),
+            ))),
+            "spark_integral_to_binary" => {
+                Ok(Arc::new(ScalarUDF::from(SparkIntegralToBinary::new())))
+            }
+            "spark_decimal_to_timestamp_micros" => Ok(Arc::new(ScalarUDF::from(
+                SparkDecimalToTimestampMicros::new(),
+            ))),
             "vector_cosine_similarity" => {
                 Ok(Arc::new(ScalarUDF::from(VectorCosineSimilarity::new())))
             }
@@ -3617,6 +3663,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(SparkCastToVariant::new()))),
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
+            "spark_variant_to_string" => {
+                Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new_cast())))
+            }
             "spark_variant_explode" => Ok(Arc::new(ScalarUDF::from(SparkVariantExplodeUdf::new()))),
             "to_variant_object" => Ok(Arc::new(ScalarUDF::from(SparkToVariantObjectUdf::new()))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
@@ -3738,7 +3787,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_year_month_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }
-            "spark_day_time_interval" => Ok(Arc::new(ScalarUDF::from(SparkDayTimeInterval::new()))),
             "year_month_interval_months" => {
                 Ok(Arc::new(ScalarUDF::from(YearMonthIntervalMonths::new())))
             }
@@ -3803,6 +3851,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<SparkCastStringToInt32>()
+            || node_inner.is::<SparkCastDecimalToFloat>()
+            || node_inner.is::<SparkIntegralToBinary>()
+            || node_inner.is::<SparkDecimalToTimestampMicros>()
             || node_inner.is::<VectorCosineSimilarity>()
             || node_inner.is::<VectorInnerProduct>()
             || node_inner.is::<VectorL2Distance>()
@@ -3854,7 +3905,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
-            || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDayTimeIntervalToCalendarInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -3933,6 +3983,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.name() == "json_length"
         {
             UdfKind::Standard(r#gen::StandardUdf {})
+        } else if let Some(func) = node_inner.downcast_ref::<SparkYearMonthIntervalFromInt64>() {
+            UdfKind::SparkYearMonthIntervalFromInt64(r#gen::SparkYearMonthIntervalFromInt64Udf {
+                multiplier: func.multiplier(),
+                is_try: func.is_try(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkDayTimeIntervalFromInt64>() {
+            UdfKind::SparkDayTimeIntervalFromInt64(r#gen::SparkDayTimeIntervalFromInt64Udf {
+                multiplier: func.multiplier(),
+                is_try: func.is_try(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkStringToTime>() {
+            UdfKind::SparkStringToTime(r#gen::SparkStringToTimeUdf {
+                is_try: func.is_try(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<Int64FloorDiv>() {
+            UdfKind::Int64FloorDiv(r#gen::Int64FloorDivUdf {
+                divisor: func.divisor(),
+            })
+        } else if let Some(func) = node_inner.downcast_ref::<SparkDayTimeInterval>() {
+            let metadata =
+                sail_common::spec::SparkIntervalMetadata::DayTime {
+                    start_field: func.start_field().try_into().map_err(
+                        |e: sail_common::error::CommonError| plan_datafusion_err!("{e}"),
+                    )?,
+                    end_field: func.end_field().try_into().map_err(
+                        |e: sail_common::error::CommonError| plan_datafusion_err!("{e}"),
+                    )?,
+                };
+            let qualifier = metadata
+                .to_json()
+                .map_err(|e| plan_datafusion_err!("{e}"))?;
+            UdfKind::SparkDayTimeInterval(r#gen::SparkDayTimeIntervalUdf {
+                qualifier,
+                is_try: func.is_try(),
+            })
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
                 last_value_wins: func.last_value_wins(),
@@ -7237,6 +7322,59 @@ mod tests {
 
         downcast_udf::<SparkCastStringToInt32>(&decoded, "SparkCastStringToInt32")?;
         assert_eq!(decoded.name(), "spark_cast_string_to_int32");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_cast_decimal_to_float_udf() -> Result<()> {
+        for (udf, name) in [
+            (
+                SparkCastDecimalToFloat::new_float64(),
+                "spark_cast_decimal_to_double",
+            ),
+            (
+                SparkCastDecimalToFloat::new_float32(),
+                "spark_cast_decimal_to_float",
+            ),
+        ] {
+            let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+
+            downcast_udf::<SparkCastDecimalToFloat>(&decoded, "SparkCastDecimalToFloat")?;
+            assert_eq!(decoded.name(), name);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_int64_floor_div_udf_keeps_the_divisor() -> Result<()> {
+        for divisor in [1_000_i64, 1_000_000, 1_000_000_000] {
+            let decoded = round_trip_udf(ScalarUDF::from(Int64FloorDiv::new(divisor)))?;
+
+            let decoded = downcast_udf::<Int64FloorDiv>(&decoded, "Int64FloorDiv")?;
+            assert_eq!(decoded.divisor(), divisor);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_decimal_to_timestamp_micros_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDecimalToTimestampMicros::new()))?;
+
+        downcast_udf::<SparkDecimalToTimestampMicros>(&decoded, "SparkDecimalToTimestampMicros")?;
+        assert_eq!(decoded.name(), "spark_decimal_to_timestamp_micros");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_integral_to_binary_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkIntegralToBinary::new()))?;
+
+        downcast_udf::<SparkIntegralToBinary>(&decoded, "SparkIntegralToBinary")?;
+        assert_eq!(decoded.name(), "spark_integral_to_binary");
 
         Ok(())
     }

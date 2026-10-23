@@ -141,12 +141,7 @@ fn try_parse_json_lenient(json_str: &str) -> Option<serde_json::Value> {
 
 /// Try to append a JSON string to the builder leniently. Returns true if successful.
 fn try_append_json(builder: &mut VariantArrayBuilder, json_str: &str) -> bool {
-    // Must go through try_parse_json_lenient (StrictValue) to reject duplicate keys,
-    // matching Spark's try_parse_json semantics (returns NULL on duplicate keys).
-    match try_parse_json_lenient(json_str) {
-        Some(value) => append_json(&value, builder).is_ok(),
-        None => false,
-    }
+    append_exact_json(builder, json_str).is_ok()
 }
 
 /// Wrap a JSON-parse failure with Spark's canonical error code so feature
@@ -160,10 +155,7 @@ fn malformed_record_err(record: &str) -> datafusion_common::DataFusionError {
 /// Strict-path append: accept trailing garbage (first valid prefix), error
 /// with `MALFORMED_RECORD_IN_PARSING` on unparseable input.
 fn append_json_strict(builder: &mut VariantArrayBuilder, json_str: &str) -> Result<()> {
-    match try_parse_json_lenient(json_str) {
-        Some(value) => append_json(&value, builder).map_err(|_| malformed_record_err(json_str)),
-        None => Err(malformed_record_err(json_str)),
-    }
+    append_exact_json(builder, json_str).map_err(|_| malformed_record_err(json_str))
 }
 
 impl ScalarUDFImpl for SparkParseJson {
@@ -200,8 +192,11 @@ impl ScalarUDFImpl for SparkParseJson {
                 .collect::<Vec<_>>()
                 .as_slice(),
         )?;
+        // ParseJson's StaticInvoke declares returnNullable = !failOnError
+        // (variantExpressions.scala:58-68); SQL NULL input still propagates.
+        let nullable = self.safe || args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(
-            Field::new(self.name(), data_type, true).with_extension_type(VariantType),
+            Field::new(self.name(), data_type, nullable).with_extension_type(VariantType),
         ))
     }
 
@@ -373,6 +368,115 @@ pub(crate) fn convert_variant_binaryview_to_binary(
         vec![value_column.clone(), metadata_column.clone()],
         struct_array.nulls().cloned(),
     ))
+}
+
+/// Validate duplicate keys as before, but append numbers from their original
+/// JSON tokens. Going through serde_json::Number/f64 loses decimal precision
+/// before CAST can perform its checked conversion.
+fn append_exact_json(builder: &mut VariantArrayBuilder, json: &str) -> Result<()> {
+    if try_parse_json_lenient(json).is_none() {
+        return Err(malformed_record_err(json));
+    }
+    let mut stream =
+        serde_json::Deserializer::from_str(json).into_iter::<Box<serde_json::value::RawValue>>();
+    let raw = stream
+        .next()
+        .transpose()
+        .map_err(|_| malformed_record_err(json))?
+        .ok_or_else(|| malformed_record_err(json))?;
+    append_raw_json(&raw, builder)
+}
+
+fn append_raw_json(
+    raw: &serde_json::value::RawValue,
+    builder: &mut impl parquet_variant::VariantBuilderExt,
+) -> Result<()> {
+    use parquet_variant::{ObjectFieldBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16};
+
+    let text = raw.get();
+    match text.as_bytes().first() {
+        Some(b'[') => {
+            let values: Vec<Box<serde_json::value::RawValue>> =
+                serde_json::from_str(text).map_err(|_| malformed_record_err(text))?;
+            let mut list = builder.try_new_list()?;
+            for value in values {
+                append_raw_json(&value, &mut list)?;
+            }
+            list.finish();
+        }
+        Some(b'{') => {
+            let values: std::collections::BTreeMap<String, Box<serde_json::value::RawValue>> =
+                serde_json::from_str(text).map_err(|_| malformed_record_err(text))?;
+            let mut object = builder.try_new_object()?;
+            for (key, value) in values {
+                append_raw_json(&value, &mut ObjectFieldBuilder::new(&key, &mut object))?;
+            }
+            object.finish();
+        }
+        Some(b'-' | b'0'..=b'9') => {
+            // Spark VariantBuilder tries integers, then decimal tokens up to
+            // precision/scale 38, and only then falls back to double. Exponent
+            // notation always goes to double (VariantBuilder.java:590-644).
+            if let Ok(integer) = text.parse::<i64>() {
+                // Spark VariantBuilder.appendLong chooses the smallest signed
+                // width. Preserve compact integers while retaining exact decimals.
+                if let Ok(value) = i8::try_from(integer) {
+                    builder.append_value(value);
+                } else if let Ok(value) = i16::try_from(integer) {
+                    builder.append_value(value);
+                } else if let Ok(value) = i32::try_from(integer) {
+                    builder.append_value(value);
+                } else {
+                    builder.append_value(integer);
+                }
+                return Ok(());
+            }
+            if !text.contains(['e', 'E']) {
+                let scale = text
+                    .split_once('.')
+                    .map_or(0, |(_, fraction)| fraction.len());
+                if scale <= 38
+                    && let Ok(mut integer) = text.replace('.', "").parse::<i128>()
+                    && integer.unsigned_abs() < 10_u128.pow(38)
+                {
+                    let mut scale = scale as u8;
+                    // Spark's Variant.getDecimal strips trailing zeros.
+                    while scale > 0 && integer % 10 == 0 {
+                        integer /= 10;
+                        scale -= 1;
+                    }
+                    if let Some(decimal) = i32::try_from(integer)
+                        .ok()
+                        .and_then(|value| VariantDecimal4::try_new(value, scale).ok())
+                    {
+                        builder.append_value(decimal);
+                    } else if let Some(decimal) = i64::try_from(integer)
+                        .ok()
+                        .and_then(|value| VariantDecimal8::try_new(value, scale).ok())
+                    {
+                        builder.append_value(decimal);
+                    } else {
+                        builder.append_value(VariantDecimal16::try_new(integer, scale)?);
+                    }
+                    return Ok(());
+                }
+            }
+            let value = text
+                .parse::<f64>()
+                .map_err(|_| malformed_record_err(text))?;
+            // This is reached only for exponent-notation input (the plain-decimal
+            // path above already returned). Spark keeps a scientific negative
+            // zero as `-0.0` -- only the non-exponent forms (`-0`, `-0.0`)
+            // normalize to `0` -- so the sign of the parsed value must survive
+            // as-is, unlike a decimal zero.
+            builder.append_value(value);
+        }
+        _ => append_json(
+            &serde_json::from_str(text).map_err(|_| malformed_record_err(text))?,
+            builder,
+        )?,
+    }
+    Ok(())
 }
 
 #[cfg(test)]

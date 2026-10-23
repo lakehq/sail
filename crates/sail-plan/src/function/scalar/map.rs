@@ -44,9 +44,10 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
 
-    let array = ScalarUDF::from(SparkArray::new());
-    let keys = array.call(keys);
-    let values = array.call(values);
+    // CreateMap.nullable is false (complexTypeCreator.scala:248). These
+    // arrays are constructed, so NULL elements do not make either array NULL.
+    let keys = ScalarUDF::from(SparkArray::new()).call(keys);
+    let values = ScalarUDF::from(SparkArray::new()).call(values);
     let values = cast_list_value_nullability(values, schema, true)?;
     let last_value_wins =
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;

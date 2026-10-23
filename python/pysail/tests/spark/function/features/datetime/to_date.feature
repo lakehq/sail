@@ -40,8 +40,8 @@ Feature: to_date with an argument coming from a column
       Examples:
         | case         | value                            | result     |
         | integer      | 20260220                         | 2026-02-20 |
-        | bigint       | CAST(20251201 AS BIGINT)          | 2025-12-01 |
-        | decimal      | CAST(20260220 AS DECIMAL(8, 0))   | 2026-02-20 |
+        | bigint       | CAST(20251201 AS BIGINT)         | 2025-12-01 |
+        | decimal      | CAST(20260220 AS DECIMAL(8, 0))  | 2026-02-20 |
         | typed null   | CAST(NULL AS BIGINT)             | NULL       |
         | untyped null | NULL                             | NULL       |
 
@@ -131,9 +131,9 @@ Feature: to_date with an argument coming from a column
         | NULL   |
 
       Examples:
-        | case                       | args                    |
-        | default invalid leap day   | '2026-02-29'            |
-        | default invalid month      | '2026-00-15'            |
+        | case                       | args                   |
+        | default invalid leap day   | '2026-02-29'           |
+        | default invalid month      | '2026-00-15'           |
         | formatted invalid leap day | '20260229', 'yyyyMMdd' |
         | formatted invalid month    | '20260015', 'yyyyMMdd' |
 
@@ -169,9 +169,9 @@ Feature: to_date with an argument coming from a column
       Then query error (?i)(CANNOT_PARSE_TIMESTAMP|CAST_INVALID_INPUT|invalid parsed (date|month)|out of range|DateValue)
 
       Examples:
-        | case                       | args                    |
-        | default invalid leap day   | '2026-02-29'            |
-        | default invalid month      | '2026-00-15'            |
+        | case                       | args                   |
+        | default invalid leap day   | '2026-02-29'           |
+        | default invalid month      | '2026-00-15'           |
         | formatted invalid leap day | '20260229', 'yyyyMMdd' |
         | formatted invalid month    | '20260015', 'yyyyMMdd' |
 
@@ -455,16 +455,17 @@ Feature: to_date with an argument coming from a column
         | trailing whitespace        | '2024-01-15 '                          | 2024-01-15   |
         | single-digit month and day | '2024-1-5'                             | 2024-01-05   |
         | leading plus on the year   | '+2024-01-15'                          | 2024-01-15   |
-        | zone designator suffix     | '2024-01-15 12:00:00Z'                 | 2024-01-15   |
-        | numeric offset suffix      | '2024-01-15 12:00:00+05:30'            | 2024-01-15   |
-        | region zone suffix         | '2024-01-15 12:00:00 America/New_York' | 2024-01-15   |
+        | zone designator suffix      | '2024-01-15 12:00:00Z'                 | 2024-01-15   |
+        | numeric offset suffix       | '2024-01-15 12:00:00+05:30'            | 2024-01-15   |
+        | region zone suffix          | '2024-01-15 12:00:00 America/New_York' | 2024-01-15   |
         | year zero                  | '0000-12-31'                           | 0000-12-31   |
-        | five-digit year            | '10000-01-01'                          | +10000-01-01 |
+        | five-digit year             | '10000-01-01'                          | +10000-01-01 |
 
-    @sail-bug
-    Scenario Outline: Accepted date string that Sail rejects: <case>
-      # Under ANSI these raise CAST_INVALID_INPUT in Sail; with ANSI off they come back as
-      # NULL. Both are wrong — Spark parses all three.
+    Scenario Outline: Accepted date string that stringToDate trims or ends at a T: <case>
+      # Spark trims whitespace and ISO control characters and ends the date at the first ' ' or
+      # 'T' after the day (SparkDateTimeUtils.stringToDate). Sail used to return NULL here, or
+      # raise CAST_INVALID_INPUT under ANSI. The full set of shapes is in
+      # conversion/cast_string_to_date.feature.
       When query
         """
         SELECT to_date(<input>) AS result

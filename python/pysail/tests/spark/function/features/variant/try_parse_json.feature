@@ -186,7 +186,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | true   |
 
-    @sail-bug
     Scenario: try_parse_json scientific notation preserves decimal
       When query
         """
@@ -205,7 +204,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | 0.15   |
 
-    @sail-bug
     Scenario: try_parse_json preserves large number beyond i64
       When query
         """
@@ -278,8 +276,6 @@ Feature: try_parse_json comprehensive tests
         | negative zero float becomes zero     | '-0.0'                 | 0                    |
         | very small float preserves precision | '0.000000000000000001' | 0.000000000000000001 |
 
-    @sail-bug
-    # Sail doesn't convert very large integers to scientific notation in Variant
     Scenario: very large integer uses scientific notation
       When query
         """
@@ -289,8 +285,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | 1.0E39 |
 
-    @sail-bug
-    # Sail doesn't produce scientific notation for 1e10 in Variant
     Scenario: scientific notation 1e10
       When query
         """
@@ -388,8 +382,6 @@ Feature: try_parse_json comprehensive tests
         | NULL    |
         | NULL    |
 
-    @sail-bug
-    # Sail renders 1e10 as 10000000000 instead of Spark's 1.0E10 (scientific notation).
     Scenario: multi-row with number edge cases
       When query
         """

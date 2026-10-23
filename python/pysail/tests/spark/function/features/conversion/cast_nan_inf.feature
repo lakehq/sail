@@ -110,6 +110,57 @@ Feature: CAST and type constructors with NaN and Infinity (issue #630)
         | TRY_CAST NaN to INT returns NULL  | INT   | NULL   |
         | TRY_CAST NaN to FLOAT returns NaN | FLOAT | NaN    |
 
+    # DOUBLE/FLOAT NaN -> TIMESTAMP takes a different resolver arm than STRING,
+    # so it needs its own scenario, under both ANSI settings.
+    Scenario Outline: TRY_CAST NaN DOUBLE to TIMESTAMP returns NULL: <case>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT TRY_CAST(CAST('NaN' AS DOUBLE) AS TIMESTAMP) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+      Examples:
+        | case      | ansi  |
+        | ANSI off  | false |
+        | ANSI on   | true  |
+
+    # NaN/Infinite under ANSI raises CAST_INVALID_INPUT, not NULL (only TRY_CAST/
+    # non-ANSI return NULL). Verified against the Spark 4.2 JVM.
+    Scenario: CAST NaN DOUBLE to TIMESTAMP raises CAST_INVALID_INPUT under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(CAST('NaN' AS DOUBLE) AS TIMESTAMP) AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
+    # A finite DOUBLE that overflows once scaled to micros raises CAST_OVERFLOW
+    # under ANSI, instead of saturating (only the non-ANSI path saturates).
+    Scenario: CAST an overflowing DOUBLE to TIMESTAMP raises CAST_OVERFLOW under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(CAST('1e20' AS DOUBLE) AS TIMESTAMP) AS result
+        """
+      Then query error CAST_OVERFLOW
+
+    # `9223372036854.775 * 1_000_000` lands exactly on `2^63`, the nearest f64 to
+    # `i64::MAX` -- Spark saturates here, Java-narrowing-style, instead of raising.
+    # Read via `unix_micros`: displaying the raw TIMESTAMP hits an unrelated,
+    # pre-existing display limitation near this boundary.
+    Scenario: CAST a DOUBLE exactly at the f64-rounded Long boundary saturates like Spark under ANSI
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT unix_micros(CAST(CAST(9223372036854.775 AS DOUBLE) AS TIMESTAMP)) AS result
+        """
+      Then query result
+        | result              |
+        | 9223372036854775807 |
+
   Rule: NaN arithmetic
 
     Scenario Outline: NaN arithmetic: <case>
