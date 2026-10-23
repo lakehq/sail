@@ -133,6 +133,94 @@ def test_monotonically_increasing_id_in_filter(spark):
     assert [row.id for row in result.collect()] == list(range(limit))
 
 
+@pytest.mark.parametrize(
+    ("predicate", "expected"),
+    [
+        ("id % 2 = 0 AND monotonically_increasing_id() < 3", [0, 2, 4]),
+        ("monotonically_increasing_id() < 3 AND id % 2 = 0", [0, 2]),
+        ("id % 2 = 0 OR monotonically_increasing_id() < 3", [0, 1, 2, 3, 4, 5, 6, 8]),
+        ("monotonically_increasing_id() < 3 OR id % 2 = 0", [0, 1, 2, 4, 6, 8]),
+        ("(CASE WHEN id % 2 = 0 THEN NULL ELSE true END) AND monotonically_increasing_id() < 3", [1, 3, 5]),
+        ("(CASE WHEN id % 2 = 0 THEN NULL ELSE false END) OR monotonically_increasing_id() < 3", [0, 1, 2]),
+        (
+            "(CASE WHEN id % 2 = 0 THEN monotonically_increasing_id() ELSE monotonically_increasing_id() END) < 3",
+            [0, 1, 2, 3, 4, 5],
+        ),
+        (
+            "monotonically_increasing_id() = (CASE WHEN id % 2 = 0 THEN monotonically_increasing_id() ELSE 100 END)",
+            [0],
+        ),
+        ("coalesce(CASE WHEN id % 2 = 0 THEN NULL ELSE 100 END, monotonically_increasing_id()) < 3", [0, 2, 4]),
+    ],
+    ids=[
+        "and",
+        "and-reversed",
+        "or",
+        "or-reversed",
+        "and-null",
+        "or-null",
+        "independent-branches",
+        "independent-calls",
+        "coalesce",
+    ],
+)
+def test_monotonically_increasing_id_conditional_filter(spark, predicate, expected):
+    result = spark.range(10, numPartitions=1).filter(predicate)
+    assert [row.id for row in result.collect()] == expected
+
+
+def test_monotonically_increasing_id_filter_state_across_batches_and_executions(spark):
+    size, partitions = 80000, 4
+    per_partition = size // partitions
+    limit = 9000
+    counter = F.monotonically_increasing_id() - F.spark_partition_id().cast("long") * (1 << 33)
+    result = spark.range(size, numPartitions=partitions).filter(
+        F.when(F.col("id") % 2 == 0, counter).otherwise(limit) < limit
+    )
+    expected = [partition * per_partition + 2 * i for partition in range(partitions) for i in range(limit)]
+    assert sorted(row.id for row in result.collect()) == expected
+    assert sorted(row.id for row in result.collect()) == expected
+
+
+@pytest.mark.parametrize("global_sort", [False, True], ids=["local-sort", "global-sort"])
+def test_monotonically_increasing_id_filter_keeps_input_sort(spark, global_sort):
+    limit = 3
+    df = spark.range(20000, numPartitions=1)
+    ordered = df.orderBy(F.col("id").desc()) if global_sort else df.sortWithinPartitions(F.col("id").desc())
+    result = ordered.filter(F.when(F.col("id") % 2 == 0, F.monotonically_increasing_id()).otherwise(100) < limit)
+    assert [row.id for row in result.orderBy("id").collect()] == [19994, 19996, 19998]
+
+
+@pytest.mark.parametrize(
+    ("predicate", "expected"),
+    [
+        ("id IN (SELECT id FROM range(0, 10, 2, 1)) AND monotonically_increasing_id() >= 0", [0, 2, 4, 6, 8]),
+        ("id IN (SELECT id FROM range(0, 10, 2, 1)) OR monotonically_increasing_id() < 0", [0, 2, 4, 6, 8]),
+        ("EXISTS (SELECT 1 FROM range(1)) AND monotonically_increasing_id() < 3", [0, 1, 2]),
+        (
+            "EXISTS (SELECT 1 FROM range(0, 10, 2, 1) u WHERE u.id = t.id) AND monotonically_increasing_id() >= 0",
+            [0, 2, 4, 6, 8],
+        ),
+        ("monotonically_increasing_id() < (SELECT count(*) FROM range(3))", [0, 1, 2]),
+    ],
+    ids=["in", "in-or", "exists", "correlated-exists", "scalar"],
+)
+def test_monotonically_increasing_id_filter_with_subquery(spark, predicate, expected):
+    result = spark.sql(f"SELECT id FROM range(0, 10, 1, 1) t WHERE {predicate}")  # noqa: S608
+    assert sorted(row.id for row in result.collect()) == expected
+
+
+def test_monotonically_increasing_id_separate_filters_keep_their_input(spark):
+    inner_limit, outer_limit = 5, 2
+    result = (
+        spark.range(20, numPartitions=1)
+        .filter(F.monotonically_increasing_id() < inner_limit)
+        .filter(F.col("id") % 2 == 0)
+        .filter(F.monotonically_increasing_id() < outer_limit)
+    )
+    assert [row.id for row in result.collect()] == [0, 2]
+
+
 @pytest.mark.parametrize("sql", [False, True], ids=["dataframe", "sql"])
 def test_monotonically_increasing_id_in_grouping(spark, sql):
     if sql:

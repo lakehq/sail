@@ -4,9 +4,8 @@ use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
-/// The actual evaluation is implemented as a plan rewrite + partition-aware
-/// physical operator. This UDF exists as a *marker* so the logical rewriter can detect
-/// and replace it before physical planning.
+/// Marker for partition-aware evaluation. Plan rewrites materialize the value
+/// as a column, or a stateful filter binds it to its execution partition.
 ///
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#spark_partition_id>
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -4,9 +4,8 @@ use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
-/// The actual evaluation is implemented as a plan rewrite + partition-aware
-/// physical operator. This UDF exists as a *marker* so the logical rewriter can detect
-/// and replace it before physical planning.
+/// Marker for partition-aware evaluation. Projections materialize an ID column;
+/// filters bind a counter at execution time to preserve conditional evaluation.
 ///
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#monotonically_increasing_id>
 #[derive(Debug, PartialEq, Eq, Hash)]

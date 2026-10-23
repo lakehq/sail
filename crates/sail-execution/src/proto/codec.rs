@@ -223,10 +223,12 @@ use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
+use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
 use sail_function::scalar::misc::theta_sketch::{
     ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
     ThetaUnionFunction,
@@ -297,6 +299,7 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::partition_filter::PartitionFilterExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
@@ -1438,6 +1441,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &input.schema(),
                 )?;
                 Ok(Arc::new(StreamFilterExec::try_new(input, predicate)?))
+            }
+            NodeKind::PartitionFilter(r#gen::PartitionFilterExecNode { input, predicate }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let predicate = try_decode_physical_expr_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &predicate,
+                    &input.schema(),
+                )?;
+                Ok(Arc::new(PartitionFilterExec::new(input, predicate)))
             }
             NodeKind::StreamSourceAdapter(r#gen::StreamSourceAdapterExecNode { input }) => {
                 let input =
@@ -2842,6 +2857,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     plan_datafusion_err!("cannot encode fetch value for StreamLimitExec")
                 })?;
             NodeKind::StreamLimit(r#gen::StreamLimitExecNode { input, skip, fetch })
+        } else if let Some(filter) = node.downcast_ref::<PartitionFilterExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                filter.input().clone(),
+            )?;
+            let predicate =
+                try_encode_physical_expr_with_converter(self, proto_converter, filter.predicate())?;
+            NodeKind::PartitionFilter(r#gen::PartitionFilterExecNode { input, predicate })
         } else if let Some(stream_filter) = node.downcast_ref::<StreamFilterExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
@@ -3572,6 +3596,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
         };
         match name {
+            "monotonically_increasing_id" => Ok(Arc::new(ScalarUDF::from(
+                SparkMonotonicallyIncreasingId::new(),
+            ))),
+            "spark_partition_id" => Ok(Arc::new(ScalarUDF::from(SparkPartitionId::new()))),
             "array_element" => Ok(Arc::new(ScalarUDF::from(ArrayElement::new()))),
             "map_extract" => Ok(Arc::new(ScalarUDF::from(MapExtract::new()))),
             "array_item_with_position" => {
@@ -3793,6 +3821,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let udf_kind: UdfKind = if (node.as_async().is_some()
             && sail_function::scalar::jev::JevKind::from_name(node.name()).is_some())
             || node_inner.is::<ArrayElement>()
+            || node_inner.is::<SparkMonotonicallyIncreasingId>()
+            || node_inner.is::<SparkPartitionId>()
             || node_inner.is::<DeltaDecodePath>()
             || node_inner.is::<MapExtract>()
             || node_inner.is::<ArrayItemWithPosition>()
