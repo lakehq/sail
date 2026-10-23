@@ -294,16 +294,17 @@ impl JobScheduler {
         let mut actions = vec![];
 
         for region in &job.topology.regions {
-            let mut failed = false;
-
-            for t in &region.tasks {
+            let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
-                if let Some(attempt) = attempts.last()
-                    && matches!(attempt.state, TaskState::Failed)
-                {
-                    failed = true;
-                }
-            }
+                attempts.iter().any(|attempt| {
+                    attempt
+                        .cause
+                        .as_ref()
+                        .is_some_and(|cause| !cause.is_retryable())
+                }) || attempts
+                    .last()
+                    .is_some_and(|attempt| matches!(attempt.state, TaskState::Failed))
+            });
 
             if failed {
                 // cancel all other tasks in this region
@@ -1128,6 +1129,153 @@ mod tests {
     use super::StageGroup;
     use crate::id::{JobId, TaskKey};
     use crate::task::scheduling::{TaskOutputKind, TaskSetEntry};
+
+    #[tokio::test]
+    async fn late_unknown_commit_cancels_queued_retry() -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use datafusion::prelude::SessionContext;
+        use sail_common::actor::{ActorContext, ActorSystem};
+        use sail_common::config::{AppConfig, SystemCatalogStore};
+        use sail_common::runtime::RuntimeHandle;
+        use sail_common_datafusion::error::CommonErrorCause;
+        use sail_iceberg::SnapshotUpdateKind;
+        use sail_iceberg::physical_plan::IcebergCommitExec;
+        use sail_telemetry::telemetry::{global_system_event_reporter, init_telemetry};
+        use sail_telemetry::{ResourceKind, ResourceOptions};
+        use url::Url;
+
+        use super::{JobAction, JobScheduler, JobState, TaskState};
+        use crate::driver::job_scheduler::JobSchedulerOptions;
+        use crate::driver::task_assigner::{TaskAssigner, TaskAssignerOptions};
+        use crate::driver::{DriverActor, DriverComponents, DriverOptions};
+        use crate::id::{DriverId, WorkerId};
+        use crate::worker_manager::LocalWorkerManager;
+
+        let mut config = AppConfig::load()?;
+        config.cluster.task_max_attempts = 4;
+        config.cluster.worker_task_slots = 1;
+        config.cluster.worker_max_count = 1;
+        config.catalog.system.store = SystemCatalogStore::Memory;
+        config.telemetry.export_traces = false;
+        config.telemetry.export_metrics = false;
+        config.telemetry.export_logs = false;
+        init_telemetry(
+            &config.telemetry,
+            &config.catalog.system,
+            ResourceOptions {
+                kind: ResourceKind::Server,
+            },
+        )?;
+        let reporter = global_system_event_reporter().ok_or("missing event reporter")?;
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let options = DriverOptions::try_new(
+            &config,
+            runtime.clone(),
+            "late-unknown-commit".into(),
+            DriverId::from(1),
+            0,
+        )?;
+        let mut scheduler =
+            JobScheduler::new(JobSchedulerOptions::from(&options), reporter.clone());
+        let mut assigner = TaskAssigner::new(TaskAssignerOptions::from(&options));
+        let mut system = ActorSystem::new();
+        let driver = system.spawn::<DriverActor>((
+            options,
+            DriverComponents {
+                worker_manager: Box::new(LocalWorkerManager::new(runtime, SessionContext::new())),
+                event_reporter: reporter,
+            },
+        ));
+        let mut ctx = ActorContext::new(&driver);
+        let input = MemorySourceConfig::try_new_exec(&[vec![]], Arc::new(Schema::empty()), None)?;
+        let plan = Arc::new(IcebergCommitExec::new(
+            input,
+            Url::parse("memory://bucket/late-unknown-commit")?,
+            None,
+            SnapshotUpdateKind::FastAppend,
+        ));
+        let (job_id, _output) =
+            scheduler.accept_job(&mut ctx, plan, Arc::new(TaskContext::default()))?;
+        scheduler.refresh_job(job_id);
+        let original = TaskKey {
+            job_id,
+            stage: 0,
+            partition: 0,
+            attempt: 0,
+        };
+        scheduler.update_task(&original, TaskState::Running, None, None);
+        // Losing the output worker cancels the driver commit in the same region.
+        let output_task = TaskKey {
+            stage: 1,
+            ..original.clone()
+        };
+        assert_eq!(
+            scheduler.task_region(&original),
+            scheduler.task_region(&output_task)
+        );
+        scheduler.update_task(
+            &output_task,
+            TaskState::Failed,
+            None,
+            Some(CommonErrorCause::Execution(
+                "worker heartbeat timeout".into(),
+            )),
+        );
+        for action in scheduler.refresh_job(job_id) {
+            if let JobAction::ScheduleTaskRegion { region } = action {
+                assigner.enqueue_tasks(&region)?;
+            }
+        }
+        assert!(matches!(
+            scheduler.get_task_state(&original),
+            Some(TaskState::Canceled)
+        ));
+        assert!(assigner.assign_tasks().is_empty());
+        let replacement = TaskKey {
+            attempt: 1,
+            ..original.clone()
+        };
+        assert!(matches!(
+            scheduler.get_task_state(&replacement),
+            Some(TaskState::Created)
+        ));
+
+        scheduler.update_task(
+            &original,
+            TaskState::Failed,
+            None,
+            Some(CommonErrorCause::CommitStateUnknown("response lost".into())),
+        );
+        let actions = scheduler.refresh_job(job_id);
+        assert!(matches!(scheduler.jobs[&job_id].state, JobState::Failed));
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            JobAction::FailJobOutput {
+                cause: CommonErrorCause::CommitStateUnknown(_),
+                ..
+            }
+        )));
+        for action in &actions {
+            if let JobAction::CancelTask { key } = action {
+                assigner.exclude_task(key);
+            }
+        }
+        // A worker can register before the driver processes asynchronous output cleanup.
+        assigner.activate_worker(WorkerId::from(1));
+        let assignments = assigner.assign_tasks();
+        assert!(
+            actions.iter().any(
+                |action| matches!(action, JobAction::CancelTask { key } if key == &replacement)
+            ) && assignments.is_empty(),
+            "late unknown commit must cancel its queued retry; actions: {actions:?}; assignments: {assignments:?}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn unknown_commit_stops_retries_and_takes_precedence_over_other_failures()
