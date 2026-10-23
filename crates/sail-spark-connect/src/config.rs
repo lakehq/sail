@@ -327,6 +327,20 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             };
         }
 
+        if let Some(value) =
+            config.get_option(SparkConfigKey::SPARK_SQL_SOURCES_PARTITION_OVERWRITE_MODE)
+        {
+            output.dynamic_partition_overwrite = match value.trim().to_ascii_uppercase().as_str() {
+                "STATIC" => false,
+                "DYNAMIC" => true,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid partition overwrite mode: {value}"
+                    )));
+                }
+            };
+        }
+
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_MAP_KEY_DEDUP_POLICY) {
             output.map_key_dedup_policy = match value.trim().to_ascii_uppercase().as_str() {
                 "EXCEPTION" => MapKeyDedupPolicy::Exception,
