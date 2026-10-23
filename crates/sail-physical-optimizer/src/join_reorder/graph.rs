@@ -103,9 +103,8 @@ pub struct JoinEdge {
     pub left_endpoint: JoinSet,
     /// The other endpoint of the hyperedge.
     pub right_endpoint: JoinSet,
-    /// Join filter expression (e.g., a.col1 = b.col1 AND a.col2 > 10).
-    /// Non-equi joins use complex expressions.
-    pub filter: Arc<dyn PhysicalExpr>,
+    /// Original residual predicates, kept separate from hash keys and their null semantics.
+    pub residual_filter: Option<Arc<dyn PhysicalExpr>>,
     /// Join type (Inner for reorderable joins).
     pub join_type: JoinType,
     /// Null semantics for equi-join key comparison.
@@ -120,7 +119,7 @@ impl JoinEdge {
     pub fn new(
         left_endpoint: JoinSet,
         right_endpoint: JoinSet,
-        filter: Arc<dyn PhysicalExpr>,
+        residual_filter: Option<Arc<dyn PhysicalExpr>>,
         join_type: JoinType,
         equi_pairs: Vec<(StableColumn, StableColumn)>,
     ) -> Self {
@@ -128,7 +127,7 @@ impl JoinEdge {
             join_set: left_endpoint | right_endpoint,
             left_endpoint,
             right_endpoint,
-            filter,
+            residual_filter,
             join_type,
             null_equality: NullEquality::NullEqualsNothing,
             equi_pairs,
@@ -445,7 +444,7 @@ mod tests {
         let edge = JoinEdge::new(
             JoinSet::new_singleton(0).unwrap(),
             JoinSet::new_singleton(1).unwrap(),
-            filter,
+            Some(filter),
             JoinType::Inner,
             vec![],
         );
@@ -457,7 +456,7 @@ mod tests {
         let edge = JoinEdge::new(
             JoinSet::new_singleton(1).unwrap(),
             JoinSet::new_singleton(2).unwrap(),
-            filter,
+            Some(filter),
             JoinType::Inner,
             vec![],
         );
@@ -520,7 +519,7 @@ mod tests {
         let edge = JoinEdge::new(
             JoinSet::from_iter([0, 1]).unwrap(),
             JoinSet::new_singleton(2).unwrap(),
-            filter,
+            Some(filter),
             JoinType::Inner,
             vec![],
         );
@@ -563,7 +562,7 @@ mod tests {
         let edge = JoinEdge::new(
             JoinSet::from_iter([0, 1]).unwrap(),
             JoinSet::new_singleton(2).unwrap(),
-            filter,
+            Some(filter),
             JoinType::Inner,
             vec![],
         );
@@ -598,7 +597,7 @@ mod tests {
         let left_join = JoinEdge::new(
             JoinSet::new_singleton(0).unwrap(),
             JoinSet::new_singleton(1).unwrap(),
-            filter,
+            Some(filter),
             JoinType::Left,
             vec![],
         );
@@ -609,7 +608,7 @@ mod tests {
         let outside_inner = JoinEdge::new(
             JoinSet::from_iter([0, 1]).unwrap(),
             JoinSet::new_singleton(2).unwrap(),
-            filter,
+            Some(filter),
             JoinType::Inner,
             vec![],
         );

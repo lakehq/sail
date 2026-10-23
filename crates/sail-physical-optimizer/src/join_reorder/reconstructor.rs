@@ -180,7 +180,7 @@ impl<'a> PlanReconstructor<'a> {
                     }
 
                     // Best-effort: add stable columns referenced in the filter expression.
-                    for c in collect_columns(&edge.filter) {
+                    for c in edge.residual_filter.iter().flat_map(collect_columns) {
                         if let Some((rel, col_idx)) = StableColumn::parse_stable_name(c.name()) {
                             if Self::join_set_contains_relation(left_set, rel) {
                                 req_left.insert((rel, col_idx));
@@ -622,7 +622,7 @@ impl<'a> PlanReconstructor<'a> {
             left_plan,
             right_plan,
             on_conditions,
-            join_filter,         // Use JoinEdge.filter for non-equi conditions
+            join_filter,         // Preserve the original residual predicates
             &join_type,          // Use determined join type
             projection.clone(),  // projection
             PartitionMode::Auto, // partition_mode
@@ -767,10 +767,8 @@ impl<'a> PlanReconstructor<'a> {
                 DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
             })?;
 
-            if let Some(non_equi_expr) =
-                self.remove_equi_conditions_from_filter(&edge.filter, &edge.equi_pairs)?
-            {
-                let sub_preds = Self::decompose_conjuncts(&non_equi_expr);
+            if let Some(residual) = &edge.residual_filter {
+                let sub_preds = Self::decompose_conjuncts(residual);
                 for pred in sub_preds {
                     let required = self.analyze_predicate_dependencies(
                         &pred, left_map, right_map, left_plan, right_plan,
@@ -1190,93 +1188,6 @@ impl<'a> PlanReconstructor<'a> {
         Ok(JoinSet::from_bits(bits))
     }
 
-    /// Remove equi-join conditions from the filter expression, returning only non-equi parts.
-    fn remove_equi_conditions_from_filter(
-        &self,
-        filter: &Arc<dyn PhysicalExpr>,
-        equi_pairs: &[(StableColumn, StableColumn)],
-    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        // Separate equi and non-equi conditions
-        let non_equi_expr = self.extract_non_equi_from_expression(filter, equi_pairs)?;
-        Ok(non_equi_expr)
-    }
-
-    /// Extract non-equi conditions from a complex expression by removing equi-join conditions.
-    fn extract_non_equi_from_expression(
-        &self,
-        expr: &Arc<dyn PhysicalExpr>,
-        equi_pairs: &[(StableColumn, StableColumn)],
-    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        use datafusion::physical_expr::expressions::BinaryExpr;
-
-        if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
-            match binary_expr.op() {
-                Operator::And => {
-                    // For AND expressions, recursively process left and right sides
-                    let left_non_equi =
-                        self.extract_non_equi_from_expression(binary_expr.left(), equi_pairs)?;
-                    let right_non_equi =
-                        self.extract_non_equi_from_expression(binary_expr.right(), equi_pairs)?;
-
-                    match (left_non_equi, right_non_equi) {
-                        (Some(left), Some(right)) => {
-                            // Both sides have non-equi conditions, combine them with AND
-                            Ok(Some(Arc::new(BinaryExpr::new(left, Operator::And, right))))
-                        }
-                        (Some(expr), None) | (None, Some(expr)) => {
-                            // Only one side has non-equi conditions
-                            Ok(Some(expr))
-                        }
-                        (None, None) => {
-                            // No non-equi conditions found
-                            Ok(None)
-                        }
-                    }
-                }
-                Operator::Eq => {
-                    // Check if this equality is part of the equi-join conditions
-                    if self.is_equi_join_condition(binary_expr, equi_pairs) {
-                        Ok(None) // This is an equi-join condition, exclude it
-                    } else {
-                        Ok(Some(expr.clone())) // This is a non-equi condition
-                    }
-                }
-                _ => {
-                    // All other operators (>, <, >=, <=, !=, etc.) are non-equi conditions
-                    Ok(Some(expr.clone()))
-                }
-            }
-        } else {
-            // Non-binary expressions are considered non-equi conditions
-            Ok(Some(expr.clone()))
-        }
-    }
-
-    /// Check if a binary equality expression matches any of the equi-join pairs.
-    fn is_equi_join_condition(
-        &self,
-        binary_expr: &BinaryExpr,
-        equi_pairs: &[(StableColumn, StableColumn)],
-    ) -> bool {
-        use datafusion::physical_expr::expressions::Column;
-
-        // Extract column references from both sides of the equality
-        let left_col = binary_expr.left().downcast_ref::<Column>();
-        let right_col = binary_expr.right().downcast_ref::<Column>();
-
-        if let (Some(left), Some(right)) = (left_col, right_col) {
-            // Check if this column pair matches any equi-join pair
-            for (col1, col2) in equi_pairs {
-                if (left.name() == col1.name && right.name() == col2.name)
-                    || (left.name() == col2.name && right.name() == col1.name)
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     /// Rewrite a pending filter expression to work with the current join's column mapping
     fn rewrite_pending_filter_for_current_join(
         &self,
@@ -1414,7 +1325,7 @@ mod tests {
         graph.add_edge(JoinEdge::new(
             JoinSet::new_singleton(left)?,
             JoinSet::new_singleton(right)?,
-            filter,
+            Some(filter),
             JoinType::Inner,
             vec![],
         ))?;
@@ -1507,15 +1418,10 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("R0.C0", 0)),
-            Operator::Eq,
-            Arc::new(Column::new("R1.C0", 0)),
-        ));
         graph.add_edge(JoinEdge::new(
             JoinSet::new_singleton(0)?,
             JoinSet::new_singleton(1)?,
-            filter,
+            None,
             JoinType::Inner,
             vec![(
                 StableColumn {
@@ -1586,15 +1492,10 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("R0.C0", 0)),
-            Operator::Eq,
-            Arc::new(Column::new("R1.C0", 0)),
-        ));
         graph.add_edge(JoinEdge::new(
             JoinSet::new_singleton(0)?,
             JoinSet::new_singleton(1)?,
-            filter,
+            None,
             JoinType::Inner,
             vec![(
                 StableColumn {
@@ -1662,15 +1563,10 @@ mod tests {
             Statistics::new_unknown(&schema_b),
         ));
 
-        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("R0.C0", 0)),
-            Operator::Eq,
-            Arc::new(Column::new("R1.C0", 0)),
-        ));
         let mut edge = JoinEdge::new(
             JoinSet::new_singleton(0)?,
             JoinSet::new_singleton(1)?,
-            filter,
+            None,
             JoinType::Inner,
             vec![(
                 StableColumn {
@@ -1940,21 +1836,10 @@ mod tests {
             Operator::Gt,
             Arc::new(Column::new("id", 0)),
         ));
-        // Make filter include an equi condition too (so build_join_filter will strip it),
-        // but keep the non-equi part ambiguous.
-        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-            Arc::new(BinaryExpr::new(
-                Arc::new(Column::new("R0.C0", 0)),
-                Operator::Eq,
-                Arc::new(Column::new("R1.C0", 0)),
-            )),
-            Operator::And,
-            non_equi,
-        ));
         graph.add_edge(JoinEdge::new(
             JoinSet::new_singleton(0)?,
             JoinSet::new_singleton(1)?,
-            filter,
+            Some(non_equi),
             JoinType::Inner,
             equi_pairs,
         ))?;
@@ -2011,7 +1896,6 @@ mod tests {
         // Greedy solver will introduce a cartesian join to connect relation 2.
 
         use datafusion::logical_expr::JoinType;
-        use datafusion::physical_expr::expressions::Column;
 
         use crate::join_reorder::dp_plan::PlanType;
         use crate::join_reorder::graph::{JoinEdge, StableColumn};
@@ -2031,11 +1915,10 @@ mod tests {
         }
 
         // One edge connecting relations 0 and 1.
-        let filter = Arc::new(Column::new("R0.C0", 0)) as Arc<dyn PhysicalExpr>;
         graph.add_edge(JoinEdge::new(
             JoinSet::new_singleton(0)?,
             JoinSet::new_singleton(1)?,
-            filter,
+            None,
             JoinType::Inner,
             vec![(
                 StableColumn {
@@ -2127,7 +2010,7 @@ mod tests {
         graph.add_edge(JoinEdge::new(
             JoinSet::new_singleton(0)?,
             JoinSet::new_singleton(1)?,
-            filter,
+            Some(filter),
             JoinType::Left,
             vec![],
         ))?;
