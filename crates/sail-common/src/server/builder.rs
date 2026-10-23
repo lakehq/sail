@@ -1,12 +1,14 @@
 use std::convert::Infallible;
 use std::future::Future;
 
-use tokio::net::TcpListener;
+use futures::TryStreamExt;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::{TcpListener, TcpStream};
 use tonic::body::Body;
 use tonic::codegen::Service;
 use tonic::codegen::http::Request;
 use tonic::server::NamedService;
-use tonic::transport::server::{Router, TcpIncoming};
+use tonic::transport::server::{Connected, Router, TcpIncoming};
 use tonic_health::server::HealthReporter;
 use tower::ServiceBuilder;
 use tower::layer::util::{Identity, Stack};
@@ -111,12 +113,29 @@ impl<'b> ServerBuilder<'b> {
     where
         F: Future<Output = ()>,
     {
+        self.serve_with_connection(listener, signal, |stream| stream)
+            .await
+    }
+
+    /// Wrap each accepted TCP connection, for example to attach per-connection
+    /// state to requests through tonic's `Connected` trait.
+    pub async fn serve_with_connection<F, C>(
+        self,
+        listener: TcpListener,
+        signal: F,
+        wrap: fn(TcpStream) -> C,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: Future<Output = ()>,
+        C: AsyncRead + AsyncWrite + Connected + Unpin + Send + 'static,
+    {
         let reflection_server = self.reflection_server_builder.build_v1()?;
         let router = self.router.add_service(reflection_server);
 
         let incoming = TcpIncoming::from(listener)
             .with_nodelay(Some(self.options.nodelay))
-            .with_keepalive(self.options.keepalive);
+            .with_keepalive(self.options.keepalive)
+            .map_ok(wrap);
 
         router
             .serve_with_incoming_shutdown(incoming, signal)

@@ -108,6 +108,10 @@ pub(super) struct PlanResolverState {
     param_values: std::collections::HashMap<String, ScalarValue>,
     /// Positional parameter values available alongside `param_values`.
     positional_param_values: Vec<ScalarValue>,
+    /// Values substituted before command expressions are stored outside the plan tree.
+    pub(super) bound_parameters: Option<Vec<ScalarValue>>,
+    /// Placeholders encountered during resolution, including those outside the plan tree.
+    pub(super) placeholders: HashSet<String>,
     /// Stack of in-scope lambda parameter frames (innermost last).
     /// Each frame holds the declared parameter names of one enclosing lambda
     /// function, along with the parameter field when the enclosing
@@ -142,6 +146,8 @@ impl PlanResolverState {
             config: PlanResolverStateConfig::default(),
             param_values: std::collections::HashMap::new(),
             positional_param_values: Vec::new(),
+            bound_parameters: None,
+            placeholders: HashSet::new(),
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
         }

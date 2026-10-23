@@ -11,6 +11,10 @@ use tokio::time::Instant;
 use crate::error::SessionResult;
 
 pub enum SessionManagerMessage {
+    GetSession {
+        session_id: String,
+        result: oneshot::Sender<Option<SessionContext>>,
+    },
     GetOrCreateSession {
         session_id: String,
         user_id: String,
@@ -47,6 +51,7 @@ pub enum SessionManagerMessage {
 impl SpanAssociation for SessionManagerMessage {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
+            SessionManagerMessage::GetSession { .. } => "GetSession",
             SessionManagerMessage::GetOrCreateSession { .. } => "GetOrCreateSession",
             SessionManagerMessage::CompleteSessionCreation { .. } => "CompleteSessionCreation",
             SessionManagerMessage::ProbeIdleSession { .. } => "ProbeIdleSession",
@@ -61,6 +66,9 @@ impl SpanAssociation for SessionManagerMessage {
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
+            SessionManagerMessage::GetSession { session_id, .. } => {
+                p.push((SpanAttribute::SESSION_ID, session_id.to_string()));
+            }
             SessionManagerMessage::GetOrCreateSession {
                 session_id,
                 user_id: _,

@@ -18,11 +18,31 @@ use tokio::time::Instant;
 
 use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
-use crate::session_manager::SessionManagerMessage;
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::session::{ServerSession, ServerSessionState};
+use crate::session_manager::{SessionManagerMessage, run_session_cleanup};
 
 impl SessionManagerActor {
+    pub(super) fn handle_get_session(
+        &self,
+        ctx: &mut ActorContext<Self>,
+        session_id: String,
+        result: oneshot::Sender<Option<SessionContext>>,
+    ) -> ActorAction {
+        let context = self
+            .sessions
+            .get(&session_id)
+            .and_then(|session| match &session.state {
+                ServerSessionState::Running { context, .. } => Some(context.clone()),
+                _ => None,
+            });
+        if let Some(context) = &context {
+            self.schedule_idle_session_probe(ctx, session_id, context);
+        }
+        let _ = result.send(context);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_get_driver(
         &self,
         driver_id: DriverId,
@@ -231,6 +251,7 @@ impl SessionManagerActor {
                     });
                 }
                 session.state = ServerSessionState::Failed;
+                run_session_cleanup(&self.cleanup, &session_id);
                 self.event_reporter.report(SystemEvent::SessionCreated {
                     session_id,
                     user_id,
@@ -284,6 +305,7 @@ impl SessionManagerActor {
                 self.drivers.remove(driver_id);
             }
             session.state = ServerSessionState::Deleted;
+            run_session_cleanup(&self.cleanup, &session_id);
             let status = session.state.status().to_string();
             self.event_reporter.report(SystemEvent::SessionUpdated {
                 session_id: session_id.clone(),
@@ -309,6 +331,7 @@ impl SessionManagerActor {
                     self.drivers.remove(driver_id);
                 }
                 session.state = ServerSessionState::Deleted;
+                run_session_cleanup(&self.cleanup, &session_id);
                 let status = session.state.status().to_string();
                 self.event_reporter.report(SystemEvent::SessionUpdated {
                     session_id: session_id.clone(),
@@ -356,6 +379,7 @@ impl SessionManagerActor {
             });
         }
         session.state = ServerSessionState::Failed;
+        run_session_cleanup(&self.cleanup, &session_id);
         let status = session.state.status().to_string();
         self.event_reporter.report(SystemEvent::SessionUpdated {
             session_id,

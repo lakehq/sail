@@ -1,31 +1,5 @@
-import os
-
 import adbc_driver_manager
 import pytest
-from adbc_driver_flightsql import dbapi
-
-from pysail.flight import FlightSqlServer
-
-
-@pytest.fixture(scope="module")
-def flight_uri():
-    if "SAIL_FLIGHT_URI" in os.environ:
-        yield os.environ["SAIL_FLIGHT_URI"]
-        return
-
-    server = FlightSqlServer(ip="127.0.0.1", port=0)
-    server.start(background=True)
-    host, port = server.listening_address
-    uri = f"grpc://{host}:{port}"
-    yield uri
-    server.stop()
-
-
-@pytest.fixture
-def flight_connection(flight_uri):
-    conn = dbapi.connect(flight_uri)
-    yield conn
-    conn.close()
 
 
 def test_flight_server_connectivity(flight_connection):

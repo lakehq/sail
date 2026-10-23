@@ -1,6 +1,11 @@
+mod connection;
 pub mod entrypoint;
 pub mod error;
+mod metadata;
 mod metrics;
+mod protocol;
+mod query;
 pub mod service;
 pub mod session;
 mod state;
+mod transport;
