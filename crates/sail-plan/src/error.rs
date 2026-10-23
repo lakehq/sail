@@ -94,6 +94,9 @@ impl From<CatalogError> for PlanError {
             CatalogError::Conflict(message) => PlanError::AnalysisError(message),
             CatalogError::NotSupported(message) => PlanError::NotSupported(message),
             CatalogError::UnsupportedCapability(message) => PlanError::NotSupported(message),
+            e @ CatalogError::CommitStateUnknown(_) => {
+                PlanError::DataFusionError(DataFusionError::External(Box::new(e)))
+            }
             CatalogError::Unauthorized(message)
             | CatalogError::Forbidden(message)
             | CatalogError::AuthExpired(message)
@@ -101,7 +104,6 @@ impl From<CatalogError> for PlanError {
             | CatalogError::ResourceExhausted(message)
             | CatalogError::ReadOnly(message)
             | CatalogError::StaleMetadata(message)
-            | CatalogError::CommitStateUnknown(message)
             | CatalogError::CommitRejected(message)
             | CatalogError::CredentialUnavailable(message)
             | CatalogError::ConversionLag(message)
