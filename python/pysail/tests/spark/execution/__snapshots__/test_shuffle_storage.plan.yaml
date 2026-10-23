@@ -347,6 +347,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#13@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#13@0 ASC]
