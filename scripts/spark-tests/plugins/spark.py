@@ -91,15 +91,30 @@ def spark_env_var(request, tmp_path_factory):
         f"spark.sql.warehouse.dir={shlex.quote(warehouse_dir.as_posix())}",
         "pyspark-shell",
     ]
-    if request.cls is not None and request.cls.__name__ == "SparkConnectFunctionTests":
-        # These tests compare `toPandas()` results of the Spark Connect session with those of
-        # the classic session. Spark Connect always uses Arrow, so Arrow is enabled for the
-        # classic session as well. Otherwise, array columns are returned as lists instead of
-        # NumPy arrays, which pandas does not consider equal. This is not done for all tests
-        # since `createDataFrame()` with Arrow turns NaN in the local data into NULL.
-        spark_args[-1:-1] = ["--conf", "spark.sql.execution.arrow.pyspark.enabled=true"]
     os.environ["TMPDIR"] = tmp_dir.as_posix()
     os.environ["PYSPARK_SUBMIT_ARGS"] = " ".join(spark_args)
+
+
+@pytest.fixture(autouse=_is_spark_testing())
+def spark_function_tests_arrow(request):
+    # These tests compare `toPandas()` results of the Spark Connect session with those of
+    # the classic session. Spark Connect always uses Arrow, so Arrow is enabled for the
+    # classic session as well. Otherwise, array columns are returned as lists instead of
+    # NumPy arrays, which pandas does not consider equal. This is not done for all tests
+    # since `createDataFrame()` with Arrow turns NaN in the local data into NULL.
+    # The configuration is set on the session rather than passed in `PYSPARK_SUBMIT_ARGS`,
+    # since the JVM may have been launched by an earlier test class in the same process.
+    if request.cls is None or request.cls.__name__ != "SparkConnectFunctionTests":
+        yield
+        return
+    key = "spark.sql.execution.arrow.pyspark.enabled"
+    conf = request.instance.spark.conf
+    original = conf.get(key)
+    conf.set(key, "true")
+    try:
+        yield
+    finally:
+        conf.set(key, original)
 
 
 @pytest.fixture(autouse=_is_spark_testing())
