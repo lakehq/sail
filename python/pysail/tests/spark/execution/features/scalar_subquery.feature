@@ -1368,3 +1368,57 @@ Feature: Scalar subqueries in distributed execution
         | 1 | 0  | 4 |
         | 1 | 1  | 2 |
         | 2 | 0  | 0 |
+
+    Scenario: Cast collisions below a generator combine every generated row
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM (
+             SELECT k, explode(array(v, v + 1)) AS x
+             FROM VALUES ('0', 2), ('00', 3), ('1', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id
+           )) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 4 |
+        | 1  | 2 |
+        | 2  | 0 |
+
+    Scenario: Cast correlation partitions windows by the compared key
+      When query
+        """
+        SELECT o.id,
+          (SELECT max(w) FROM (
+             SELECT k, row_number() OVER (ORDER BY v) AS w
+             FROM VALUES ('0', 2), ('00', 3), ('1', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id
+           )) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n    |
+        | 0  | 2    |
+        | 1  | 1    |
+        | 2  | NULL |
+
+    Scenario: Cast correlation preserves existing window partitions
+      When query
+        """
+        SELECT o.id,
+          (SELECT sum(w) FROM (
+             SELECT k, row_number() OVER (PARTITION BY k ORDER BY v) AS w
+             FROM VALUES ('0', 2), ('00', 3), ('1', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id
+           )) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n    |
+        | 0  | 2    |
+        | 1  | 1    |
+        | 2  | NULL |
