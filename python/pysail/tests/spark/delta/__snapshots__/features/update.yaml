@@ -9,27 +9,18 @@ data:
     == Plan Steps ==
     initial_logical_plan:
     RowLevelWrite: command=Update, mode=CopyOnWrite, target=delta_update_basic, format=delta, condition=id = 2
-      Projection: id AS id, CASE WHEN id = Int32(2) THEN CAST(value + Int32(1) AS Int32) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN id = Int32(2) THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
-        Projection: delta_update_basic.#0 AS id, delta_update_basic.#1 AS value, delta_update_basic.#2 AS previous_value, delta_update_basic.#3 AS label, __sail_file_path AS __sail_file_path
-          Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+      Projection: id AS id, CASE WHEN id = Int32(2) THEN value + Int32(1) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN id = Int32(2) THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
+        Projection: __sail_attribute_0 AS id, __sail_attribute_1 AS value, __sail_attribute_2 AS previous_value, __sail_attribute_3 AS label, __sail_file_path AS __sail_file_path
+          Projection: delta_update_basic.id AS __sail_attribute_0, delta_update_basic.value AS __sail_attribute_1, delta_update_basic.previous_value AS __sail_attribute_2, delta_update_basic.label AS __sail_attribute_3, delta_update_basic.__sail_file_path AS __sail_file_path
             TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
       Projection: __sail_file_path AS __sail_file_path
         Aggregate: groupBy=[[__sail_file_path]], aggr=[[]]
           Filter: id = Int32(2)
-            Projection: delta_update_basic.#0 AS id, delta_update_basic.#1 AS value, delta_update_basic.#2 AS previous_value, delta_update_basic.#3 AS label, __sail_file_path AS __sail_file_path
-              Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+            Projection: __sail_attribute_0 AS id, __sail_attribute_1 AS value, __sail_attribute_2 AS previous_value, __sail_attribute_3 AS label, __sail_file_path AS __sail_file_path
+              Projection: delta_update_basic.id AS __sail_attribute_0, delta_update_basic.value AS __sail_attribute_1, delta_update_basic.previous_value AS __sail_attribute_2, delta_update_basic.label AS __sail_attribute_3, delta_update_basic.__sail_file_path AS __sail_file_path
                 TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
 
-    logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_grouping_function:
-    SAME TEXT AS ABOVE
-
-    logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -97,14 +88,14 @@ data:
 
     logical_plan after push_down_filter:
     RowLevelWrite: command=Update, mode=CopyOnWrite, target=delta_update_basic, format=delta, condition=id = 2
-      Projection: id AS id, CASE WHEN id = Int32(2) THEN CAST(value + Int32(1) AS Int32) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN id = Int32(2) THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
-        Projection: delta_update_basic.#0 AS id, delta_update_basic.#1 AS value, delta_update_basic.#2 AS previous_value, delta_update_basic.#3 AS label, __sail_file_path AS __sail_file_path
-          Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+      Projection: id AS id, CASE WHEN id = Int32(2) THEN value + Int32(1) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN id = Int32(2) THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
+        Projection: __sail_attribute_0 AS id, __sail_attribute_1 AS value, __sail_attribute_2 AS previous_value, __sail_attribute_3 AS label, __sail_file_path AS __sail_file_path
+          Projection: delta_update_basic.id AS __sail_attribute_0, delta_update_basic.value AS __sail_attribute_1, delta_update_basic.previous_value AS __sail_attribute_2, delta_update_basic.label AS __sail_attribute_3, delta_update_basic.__sail_file_path AS __sail_file_path
             TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
       Projection: __sail_file_path AS __sail_file_path
         Aggregate: groupBy=[[__sail_file_path]], aggr=[[]]
-          Projection: delta_update_basic.#0 AS id, delta_update_basic.#1 AS value, delta_update_basic.#2 AS previous_value, delta_update_basic.#3 AS label, __sail_file_path AS __sail_file_path
-            Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+          Projection: __sail_attribute_0 AS id, __sail_attribute_1 AS value, __sail_attribute_2 AS previous_value, __sail_attribute_3 AS label, __sail_file_path AS __sail_file_path
+            Projection: delta_update_basic.id AS __sail_attribute_0, delta_update_basic.value AS __sail_attribute_1, delta_update_basic.previous_value AS __sail_attribute_2, delta_update_basic.label AS __sail_attribute_3, delta_update_basic.__sail_file_path AS __sail_file_path
               Filter: delta_update_basic.id = Int32(2)
                 TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path], partial_filters=[delta_update_basic.id = Int32(2)]
 
@@ -116,15 +107,15 @@ data:
 
     logical_plan after common_sub_expression_eliminate:
     RowLevelWrite: command=Update, mode=CopyOnWrite, target=delta_update_basic, format=delta, condition=id = 2
-      Projection: id AS id, CASE WHEN __common_expr_1 THEN CAST(value + Int32(1) AS Int32) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_1 THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
+      Projection: id AS id, CASE WHEN __common_expr_1 THEN value + Int32(1) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_1 THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
         Projection: id = Int32(2) AS __common_expr_1, id, value, previous_value, label, __sail_file_path
-          Projection: delta_update_basic.#0 AS id, delta_update_basic.#1 AS value, delta_update_basic.#2 AS previous_value, delta_update_basic.#3 AS label, __sail_file_path AS __sail_file_path
-            Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+          Projection: __sail_attribute_0 AS id, __sail_attribute_1 AS value, __sail_attribute_2 AS previous_value, __sail_attribute_3 AS label, __sail_file_path AS __sail_file_path
+            Projection: delta_update_basic.id AS __sail_attribute_0, delta_update_basic.value AS __sail_attribute_1, delta_update_basic.previous_value AS __sail_attribute_2, delta_update_basic.label AS __sail_attribute_3, delta_update_basic.__sail_file_path AS __sail_file_path
               TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
       Projection: __sail_file_path AS __sail_file_path
         Aggregate: groupBy=[[__sail_file_path]], aggr=[[]]
-          Projection: delta_update_basic.#0 AS id, delta_update_basic.#1 AS value, delta_update_basic.#2 AS previous_value, delta_update_basic.#3 AS label, __sail_file_path AS __sail_file_path
-            Projection: delta_update_basic.id AS #0, delta_update_basic.value AS #1, delta_update_basic.previous_value AS #2, delta_update_basic.label AS #3, delta_update_basic.__sail_file_path AS __sail_file_path
+          Projection: __sail_attribute_0 AS id, __sail_attribute_1 AS value, __sail_attribute_2 AS previous_value, __sail_attribute_3 AS label, __sail_file_path AS __sail_file_path
+            Projection: delta_update_basic.id AS __sail_attribute_0, delta_update_basic.value AS __sail_attribute_1, delta_update_basic.previous_value AS __sail_attribute_2, delta_update_basic.label AS __sail_attribute_3, delta_update_basic.__sail_file_path AS __sail_file_path
               Filter: delta_update_basic.id = Int32(2)
                 TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path], partial_filters=[delta_update_basic.id = Int32(2)]
 
@@ -133,7 +124,7 @@ data:
 
     logical_plan after optimize_projections:
     RowLevelWrite: command=Update, mode=CopyOnWrite, target=delta_update_basic, format=delta, condition=id = 2
-      Projection: id AS id, CASE WHEN __common_expr_1 THEN CAST(value + Int32(1) AS Int32) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_1 THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
+      Projection: id AS id, CASE WHEN __common_expr_1 THEN value + Int32(1) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_1 THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
         Projection: delta_update_basic.id = Int32(2) AS __common_expr_1, delta_update_basic.id AS id, delta_update_basic.value AS value, delta_update_basic.previous_value AS previous_value, delta_update_basic.label AS label, delta_update_basic.__sail_file_path AS __sail_file_path
           TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
       Projection: __sail_file_path AS __sail_file_path
@@ -143,9 +134,6 @@ data:
               TableScan: delta_update_basic projection=[id, __sail_file_path], partial_filters=[delta_update_basic.id = Int32(2)]
 
     logical_plan after rewrite_binary_grouping:
-    SAME TEXT AS ABOVE
-
-    logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_lateral_projection:
@@ -226,12 +214,9 @@ data:
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
-    logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
-
     logical_plan:
     RowLevelWrite: command=Update, mode=CopyOnWrite, target=delta_update_basic, format=delta, condition=id = 2
-      Projection: id AS id, CASE WHEN __common_expr_1 THEN CAST(value + Int32(1) AS Int32) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_1 THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
+      Projection: id AS id, CASE WHEN __common_expr_1 THEN value + Int32(1) ELSE value END AS value, previous_value AS previous_value, label AS label, __sail_file_path AS __sail_file_path, CASE WHEN __common_expr_1 THEN Int32(2) ELSE Int32(0) END AS __sail_operation_type
         Projection: delta_update_basic.id = Int32(2) AS __common_expr_1, delta_update_basic.id AS id, delta_update_basic.value AS value, delta_update_basic.previous_value AS previous_value, delta_update_basic.label AS label, delta_update_basic.__sail_file_path AS __sail_file_path
           TableScan: delta_update_basic projection=[id, value, previous_value, label, __sail_file_path]
       Projection: __sail_file_path AS __sail_file_path

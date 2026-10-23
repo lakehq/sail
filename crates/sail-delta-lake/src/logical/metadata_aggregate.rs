@@ -248,6 +248,10 @@ fn rewrite_metadata_grouping(
         .group_expr
         .iter()
         .map(|expression| {
+            let mut expression = expression;
+            while let Expr::Alias(alias) = expression {
+                expression = alias.expr.as_ref();
+            }
             let Expr::Column(column) = expression else {
                 return None;
             };

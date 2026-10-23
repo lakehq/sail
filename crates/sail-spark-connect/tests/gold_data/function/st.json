@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: one value expected: [ScalarFunction(ScalarFunction { func: ScalarUDF { inner: StGeomFromWKB { signature: Signature { type_signature: Exact([Binary]), volatility: Immutable, parameter_names: None } } }, args: [Literal(Binary(\"1,1,0,0,0,0,0,0,0,0,0,240,63,0,0,0,0,0,0,0,64\"), None)] }), Literal(Utf8(\"XDR\"), None)]"
+        "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'st_asbinary' function: coercion from Binary, Utf8 to the signature Exact(Binary) failed"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Binary(\"1,1,0,0,0,0,0,0,0,0,0,240,63,0,0,0,0,0,0,0,64\"), None), Literal(Int32(4326), None)]"
+        "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'st_geomfromwkb' function: coercion from Binary, Int32 to the signature Exact(Binary) failed"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: st_srid"
+        "failure": "not supported: native function resolution: st_srid"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: st_srid"
+        "failure": "not supported: native function resolution: st_srid"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: st_srid"
+        "failure": "not supported: native function resolution: st_srid"
       }
     },
     {
@@ -173,7 +173,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: one value expected: [Literal(Binary(\"1,1,0,0,0,0,0,0,0,0,0,240,63,0,0,0,0,0,0,0,64\"), None), Literal(Int32(4326), None)]"
+        "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'st_geomfromwkb' function: coercion from Binary, Int32 to the signature Exact(Binary) failed"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: st_setsrid"
+        "failure": "not supported: native function resolution: st_setsrid"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: st_setsrid"
+        "failure": "not supported: native function resolution: st_setsrid"
       }
     }
   ]

@@ -7,7 +7,7 @@ use chrono_tz::Tz;
 use datafusion::arrow::array::{
     Array, ArrayRef, MapArray, StringArray, StructArray, downcast_array,
 };
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
@@ -41,14 +41,7 @@ impl SparkSchemaOfJson {
     }
 
     fn validate_args_len<T>(args: &[T]) -> Result<()> {
-        if args.is_empty() || args.len() > 2 {
-            return plan_err!(
-                "function `{}` expected 1 to 2 args but got {}",
-                Self::SCHEMA_OF_JSON_NAME,
-                args.len()
-            );
-        };
-        Ok(())
+        sail_type_system::policies::schema_of_json_arguments::validate_args_len(args)
     }
 
     fn validate_args_are_literal(cols: &[ColumnarValue]) -> Result<()> {
@@ -66,36 +59,6 @@ impl SparkSchemaOfJson {
         }
         Ok(())
     }
-
-    fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
-        match arg_types {
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
-            [
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                DataType::Map(map_field, _),
-            ] => match map_field.data_type() {
-                DataType::Struct(fields) => {
-                    let key = fields[0].clone();
-                    let value = fields[1].clone();
-                    if !key.data_type().is_string() || !value.data_type().is_string() {
-                        return Err(DataFusionError::Plan(format!(
-                            "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
-                            Self::SCHEMA_OF_JSON_NAME,
-                            key.data_type(),
-                            value.data_type(),
-                        )));
-                    }
-                    Ok(())
-                }
-                _ => unreachable!(),
-            },
-            _ => plan_err!(
-                "For function `{:?}` found invalid arg types: {:?}",
-                Self::SCHEMA_OF_JSON_NAME,
-                arg_types
-            ),
-        }
-    }
 }
 
 impl ScalarUDFImpl for SparkSchemaOfJson {
@@ -108,14 +71,11 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        sail_type_system::policies::scalar_json_schema_of_json_typing::spark_schema_of_json_return_type(_arg_types)
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        // `schema_of_json` only accepts a foldable, non-null input and always
-        // produces a DDL string, so the result is never null. Spark marks the
-        // output of a successful foldable call as non-nullable.
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, false)))
+        sail_type_system::policies::scalar_json_schema_of_json_typing::spark_schema_of_json_return_field_from_args(self.name(), _args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -127,25 +87,7 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        Self::validate_args_len(arg_types)?;
-        Self::validate_arg_types(arg_types)?;
-        let mut coerce_to = vec![DataType::Utf8];
-        if arg_types.len() > 1 {
-            // Force map<k,v> → map<Utf8, Utf8>
-            coerce_to.push(DataType::Map(
-                Arc::new(Field::new(
-                    "entries",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, true),
-                    ])),
-                    false,
-                )),
-                false,
-            ));
-        }
-        // utf8, optional<map>
-        Ok(coerce_to)
+        sail_type_system::policies::schema_of_json_arguments::coerce_types(arg_types)
     }
 }
 

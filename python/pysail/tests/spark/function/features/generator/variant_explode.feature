@@ -218,7 +218,6 @@ Feature: variant_explode and variant_explode_outer
   # empty containers.
   Rule: variant_explode_outer emits a single NULL row when there is nothing to explode
 
-    @sail-bug
     Scenario Outline: Outer non-container: <case>
       When query
         """
@@ -237,7 +236,6 @@ Feature: variant_explode and variant_explode_outer
         | Outer explode string scalar yields one NULL row  | parse_json('"text"')  |
         | Outer explode boolean scalar yields one NULL row | parse_json('false')   |
 
-    @sail-bug
     Scenario Outline: Outer empty container: <case>
       When query
         """
@@ -298,7 +296,6 @@ Feature: variant_explode and variant_explode_outer
 
     # The inner form drops rows with nothing to explode; the outer form keeps them with an
     # all-NULL right side. Sail drops them in both.
-    @sail-bug
     Scenario: Outer explode variant column keeps null, empty, and non-container rows
       When query
         """

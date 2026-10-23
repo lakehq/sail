@@ -2,80 +2,10 @@ use arrow::array::{Float64Array, Int64Array, StringArray};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal16};
 use parquet_variant_compute::VariantArrayBuilder;
+use sail_type_system::policies::jev::fields;
 
 use super::*;
 use crate::scalar::variant::spark_parse_json::convert_variant_binaryview_to_binary;
-
-fn map_field(name: &str, value: Field) -> Field {
-    Field::new(
-        name,
-        DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    value,
-                ])),
-                false,
-            )),
-            false,
-        ),
-        false,
-    )
-}
-
-pub(super) fn fields(kind: JevKind) -> Fields {
-    let string = |name, nullable| Field::new(name, DataType::Utf8, nullable);
-    let double = |name| Field::new(name, DataType::Float64, false);
-    let probabilities = || map_field("probabilities", double("value"));
-    let mut fields = match kind {
-        JevKind::Noul => vec![double("noul")],
-        JevKind::Choice => vec![
-            string("choice", false),
-            probabilities(),
-            double("confidence"),
-        ],
-        JevKind::Score => vec![
-            double("score"),
-            probabilities(),
-            double("confidence"),
-            map_field("legend", variant_field("value", false)),
-        ],
-        JevKind::SystemOne => vec![map_field("answers", variant_field("value", false))],
-        JevKind::Models => {
-            return Fields::from(vec![
-                Field::new(
-                    "models",
-                    DataType::List(Arc::new(Field::new(
-                        "item",
-                        DataType::Struct(Fields::from(vec![
-                            string("name", false),
-                            string("description", false),
-                            string("release_date", false),
-                        ])),
-                        false,
-                    ))),
-                    false,
-                ),
-                string("request_id", true),
-            ]);
-        }
-    };
-    fields.extend([
-        string("model", false),
-        string("request_id", true),
-        string("batch_id", false),
-        Field::new(
-            "usage",
-            DataType::Struct(Fields::from(vec![
-                Field::new("input_tokens", DataType::Int64, true),
-                Field::new("output_tokens", DataType::Int64, true),
-            ])),
-            false,
-        ),
-    ]);
-    Fields::from(fields)
-}
 
 #[derive(Clone)]
 pub(crate) struct ResponseRow {

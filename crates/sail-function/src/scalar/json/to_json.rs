@@ -143,7 +143,9 @@ impl ScalarUDFImpl for SparkToJson {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        sail_type_system::policies::scalar_json_to_json_typing::spark_to_json_return_type(
+            _arg_types,
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

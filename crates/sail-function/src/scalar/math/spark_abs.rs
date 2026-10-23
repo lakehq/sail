@@ -61,37 +61,11 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0].is_numeric()
-            || arg_types[0].is_null()
-            || matches!(arg_types[0], DataType::Interval(_) | DataType::Duration(_))
-        {
-            Ok(arg_types[0].clone())
-        } else {
-            Err(unsupported_data_type_exec_err(
-                "abs",
-                "Numeric, Interval, or Duration type",
-                &arg_types[0],
-            ))
-        }
+        sail_type_system::abs::return_type(arg_types)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("abs", (1, 1), arg_types.len()));
-        }
-        match &arg_types[0] {
-            t if t.is_numeric() => Ok(vec![t.clone()]),
-            DataType::Null => Ok(vec![DataType::Null]),
-            DataType::Interval(_) | DataType::Duration(_) => Ok(vec![arg_types[0].clone()]),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                Ok(vec![DataType::Float64])
-            }
-            other => Err(unsupported_data_type_exec_err(
-                "abs",
-                "Numeric, String, Interval, or Duration type",
-                other,
-            )),
-        }
+        sail_type_system::abs::coerce_types(arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

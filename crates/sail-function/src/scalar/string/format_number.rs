@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Float64Array, Int32Array, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_float64_array;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -41,15 +41,13 @@ impl ScalarUDFImpl for FormatNumber {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
-        )
+        sail_type_system::policies::string_format_number::return_type(_arg_types)
     }
 
     /// Spark: `FormatNumber.nullable = true`, unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala#L3367>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+        sail_type_system::policies::string_format_number::return_field_from_args(_args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

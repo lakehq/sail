@@ -2,14 +2,13 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType, DurationMicrosecondType, Field, FieldRef, Int32Type, IntervalMonthDayNano,
-    IntervalUnit, IntervalYearMonthType, TimeUnit,
+    DataType, DurationMicrosecondType, FieldRef, Int32Type, IntervalMonthDayNano, IntervalUnit,
+    IntervalYearMonthType, TimeUnit,
 };
 use datafusion_common::arrow::array::{AsArray, PrimitiveArray};
 use datafusion_common::arrow::datatypes::IntervalMonthDayNanoType;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -134,17 +133,11 @@ impl ScalarUDFImpl for YearMonthIntervalMonths {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        sail_type_system::policies::scalar_datetime_spark_interval_typing::year_month_interval_months_return_type(_arg_types)
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let [field] = take_function_args(self.name(), args.arg_fields)?;
-        // The numeric output must not retain interval qualifier metadata.
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Int32,
-            field.is_nullable(),
-        )))
+        sail_type_system::policies::scalar_datetime_spark_interval_typing::year_month_interval_months_return_field_from_args(self.name(), args)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -216,7 +209,7 @@ impl ScalarUDFImpl for SparkDayTimeIntervalToCalendarInterval {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        sail_type_system::policies::scalar_datetime_spark_interval_typing::spark_day_time_interval_to_calendar_interval_return_type(_arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

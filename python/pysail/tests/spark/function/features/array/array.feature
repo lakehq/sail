@@ -64,9 +64,9 @@ Feature: array output schema
         """
 
   # Existing array-index bugs retained after reverting the PR implementation.
-  @sail-bug
   Rule: Array subscripts require integral types
 
+    @sail-bug
     Scenario Outline: Non-integral array subscript <index> is rejected with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -80,6 +80,7 @@ Feature: array output schema
         | '4294967296' | true  |
         | '4294967296' | false |
 
+    @sail-bug
     Scenario: Integral and NULL subscripts retain their existing behavior
       Given config spark.sql.ansi.enabled = false
       When query
@@ -120,6 +121,7 @@ Feature: array output schema
         | BIGINT   | true  |
         | BIGINT   | false |
 
+    @sail-bug
     Scenario Outline: BIGINT subscript columns narrow to signed INT with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -140,6 +142,7 @@ Feature: array output schema
         | true  |
         | false |
 
+    @sail-bug
     Scenario Outline: Non-integral subscript column <index> is rejected with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -157,6 +160,7 @@ Feature: array output schema
         | 0.5D  | true  |
         | 0.5D  | false |
 
+    @sail-bug
     Scenario Outline: Projected subscript columns widened to <value> are rejected with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query
@@ -191,6 +195,7 @@ Feature: array output schema
         | 2147483648L |
         | 4294967295L |
 
+    @sail-bug
     Scenario: Out-of-bounds subscript columns return NULL outside ANSI mode
       Given config spark.sql.ansi.enabled = false
       When query

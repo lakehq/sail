@@ -52,7 +52,7 @@ impl ScalarUDFImpl for SparkDateFormat {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        sail_type_system::policies::datetime_spark_date_format::return_type(_arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

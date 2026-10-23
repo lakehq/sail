@@ -16,10 +16,9 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_common_datafusion::session::job::JobService;
 
+use crate::analysis::{NamedPlan, QueryAnalyzer};
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::PlanResolver;
-use crate::resolver::plan::NamedPlan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplainKind {
@@ -456,8 +455,8 @@ pub async fn explain_string(
     options: ExplainOptions,
 ) -> PlanResult<ExplainString> {
     let collected = collect_plan_with(ctx, async {
-        let resolver = PlanResolver::new(ctx, Arc::clone(&config));
-        let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+        let resolver = QueryAnalyzer::new(ctx, Arc::clone(&config));
+        let NamedPlan { plan, fields } = resolver.plan(plan).await?;
         Ok((plan, fields))
     })
     .await?;

@@ -1341,11 +1341,6 @@ def test_shredded_variant_arguments_keep_object_content(spark, jev, tmp_path, ex
             [{"p": 0.0, "n": 2}, {"p": 0.01, "n": 2}],
             "No field named range.",
             id="grouping_repeated_text",
-            marks=pytest.mark.xfail(
-                reason="Separate Jev call IDs prevent SELECT from matching the repeated GROUP BY expression during rebasing.",
-                strict=True,
-                raises=SparkConnectGrpcException,
-            ),
         ),
         pytest.param(
             "SELECT transform(array(id,id+1), x -> x+id) AS a, jev_noul(CAST(id AS STRING),'yes?').noul AS n "
@@ -1448,11 +1443,6 @@ def test_shredded_variant_arguments_keep_object_content(spark, jev, tmp_path, ex
             [{"p": 0.0, "n": 2}, {"p": 0.01, "n": 2}],
             "No field named range.",
             id="grouping_wrapped_reference",
-            marks=pytest.mark.xfail(
-                reason="Distinct Jev call IDs prevent matching repeated grouping expressions.",
-                strict=True,
-                raises=SparkConnectGrpcException,
-            ),
         ),
         pytest.param(
             "SELECT jev_noul(CAST(id % 2 AS STRING), 'q').noul AS p, count(*) AS n FROM range(0,4,1,1) GROUP BY "
@@ -1461,11 +1451,6 @@ def test_shredded_variant_arguments_keep_object_content(spark, jev, tmp_path, ex
             [{"p": 0.01, "n": 2}],
             "No field named range.",
             id="grouping_having_reference",
-            marks=pytest.mark.xfail(
-                reason="Distinct Jev call IDs prevent matching repeated grouping expressions.",
-                strict=True,
-                raises=SparkConnectGrpcException,
-            ),
         ),
         pytest.param(
             "SELECT jev_noul(CAST(id % 2 AS STRING), 'q').noul AS p, count(*) AS n FROM range(0,4,1,1) GROUP BY "
@@ -1473,11 +1458,6 @@ def test_shredded_variant_arguments_keep_object_content(spark, jev, tmp_path, ex
             [{"p": 0.0, "n": 2}, {"p": 0.01, "n": 2}, {"p": None, "n": 4}],
             "No field named range.",
             id="grouping_sets_reference",
-            marks=pytest.mark.xfail(
-                reason="Distinct Jev call IDs prevent matching repeated grouping expressions.",
-                strict=True,
-                raises=SparkConnectGrpcException,
-            ),
         ),
     ],
 )

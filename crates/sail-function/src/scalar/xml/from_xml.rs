@@ -4,18 +4,13 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use sail_common::spec::{
-    self, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
-    SAIL_MAP_VALUE_FIELD_NAME,
-};
+use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
-use sail_sql_analyzer::data_type::from_ast_data_type;
-use sail_sql_analyzer::parser as sail_parser;
 use xee_xpath::Documents;
 
 use crate::functions_utils::make_scalar_function;
@@ -177,48 +172,22 @@ impl ScalarUDFImpl for SparkFromXml {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
+        sail_type_system::policies::scalar_xml_from_xml_typing::spark_from_xml_return_type(
+            _arg_types,
         )
     }
 
     /// Spark: `XmlToStructs.nullable = true`, unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L70>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let schema_str = match args.scalar_arguments.get(1) {
-            Some(Some(
-                ScalarValue::Utf8(Some(s))
-                | ScalarValue::LargeUtf8(Some(s))
-                | ScalarValue::Utf8View(Some(s)),
-            )) => s.as_str(),
-            _ => {
-                return plan_err!(
-                    "`{}` requires the schema argument to be a string literal",
-                    Self::FROM_XML_NAME
-                );
-            }
-        };
-        let dt = parse_xml_schema(schema_str, &self.session_timezone)?;
-        Ok(Arc::new(Field::new(self.name(), dt, true)))
+        sail_type_system::policies::from_xml_schema::return_field_from_args(
+            &self.session_timezone,
+            args,
+        )
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        match arg_types {
-            [
-                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-            ] => Ok(vec![DataType::Utf8, DataType::Utf8]),
-            [
-                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                DataType::Map(_, _),
-            ] => Ok(vec![DataType::Utf8, DataType::Utf8, arg_types[2].clone()]),
-            _ => plan_err!(
-                "`{}` requires 2 or 3 arguments: xml STRING, schema STRING, options MAP (optional), got {:?}",
-                Self::FROM_XML_NAME,
-                arg_types
-            ),
-        }
+        sail_type_system::policies::from_xml_schema::coerce_types(arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -303,153 +272,7 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     finish_struct_builder(builder)
 }
 
-fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
-    let schema = schema.trim();
-    let ast_result = sail_parser::parse_data_type(schema)
-        .or_else(|_| sail_parser::parse_data_type(&format!("STRUCT<{schema}>")));
-    let ast = ast_result
-        .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
-    let spec_dt = from_ast_data_type(ast)
-        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
-    spec_to_arrow_data_type(&spec_dt, session_timezone)
-}
-
-fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
-    use spec::DataType as SDT;
-
-    fn to_time_unit(unit: &spec::TimeUnit) -> TimeUnit {
-        match unit {
-            spec::TimeUnit::Second => TimeUnit::Second,
-            spec::TimeUnit::Millisecond => TimeUnit::Millisecond,
-            spec::TimeUnit::Microsecond => TimeUnit::Microsecond,
-            spec::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
-        }
-    }
-
-    match dt {
-        SDT::Null => Ok(DataType::Null),
-        SDT::Boolean => Ok(DataType::Boolean),
-        SDT::Int8 => Ok(DataType::Int8),
-        SDT::Int16 => Ok(DataType::Int16),
-        SDT::Int32 => Ok(DataType::Int32),
-        SDT::Int64 => Ok(DataType::Int64),
-        SDT::UInt8 => Ok(DataType::UInt8),
-        SDT::UInt16 => Ok(DataType::UInt16),
-        SDT::UInt32 => Ok(DataType::UInt32),
-        SDT::UInt64 => Ok(DataType::UInt64),
-        SDT::Float16 => Ok(DataType::Float16),
-        SDT::Float32 => Ok(DataType::Float32),
-        SDT::Float64 => Ok(DataType::Float64),
-        SDT::Binary | SDT::ConfiguredBinary => Ok(DataType::Binary),
-        SDT::FixedSizeBinary { size } => Ok(DataType::FixedSizeBinary(*size)),
-        SDT::LargeBinary => Ok(DataType::LargeBinary),
-        SDT::BinaryView => Ok(DataType::BinaryView),
-        SDT::Utf8 | SDT::ConfiguredUtf8 { .. } => Ok(DataType::Utf8),
-        SDT::LargeUtf8 => Ok(DataType::LargeUtf8),
-        SDT::Utf8View => Ok(DataType::Utf8View),
-        SDT::Date32 => Ok(DataType::Date32),
-        SDT::Date64 => Ok(DataType::Date64),
-        SDT::Timestamp {
-            time_unit,
-            timestamp_type,
-        } => Ok(DataType::Timestamp(
-            to_time_unit(time_unit),
-            match timestamp_type {
-                spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
-                    Some(Arc::from(session_timezone))
-                }
-                spec::TimestampType::WithoutTimeZone => None,
-            },
-        )),
-        SDT::Time32 { time_unit: u } => Ok(DataType::Time32(to_time_unit(u))),
-        SDT::Time64 { time_unit: u } => Ok(DataType::Time64(to_time_unit(u))),
-        SDT::Duration { time_unit: u } => Ok(DataType::Duration(to_time_unit(u))),
-        SDT::Interval { interval_unit, .. } => match interval_unit {
-            spec::IntervalUnit::YearMonth => Ok(DataType::Interval(IntervalUnit::YearMonth)),
-            spec::IntervalUnit::DayTime => Ok(DataType::Duration(TimeUnit::Microsecond)),
-            spec::IntervalUnit::MonthDayNano => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
-        },
-        SDT::Decimal128 { precision, scale } => Ok(DataType::Decimal128(*precision, *scale)),
-        SDT::Decimal256 { precision, scale } => Ok(DataType::Decimal256(*precision, *scale)),
-        SDT::List {
-            data_type,
-            nullable,
-        } => Ok(DataType::List(Arc::new(Field::new(
-            SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-            *nullable,
-        )))),
-        SDT::FixedSizeList {
-            data_type,
-            nullable,
-            length,
-        } => Ok(DataType::FixedSizeList(
-            Arc::new(Field::new(
-                SAIL_LIST_FIELD_NAME,
-                spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-                *nullable,
-            )),
-            *length,
-        )),
-        SDT::LargeList {
-            data_type,
-            nullable,
-        } => Ok(DataType::LargeList(Arc::new(Field::new(
-            SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
-            *nullable,
-        )))),
-        SDT::Struct { fields } => {
-            let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
-            for f in fields.iter() {
-                out.push(Arc::new(Field::new(
-                    f.name.clone(),
-                    spec_to_arrow_data_type(&f.data_type, session_timezone)?,
-                    f.nullable,
-                )));
-            }
-            Ok(DataType::Struct(Fields::from(out)))
-        }
-        SDT::Map {
-            key_type,
-            value_type,
-            value_type_nullable,
-            keys_sorted,
-        } => {
-            let fields = Fields::from(vec![
-                Arc::new(Field::new(
-                    SAIL_MAP_KEY_FIELD_NAME,
-                    spec_to_arrow_data_type(key_type.as_ref(), session_timezone)?,
-                    false,
-                )),
-                Arc::new(Field::new(
-                    SAIL_MAP_VALUE_FIELD_NAME,
-                    spec_to_arrow_data_type(value_type.as_ref(), session_timezone)?,
-                    *value_type_nullable,
-                )),
-            ]);
-            Ok(DataType::Map(
-                Arc::new(Field::new(
-                    SAIL_MAP_FIELD_NAME,
-                    DataType::Struct(fields),
-                    false,
-                )),
-                *keys_sorted,
-            ))
-        }
-        SDT::Geometry { .. } | SDT::Geography { .. } => Ok(DataType::Binary),
-        SDT::Variant => Ok(DataType::Struct(Fields::from(vec![
-            Arc::new(Field::new("metadata", DataType::Binary, false)),
-            Arc::new(Field::new("value", DataType::Binary, false)),
-        ]))),
-        SDT::UserDefined { sql_type, .. } => {
-            spec_to_arrow_data_type(sql_type.as_ref(), session_timezone)
-        }
-        other => Err(DataFusionError::Plan(format!(
-            "Unsupported data type in from_xml schema: {other:?}"
-        ))),
-    }
-}
+use sail_type_system::schema::parse_xml_schema;
 
 enum XmlFieldBuilder {
     Boolean(BooleanBuilder),

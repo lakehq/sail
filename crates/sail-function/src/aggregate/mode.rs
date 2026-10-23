@@ -69,7 +69,7 @@ impl AggregateUDFImpl for ModeFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        sail_type_system::policies::aggregate_mode::return_type(arg_types)
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

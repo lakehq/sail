@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, LargeListArray, ListArray};
 use datafusion::arrow::compute::take_arrays;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values_row_number};
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
@@ -93,43 +93,15 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
-
-        let element = match list.data_type() {
-            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
-            other => return plan_err!("{} expected a list, got {other}", self.name()),
-        };
-
-        // Spark lambdas may declare one parameter (the element) or two (the
-        // element and its 0-based index).
-        let index = Arc::new(Field::new("", DataType::Int32, false));
-        let params = if self.index_first {
-            vec![index, element]
-        } else {
-            vec![element, index]
-        };
-        Ok(LambdaParametersProgress::Complete(vec![params]))
+        sail_type_system::higher_order::list_parameters(self.name(), fields, true, self.index_first)
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (list, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
-
-        // The element type of the result is the lambda body's return type, not
-        // the input element type — this is what distinguishes `transform` (map)
-        // from `filter` (which keeps the input element type).
-        let field = Arc::new(Field::new(
-            Field::LIST_FIELD_DEFAULT_NAME,
-            lambda.data_type().clone(),
-            lambda.is_nullable(),
-        ));
-
-        let return_type = match list.data_type() {
-            DataType::List(_) => DataType::List(field),
-            DataType::LargeList(_) => DataType::LargeList(field),
-            other => return plan_err!("{} expected a list, got {other}", self.name()),
-        };
-
-        Ok(Arc::new(Field::new("", return_type, list.is_nullable())))
+        sail_type_system::higher_order::list_result(
+            self.name(),
+            args,
+            sail_type_system::higher_order::ListResult::Transform,
+        )
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
@@ -210,6 +182,7 @@ impl HigherOrderUDFImpl for SparkArrayTransform {
 mod tests {
     use std::collections::HashMap;
 
+    use arrow_schema::Field;
     use datafusion::arrow::array::{Int32Array, RecordBatch};
     use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
     use datafusion_common::DFSchema;

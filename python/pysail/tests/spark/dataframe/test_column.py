@@ -230,7 +230,7 @@ SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.skipif(
         pytest.param(
             "nested-hidden-using-key",
             [Row(a=1, e=7)],
-            marks=[SPARK_42_DATAFRAME_COLUMN_MARK, _sail_bug("Hidden USING keys do not survive another join")],
+            marks=SPARK_42_DATAFRAME_COLUMN_MARK,
         ),
         pytest.param(
             "direct-join-child",
@@ -240,7 +240,6 @@ SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.skipif(
         pytest.param(
             "drop-duplicate-attribute",
             [Row(b=10), Row(b=20), Row(b=30)],
-            marks=_sail_bug("Column candidates for drop are not deduplicated by attribute"),
         ),
     ],
 )

@@ -3331,7 +3331,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         match udf_kind {
             UdfKind::Standard(r#gen::StandardUdf {}) => {
                 if let Some(kind) = sail_function::scalar::jev::JevKind::from_name(name) {
-                    return Ok(Arc::new(kind.udf()));
+                    return Ok(Arc::new(sail_function::scalar::jev::jev_udf(kind)));
                 }
             }
             UdfKind::PySpark(r#gen::PySparkUdf {
@@ -6004,10 +6004,13 @@ mod tests {
     #[test]
     fn test_jev_udf_codec_preserves_async_wrapper() -> Result<()> {
         for kind in sail_function::scalar::jev::JevKind::ALL {
-            let decoded = round_trip_udf(kind.udf())?;
+            let decoded = round_trip_udf(sail_function::scalar::jev::jev_udf(kind))?;
             assert_eq!(decoded.name(), kind.name());
             assert!(decoded.as_async().is_some());
-            assert_eq!(decoded.signature(), kind.udf().signature());
+            assert_eq!(
+                decoded.signature(),
+                sail_function::scalar::jev::jev_udf(kind).signature()
+            );
         }
         Ok(())
     }

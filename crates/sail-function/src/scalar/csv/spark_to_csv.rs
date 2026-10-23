@@ -5,7 +5,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -219,15 +219,15 @@ impl ScalarUDFImpl for SparkToCsv {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!(
-            "`return_type` should not be called; `return_field_from_args` is used instead"
+        sail_type_system::policies::scalar_csv_spark_to_csv_typing::spark_to_csv_return_type(
+            _arg_types,
         )
     }
 
     /// Spark: `StructsToCsv.nullable = true`, unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/csvExpressions.scala#L227>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
+        sail_type_system::policies::scalar_csv_spark_to_csv_typing::spark_to_csv_return_field_from_args(self.name(), _args)
     }
 
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
@@ -244,17 +244,7 @@ impl ScalarUDFImpl for SparkToCsv {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        match arg_types {
-            [DataType::Struct(_)] => Ok(vec![arg_types[0].clone()]),
-            [DataType::Struct(_), DataType::Map(_, _)] => {
-                Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
-            }
-            _ => plan_err!(
-                "`{}` function requires 1 or 2 arguments: a struct and an optional options map, got {:?}",
-                Self::TO_CSV_NAME,
-                arg_types
-            ),
-        }
+        sail_type_system::policies::to_csv_arguments::coerce_types(arg_types)
     }
 }
 

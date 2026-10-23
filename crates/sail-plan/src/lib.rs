@@ -9,12 +9,12 @@ use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 
+use crate::analysis::{NamedPlan, QueryAnalyzer};
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
-use crate::resolver::PlanResolver;
-use crate::resolver::plan::NamedPlan;
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
+pub mod analysis;
 pub mod catalog;
 pub mod config;
 pub mod error;
@@ -22,7 +22,6 @@ pub mod explain;
 pub mod formatter;
 pub mod function;
 pub mod procedure;
-pub mod resolver;
 mod streaming;
 
 /// Executes a logical plan.
@@ -38,8 +37,8 @@ pub async fn resolve_and_execute_plan(
     plan: spec::Plan,
 ) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
     let mut info = vec![];
-    let resolver = PlanResolver::new(ctx, config);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    let resolver = QueryAnalyzer::new(ctx, config);
+    let NamedPlan { plan, fields } = resolver.plan(plan).await?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();

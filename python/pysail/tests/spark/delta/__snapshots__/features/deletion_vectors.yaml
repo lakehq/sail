@@ -29,22 +29,13 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Projection: count(Int64(1)) AS cnt AS #3
-      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-        Filter: delta_dv_explain.#2 > Int32(100)
-          Projection: delta_dv_explain.id AS #0, delta_dv_explain.name AS #1, delta_dv_explain.value AS #2
+    Projection: __sail_attribute_3 AS __sail_expression_4 AS __sail_attribute_4
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __sail_attribute_3]]
+        Filter: __sail_attribute_2 > Int32(100)
+          Projection: delta_dv_explain.id AS __sail_attribute_0, delta_dv_explain.name AS __sail_attribute_1, delta_dv_explain.value AS __sail_attribute_2
             TableScan: delta_dv_explain
 
-    logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_grouping_function:
-    SAME TEXT AS ABOVE
-
-    logical_plan after type_coercion:
-    SAME TEXT AS ABOVE
-
-    logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -111,9 +102,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
-    Projection: count(Int64(1)) AS cnt AS #3
-      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-        Projection: delta_dv_explain.id AS #0, delta_dv_explain.name AS #1, delta_dv_explain.value AS #2
+    Projection: __sail_attribute_3 AS __sail_expression_4 AS __sail_attribute_4
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __sail_attribute_3]]
+        Projection: delta_dv_explain.id AS __sail_attribute_0, delta_dv_explain.name AS __sail_attribute_1, delta_dv_explain.value AS __sail_attribute_2
           Filter: delta_dv_explain.value > Int32(100)
             TableScan: delta_dv_explain, partial_filters=[delta_dv_explain.value > Int32(100)]
 
@@ -130,16 +121,13 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Projection: count(Int64(1)) AS cnt AS #3
-      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+    Projection: __sail_attribute_3 AS __sail_expression_4 AS __sail_attribute_4
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __sail_attribute_3]]
         Projection:
           Filter: delta_dv_explain.value > Int32(100)
             TableScan: delta_dv_explain projection=[value], partial_filters=[delta_dv_explain.value > Int32(100)]
 
     logical_plan after rewrite_binary_grouping:
-    SAME TEXT AS ABOVE
-
-    logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_lateral_projection:
@@ -220,20 +208,17 @@ data:
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
 
-    logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
-
     logical_plan:
-    Projection: count(Int64(1)) AS cnt AS #3
-      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+    Projection: __sail_attribute_3 AS __sail_expression_4 AS __sail_attribute_4
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __sail_attribute_3]]
         Projection:
           Filter: delta_dv_explain.value > Int32(100)
             TableScan: delta_dv_explain projection=[value], partial_filters=[delta_dv_explain.value > Int32(100)]
 
     initial_physical_plan:
-    ProjectionExec: expr=[count(Int64(1))@0 as #3]
-      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
-        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+    ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4]
+      AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3]
+        AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3]
           ProjectionExec: expr=[]
             FilterExec: value@0 > 100
               ProjectionExec: expr=[value@0 as value]
@@ -242,9 +227,9 @@ data:
 
 
     initial_physical_plan_with_stats:
-    ProjectionExec: expr=[count(Int64(1))@0 as #3], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]]
-      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
-        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+    ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]]
+      AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+        AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
           ProjectionExec: expr=[], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), []]
             FilterExec: value@0 > 100, statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(101)) Max=Inexact(Int32(300)) Null=Exact(0))]]
               ProjectionExec: expr=[value@0 as value], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(100)) Max=Inexact(Int32(300)) Null=Inexact(0))]]
@@ -253,9 +238,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ProjectionExec: expr=[count(Int64(1))@0 as #3], schema=[#3:Int64]
-      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1)):Int64]
-        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1))[count]:Int64]
+    ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4], schema=[__sail_attribute_4:Int64]
+      AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3], schema=[__sail_attribute_3:Int64]
+        AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3], schema=[__sail_attribute_3[count]:Int64]
           ProjectionExec: expr=[], schema=[]
             FilterExec: value@0 > 100, schema=[value:Int32]
               ProjectionExec: expr=[value@0 as value], schema=[value:Int32]
@@ -265,9 +250,9 @@ data:
 
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
-      ProjectionExec: expr=[count(Int64(1))@0 as #3]
-        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
-          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+      ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3]
+          AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3]
             ProjectionExec: expr=[]
               FilterExec: value@0 > 100
                 ProjectionExec: expr=[value@0 as value]
@@ -301,10 +286,10 @@ data:
 
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
-      ProjectionExec: expr=[count(Int64(1))@0 as #3]
-        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+      ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3]
               ProjectionExec: expr=[]
                 FilterExec: value@0 > 100
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -324,10 +309,10 @@ data:
 
     physical_plan after ProjectionPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
-      ProjectionExec: expr=[count(Int64(1))@0 as #3]
-        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+      ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3]
               FilterExec: value@0 > 100, projection=[]
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true)
@@ -335,10 +320,10 @@ data:
 
 
     physical_plan after OutputRequirements:
-    ProjectionExec: expr=[count(Int64(1))@0 as #3]
-      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+    ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4]
+      AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3]
         CoalescePartitionsExec
-          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+          AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3]
             FilterExec: value@0 > 100, projection=[]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                 DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true)
@@ -388,11 +373,11 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan:
-    ProjectionExec: expr=[#3@0 as cnt]
-      ProjectionExec: expr=[count(Int64(1))@0 as #3]
-        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+    ProjectionExec: expr=[__sail_attribute_4@0 as cnt]
+      ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3]
               FilterExec: value@0 > 100, projection=[]
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true)
@@ -400,11 +385,11 @@ data:
 
 
     == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as cnt]
-      ProjectionExec: expr=[count(Int64(1))@0 as #3]
-        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+    ProjectionExec: expr=[__sail_attribute_4@0 as cnt]
+      ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3]
               FilterExec: value@0 > 100, projection=[]
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                   DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([2]), limit=None, pushdown=true)
@@ -427,7 +412,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+    AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_3]
       FilterExec: value@0 > 100, projection=[]
         StageInputExec: input=0, partitioning=RoundRobinBatch(4)
 
@@ -437,17 +422,17 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    ProjectionExec: expr=[#3@0 as cnt]
-      ProjectionExec: expr=[count(Int64(1))@0 as #3]
-        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+    ProjectionExec: expr=[__sail_attribute_4@0 as cnt]
+      ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_3]
           StageInputExec: input=0, partitioning=UnknownPartitioning(1)
 ---
 name: "test_explain_count_literal_after_delete_uses_logical_dv_statistics"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as cnt]
-      ProjectionExec: expr=[2 as #3]
+    ProjectionExec: expr=[__sail_attribute_4@0 as cnt]
+      ProjectionExec: expr=[2 as __sail_attribute_4]
         PlaceholderRowExec
 ---
 name: "test_explain_delete_deduplicates_and_rebinds_multiple_predicate_columns"
@@ -535,8 +520,8 @@ name: "test_explain_dvenabled_table_without_deleted_rows_retains_the_direct_parq
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as name]
-      ProjectionExec: expr=[name@0 as #3]
+    ProjectionExec: expr=[__sail_attribute_3@0 as name]
+      ProjectionExec: expr=[name@0 as __sail_attribute_3]
         FilterExec: value@1 >= 200, projection=[name@0]
           DataSourceExec: file_groups={1 group: [[<tmp>/dv_explain/part-<id>.snappy.parquet]]}, projection=[name, value], file_type=parquet, predicate=value@2 >= 200 AND value@2 >= 200, pruning_predicate=value_null_count@1 != row_count@2 AND value_max@0 >= 200 AND value_null_count@1 != row_count@2 AND value_max@0 >= 200, required_guarantees=[]
 ---
@@ -581,8 +566,8 @@ name: "test_explain_filtered_dv_existence_retains_the_predicate_below_the_limit"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as present]
-      ProjectionExec: expr=[1 as #3]
+    ProjectionExec: expr=[__sail_attribute_3@0 as present]
+      ProjectionExec: expr=[1 as __sail_attribute_3]
         CoalescePartitionsExec: fetch=1
           FilterExec: id@0 = 2, fetch=1
             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -593,8 +578,8 @@ name: "test_explain_projected_eager_dv_scan_retains_an_unprojected_predicate_col
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as name]
-      ProjectionExec: expr=[name@0 as #3]
+    ProjectionExec: expr=[__sail_attribute_3@0 as name]
+      ProjectionExec: expr=[name@0 as __sail_attribute_3]
         FilterExec: value@1 >= 200, projection=[name@0]
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
             DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([1, 2]), limit=None, pushdown=true)
@@ -604,8 +589,8 @@ name: "test_explain_projected_replay_dv_scan_retains_an_unprojected_predicate_co
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#2@0 as name]
-      ProjectionExec: expr=[name@0 as #2]
+    ProjectionExec: expr=[__sail_attribute_2@0 as name]
+      ProjectionExec: expr=[name@0 as __sail_attribute_2]
         FilterExec: id@0 >= 2, projection=[name@1]
           DeltaScanByAddsExec(table_path=file://<tmp>/dv_read_metadata/, version=1, projection=Some([0, 1]), limit=None, pushdown=true)
             DeltaDiscoveryExec(table_path=file://<tmp>/dv_read_metadata/)
@@ -621,8 +606,8 @@ name: "test_explain_select_on_dv_table_after_delete_uses_eager_add_input"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#3@0 as id, #4@1 as name, #5@2 as value]
-      ProjectionExec: expr=[id@0 as #3, name@1 as #4, value@2 as #5]
+    ProjectionExec: expr=[__sail_attribute_3@0 as id, __sail_attribute_4@1 as name, __sail_attribute_5@2 as value]
+      ProjectionExec: expr=[id@0 as __sail_attribute_3, name@1 as __sail_attribute_4, value@2 as __sail_attribute_5]
         SortExec: expr=[id@0 ASC], preserve_partitioning=[false]
           DeltaScanByAddsExec(table_path=file://<tmp>/dv_explain/, version=1, projection=Some([0, 1, 2]), limit=None, pushdown=false)
             DataSourceExec: partitions=1, partition_sizes=[1]
@@ -631,14 +616,14 @@ name: "test_sql_row_existence_counts_live_rows_after_a_deletion_vector"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#2@0 as present]
-      ProjectionExec: expr=[1 as #2]
+    ProjectionExec: expr=[__sail_attribute_2@0 as present]
+      ProjectionExec: expr=[1 as __sail_attribute_2]
         PlaceholderRowExec
 ---
 name: "test_sql_row_existence_preserves_empty_and_historical_deletion_vector_snapshots"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[#2@0 as present]
-      ProjectionExec: expr=[1 as #2]
+    ProjectionExec: expr=[__sail_attribute_2@0 as present]
+      ProjectionExec: expr=[1 as __sail_attribute_2]
         EmptyExec

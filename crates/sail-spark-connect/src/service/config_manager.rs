@@ -8,7 +8,7 @@ use log::warn;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_plan::resolver::PlanResolver;
+use sail_plan::analysis::QueryAnalyzer;
 
 use crate::config::ConfigKeyValue;
 use crate::error::{SparkError, SparkResult};
@@ -122,9 +122,9 @@ async fn execute_native_config(
     command: spec::CommandNode,
 ) -> SparkResult<()> {
     let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let resolver = QueryAnalyzer::new(ctx, spark.plan_config()?);
     let plan = spec::Plan::Command(spec::CommandPlan::new(command));
-    let plan = resolver.resolve_named_plan(plan).await?.plan;
+    let plan = resolver.plan(plan).await?.plan;
     ctx.execute_logical_plan(plan).await?;
     Ok(())
 }

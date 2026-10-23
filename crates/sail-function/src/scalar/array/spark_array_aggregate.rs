@@ -13,13 +13,14 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::take_arrays;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::utils::{adjust_offsets_for_slice, list_values};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaArgument, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
+use sail_type_system::higher_order::{aggregate_args, equals_structurally_ignore_nullability};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayAggregate {
@@ -83,58 +84,11 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let (list, zero, has_finish) = match fields {
-            [
-                ValueOrLambda::Value(list),
-                ValueOrLambda::Value(zero),
-                ValueOrLambda::Lambda(_merge),
-            ] => (list, zero, false),
-            [
-                ValueOrLambda::Value(list),
-                ValueOrLambda::Value(zero),
-                ValueOrLambda::Lambda(_merge),
-                ValueOrLambda::Lambda(_finish),
-            ] => (list, zero, true),
-            _ => {
-                return plan_err!(
-                    "{} expects value, value, lambda[, lambda] arguments",
-                    self.name()
-                );
-            }
-        };
-
-        let element = list_element_field(self.name(), list.data_type())?;
-        let acc = Arc::new(Field::new("", zero.data_type().clone(), true));
-        let merge_params = if self.element_first {
-            vec![element, Arc::clone(&acc)]
-        } else {
-            vec![Arc::clone(&acc), element]
-        };
-        let mut params = vec![merge_params];
-        if has_finish {
-            params.push(vec![acc]);
-        }
-        Ok(LambdaParametersProgress::Complete(params))
+        sail_type_system::higher_order::aggregate_parameters(self.element_first, fields)
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (list, zero, merge, finish) = aggregate_args(self.name(), args.arg_fields)?;
-        list_element_field(self.name(), list.data_type())?;
-
-        if !equals_structurally_ignore_nullability(zero.data_type(), merge.data_type()) {
-            return plan_err!(
-                "{} merge lambda result type must match zero value type, got {} and {}",
-                self.name(),
-                merge.data_type(),
-                zero.data_type()
-            );
-        }
-
-        Ok(Arc::new(Field::new(
-            "",
-            finish.data_type().clone(),
-            list.is_nullable() || finish.is_nullable(),
-        )))
+        sail_type_system::higher_order::aggregate_result(args)
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
@@ -185,72 +139,7 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
     }
 
     fn coerce_value_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [list, zero] = take_function_args(self.name(), arg_types)?;
-        Ok(vec![coerce_list_type(self.name(), list)?, zero.clone()])
-    }
-}
-
-fn aggregate_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
-    name: &str,
-    args: &'a [ValueOrLambda<V, L>],
-) -> Result<(&'a V, &'a V, &'a L, &'a L)> {
-    let [list, zero, merge, finish] = take_function_args(name, args)?;
-    let (
-        ValueOrLambda::Value(list),
-        ValueOrLambda::Value(zero),
-        ValueOrLambda::Lambda(merge),
-        ValueOrLambda::Lambda(finish),
-    ) = (list, zero, merge, finish)
-    else {
-        return plan_err!("{name} expects value, value, lambda, lambda arguments");
-    };
-    Ok((list, zero, merge, finish))
-}
-
-fn coerce_list_type(name: &str, data_type: &DataType) -> Result<DataType> {
-    match data_type {
-        DataType::List(_) | DataType::LargeList(_) => Ok(data_type.clone()),
-        DataType::ListView(field) | DataType::FixedSizeList(field, _) => {
-            Ok(DataType::List(Arc::clone(field)))
-        }
-        DataType::LargeListView(field) => Ok(DataType::LargeList(Arc::clone(field))),
-        _ => plan_err!("{name} expected a list as first argument, got {data_type}"),
-    }
-}
-
-fn list_element_field(name: &str, data_type: &DataType) -> Result<FieldRef> {
-    match data_type {
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field)
-        | DataType::FixedSizeList(field, _) => Ok(Arc::clone(field)),
-        other => plan_err!("{name} expected a list as first argument, got {other}"),
-    }
-}
-
-fn equals_structurally_ignore_nullability(left: &DataType, right: &DataType) -> bool {
-    match (left, right) {
-        (DataType::List(left), DataType::List(right))
-        | (DataType::LargeList(left), DataType::LargeList(right))
-        | (DataType::ListView(left), DataType::ListView(right))
-        | (DataType::LargeListView(left), DataType::LargeListView(right)) => {
-            equals_structurally_ignore_nullability(left.data_type(), right.data_type())
-        }
-        (DataType::FixedSizeList(left, left_size), DataType::FixedSizeList(right, right_size)) => {
-            left_size == right_size
-                && equals_structurally_ignore_nullability(left.data_type(), right.data_type())
-        }
-        (DataType::Struct(left), DataType::Struct(right)) => {
-            left.len() == right.len()
-                && left.iter().zip(right).all(|(left, right)| {
-                    equals_structurally_ignore_nullability(left.data_type(), right.data_type())
-                })
-        }
-        (DataType::Map(left, _), DataType::Map(right, _)) => {
-            equals_structurally_ignore_nullability(left.data_type(), right.data_type())
-        }
-        _ => left == right,
+        sail_type_system::higher_order::aggregate_value_types(arg_types)
     }
 }
 

@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_xml"
+        "failure": "not supported: native function resolution: schema_of_xml"
       }
     },
     {
@@ -169,7 +169,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: schema_of_xml"
+        "failure": "not supported: native function resolution: schema_of_xml"
       }
     },
     {

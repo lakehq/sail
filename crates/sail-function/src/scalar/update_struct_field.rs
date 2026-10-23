@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_struct_array;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -24,72 +24,6 @@ impl UpdateStructField {
 
     pub fn field_names(&self) -> &[String] {
         &self.field_names
-    }
-
-    fn update_nested_field(
-        data_type: &DataType,
-        field_names: &[String],
-        new_field: &Field,
-    ) -> Result<DataType> {
-        match data_type {
-            DataType::Struct(fields) => {
-                if field_names.is_empty() {
-                    return plan_err!("Field name cannot be empty");
-                }
-
-                let current_field = &field_names[0];
-                let mut new_fields = Vec::new();
-                let mut field_found = false;
-
-                for field in fields.iter() {
-                    if field.name() == current_field {
-                        field_found = true;
-                        if field_names.len() == 1 {
-                            new_fields.push(Arc::new(
-                                field
-                                    .as_ref()
-                                    .clone()
-                                    .with_data_type(new_field.data_type().clone())
-                                    .with_nullable(new_field.is_nullable()),
-                            ));
-                        } else {
-                            let new_data_type = Self::update_nested_field(
-                                field.data_type(),
-                                &field_names[1..],
-                                new_field,
-                            )?;
-                            new_fields.push(Arc::new(
-                                field.as_ref().clone().with_data_type(new_data_type),
-                            ));
-                        }
-                    } else {
-                        new_fields.push(Arc::clone(field));
-                    }
-                }
-
-                if !field_found {
-                    if field_names.len() == 1 {
-                        new_fields.push(Arc::new(new_field.clone()));
-                    } else {
-                        let mut intermediate_type = new_field.data_type().clone();
-                        for field_name in field_names.iter().rev().skip(1) {
-                            intermediate_type = DataType::Struct(
-                                vec![Arc::new(Field::new(field_name, intermediate_type, true))]
-                                    .into(),
-                            );
-                        }
-                        new_fields.push(Arc::new(Field::new(
-                            current_field,
-                            intermediate_type,
-                            true,
-                        )));
-                    }
-                }
-
-                Ok(DataType::Struct(new_fields.into()))
-            }
-            _ => plan_err!("Expected Struct, found {data_type}"),
-        }
     }
 
     fn update_nested_field_from_array(
@@ -154,47 +88,17 @@ impl ScalarUDFImpl for UpdateStructField {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
-            return exec_err!(
-                "update_struct_field function requires 2 arguments, got {}",
-                arg_types.len()
-            );
-        }
-        let data_type = &arg_types[0];
-        let new_field_type = &arg_types[1];
-        let new_field = Field::new(
-            self.field_names
-                .last()
-                .ok_or_else(|| exec_datafusion_err!("empty attribute: {:?}", &self.field_names))?,
-            new_field_type.clone(),
-            true,
-        );
-        Self::update_nested_field(data_type, &self.field_names, &new_field)
+        sail_type_system::policies::scalar_update_struct_field::return_type(
+            &self.field_names,
+            arg_types,
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let [struct_field, value_field] = args.arg_fields else {
-            return exec_err!(
-                "update_struct_field function requires 2 arguments, got {}",
-                args.arg_fields.len()
-            );
-        };
-        let field_name = self
-            .field_names
-            .last()
-            .ok_or_else(|| exec_datafusion_err!("empty attribute: {:?}", &self.field_names))?;
-        let new_field = Field::new(
-            field_name,
-            value_field.data_type().clone(),
-            value_field.is_nullable(),
-        );
-        let data_type =
-            Self::update_nested_field(struct_field.data_type(), &self.field_names, &new_field)?;
-        Ok(Arc::new(Field::new(
-            self.name(),
-            data_type,
-            struct_field.is_nullable(),
-        )))
+        sail_type_system::policies::scalar_update_struct_field::return_field_from_args(
+            &self.field_names,
+            args,
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

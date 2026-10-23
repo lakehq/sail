@@ -64,13 +64,10 @@ impl ScalarUDFImpl for Explode {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types {
-            &[DataType::List(f)]
-            | &[DataType::LargeList(f)]
-            | &[DataType::FixedSizeList(f, _)]
-            | &[DataType::Map(f, _)] => Ok(f.data_type().clone()),
-            _ => plan_err!("{} should only be called with a list or map", self.name()),
-        }
+        sail_type_system::policies::scalar_explode_typing::explode_return_type(
+            self.name(),
+            arg_types,
+        )
     }
 
     fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -5,10 +5,9 @@ use datafusion::arrow::array::{
     as_list_array,
 };
 use datafusion::arrow::datatypes::{DataType, Float32Type};
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-use super::is_float_vector;
 use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -40,12 +39,9 @@ impl ScalarUDFImpl for VectorL2Distance {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 || !arg_types.iter().all(is_float_vector) {
-            return plan_err!(
-                "vector_l2_distance expects two ARRAY<FLOAT> arguments, got {arg_types:?}"
-            );
-        }
-        Ok(DataType::Float32)
+        sail_type_system::policies::scalar_vector_l2_distance_typing::vector_l2_distance_return_type(
+            arg_types,
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

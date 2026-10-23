@@ -4,7 +4,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, ListArray, MapArray, StructArray, new_empty_array,
 };
 use datafusion::arrow::compute::take_arrays;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::utils::{
     adjust_offsets_for_slice, list_values, list_values_row_number, remove_list_null_values,
 };
@@ -97,35 +97,15 @@ impl HigherOrderUDFImpl for SparkTransformKeys {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let (map, _) = value_lambda_pair(self.name(), fields)?;
-        let DataType::Map(entries, _) = map.data_type() else {
-            return plan_err!("transform_keys expected a map, got {}", map.data_type());
-        };
-        let (key, value) = entry_fields(self.name(), entries)?;
-        Ok(LambdaParametersProgress::Complete(vec![vec![key, value]]))
+        sail_type_system::higher_order::map_parameters(self.name(), fields)
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (map, lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
-        let DataType::Map(entries, _) = map.data_type() else {
-            return plan_err!("transform_keys expected a map, got {}", map.data_type());
-        };
-        let (key, value) = entry_fields(self.name(), entries)?;
-        // Only the key type changes. A map key is never nullable: a null key
-        // raises an error at evaluation time rather than widening the field.
-        let key = Arc::new(Field::new(key.name(), lambda.data_type().clone(), false));
-        let entries = Arc::new(Field::new(
-            entries.name(),
-            DataType::Struct(Fields::from(vec![key, value])),
-            entries.is_nullable(),
-        ));
-        Ok(Arc::new(Field::new(
-            "",
-            // Rewritten keys are in no particular order, so the result can never
-            // claim sorted keys even when the input map does.
-            DataType::Map(entries, false),
-            map.is_nullable(),
-        )))
+        sail_type_system::higher_order::map_result(
+            self.name(),
+            args,
+            sail_type_system::higher_order::MapResult::Keys,
+        )
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {

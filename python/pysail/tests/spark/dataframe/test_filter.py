@@ -1138,11 +1138,6 @@ def test_filter_does_not_recover_literal_function_names(spark, column, predicate
 
 
 @pytest.mark.parametrize(("color", "expected"), [("RED", [Row(id=1)]), ("red", [])])
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Sail does not extract map values by a dotted name",
-    strict=True,
-)
 def test_filter_missing_attribute_keeps_map_bindings(spark, color, expected):
     source = spark.createDataFrame([(1, ("red",)), (2, ("blue",))], "id int, attrs struct<color:string>")
     projected = source.withColumn("attrs", F.create_map(F.lit("color"), F.upper(F.col("attrs.color")))).select("id")
@@ -1173,11 +1168,6 @@ def test_filter_recovered_computed_struct_keeps_binding(spark, predicate):
 
 
 @pytest.mark.parametrize("update", ["drop", "with-literal", "with-cast"])
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Missing-input recovery does not preserve Spark analyzer staging for native struct updates",
-    strict=True,
-)
 def test_filter_native_struct_update_discards_invalid_descendant(spark, update):
     source = spark.createDataFrame([((1, 9), 7), ((2, 8), 8)], "s struct<x:int,y:int>, a int")
     projected = source.select(F.struct(F.lit(2).alias("x"), F.lit(3).alias("z")).alias("s"), "a").select("a")
@@ -1194,11 +1184,6 @@ def test_filter_native_struct_update_discards_invalid_descendant(spark, update):
     assert result.schema == projected.schema
 
 
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Sail cannot distinguish SQL CASE resolution from the Column when function",
-    strict=True,
-)
 def test_filter_recovered_sql_case_discards_invalid_struct_binding(spark):
     source = spark.createDataFrame([((1,), 7), ((2,), 8)], "s struct<x:int>, a int")
     projected = source.select(F.struct(F.lit(2).alias("y")).alias("s"), "a").select("a")
@@ -1384,11 +1369,6 @@ def test_filter_missing_attributes_in_subquery(spark, filter_source, columns):
         "value IN (SELECT lookup_value FROM filter_recovered_lookup WHERE lookup_value = value)",
     ],
     ids=["exists-after-local", "exists-before-local", "scalar", "in"],
-)
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Correlated subqueries cannot yet use inputs recovered by the enclosing filter's predicate",
-    strict=True,
 )
 def test_filter_recovered_attributes_are_visible_to_correlated_subqueries(spark, filter_source, predicate):
     spark.createDataFrame([(2,)], "lookup_value int").createOrReplaceTempView("filter_recovered_lookup")
@@ -1863,11 +1843,6 @@ def test_filter_correlated_extract_preserves_selector_kind(spark, selector):
 
 @pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.exists requires PySpark 4+")
 @pytest.mark.parametrize("predicate_kind", ["column", "sql", "case-column"])
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Rejecting selectors on computed recovered structs requires staged name resolution",
-    strict=True,
-)
 def test_filter_correlated_computed_struct_rejects_column_selector(spark, predicate_kind):
     outer = spark.createDataFrame([({"selector": 1}, "selector")], "payload map<string,int>, selector string")
     inner = spark.range(1).select(F.struct(F.lit(42).alias("selector")).alias("payload")).select(F.lit(1).alias("keep"))

@@ -13,7 +13,7 @@ use datafusion_expr::{
 use jiter::Peek;
 
 use crate::scalar::json::common::{
-    GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find, return_type_check,
+    GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -47,7 +47,10 @@ impl ScalarUDFImpl for JsonAsText {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        return_type_check(arg_types, self.name(), DataType::Utf8)
+        sail_type_system::policies::scalar_json_json_as_text_typing::json_as_text_return_type(
+            self.name(),
+            arg_types,
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use datafusion_expr::LogicalPlan;
 use lazy_static::lazy_static;
 use sail_common_datafusion::catalog::{TableColumnStatus, TemporaryViewSource};
+use sail_query::ir::LogicalPlan;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::provider::{CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions};
@@ -105,9 +105,13 @@ impl TemporaryViewManager {
                 ));
             }
         }
+        let schema = input
+            .schema
+            .resolved("temporary view schema")?
+            .arrow_schema()?;
         let comments = if columns.is_empty() {
-            vec![None; input.schema().fields().len()]
-        } else if input.schema().fields().len() != columns.len() {
+            vec![None; schema.fields().len()]
+        } else if schema.fields().len() != columns.len() {
             return Err(CatalogError::InvalidArgument(
                 "temporary view column count do not match input schema".to_string(),
             ));
@@ -120,8 +124,7 @@ impl TemporaryViewManager {
                 })
                 .collect()
         };
-        let columns = input
-            .schema()
+        let columns = schema
             .fields()
             .iter()
             .zip(comments)

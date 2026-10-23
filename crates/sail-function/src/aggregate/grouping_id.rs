@@ -32,7 +32,7 @@ impl AggregateUDFImpl for GroupingIdFunction {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int64)
+        sail_type_system::policies::aggregate_grouping_id::return_type(_arg_types)
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {

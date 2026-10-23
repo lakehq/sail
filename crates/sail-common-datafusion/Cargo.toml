@@ -8,6 +8,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-query = { path = "../sail-query" }
 sail-common = { path = "../sail-common" }
 
 chrono = { workspace = true }

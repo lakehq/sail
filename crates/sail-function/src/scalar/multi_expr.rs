@@ -34,11 +34,8 @@ impl ScalarUDFImpl for MultiExpr {
         &self.signature
     }
 
-    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        plan_err!(
-            "{} should be rewritten during logical plan analysis",
-            self.name()
-        )
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        sail_type_system::policies::multi_expr::return_type(arg_types)
     }
 
     fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {

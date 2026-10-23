@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use datafusion_expr::{LogicalPlan, ScalarUDF};
+use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::extension::SessionExtension;
+use sail_query::ir::LogicalPlan;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};

@@ -51,7 +51,7 @@ impl ScalarUDFImpl for SparkTimeTrunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Time64(TimeUnit::Microsecond))
+        sail_type_system::policies::datetime_spark_time_trunc::return_type(_arg_types)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -163,16 +163,7 @@ impl ScalarUDFImpl for SparkTimeTrunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return exec_err!(
-                "Spark `time_trunc` function requires 2 arguments, got {}",
-                arg_types.len()
-            );
-        }
-        Ok(vec![
-            DataType::Utf8,
-            DataType::Time64(TimeUnit::Microsecond),
-        ])
+        sail_type_system::policies::datetime_spark_time_trunc::coerce_types(arg_types)
     }
 }
 

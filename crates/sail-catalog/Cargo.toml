@@ -8,6 +8,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-query = { path = "../sail-query" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }

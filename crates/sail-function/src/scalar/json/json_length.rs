@@ -13,7 +13,7 @@ use datafusion_expr::{
 use jiter::Peek;
 
 use crate::scalar::json::common::{
-    GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find, return_type_check,
+    GetError, InvokeResult, JsonPath, get_err, invoke, jiter_json_find,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -47,7 +47,10 @@ impl ScalarUDFImpl for JsonLength {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        return_type_check(arg_types, self.name(), DataType::UInt64)
+        sail_type_system::policies::scalar_json_json_length_typing::json_length_return_type(
+            self.name(),
+            arg_types,
+        )
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

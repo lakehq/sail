@@ -23,7 +23,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_avg"
+        "failure": "not supported: native function resolution: vector_avg"
       }
     },
     {
@@ -259,7 +259,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: vector_sum"
+        "failure": "not supported: native function resolution: vector_sum"
       }
     }
   ]
