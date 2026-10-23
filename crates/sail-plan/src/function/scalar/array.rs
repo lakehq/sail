@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
+use datafusion::functions::expr_fn::{btrim, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
@@ -156,11 +156,35 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element + lit(1_i64))
 }
 
-fn array_contains(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
-    Ok(coalesce(vec![
-        expr_fn::array_has(array.clone(), element),
-        when(array.is_not_null(), lit(false)).end()?,
-    ]))
+/// Returns null when the element is not found and the array has a null element,
+/// since the null element may or may not be equal to the value.
+fn array_contains(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+
+    let (array, element) = arguments.two()?;
+
+    let nullable_array_type =
+        with_list_value_nullability(&array.get_type(function_context.schema.as_ref())?, true);
+    let same_type_null_only_array = cast(
+        make_array(vec![lit(ScalarValue::Null)]),
+        nullable_array_type.clone(),
+    );
+    let array_has_null = expr_fn::array_has_any(
+        cast(array.clone(), nullable_array_type),
+        same_type_null_only_array,
+    );
+
+    Ok(when(
+        or(is_null(array.clone()), is_null(element.clone())),
+        lit(ScalarValue::Null),
+    )
+    .when(expr_fn::array_has(array, element), lit(true))
+    .when(array_has_null, lit(ScalarValue::Null))
+    .when(lit(true), lit(false))
+    .end()?)
 }
 
 fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
@@ -556,7 +580,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array", F::udf(SparkArray::new())),
         ("array_append", F::custom(array_append)),
         ("array_compact", F::unary(array_compact)),
-        ("array_contains", F::binary(array_contains)),
+        ("array_contains", F::custom(array_contains)),
         ("array_contains_all", F::binary(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
         ("array_except", F::custom(array_except)),
