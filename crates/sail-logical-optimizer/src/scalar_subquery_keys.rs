@@ -8,7 +8,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::expr_rewriter::{NamePreserver, strip_outer_reference};
 use datafusion_expr::logical_plan::{Filter, Projection};
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
-use datafusion_expr::{Expr, LogicalPlan, Operator, Volatility};
+use datafusion_expr::{Expr, JoinType, LogicalPlan, Operator, Volatility};
 
 /// Group native correlated scalar aggregates by the value used in cast equality.
 #[derive(Debug)]
@@ -104,6 +104,23 @@ fn normalize_keys(
             ) && !node.all_out_ref_exprs().is_empty())
         {
             eligible = false;
+        }
+        if let LogicalPlan::Join(join) = node {
+            // Pulling a filter from an outer/semi/anti join's non-preserved side
+            // changes unmatched rows; native decorrelation cannot carry that key.
+            eligible &= (join.left.all_out_ref_exprs().is_empty()
+                || matches!(
+                    join.join_type,
+                    JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
+                ))
+                && (join.right.all_out_ref_exprs().is_empty()
+                    || matches!(
+                        join.join_type,
+                        JoinType::Inner
+                            | JoinType::Right
+                            | JoinType::RightSemi
+                            | JoinType::RightAnti
+                    ));
         }
         for expression in node.expressions() {
             eligible &= !expression.exists(|part| {
@@ -201,6 +218,15 @@ fn normalize_keys(
     if !normalized.transformed {
         return Ok(normalized);
     }
+    let schema = Arc::clone(normalized.data.schema());
+    let carried = carry_correlation_keys(normalized.data)?.0;
+    let normalized = Transformed::yes(if carried.schema() == &schema {
+        carried
+    } else {
+        // The scalar result stays one column until native decorrelation consumes
+        // its correlation keys as join inputs.
+        LogicalPlan::Projection(Projection::new_from_schema(Arc::new(carried), schema))
+    });
 
     let mut correlations = Vec::new();
     normalized.data.apply(|node| {
@@ -232,4 +258,79 @@ fn normalize_keys(
     } else {
         Ok(normalized)
     }
+}
+
+/// Keep correlation inputs available until native pull-up adds them to aggregation.
+fn carry_correlation_keys(plan: LogicalPlan) -> Result<(LogicalPlan, BTreeSet<Column>)> {
+    let mut keys = BTreeSet::new();
+    let plan = plan
+        .map_children(|input| {
+            let (input, input_keys) = carry_correlation_keys(input)?;
+            keys.extend(input_keys);
+            Ok(Transformed::yes(input))
+        })?
+        .data;
+    let names = NamePreserver::new(&plan);
+    let plan = match plan {
+        LogicalPlan::Filter(filter) => {
+            let correlations = split_conjunction(&filter.predicate)
+                .into_iter()
+                .filter(|expr| expr.contains_outer())
+                .map(|expr| strip_outer_reference(expr.clone()))
+                .collect::<Vec<_>>();
+            keys.extend(collect_subquery_cols(&correlations, filter.input.schema())?);
+            LogicalPlan::Filter(filter)
+        }
+        LogicalPlan::Projection(mut projection) => {
+            for key in &keys {
+                if !projection.schema.has_column(key) {
+                    projection.expr.push(Expr::Column(key.clone()));
+                }
+            }
+            LogicalPlan::Projection(projection)
+        }
+        LogicalPlan::Window(mut window) => {
+            // Removing the filter makes the window see all correlation groups.
+            // Add their compared keys without replacing the user's partitions.
+            window.window_expr = window
+                .window_expr
+                .into_iter()
+                .map(|expression| {
+                    let name = names.save(&expression);
+                    expression
+                        .transform_up(|expression| {
+                            let Expr::WindowFunction(mut function) = expression else {
+                                return Ok(Transformed::no(expression));
+                            };
+                            for key in &keys {
+                                let key = Expr::Column(key.clone());
+                                if !function.params.partition_by.contains(&key) {
+                                    function.params.partition_by.push(key);
+                                }
+                            }
+                            Ok(Transformed::yes(Expr::WindowFunction(function)))
+                        })
+                        .map(|expression| name.restore(expression.data))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            LogicalPlan::Window(window)
+        }
+        LogicalPlan::SubqueryAlias(alias) => {
+            keys = keys
+                .into_iter()
+                .map(|key| Column::new(Some(alias.alias.clone()), key.name))
+                .collect();
+            LogicalPlan::SubqueryAlias(alias)
+        }
+        LogicalPlan::Aggregate(aggregate) => {
+            // Leave the original grouping intact: native pull-up must still see
+            // an ungrouped aggregate to compensate COUNT on an empty input.
+            keys.clear();
+            LogicalPlan::Aggregate(aggregate)
+        }
+        plan => plan,
+    };
+    // Window, Unnest, joins and aliases cache their output schema. Native
+    // pull-up otherwise retains the old schema after adding a hidden key below.
+    Ok((plan.recompute_schema()?, keys))
 }

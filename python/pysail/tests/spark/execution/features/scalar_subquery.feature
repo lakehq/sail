@@ -1422,3 +1422,435 @@ Feature: Scalar subqueries in distributed execution
         | 0  | 2    |
         | 1  | 1    |
         | 2  | NULL |
+
+    # Windows keep their existing partitions as well as the compared correlation keys.
+    # Generators and joins retain hidden keys without changing row multiplicity.
+    Scenario: Cast key propagation window rank
+      When query
+        """
+        SELECT o.id, (SELECT sum(w) FROM (SELECT rank() OVER (ORDER BY g) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 8    |
+        | 0    | 8    |
+        | 1    | 1    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation window dense rank
+      When query
+        """
+        SELECT o.id, (SELECT sum(w) FROM (SELECT dense_rank() OVER (ORDER BY g) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 6    |
+        | 0    | 6    |
+        | 1    | 1    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation window bounded frame
+      When query
+        """
+        SELECT o.id, (SELECT sum(w) FROM (SELECT sum(v) OVER (ORDER BY v ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 25   |
+        | 0    | 25   |
+        | 1    | 5    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation window running frame
+      When query
+        """
+        SELECT o.id, (SELECT sum(w) FROM (SELECT sum(v) OVER (PARTITION BY g ORDER BY v ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 14   |
+        | 0    | 14   |
+        | 1    | 5    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation window range frame
+      When query
+        """
+        SELECT o.id, (SELECT sum(w) FROM (SELECT sum(v) OVER (ORDER BY v RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 25   |
+        | 0    | 25   |
+        | 1    | 5    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation window lag
+      When query
+        """
+        SELECT o.id, (SELECT sum(w) FROM (SELECT lag(v, 1, -1) OVER (PARTITION BY g ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 2    |
+        | 0    | 2    |
+        | 1    | -1   |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation window lead
+      When query
+        """
+        SELECT o.id, (SELECT sum(w) FROM (SELECT lead(v, 1, -1) OVER (ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 8    |
+        | 0    | 8    |
+        | 1    | -1   |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation two windows
+      When query
+        """
+        SELECT o.id, (SELECT sum(z) FROM (SELECT row_number() OVER (PARTITION BY g ORDER BY w DESC) AS z FROM (SELECT k,g,v,row_number() OVER (ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) a) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 6    |
+        | 0    | 6    |
+        | 1    | 1    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation window local filter
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM (SELECT w FROM (SELECT k,g,v,row_number() OVER (ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) a WHERE w > 1) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n |
+        | NULL | 0 |
+        | 0    | 3 |
+        | 0    | 3 |
+        | 1    | 0 |
+        | 2    | 0 |
+
+    Scenario: Cast key propagation window empty local filter
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM (SELECT w FROM (SELECT k,g,v,row_number() OVER (ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) a WHERE w > 100) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n |
+        | NULL | 0 |
+        | 0    | 0 |
+        | 0    | 0 |
+        | 1    | 0 |
+        | 2    | 0 |
+
+    Scenario: Cast key propagation posexplode value
+      When query
+        """
+        SELECT o.id, (SELECT sum(x) FROM (SELECT posexplode(array(v, v+1)) AS (p,x) FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 24   |
+        | 0    | 24   |
+        | 1    | 11   |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation explode null empty value
+      When query
+        """
+        SELECT o.id, (SELECT sum(x) FROM (SELECT explode(IF(k = '00', CAST(NULL AS ARRAY<INT>), IF(k = '1', array(), array(v)))) AS x FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 4    |
+        | 0    | 4    |
+        | 1    | NULL |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation explode outer null value
+      When query
+        """
+        SELECT o.id, (SELECT sum(x) FROM (SELECT explode_outer(IF(k = '00', CAST(NULL AS ARRAY<INT>), array(v))) AS x FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 4    |
+        | 0    | 4    |
+        | 1    | 5    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation inline value
+      When query
+        """
+        SELECT o.id, (SELECT sum(x) FROM (SELECT inline(array(named_struct('x',v),named_struct('x',v+1))) FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 24   |
+        | 0    | 24   |
+        | 1    | 11   |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation window then explode
+      When query
+        """
+        SELECT o.id, (SELECT sum(w) FROM (SELECT w, explode(array(v,v+1)) AS x FROM (SELECT k,g,v,row_number() OVER (ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) a) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 20   |
+        | 0    | 20   |
+        | 1    | 2    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation explode then window
+      When query
+        """
+        SELECT o.id, (SELECT max(w) FROM (SELECT row_number() OVER (ORDER BY x,v) AS w FROM (SELECT k,g,v,explode(array(v,v+1)) AS x FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) a) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 8    |
+        | 0    | 8    |
+        | 1    | 2    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation two generators
+      When query
+        """
+        SELECT o.id, (SELECT sum(y) FROM (SELECT explode(array(x,x+1)) AS y FROM (SELECT k,g,v,explode(array(v,v+1)) AS x FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) a) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 56   |
+        | 0    | 56   |
+        | 1    | 24   |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation reversed equality
+      When query
+        """
+        SELECT o.id, (SELECT max(w) FROM (SELECT row_number() OVER (ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE o.id = CAST(i.k AS BIGINT)) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 4    |
+        | 0    | 4    |
+        | 1    | 1    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation repeated cast key
+      When query
+        """
+        SELECT o.id, (SELECT max(w) FROM (SELECT row_number() OVER (ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id AND o.id = CAST(i.k AS BIGINT)) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 4    |
+        | 0    | 4    |
+        | 1    | 1    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation outer expression
+      When query
+        """
+        SELECT o.id, (SELECT max(w) FROM (SELECT row_number() OVER (ORDER BY v) AS w FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id + 0L) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 4    |
+        | 0    | 4    |
+        | 1    | 1    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation union input
+      When query
+        """
+        SELECT o.id, (SELECT sum(v) FROM (SELECT v FROM (SELECT * FROM VALUES ('0',1),('00',2) AS a(k,v) UNION ALL SELECT * FROM VALUES ('1',3) AS b(k,v)) a WHERE CAST(k AS BIGINT) = o.id) q) AS n FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 3    |
+        | 0    | 3    |
+        | 1    | 3    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation multiple scalar subqueries
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) AS n, (SELECT sum(v) FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) AS s FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n | s    |
+        | NULL | 0 | NULL |
+        | 0    | 4 | 10   |
+        | 0    | 4 | 10   |
+        | 1    | 1 | 5    |
+        | 2    | 0 | NULL |
+
+    Scenario: Cast key propagation filter consumer
+      When query
+        """
+        SELECT o.id FROM VALUES (0L), (0L), (1L), (2L), (CAST(NULL AS BIGINT)) AS o(id) WHERE (SELECT count(*) FROM VALUES ('0', 10, 1), ('00', 10, 2), ('0', 20, 3), ('00', 20, 4), ('1', 10, 5), (CAST(NULL AS STRING), 10, 6) AS i(k,g,v) WHERE CAST(i.k AS BIGINT) = o.id) > 1 ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id |
+        | 0  |
+        | 0  |
+
+    Scenario: Cast key propagation reserved key name
+      When query
+        """
+        SELECT o.id, (SELECT count(*) FROM VALUES ('0',7),('00',9),('1',2) AS i(k,`__sail_correlation_key_1`) WHERE CAST(i.k AS BIGINT)=o.id AND i.`__sail_correlation_key_1` > 2) AS n FROM VALUES (0L),(1L),(2L) AS o(id) ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 2 |
+        | 1  | 0 |
+        | 2  | 0 |
+
+    Scenario: Cast key propagation two cast keys window
+      When query
+        """
+        SELECT o.id,o.g,(SELECT max(w) FROM (SELECT row_number() OVER(ORDER BY v) w FROM VALUES ('0','1',1),('00','01',2),('0','2',3),('1','1',4) i(k,g,v) WHERE CAST(i.k AS BIGINT)=o.id AND CAST(i.g AS BIGINT)=o.g)) n FROM VALUES (0L,1L),(0L,2L),(1L,1L),(2L,1L) o(id,g) ORDER BY o.id,o.g
+        """
+      Then query result collected ordered
+        | id | g | n    |
+        | 0  | 1 | 2    |
+        | 0  | 2 | 1    |
+        | 1  | 1 | 1    |
+        | 2  | 1 | NULL |
+
+    Scenario: Cast key propagation map nullable values
+      When query
+        """
+        SELECT o.id,(SELECT sum(x) FROM (SELECT explode(map('a',CASE WHEN v<0 THEN NULL ELSE v END,'b',v+1)) AS (mk,x) FROM VALUES ('0',1),('00',2),('1',3),(CAST(NULL AS STRING),4) i(k,v) WHERE CAST(i.k AS BIGINT)=o.id)) n FROM VALUES (0L),(0L),(1L),(2L),(CAST(NULL AS BIGINT)) o(id) ORDER BY id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 8    |
+        | 0    | 8    |
+        | 1    | 7    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation outer generator typed empty
+      When query
+        """
+        SELECT o.id,(SELECT sum(x) FROM (SELECT explode_outer(IF(k='00',CAST(array() AS ARRAY<INT>),array(v))) x FROM VALUES ('0',1),('00',2),('1',3),(CAST(NULL AS STRING),4) i(k,v) WHERE CAST(i.k AS BIGINT)=o.id)) n FROM VALUES (0L),(0L),(1L),(2L),(CAST(NULL AS BIGINT)) o(id) ORDER BY id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 1    |
+        | 0    | 1    |
+        | 1    | 3    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation limit below correlation
+      When query
+        """
+        SELECT o.id,(SELECT count(*) FROM (SELECT * FROM VALUES ('0',1),('00',2),('1',3),(CAST(NULL AS STRING),4) i(k,v) ORDER BY v LIMIT 3) i WHERE CAST(i.k AS BIGINT)=o.id) n FROM VALUES (0L),(0L),(1L),(2L),(CAST(NULL AS BIGINT)) o(id) ORDER BY id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n |
+        | NULL | 0 |
+        | 0    | 2 |
+        | 0    | 2 |
+        | 1    | 1 |
+        | 2    | 0 |
+
+    Scenario: Cast key propagation volatile input control
+      When query
+        """
+        SELECT o.id,(SELECT max(k) FROM VALUES ('0'),('1') i(k) WHERE CAST(i.k AS BIGINT)=o.id AND rand(7)>=0D) n FROM VALUES (0L),(0L),(1L),(2L),(CAST(NULL AS BIGINT)) o(id) ORDER BY id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 0    |
+        | 0    | 0    |
+        | 1    | 1    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation grouped raw key control
+      When query
+        """
+        SELECT o.id,(SELECT max(v) FROM VALUES ('0',1),('1',2) i(k,v) WHERE CAST(i.k AS BIGINT)=o.id GROUP BY i.k) n FROM VALUES (0L),(0L),(1L),(2L),(CAST(NULL AS BIGINT)) o(id) ORDER BY id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 1    |
+        | 0    | 1    |
+        | 1    | 2    |
+        | 2    | NULL |
+
+    Scenario: Cast key propagation decimal cast window
+      When query
+        """
+        SELECT o.id,(SELECT max(w) FROM (SELECT row_number() OVER(ORDER BY v) w FROM VALUES ('1.00',1),('01.00',2),('2.00',3) i(k,v) WHERE CAST(i.k AS DECIMAL(8,2))=o.id)) n FROM VALUES (CAST(1 AS DECIMAL(8,2))),(CAST(2 AS DECIMAL(8,2))),(CAST(3 AS DECIMAL(8,2))) o(id) ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | 1.00 | 2    |
+        | 2.00 | 1    |
+        | 3.00 | NULL |
+
+    Scenario: Cast key propagation generator retains array correlation
+      When query
+        """
+        SELECT o.label,(SELECT count(*) FROM (SELECT explode(a) x FROM VALUES ('0',array(1,2)),('00',array(1,2)),('00',array(3)),('1',CAST(array() AS ARRAY<INT>)) i(k,a) WHERE CAST(i.k AS BIGINT)=o.id AND i.a=o.a)) n FROM VALUES (0L,array(1,2),'pair'),(0L,array(3),'single'),(1L,CAST(array() AS ARRAY<INT>),'empty'),(0L,CAST(NULL AS ARRAY<INT>),'null') o(id,a,label) ORDER BY o.label
+        """
+      Then query result collected ordered
+        | label  | n |
+        | empty  | 0 |
+        | null   | 0 |
+        | pair   | 4 |
+        | single | 1 |
+
+    Scenario: Cast key propagation window retains struct correlation
+      When query
+        """
+        SELECT o.label,(SELECT max(w) FROM (SELECT row_number() OVER(ORDER BY v) w FROM VALUES ('0',named_struct('g',1),1),('00',named_struct('g',1),2),('00',named_struct('g',2),3),('1',named_struct('g',1),4) i(k,s,v) WHERE CAST(i.k AS BIGINT)=o.id AND i.s=o.s)) n FROM VALUES (0L,named_struct('g',1),'first'),(0L,named_struct('g',2),'second'),(1L,named_struct('g',1),'third') o(id,s,label) ORDER BY label
+        """
+      Then query result collected ordered
+        | label  | n |
+        | first  | 2 |
+        | second | 1 |
+        | third  | 1 |
+
+    Scenario: Cast key propagation two correlated join inputs
+      When query
+        """
+        SELECT o.id,(SELECT count(*) FROM (SELECT * FROM VALUES ('0',1),('00',2),('1',3) i(k,v) WHERE CAST(i.k AS BIGINT)=o.id) a CROSS JOIN (SELECT * FROM VALUES ('0',1),('00',2),('1',3) j(k,v) WHERE CAST(j.k AS BIGINT)=o.id) b) n FROM VALUES (0L),(0L),(1L),(2L) o(id) ORDER BY id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 4 |
+        | 0  | 4 |
+        | 1  | 1 |
+        | 2  | 0 |

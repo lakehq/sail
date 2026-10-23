@@ -64,3 +64,14 @@ def test_cast_correlation_keeps_aliased_window_partition_keys(spark, cast_below_
         (1, 10, 1 if cast_below_window else 3),
         (2, 10, None),
     ]
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="DataFrame.scalar requires PySpark 4+")
+def test_cast_correlation_keeps_shared_dataframe_aliases_distinct(spark):
+    source = spark.sql("SELECT * FROM VALUES ('0', 1), ('00', 2), ('1', 3) AS t(k, v)")
+    outer = source.select(F.col("k").cast("long").alias("id")).alias("o")
+    matching = source.alias("i").where(F.col("i.k").cast("long") == F.col("o.id").outer()).alias("a")
+    matching = matching.withColumn("w", F.row_number().over(Window.orderBy("v")))
+    result = outer.select("id", matching.select(F.max("w")).scalar().alias("n")).orderBy("id")
+    assert result.columns == ["id", "n"]
+    assert [tuple(row) for row in result.collect()] == [(0, 2), (0, 2), (1, 1)]
