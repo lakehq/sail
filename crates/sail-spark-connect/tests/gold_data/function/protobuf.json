@@ -12,7 +12,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: from_protobuf"
+        "failure": "not supported: native function resolution: from_protobuf"
       }
     },
     {
@@ -27,7 +27,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_protobuf"
+        "failure": "not supported: native function resolution: to_protobuf"
       }
     }
   ]

@@ -4,6 +4,9 @@ use arrow_schema::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ScalarUDF;
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::arrays_zip::ArraysZip;
+use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 
 use super::{NamedExpression, Resolver};
@@ -14,7 +17,7 @@ pub(super) fn is_generator(expression: &spec::Expr) -> bool {
     match expression {
         spec::Expr::Alias { expr, .. } => is_generator(expr),
         spec::Expr::UnresolvedFunction(f) => {
-            matches!(f.function_name.parts(), [name] if matches!(name.as_ref().to_ascii_lowercase().as_str(), "explode" | "explode_outer" | "posexplode" | "posexplode_outer" | "inline" | "inline_outer" | "variant_explode" | "variant_explode_outer" | "window" | "json_tuple"))
+            matches!(f.function_name.parts(), [name] if matches!(name.as_ref().to_ascii_lowercase().as_str(), "explode" | "explode_outer" | "posexplode" | "posexplode_outer" | "inline" | "inline_outer" | "variant_explode" | "variant_explode_outer" | "window" | "json_tuple" | "stack"))
         }
         _ => false,
     }
@@ -80,16 +83,13 @@ impl Resolver<'_, '_> {
                 | "variant_explode_outer"
                 | "window"
                 | "json_tuple"
+                | "stack"
         ) {
             return Err(PlanError::analysis(format!(
                 "unknown table function: {function_name}"
             )));
         }
-        if !function.named_arguments.is_empty()
-            || function.is_distinct
-            || function.filter.is_some()
-            || function.order_by.is_some()
-        {
+        if function.is_distinct || function.filter.is_some() || function.order_by.is_some() {
             return Err(PlanError::analysis("invalid generator function modifiers"));
         }
         let name = function_name.as_str();
@@ -97,10 +97,38 @@ impl Resolver<'_, '_> {
         let position = name.starts_with("posexplode");
         let inline = name.starts_with("inline")
             || name.starts_with("variant_explode")
-            || name == "json_tuple";
+            || matches!(name, "json_tuple" | "stack");
         let replacements = self.expression_replacements.len();
         let mut arguments = vec![];
-        for argument in function.arguments {
+        let requests =
+            function
+                .arguments
+                .into_iter()
+                .chain(function.named_arguments.into_iter().map(|(key, value)| {
+                    spec::Expr::NamedArgument {
+                        key: key.into(),
+                        value: Box::new(value),
+                    }
+                }));
+        for argument in requests {
+            let argument = match argument {
+                spec::Expr::NamedArgument { key, value } => {
+                    let parameter = match name {
+                        "explode" | "explode_outer" | "posexplode" | "posexplode_outer" => {
+                            "collection"
+                        }
+                        "inline" | "inline_outer" => "input",
+                        _ => return Err(PlanError::unsupported("native named function arguments")),
+                    };
+                    if !key.eq_ignore_ascii_case(parameter) {
+                        return Err(PlanError::analysis(format!(
+                            "unknown named argument for {name}: {key}"
+                        )));
+                    }
+                    *value
+                }
+                argument => argument,
+            };
             let mut nested = vec![];
             nested_generators(&argument, &mut nested);
             for request in nested {
@@ -122,6 +150,7 @@ impl Resolver<'_, '_> {
         }
         self.expression_replacements.truncate(replacements);
         let mut argument = match name {
+            "stack" => self.stack_rows(arguments)?,
             "window" => self.window_buckets(arguments)?,
             "variant_explode" | "variant_explode_outer" => self.scalar_udf(Arc::new(ScalarUDF::from(sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf::new())), arguments)?,
             "json_tuple" => {
@@ -152,7 +181,6 @@ impl Resolver<'_, '_> {
                 )?
             }
             _ => {
-                use sail_common_datafusion::utils::items::ItemTaker;
                 arguments.one()?
             }
         };
@@ -241,6 +269,42 @@ impl Resolver<'_, '_> {
         }
         Ok((input, expressions))
     }
+
+    fn stack_rows(&mut self, arguments: Vec<LogicalExpression>) -> PlanResult<LogicalExpression> {
+        let (rows, mut values) = arguments.at_least_one()?;
+        let crate::analysis::deferred::Deferred::Resolved(ExpressionNode::Literal(rows)) =
+            rows.node
+        else {
+            return Err(PlanError::invalid(
+                "stack expects integer literal as first argument",
+            ));
+        };
+        if !rows.data_type().is_integer() {
+            return Err(PlanError::invalid(
+                "stack expects integer literal as first argument",
+            ));
+        }
+        let rows = match rows.cast_to(&DataType::Int32)? {
+            ScalarValue::Int32(Some(rows)) if rows > 0 => rows as usize,
+            value => {
+                return Err(PlanError::invalid(format!(
+                    "stack expects first argument to be between (0, INT32::MAX], got {value}"
+                )));
+            }
+        };
+        let width = values.len().div_ceil(rows);
+        values.resize_with(width * rows, || self.literal(ScalarValue::Null));
+        let mut columns = (0..width).map(|_| vec![]).collect::<Vec<_>>();
+        for (index, value) in values.into_iter().enumerate() {
+            columns[index % width].push(value);
+        }
+        let arrays = columns
+            .into_iter()
+            .map(|column| self.scalar_udf(Arc::new(ScalarUDF::from(SparkArray::new())), column))
+            .collect::<PlanResult<Vec<_>>>()?;
+        let fields = (0..width).map(|index| format!("col{index}")).collect();
+        self.scalar_udf(Arc::new(ScalarUDF::from(ArraysZip::new(fields))), arrays)
+    }
 }
 
 /// Find generators inside a projection without crossing subquery or lambda scopes.
@@ -259,6 +323,9 @@ pub(super) fn nested_generators(expression: &spec::Expr, output: &mut Vec<spec::
         }
         spec::Expr::UnresolvedFunction(function) => {
             for argument in &function.arguments {
+                nested_generators(argument, output);
+            }
+            for (_, argument) in &function.named_arguments {
                 nested_generators(argument, output);
             }
         }

@@ -6,7 +6,7 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "when"
+              "case"
             ],
             "arguments": [
               {
@@ -87,7 +87,7 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "when"
+              "case"
             ],
             "arguments": [
               {
@@ -249,7 +249,7 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "when"
+              "case"
             ],
             "arguments": [
               {
@@ -361,7 +361,7 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "when"
+              "case"
             ],
             "arguments": [
               {
@@ -380,7 +380,7 @@
                     {
                       "unresolvedFunction": {
                         "functionName": [
-                          "when"
+                          "case"
                         ],
                         "arguments": [
                           {
@@ -491,7 +491,7 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "when"
+              "case"
             ],
             "arguments": [
               {

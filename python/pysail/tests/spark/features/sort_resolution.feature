@@ -1,21 +1,30 @@
 Feature: Sort reference resolution
-  Scenario Outline: Sort expressions combine visible aliases with aggregate arguments
+  Scenario: Order by expressions combine visible aliases with aggregate arguments
     When query
       """
       SELECT -a AS a, sum(b) AS total
       FROM VALUES (1, 10), (2, 30), (2, 5) AS t(a, b)
       GROUP BY a
-      <sort> a + sum(b) DESC
+      ORDER BY a + sum(b) DESC
       """
     Then query result ordered
       | a  | total |
       | -2 | 35    |
       | -1 | 10    |
 
-    Examples:
-      | sort     |
-      | ORDER BY |
-      | SORT BY  |
+  Scenario: Sort by expressions combine visible aliases with aggregate arguments
+    When query
+      """
+      SELECT -a AS a, sum(b) AS total
+      FROM VALUES (1, 10), (2, 30), (2, 5) AS t(a, b)
+      GROUP BY a
+      SORT BY a + sum(b) DESC
+      """
+    # SORT BY only guarantees ordering within each partition.
+    Then query result
+      | a  | total |
+      | -2 | 35    |
+      | -1 | 10    |
 
   Scenario: Sort ordinals refer to visible output alongside a recovered key
     When query
