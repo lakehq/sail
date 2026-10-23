@@ -1,4 +1,3 @@
-# ruff: noqa: S608
 import pytest
 from pyiceberg.table import StaticTable
 

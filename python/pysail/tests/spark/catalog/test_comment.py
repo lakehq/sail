@@ -129,7 +129,7 @@ def test_comment_rejects_views(spark, tmp_path, kind):
             )
         spark.sql(f"CREATE {kind} comment_view AS SELECT 1 AS id")
         for target in [f"TABLE {view}", f"COLUMN {view}.id"]:
-            with pytest.raises(Exception, match="requires a table.*is a view"):
+            with pytest.raises(Exception, match=r"requires a table.*is a view"):
                 spark.sql(f"COMMENT ON {target} IS 'rejected'")
         if kind == "TEMPORARY VIEW":
             description = spark.sql(f"DESCRIBE TABLE EXTENDED {table}").collect()
