@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use datafusion::arrow::datatypes::Schema;
@@ -16,6 +16,7 @@ use futures::TryStreamExt;
 use log::debug;
 use sail_common::actor::ActorHandle;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
+use sail_system_store::types::TaskOutputStatistics;
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{TracingExecOptions, trace_execution_plan};
 use tokio_util::sync::CancellationToken;
@@ -32,6 +33,7 @@ pub(super) struct TaskPreparation {
     pub session_id: String,
     pub handle: ActorHandle<TaskRunnerActor>,
     pub celeborn: bool,
+    pub output_statistics: Arc<OnceLock<TaskOutputStatistics>>,
 }
 
 impl TaskPreparation {
@@ -155,7 +157,12 @@ impl TaskPreparation {
         let schema = plan.schema();
         let partitioning = output.shuffle_partitioning(&context, &schema, &RemoteExecutionCodec)?;
         let writer = streams.writer(key.clone(), output.clone(), schema.clone());
-        Ok(Arc::new(ShuffleWriteExec::new(plan, writer, partitioning)))
+        Ok(Arc::new(ShuffleWriteExec::new(
+            plan,
+            writer,
+            partitioning,
+            self.output_statistics.clone(),
+        )))
     }
 }
 

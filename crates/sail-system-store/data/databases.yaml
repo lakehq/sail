@@ -151,6 +151,12 @@
           sql_type: STRING
           arrow_type: crate::types::string()
           nullable: false
+        - name: plan
+          description: The physical plan for the stage, before task-local shuffle and telemetry wrappers.
+          rust_type: String
+          sql_type: STRING
+          arrow_type: crate::types::string()
+          nullable: false
         - name: status
           description: The current status of the stage.
           rust_type: String
@@ -221,6 +227,18 @@
           rust_type: Option<chrono::DateTime<chrono::Utc>>
           sql_type: TIMESTAMP_LTZ(6)
           arrow_type: crate::types::timestamp()
+          nullable: true
+        - name: output_statistics
+          description: |
+            Output statistics for this successful task attempt, or NULL if unavailable.
+            Complete is true only after input EOF and successful commit of all channels.
+            Partition entries are ordered by zero-based shuffle channel, including empty channels.
+            Row counts are exact only for complete output. Batch bytes sum Arrow buffer sizes
+            deduplicated within each batch and estimate data volume, not peak memory usage.
+            Stored bytes include framing and compression and are NULL when unavailable.
+          rust_type: Option<crate::types::TaskOutputStatistics>
+          sql_type: "STRUCT<complete: BOOLEAN NOT NULL, partitions: ARRAY<STRUCT<num_rows: UNSIGNED LONG NOT NULL, batch_bytes: UNSIGNED LONG NOT NULL, stored_bytes: UNSIGNED LONG>> NOT NULL>"
+          arrow_type: crate::types::task_output_statistics()
           nullable: true
 
 - name: session
