@@ -34,6 +34,7 @@ use sail_common_datafusion::datasource::{
     BucketBy, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
     create_sort_order, find_path_in_options,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::LakeProcedureProvider;
 use sail_common_datafusion::lakerelation::{
     LakeRelation, LakeRelationAccess, LakeRelationProvider, LakeRelationResolution,
@@ -374,7 +375,9 @@ impl LakeSource for IcebergLakeSource {
 
         let mut partition_spec = create_table_partition_spec(&iceberg_schema, &partition_by)?;
         if let Some((_, metadata)) = existing_metadata.as_ref() {
-            partition_spec = partition_spec.assign_ids(metadata);
+            partition_spec = partition_spec
+                .assign_ids(metadata)
+                .map_err(DataFusionError::Plan)?;
         }
         let table_properties = iceberg_table_properties_from_catalog_create(properties)?;
         let store_ctx = StoreContext::new(object_store, &table_url)?;
@@ -429,6 +432,41 @@ impl LakeSource for IcebergLakeSource {
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+        if let LakeSourceAlterTableOperation::AlterSnapshotReference { operation } = operation {
+            let properties = if let Some(context) = lakehouse_table.as_ref() {
+                let manager = ctx.extension::<sail_catalog::manager::CatalogManager>()?;
+                let status = manager
+                    .get_table(context.catalog_table())
+                    .await
+                    .map_err(|error| {
+                        datafusion_common::DataFusionError::External(Box::new(error))
+                    })?;
+                match status.kind {
+                    sail_common_datafusion::catalog::TableKind::Table { properties, .. } => {
+                        properties
+                    }
+                    _ => return plan_err!("Snapshot references require an Iceberg table"),
+                }
+            } else {
+                vec![]
+            };
+            let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
+            crate::procedure::snapshot::commit_snapshot_operation(
+                ctx,
+                &table_url,
+                &properties,
+                lakehouse_table.as_ref(),
+                crate::procedure::snapshot::SnapshotOperation::AlterReference(operation),
+                Arc::new(datafusion::arrow::datatypes::Schema::empty()),
+            )
+            .await?;
+            return Ok(
+                sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+                    catalog_updated: true,
+                    ..Default::default()
+                },
+            );
+        }
         if let Some(context) = lakehouse_table.as_ref()
             && context.commit != CommitAuthority::Filesystem
         {
@@ -440,12 +478,16 @@ impl LakeSource for IcebergLakeSource {
                 },
             );
         }
-        let schema = self
+        if matches!(operation, LakeSourceAlterTableOperation::SetLocation { .. }) {
+            return not_impl_err!("SET LOCATION is not supported for path-based Iceberg tables");
+        }
+        let (schema, partition_by) = self
             .alter_path_table(ctx.runtime_env(), path, &operation)
             .await?;
         Ok(
             sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
                 schema: Some(schema),
+                partition_by: Some(partition_by),
                 ..Default::default()
             },
         )
@@ -797,7 +839,7 @@ impl IcebergLakeSource {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: &LakeSourceAlterTableOperation,
-    ) -> Result<SchemaRef> {
+    ) -> Result<(SchemaRef, Vec<CatalogPartitionField>)> {
         let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
         let object_store = runtime_env
             .object_store_registry
@@ -923,7 +965,7 @@ impl IcebergLakeSource {
 
             write_version_hint(&store_ctx.prefixed, &next_version.to_string()).await;
 
-            return Ok(schema);
+            return Ok((schema, partition_columns_from_table_metadata(&table_meta)?));
         }
     }
 
@@ -1176,7 +1218,7 @@ fn create_table_arrow_schema(columns: Vec<LakeSourceCreateTableColumn>) -> Resul
     Ok(ArrowSchema::new(fields))
 }
 
-fn create_table_partition_spec(
+pub(crate) fn create_table_partition_spec(
     iceberg_schema: &Schema,
     partition_by: &[CatalogPartitionField],
 ) -> Result<PartitionSpec> {

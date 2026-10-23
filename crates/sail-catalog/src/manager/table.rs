@@ -31,6 +31,38 @@ impl ResolvedCatalogTableReference {
 }
 
 impl CatalogManager {
+    pub async fn rename_table(
+        &self,
+        table: &[String],
+        destination: &[String],
+    ) -> CatalogResult<()> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        let (target_provider, target_database, target_name) = match destination {
+            [] => {
+                return Err(CatalogError::InvalidArgument(
+                    "Empty rename destination".into(),
+                ));
+            }
+            [name] => (provider.clone(), database.clone(), name.as_str().into()),
+            [first, ..] if self.state()?.catalogs.contains_key(first.as_str()) => {
+                self.resolve_object(destination)?
+            }
+            [namespace @ .., name] => (
+                provider.clone(),
+                crate::provider::Namespace::try_from(namespace)?,
+                name.as_str().into(),
+            ),
+        };
+        if provider.get_name() != target_provider.get_name() {
+            return Err(CatalogError::NotSupported(
+                "Cannot rename a table across catalogs".into(),
+            ));
+        }
+        provider
+            .rename_table(&database, &name, &target_database, &target_name)
+            .await
+    }
+
     pub async fn create_table<T: AsRef<str>>(
         &self,
         table: &[T],

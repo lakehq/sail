@@ -1,5 +1,6 @@
 pub mod array;
 pub mod catalog;
+pub mod column_change;
 pub mod column_features;
 pub mod datasource;
 pub mod display;
@@ -17,6 +18,7 @@ pub mod logical_rewriter;
 pub mod metadata_aggregate;
 pub mod rename;
 pub mod scan;
+pub mod schema;
 pub mod schema_evolution;
 pub mod session;
 pub mod statistics;

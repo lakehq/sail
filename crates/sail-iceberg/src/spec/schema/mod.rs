@@ -404,6 +404,24 @@ impl Schema {
             .and_then(|id| self.field_by_id(*id))
     }
 
+    pub(crate) fn field_by_name_case_insensitive(
+        &self,
+        field_name: &str,
+    ) -> Result<Option<&NestedFieldRef>, String> {
+        let name = field_name.to_lowercase();
+        let mut matches = self
+            .name_to_id
+            .iter()
+            .filter(|(candidate, _)| candidate.to_lowercase() == name);
+        let Some((_, id)) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(format!("Ambiguous column '{field_name}'"));
+        }
+        Ok(self.field_by_id(*id))
+    }
+
     /// Returns [`highest_field_id`].
     #[inline]
     pub fn highest_field_id(&self) -> i32 {
