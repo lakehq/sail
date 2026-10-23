@@ -18,9 +18,9 @@ use crate::lakehouse::{
 use crate::manager::CatalogManager;
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::provider::{
-    AlterTableOptions, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableMode,
-    CreateTableOptions, CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropTemporaryViewOptions, DropViewOptions,
+    AlterTableOptions, CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
+    DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
@@ -832,16 +832,11 @@ impl CatalogCommand {
                 // redirect the command to a table of the same name.
                 let status = manager.get_table_or_view(&table).await?;
                 let TableKind::Table {
-                    columns,
-                    comment,
-                    constraints,
                     location,
                     format,
                     partition_by,
-                    sort_by,
-                    bucket_by,
-                    properties,
                     is_external,
+                    ..
                 } = status.kind
                 else {
                     return Err(CatalogError::NotSupported(format!(
@@ -871,109 +866,63 @@ impl CatalogCommand {
                     .map(|field| field.column.clone())
                     .collect::<Vec<_>>();
                 if let Some(ref loc) = location {
-                    // Like Spark, the location is not percent-decoded: `file:/a%20b` is
-                    // the directory literally named `a%20b`.
-                    let local_path = loc
-                        .strip_prefix("file://")
-                        .or_else(|| loc.strip_prefix("file:"))
-                        .or_else(|| loc.starts_with('/').then_some(loc.as_str()))
-                        .map(str::to_string);
-                    match local_path {
-                        Some(path) => {
-                            let dir = std::path::Path::new(&path);
-                            if !dir.is_absolute() || path.is_empty() {
-                                return Err(CatalogError::External(format!(
-                                    "TRUNCATE TABLE requires an absolute local path, got: {path}"
-                                )));
-                            }
-                            if dir.parent().is_none() {
-                                return Err(CatalogError::External(format!(
-                                    "TRUNCATE TABLE on filesystem root is not allowed: {path}"
-                                )));
-                            }
-                            {
-                                let dir = dir.to_path_buf();
-                                let path = path.clone();
-                                tokio::task::spawn_blocking(move || -> CatalogResult<()> {
-                                    // Like Spark, recreate the directory if it is gone.
-                                    if !dir.exists() {
-                                        return std::fs::create_dir_all(&dir).map_err(|e| {
-                                            CatalogError::External(format!(
-                                                "failed to create table directory at {path}: {e}"
-                                            ))
-                                        });
-                                    }
-                                    let has_delta = dir.join("_delta_log").exists();
-                                    // Iceberg tables have a `metadata/version-hint.text` file
-                                    // (or `.iceberg` marker). A plain `metadata/` subdirectory
-                                    // is not sufficient — it could be user data.
-                                    let has_iceberg_meta =
-                                        dir.join("metadata").join("version-hint.text").exists();
-                                    let has_iceberg_dot = dir.join(".iceberg").exists();
-                                    if has_delta || has_iceberg_meta || has_iceberg_dot {
-                                        return Err(CatalogError::NotSupported(
-                                            "TRUNCATE TABLE is not supported for tables with \
-                                             transaction logs (Delta Lake, Iceberg). \
-                                             Use format-specific overwrite operations instead."
-                                                .to_string(),
-                                        ));
-                                    }
-                                    // Like Spark's `TruncateTableCommand`, a partitioned table only
-                                    // loses its partition directories; otherwise the table
-                                    // directory is replaced by an empty one with the same
-                                    // permissions.
-                                    if partition_columns.is_empty() {
-                                        replace_with_empty_dir(&dir)
-                                    } else {
-                                        clear_partition_dirs(&dir, &partition_columns)
-                                    }
-                                    .map_err(|e| {
-                                        CatalogError::External(format!(
-                                            "failed to truncate table directory at {path}: {e}"
-                                        ))
-                                    })
-                                })
-                                .await
-                                .map_err(|e| {
-                                    CatalogError::External(format!(
-                                        "TRUNCATE TABLE task failed: {e}"
-                                    ))
-                                })??;
-                            }
-                        }
-                        None => {
-                            return Err(CatalogError::NotSupported(format!(
-                                "TRUNCATE TABLE for non-local table location: {loc}"
-                            )));
-                        }
+                    let Some(dir) = local_table_dir(loc)? else {
+                        return Err(CatalogError::NotSupported(format!(
+                            "TRUNCATE TABLE for non-local table location: {loc}"
+                        )));
+                    };
+                    if dir.parent().is_none() {
+                        return Err(CatalogError::External(format!(
+                            "TRUNCATE TABLE on filesystem root is not allowed: {}",
+                            dir.display()
+                        )));
                     }
-                }
-                let create_options = CreateTableOptions {
-                    columns: columns
-                        .into_iter()
-                        .map(|c| CreateTableColumnOptions {
-                            name: c.name,
-                            data_type: c.data_type,
-                            nullable: c.nullable,
-                            comment: c.comment,
-                            default: c.default,
-                            generated_always_as: c.generated_always_as,
-                            identity: c.identity,
+                    tokio::task::spawn_blocking(move || -> CatalogResult<()> {
+                        // Like Spark, recreate the directory if it is gone.
+                        if !dir.exists() {
+                            return std::fs::create_dir_all(&dir).map_err(|e| {
+                                CatalogError::External(format!(
+                                    "failed to create table directory at {}: {e}",
+                                    dir.display()
+                                ))
+                            });
+                        }
+                        let has_delta = dir.join("_delta_log").exists();
+                        // Iceberg tables have a `metadata/version-hint.text` file
+                        // (or `.iceberg` marker). A plain `metadata/` subdirectory
+                        // is not sufficient — it could be user data.
+                        let has_iceberg_meta =
+                            dir.join("metadata").join("version-hint.text").exists();
+                        let has_iceberg_dot = dir.join(".iceberg").exists();
+                        if has_delta || has_iceberg_meta || has_iceberg_dot {
+                            return Err(CatalogError::NotSupported(
+                                "TRUNCATE TABLE is not supported for tables with \
+                                 transaction logs (Delta Lake, Iceberg). \
+                                 Use format-specific overwrite operations instead."
+                                    .to_string(),
+                            ));
+                        }
+                        // Like Spark's `TruncateTableCommand`, a partitioned table only
+                        // loses its partition directories; otherwise the table
+                        // directory is replaced by an empty one with the same
+                        // permissions.
+                        if partition_columns.is_empty() {
+                            replace_with_empty_dir(&dir)
+                        } else {
+                            clear_partition_dirs(&dir, &partition_columns)
+                        }
+                        .map_err(|e| {
+                            CatalogError::External(format!(
+                                "failed to truncate table directory at {}: {e}",
+                                dir.display()
+                            ))
                         })
-                        .collect(),
-                    comment,
-                    constraints,
-                    location,
-                    format,
-                    partition_by,
-                    sort_by,
-                    bucket_by,
-                    mode: CreateTableMode::Replace,
-                    properties,
-                    is_external,
-                    is_write_precondition: false,
-                };
-                manager.create_table(&table, create_options).await?;
+                    })
+                    .await
+                    .map_err(|e| {
+                        CatalogError::External(format!("TRUNCATE TABLE task failed: {e}"))
+                    })??;
+                }
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::DescribeDatabase { database, extended } => {
@@ -1291,6 +1240,48 @@ impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatu
     fn identity(&self) -> Option<&sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
         self.identity.as_ref()
     }
+}
+
+/// Resolves a table location to the local directory that Sail's own table I/O reads and writes:
+/// a `file:` URI is percent-decoded, a bare path is taken literally, and a relative path is
+/// resolved against the current directory. A location with any other scheme is not local.
+fn local_table_dir(location: &str) -> CatalogResult<Option<std::path::PathBuf>> {
+    let path = if let Some(uri_path) = location
+        .strip_prefix("file://")
+        .or_else(|| location.strip_prefix("file:"))
+    {
+        percent_encoding::percent_decode_str(uri_path)
+            .decode_utf8()
+            .map_err(|e| {
+                CatalogError::External(format!(
+                    "TRUNCATE TABLE cannot decode table location {location}: {e}"
+                ))
+            })?
+            .into_owned()
+    } else if location.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.len() > 1
+            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    }) {
+        return Ok(None);
+    } else {
+        location.to_string()
+    };
+    if path.is_empty() {
+        return Err(CatalogError::External(
+            "TRUNCATE TABLE requires a non-empty table location".to_string(),
+        ));
+    }
+    let path = std::path::PathBuf::from(path);
+    if path.is_absolute() {
+        return Ok(Some(path));
+    }
+    let cwd = std::env::current_dir().map_err(|e| {
+        CatalogError::External(format!("TRUNCATE TABLE cannot resolve table location: {e}"))
+    })?;
+    Ok(Some(cwd.join(path)))
 }
 
 /// Empties the partition directories of a Hive-partitioned table (`col=value/...`, one level per
@@ -1835,5 +1826,38 @@ mod tests {
         assert!(
             matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
         );
+    }
+    #[test]
+    fn test_local_table_dir_decodes_file_uris_only() {
+        let dir = |location: &str| local_table_dir(location).ok().flatten();
+        let spaced = Some(std::path::PathBuf::from("/tmp/a b"));
+        assert_eq!(dir("file:///tmp/a%20b"), spaced);
+        assert_eq!(dir("file:/tmp/a%20b"), spaced);
+        // a bare path is taken literally, so a real `%` is preserved
+        assert_eq!(
+            dir("/tmp/a%20b"),
+            Some(std::path::PathBuf::from("/tmp/a%20b"))
+        );
+    }
+
+    #[test]
+    fn test_local_table_dir_resolves_relative_paths_against_cwd() {
+        let cwd = std::env::current_dir().ok();
+        assert!(cwd.is_some());
+        let expected = cwd.map(|cwd| cwd.join("spark-warehouse/t"));
+        assert_eq!(
+            local_table_dir("spark-warehouse/t").ok().flatten(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_local_table_dir_rejects_other_schemes_and_bad_locations() {
+        for location in ["s3://bucket/key", "memory:///t", "hdfs://nn/path"] {
+            assert!(matches!(local_table_dir(location), Ok(None)), "{location}");
+        }
+        for location in ["", "file://", "file:///tmp/%FF"] {
+            assert!(local_table_dir(location).is_err(), "{location}");
+        }
     }
 }

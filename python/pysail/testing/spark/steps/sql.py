@@ -5,6 +5,7 @@ import json
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from jinja2 import Template
@@ -68,11 +69,14 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
 def variable_for_table_location(name: str, table: str, spark, variables: dict) -> dict:
     """Defines a variable for the directory of a table, taken from `DESCRIBE EXTENDED`.
 
-    The location is used as is, without percent-decoding, as Spark does.
+    A `file:` URI is percent-decoded, as Sail does when it reads and writes the table;
+    a bare path is used as is.
     """
     rows = spark.sql(f"DESCRIBE EXTENDED {table}").collect()
     location = next(r.data_type for r in rows if r.col_name == "Location")
-    variables[name] = PathWrapper(Path(location.removeprefix("file:")))
+    if location.startswith("file:"):
+        location = unquote(location.removeprefix("file://").removeprefix("file:"))
+    variables[name] = PathWrapper(Path(location))
     return variables
 
 

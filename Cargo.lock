@@ -7009,6 +7009,7 @@ dependencies = [
  "lazy_static",
  "log",
  "moka",
+ "percent-encoding",
  "regex",
  "sail-common",
  "sail-common-datafusion",

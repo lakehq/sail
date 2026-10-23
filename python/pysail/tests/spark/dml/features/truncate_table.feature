@@ -40,6 +40,37 @@ Feature: TRUNCATE TABLE
       | 0   |
 
   @sail-only
+  Scenario: TRUNCATE TABLE removes the data of a managed table whose warehouse path has a space
+    Given variable warehouse for temporary directory truncate warehouse with space
+    Given config spark.sql.warehouse.dir = {{ warehouse.file_uri }}
+    Given final statement
+      """
+      DROP TABLE IF EXISTS truncate_space_managed_t
+      """
+    Given statement
+      """
+      CREATE TABLE truncate_space_managed_t (id INT) USING PARQUET
+      """
+    Given statement
+      """
+      INSERT INTO truncate_space_managed_t VALUES (1), (2)
+      """
+    Given variable table_dir for location of table truncate_space_managed_t
+    Then data files in table_dir count is at least 1
+    Given statement
+      """
+      TRUNCATE TABLE truncate_space_managed_t
+      """
+    Then data files in table_dir count is 0
+    When query
+      """
+      SELECT COUNT(*) AS cnt FROM truncate_space_managed_t
+      """
+    Then query result
+      | cnt |
+      | 0   |
+
+  @sail-only
   Scenario: TRUNCATE TABLE twice leaves a table that can be written again
     Given variable warehouse for temporary directory truncate_twice_warehouse
     Given config spark.sql.warehouse.dir = {{ warehouse.string }}
