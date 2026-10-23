@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
@@ -40,7 +41,7 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
     for rule in rules {
-        if rule.name() == "scalar_subquery_to_join" {
+        if rule.name() == ScalarSubqueryToJoin::new().name() {
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
         }
         custom.push(rule);
