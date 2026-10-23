@@ -58,7 +58,10 @@ def test_output_statistics_and_stage_plans(spark, shuffle_backend):
 
     # Select in Python so the observation query cannot match its own plan text.
     def find_stage():
-        stages = _system_rows(spark, f"SELECT * FROM system.execution.stages WHERE session_id = '{spark.session_id}'")
+        stages = _system_rows(
+            spark,
+            f"SELECT * FROM system.execution.stages WHERE session_id = '{spark.session_id}'",  # noqa: S608 - server-generated session ID.
+        )
         candidates = [
             stage
             for stage in stages
@@ -74,7 +77,7 @@ def test_output_statistics_and_stage_plans(spark, shuffle_backend):
             f"""
             SELECT * FROM system.execution.tasks
             WHERE session_id = '{spark.session_id}' AND job_id = {stage["job_id"]} AND stage = {stage["stage"]}
-            """,
+            """,  # noqa: S608 - session and task IDs come from the server.
         )
         if len(tasks) == stage["partitions"] and all(task["output_statistics"] is not None for task in tasks):
             return tasks
@@ -96,7 +99,7 @@ def test_output_statistics_and_stage_plans(spark, shuffle_backend):
             f"""
             SELECT * FROM system.execution.stages
             WHERE session_id = '{spark.session_id}' AND job_id = {producer["job_id"]} AND mode = 'Blocking'
-            """,
+            """,  # noqa: S608 - session and task IDs come from the server.
         )
         assert stages
         for stage in stages:
