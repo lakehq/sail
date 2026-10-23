@@ -105,6 +105,19 @@ fn normalize_keys(
         {
             eligible = false;
         }
+        if matches!(node, LogicalPlan::Window(_) | LogicalPlan::Unnest(_)) {
+            // shortcut: skip keys here until native pull-up can extend these schemas.
+            eligible &= !node.exists(|input| {
+                let LogicalPlan::Filter(filter) = input else {
+                    return Ok(false);
+                };
+                Ok(split_conjunction(&filter.predicate)
+                    .into_iter()
+                    .any(|predicate| {
+                        matches!(native_equality(predicate), Some((Expr::Cast(_), _)))
+                    }))
+            })?;
+        }
         for expression in node.expressions() {
             eligible &= !expression.exists(|part| {
                 Ok(match part {

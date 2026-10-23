@@ -1296,3 +1296,75 @@ Feature: Scalar subqueries in distributed execution
         | 0  | 0 |
         | 1  | 2 |
         | 2  | 0 |
+
+    Scenario: Cast correlation below a window preserves matching rows
+      When query
+        """
+        SELECT o.id,
+          (SELECT max(w) FROM (
+             SELECT k, row_number() OVER (PARTITION BY k ORDER BY v) AS w
+             FROM VALUES ('0', 2), ('0', 3), ('1', 4) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id
+           )) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n    |
+        | 0  | 2    |
+        | 1  | 1    |
+        | 2  | NULL |
+
+    Scenario: Cast correlation below a generator preserves matching rows
+      When query
+        """
+        SELECT o.id,
+          (SELECT count(*) FROM (
+             SELECT k, explode(array(v, v + 1)) AS x
+             FROM VALUES ('0', 2), ('1', 3) AS i(k, v)
+             WHERE CAST(i.k AS BIGINT) = o.id
+           )) AS n
+        FROM VALUES (0L), (1L), (2L) AS o(id)
+        ORDER BY o.id
+        """
+      Then query result collected ordered
+        | id | n |
+        | 0  | 2 |
+        | 1  | 2 |
+        | 2  | 0 |
+
+    Scenario: Cast correlation above a window still combines keys with another correlation below
+      When query
+        """
+        SELECT o.g, o.id,
+          (SELECT count(*) FROM (
+             SELECT k, row_number() OVER (PARTITION BY g ORDER BY v) AS w
+             FROM VALUES (1L, '0', 2), (1L, '00', 3), (1L, '1', 4) AS i(g, k, v)
+             WHERE i.g = o.g
+           ) WHERE CAST(k AS BIGINT) = o.id) AS n
+        FROM VALUES (1L, 0L), (1L, 1L), (2L, 0L) AS o(g, id)
+        ORDER BY o.g, o.id, n
+        """
+      Then query result collected ordered
+        | g | id | n |
+        | 1 | 0  | 2 |
+        | 1 | 1  | 1 |
+        | 2 | 0  | 0 |
+
+    Scenario: Cast correlation above a generator still combines keys with another correlation below
+      When query
+        """
+        SELECT o.g, o.id,
+          (SELECT count(*) FROM (
+             SELECT g, k, explode(array(v, v + 1)) AS x
+             FROM VALUES (1L, '0', 2), (1L, '00', 3), (1L, '1', 4) AS i(g, k, v)
+             WHERE i.g = o.g
+           ) WHERE CAST(k AS BIGINT) = o.id) AS n
+        FROM VALUES (1L, 0L), (1L, 1L), (2L, 0L) AS o(g, id)
+        ORDER BY o.g, o.id, n
+        """
+      Then query result collected ordered
+        | g | id | n |
+        | 1 | 0  | 4 |
+        | 1 | 1  | 2 |
+        | 2 | 0  | 0 |
