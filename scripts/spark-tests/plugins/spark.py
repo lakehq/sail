@@ -68,7 +68,7 @@ def spark_working_dir(tmp_path_factory):
 
 
 @pytest.fixture(scope="class", autouse=_is_spark_testing())
-def spark_env_var(request, tmp_path_factory):
+def spark_env_var(tmp_path_factory):
     """This fixture sets up the environment for each PySpark test class
     in a similar way to the `python/run-tests.py` script, so that we can
     use pytest to run the tests.

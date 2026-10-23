@@ -19,10 +19,10 @@ def df(spark):
         ("a", "<", Decimal(3), [True, True, False]),
         ("a", "!=", Decimal(2), [True, False, True]),
         ("a", "==", Decimal(2), [False, True, False]),
-        ("b", "<", Decimal(2.5), [True, None, False]),
-        ("b", ">", Decimal(2.5), [False, None, True]),
+        ("b", "<", Decimal("2.5"), [True, None, False]),
+        ("b", ">", Decimal("2.5"), [False, None, True]),
         ("b", "<=", Decimal("1.0"), [True, None, False]),
-        ("d", ">=", Decimal(3.0), [None, False, True]),
+        ("d", ">=", Decimal("3.0"), [None, False, True]),
     ],
 )
 def test_compare_with_decimal_literal(df, column, op, literal, expected):
