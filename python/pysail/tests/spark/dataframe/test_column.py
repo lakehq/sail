@@ -25,6 +25,16 @@ def test_struct_field_selector_kind(spark, computed):
         df.select(payload[F.col("selector")]).collect()
 
 
+def test_array_item_index_from_a_column_or_an_expression(spark):
+    df = spark.createDataFrame([([10, 20, 30], 1), ([40], 0), (None, 0)], "parts array<int>, i int")
+
+    by_column = df.select(F.col("parts")[F.col("i")].alias("value"))
+    by_expression = df.select(F.col("parts")[F.size("parts") - 1].alias("value"))
+
+    assert by_column.collect() == [Row(value=20), Row(value=40), Row(value=None)]
+    assert by_expression.collect() == [Row(value=30), Row(value=40), Row(value=None)]
+
+
 def test_struct_wildcard_after_join(spark):
     df = spark.createDataFrame(
         data=[(1, "A"), (2, "B"), (3, "C")],
