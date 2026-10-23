@@ -9,6 +9,8 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -450,10 +452,6 @@ fn positive(expr: Expr) -> Expr {
     expr
 }
 
-fn rint(expr: Expr) -> Expr {
-    cast(expr_fn::round(vec![expr]), DataType::Float64)
-}
-
 fn positive_or_null(expr: Expr) -> Expr {
     Expr::Case(expr::Case {
         expr: None,
@@ -564,8 +562,76 @@ fn log2(expr: Expr) -> Expr {
     expr_fn::log2(positive_or_null(expr))
 }
 
-fn double(func: impl Fn(Expr) -> Expr) -> impl Fn(Expr) -> Expr {
-    move |arg: Expr| func(cast(arg, DataType::Float64))
+// TODO: The kernels still come from DataFusion (the platform libm), which differs from Java's
+//  `StrictMath` (fdlibm) in the last digit, e.g. `acos(0.5)`. The `libm` crate (already in the
+//  lockfile via `bigdecimal`) is a candidate, and Spark's own formulas are needed for `atanh`,
+//  `asinh`, `acosh` and `cot`. See the `@sail-bug` rows of `math/unary_double_math.feature`.
+//  `log2` keeps the exact DataFusion result on purpose (`@sail-only` rows in the same file).
+// TODO: `positive_or_null` repeats the argument inside a CASE, so `ln`, `log10` and `log2` evaluate a
+//  volatile argument twice, and `log1p` is `ln(x + 1)`. Both need a Sail UDF. See the `@sail-bug` rows.
+// TODO: A string argument still goes through Arrow's string to DOUBLE cast: no `[CAST_INVALID_INPUT]`
+//  class under ANSI and no Java grammar (`'1d'`, `'0x1p3'`).
+/// Spark's `UnaryMathExpression` family: `inputTypes = Seq(DoubleType)` with
+/// `ImplicitCastInputTypes`, so a numeric or NULL argument is cast to DOUBLE, a string is parsed
+/// as a DOUBLE, and any other type is a `DATATYPE_MISMATCH` at analysis time. The arity is checked
+/// first (`WRONG_NUM_ARGS`).
+///
+/// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L66-L87>
+fn unary_double(
+    name: &'static str,
+    func: impl Fn(Expr) -> Expr + Send + Sync + 'static,
+) -> ScalarFunction {
+    Arc::new(move |input: ScalarFunctionInput| -> PlanResult<Expr> {
+        let ScalarFunctionInput {
+            arguments,
+            function_context,
+        } = input;
+        let arity = arguments.len();
+        if arity != 1 {
+            return Err(PlanError::analysis(format!(
+                "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `{name}` requires 1 parameters but the actual number is {arity}. \
+                 Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix."
+            )));
+        }
+        let arg = arguments.one()?;
+        let data_type = arg.get_type(function_context.schema)?;
+        // A dictionary-encoded column is the same Spark type as its values.
+        let value_type = match &data_type {
+            DataType::Dictionary(_, value_type) => value_type.as_ref(),
+            other => other,
+        };
+        // The type seen here can still change: DataFusion coerces the branches of a CASE, IF or
+        // UNION later, so a numeric argument may end up as a string. Every accepted type therefore
+        // takes the same conversion (`try_cast` under ANSI off). For a number it never fails.
+        let arg = match value_type {
+            t if t.is_numeric()
+                || t.is_null()
+                || matches!(t, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) =>
+            {
+                string_to_double(arg, function_context.plan_config.ansi_mode)
+            }
+            other => {
+                let service = function_context
+                    .session_context
+                    .extension::<PlanService>()?;
+                let formatter = service.plan_formatter();
+                let type_name = formatter
+                    .data_type_to_simple_string(other)?
+                    .to_ascii_uppercase();
+                let arg_name = function_context
+                    .argument_display_names
+                    .first()
+                    .map_or("input", String::as_str);
+                // The formatter that names the output column, which prints `ACOSH(1)` but `ln(1)` like Spark.
+                let call = formatter.function_to_string(name, vec![arg_name], false)?;
+                return Err(PlanError::analysis(format!(
+                    "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{call}\" due to data type mismatch: \
+                     The first parameter requires the \"DOUBLE\" type, however \"{arg_name}\" has the type \"{type_name}\"."
+                )));
+            }
+        };
+        Ok(func(arg))
+    })
 }
 
 fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
@@ -573,7 +639,7 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
 }
 
 fn spark_sqrt(arg: Expr) -> Expr {
-    ScalarUDF::from(SparkSqrt::new()).call(vec![cast(arg, DataType::Float64)])
+    ScalarUDF::from(SparkSqrt::new()).call(vec![arg])
 }
 
 /// Modulo operation with division-by-zero handling.
@@ -755,39 +821,42 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("-", F::custom(spark_minus)),
         ("/", F::custom(spark_divide)),
         ("abs", F::custom(spark_abs)),
-        ("acos", F::unary(double(expr_fn::acos))),
-        ("acosh", F::unary(double(expr_fn::acosh))),
-        ("asin", F::unary(double(expr_fn::asin))),
-        ("asinh", F::unary(double(expr_fn::asinh))),
-        ("atan", F::unary(double(expr_fn::atan))),
+        ("acos", unary_double("acos", expr_fn::acos)),
+        ("acosh", unary_double("acosh", expr_fn::acosh)),
+        ("asin", unary_double("asin", expr_fn::asin)),
+        ("asinh", unary_double("asinh", expr_fn::asinh)),
+        ("atan", unary_double("atan", expr_fn::atan)),
         ("atan2", F::binary(double2(expr_fn::atan2))),
-        ("atanh", F::unary(double(expr_fn::atanh))),
+        ("atanh", unary_double("atanh", expr_fn::atanh)),
         ("bin", F::custom(spark_bin)),
         ("bround", F::udf(SparkBRound::new())),
-        ("cbrt", F::unary(double(expr_fn::cbrt))),
+        ("cbrt", unary_double("cbrt", expr_fn::cbrt)),
         ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("conv", F::udf(SparkConv::new())),
-        ("cos", F::unary(double(expr_fn::cos))),
-        ("cosh", F::unary(double(expr_fn::cosh))),
-        ("cot", F::unary(double(expr_fn::cot))),
-        ("csc", F::unary(double(|arg| lit(1.0) / expr_fn::sin(arg)))),
-        ("degrees", F::unary(double(expr_fn::degrees))),
+        ("cos", unary_double("cos", expr_fn::cos)),
+        ("cosh", unary_double("cosh", expr_fn::cosh)),
+        ("cot", unary_double("cot", expr_fn::cot)),
+        (
+            "csc",
+            unary_double("csc", |arg| lit(1.0) / expr_fn::sin(arg)),
+        ),
+        ("degrees", unary_double("degrees", expr_fn::degrees)),
         ("div", F::custom(spark_div)),
         ("e", F::nullary(eulers_constant)),
-        ("exp", F::unary(double(expr_fn::exp))),
-        ("expm1", F::unary(math_fn::expm1)),
+        ("exp", unary_double("exp", expr_fn::exp)),
+        ("expm1", unary_double("expm1", math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         ("greatest", F::var_arg(expr_fn::greatest)),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
         ("least", F::var_arg(expr_fn::least)),
-        ("ln", F::unary(double(ln))),
+        ("ln", unary_double("ln", ln)),
         ("log", F::binary(double2(log))),
-        ("log10", F::unary(double(log10))),
-        ("log1p", F::unary(double(log1p))),
-        ("log2", F::unary(double(log2))),
+        ("log10", unary_double("log10", log10)),
+        ("log1p", unary_double("log1p", log1p)),
+        ("log2", unary_double("log2", log2)),
         ("mod", F::custom(spark_modulo)),
         ("negative", F::custom(spark_negative)),
         ("pi", F::nullary(expr_fn::pi)),
@@ -795,21 +864,24 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("positive", F::unary(positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
-        ("radians", F::unary(double(expr_fn::radians))),
+        ("radians", unary_double("radians", expr_fn::radians)),
         ("rand", F::udf(Random::new())),
         ("random_poisson", F::udf(RandPoisson::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
-        ("rint", F::unary(rint)),
+        ("rint", unary_double("rint", math_fn::rint)),
         ("round", F::custom(spark_round)),
-        ("sec", F::unary(double(|arg| lit(1.0) / expr_fn::cos(arg)))),
+        (
+            "sec",
+            unary_double("sec", |arg| lit(1.0) / expr_fn::cos(arg)),
+        ),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
-        ("sin", F::unary(double(expr_fn::sin))),
-        ("sinh", F::unary(double(expr_fn::sinh))),
-        ("sqrt", F::unary(spark_sqrt)),
-        ("tan", F::unary(double(expr_fn::tan))),
-        ("tanh", F::unary(double(expr_fn::tanh))),
+        ("sin", unary_double("sin", expr_fn::sin)),
+        ("sinh", unary_double("sinh", expr_fn::sinh)),
+        ("sqrt", unary_double("sqrt", spark_sqrt)),
+        ("tan", unary_double("tan", expr_fn::tan)),
+        ("tanh", unary_double("tanh", expr_fn::tanh)),
         ("try_add", F::udf(SparkTryAdd::new())),
         ("try_divide", F::udf(SparkTryDiv::new())),
         ("try_multiply", F::udf(SparkTryMult::new())),
