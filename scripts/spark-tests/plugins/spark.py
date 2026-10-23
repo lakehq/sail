@@ -801,6 +801,23 @@ SKIPPED_SPARK_TESTS = [
         ),
         spark_major_version_less_than=4,
     ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_streaming_local_relation"],
+        reason=(
+            "Sends a local relation larger than spark.sql.session.localRelationCacheThreshold "
+            "as a cached artifact, which needs the ArtifactStatus request that Sail does not support yet"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_column.py", "SparkConnectColumnTests", "test_decimal"],
+        reason=(
+            "Spark rounds a decimal literal compared with an integral column (b < 2.5 becomes b < 3) "
+            "and names the column after the rewritten comparison, while Sail keeps the literal in the name; "
+            "the results are covered in dataframe/test_decimal_comparison.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
 ]
 
 
