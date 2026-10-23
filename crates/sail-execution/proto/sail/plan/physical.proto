@@ -77,6 +77,8 @@ message ExtendedPhysicalPlanNode {
     IcebergFileTasksExecNode iceberg_file_tasks = 62;
     IcebergRewriteExecNode iceberg_rewrite = 63;
     InputFileMetadataExecNode input_file_metadata = 64;
+    DeltaMaintenanceExecNode delta_maintenance = 65;
+    DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
   }
 }
 
@@ -885,6 +887,7 @@ message DeltaScanByAddsExecNode {
   string lakehouse_table_json = 11;
   string catalog_managed_commits_json = 12;
   repeated PhysicalProjectionExpr input_file_projection = 13;
+  bool preserve_file_groups = 14;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -1272,5 +1275,23 @@ message IcebergRewriteExecNode {
 }
 
 message IcebergRewriteGroupAssignment {
+  repeated uint64 groups = 1;
+}
+
+message DeltaMaintenanceExecNode {
+  string call = 1;
+  map<string, string> options = 2;
+  optional bytes predicate = 3;
+  optional bytes predicate_schema = 4;
+  bytes input = 5;
+  string optimize_plan = 6;
+}
+
+message DeltaOptimizeRewriteExecNode {
+  bytes input = 1;
+  repeated DeltaOptimizeGroupAssignment assignments = 2;
+}
+
+message DeltaOptimizeGroupAssignment {
   repeated uint64 groups = 1;
 }

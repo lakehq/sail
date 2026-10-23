@@ -63,6 +63,15 @@ impl std::str::FromStr for SaveMode {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    Optimize {
+        predicate: Option<String>,
+    },
+    VacuumStart {
+        retention_check_enabled: bool,
+        specified_retention_millis: Option<i64>,
+        default_retention_millis: i64,
+    },
+    VacuumEnd {},
     DynamicPartitionOverwrite {
         partition_by: Option<Vec<String>>,
     },
@@ -145,6 +154,9 @@ pub enum DeltaOperation {
 impl DeltaOperation {
     pub fn name(&self) -> &str {
         match self {
+            Self::Optimize { .. } => "OPTIMIZE",
+            Self::VacuumStart { .. } => "VACUUM START",
+            Self::VacuumEnd { .. } => "VACUUM END",
             Self::ReplaceColumns { .. } => "REPLACE COLUMNS",
             Self::AddColumns { .. } => "ADD COLUMNS",
             Self::DropColumns { .. } => "DROP COLUMNS",
@@ -189,6 +201,40 @@ impl DeltaOperation {
 
         let mut parameters = HashMap::new();
         match self {
+            Self::Optimize { predicate } => {
+                insert_json(
+                    &mut parameters,
+                    "predicate",
+                    &predicate.iter().collect::<Vec<_>>(),
+                )?;
+                insert_json(&mut parameters, "zOrderBy", &Vec::<String>::new())?;
+                insert_json(&mut parameters, "clusterBy", &Vec::<String>::new())?;
+                insert_opt(&mut parameters, "auto", Some(false));
+            }
+            Self::VacuumStart {
+                retention_check_enabled,
+                specified_retention_millis,
+                default_retention_millis,
+            } => {
+                insert_opt(
+                    &mut parameters,
+                    "retentionCheckEnabled",
+                    Some(retention_check_enabled),
+                );
+                insert_opt(
+                    &mut parameters,
+                    "specifiedRetentionMillis",
+                    *specified_retention_millis,
+                );
+                insert_opt(
+                    &mut parameters,
+                    "defaultRetentionMillis",
+                    Some(default_retention_millis),
+                );
+            }
+            Self::VacuumEnd {} => {
+                insert_opt(&mut parameters, "status", Some("COMPLETED"));
+            }
             Self::DynamicPartitionOverwrite { partition_by } => {
                 insert_opt(&mut parameters, "mode", Some("Overwrite"));
                 if let Some(partitions) = partition_by {

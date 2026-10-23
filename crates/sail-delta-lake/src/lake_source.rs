@@ -156,6 +156,12 @@ impl DataSource for DeltaLakeSource {
 
 #[async_trait]
 impl LakeSource for DeltaLakeSource {
+    fn procedure_provider(
+        self: Arc<Self>,
+    ) -> Option<Arc<dyn sail_common_datafusion::lakeprocedure::LakeProcedureProvider>> {
+        Some(self)
+    }
+
     async fn table_properties(
         &self,
         ctx: &dyn Session,

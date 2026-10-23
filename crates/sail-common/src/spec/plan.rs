@@ -302,6 +302,13 @@ pub enum CommandNode {
         arguments: Vec<Expr>,
         named_arguments: Vec<(Identifier, Expr)>,
     },
+    /// Native lakehouse SQL lowered through the shared procedure boundary.
+    LakehouseCommand {
+        format: String,
+        procedure: String,
+        table: ObjectName,
+        arguments: Vec<(Identifier, Expr)>,
+    },
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {

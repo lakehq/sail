@@ -139,6 +139,54 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 },
             )))
         }
+        Statement::Optimize {
+            target,
+            full,
+            predicate,
+            zorder,
+            ..
+        } => {
+            let mut arguments = vec![];
+            if full.is_some() {
+                arguments.push((
+                    "full".into(),
+                    spec::Expr::Literal(spec::Literal::Boolean { value: Some(true) }),
+                ));
+            }
+            if let Some(predicate) = predicate {
+                arguments.push((
+                    "predicate".into(),
+                    lakehouse_string(predicate.condition.text()),
+                ));
+            }
+            if let Some(zorder) = zorder {
+                arguments.push(("zorder".into(), lakehouse_string(zorder.text())));
+            }
+            lakehouse_command("optimize", target, arguments)
+        }
+        Statement::Vacuum {
+            target, clauses, ..
+        } => {
+            let mut arguments = vec![];
+            for clause in clauses {
+                use sail_sql_parser::ast::statement::VacuumClause;
+                let (key, value) = match clause {
+                    VacuumClause::Retain(_, value, _) => (
+                        "retention_hours",
+                        lakehouse_string(value.text().trim().to_string()),
+                    ),
+                    VacuumClause::DryRun(_, _) => (
+                        "dry_run",
+                        spec::Expr::Literal(spec::Literal::Boolean { value: Some(true) }),
+                    ),
+                    VacuumClause::Mode(mode) => {
+                        ("mode", lakehouse_string(mode.text().trim().to_string()))
+                    }
+                };
+                arguments.push((key.into(), value));
+            }
+            lakehouse_command("vacuum", target, arguments)
+        }
         Statement::SetCatalog {
             set: _,
             catalog: _,
@@ -1245,6 +1293,21 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         }
         Statement::Describe { describe: _, item } => {
             let node = match item {
+                DescribeItem::DeltaDetail { target, .. } => {
+                    return lakehouse_command("describe_detail", target, vec![]);
+                }
+                DescribeItem::DeltaHistory { target, limit, .. } => {
+                    let arguments = limit
+                        .map(|(_, limit)| {
+                            (
+                                "limit".into(),
+                                lakehouse_string(limit.text().trim().to_string()),
+                            )
+                        })
+                        .into_iter()
+                        .collect();
+                    return lakehouse_command("describe_history", target, arguments);
+                }
                 DescribeItem::Query { query: _, item } => {
                     let query = from_ast_query(item)?;
                     spec::CommandNode::DescribeQuery {
@@ -2793,4 +2856,30 @@ fn from_ast_alter_view_operation(
     _operation: AlterViewOperation,
 ) -> SqlResult<spec::AlterViewOperation> {
     Ok(spec::AlterViewOperation::Unknown)
+}
+
+fn lakehouse_string(value: String) -> spec::Expr {
+    spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) })
+}
+
+fn lakehouse_command(
+    procedure: &str,
+    target: Either<
+        sail_sql_parser::ast::literal::StringLiteral,
+        sail_sql_parser::ast::identifier::ObjectName,
+    >,
+    arguments: Vec<(spec::Identifier, spec::Expr)>,
+) -> SqlResult<spec::Plan> {
+    let table = match target {
+        Either::Left(path) => spec::ObjectName::from(["delta".to_string(), from_ast_string(path)?]),
+        Either::Right(table) => from_ast_object_name(table)?,
+    };
+    Ok(spec::Plan::Command(spec::CommandPlan::new(
+        spec::CommandNode::LakehouseCommand {
+            format: "delta".to_string(),
+            procedure: procedure.to_string(),
+            table,
+            arguments,
+        },
+    )))
 }

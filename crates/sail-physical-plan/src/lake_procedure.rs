@@ -18,7 +18,7 @@ use sail_common_datafusion::datasource::{DataSourceRegistry, OptionLayer, Source
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedureAccess, LakeProcedureCall, LakeProcedureExecutionTarget, LakeProcedureResolution,
-    LakeProcedureRootPlacement, LakeProcedureTarget,
+    LakeProcedureRootPlacement, LakeProcedureTableTarget, LakeProcedureTarget,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -190,16 +190,33 @@ pub async fn prepare_lake_procedure_execution(
         (LakeProcedureTarget::Catalog, None) => LakeProcedureExecutionTarget::Catalog {
             catalog: call.catalog.clone(),
         },
-        (LakeProcedureTarget::Table { .. }, Some(target)) => {
+        (
+            LakeProcedureTarget::Table { .. } | LakeProcedureTarget::TableOrPath { .. },
+            Some(LakeProcedureTableTarget::Table { binding }),
+        ) => {
             prepare_table_target(
                 manager.as_ref(),
                 &call.catalog,
                 &call.lake_source,
                 call.invocation.procedure.access,
-                target,
+                binding,
             )
             .await?
         }
+        (
+            LakeProcedureTarget::TableOrPath { .. },
+            Some(LakeProcedureTableTarget::Path { location }),
+        ) => LakeProcedureExecutionTarget::Table(Box::new(SourceInfo {
+            paths: vec![location.clone()],
+            lakehouse_table: None,
+            schema: None,
+            constraints: Default::default(),
+            partition_by: vec![],
+            bucket_by: None,
+            sort_order: vec![],
+            options: vec![],
+            read_case_sensitive: true,
+        })),
         _ => {
             return Err(catalog_error(CatalogError::Conflict(format!(
                 "procedure target changed after planning for invocation {}",
@@ -214,9 +231,9 @@ async fn prepare_table_target(
     catalog: &str,
     lake_source: &str,
     access: LakeProcedureAccess,
-    target: &sail_common_datafusion::lakeprocedure::LakeProcedureTableTarget,
+    binding: &sail_common_datafusion::catalog::LakehouseTableBinding,
 ) -> Result<LakeProcedureExecutionTarget> {
-    let table = &target.binding.catalog_table;
+    let table = &binding.catalog_table;
     if !table
         .first()
         .is_some_and(|table_catalog| table_catalog.eq_ignore_ascii_case(catalog))
@@ -258,7 +275,7 @@ async fn prepare_table_target(
         )
         .await
         .map_err(catalog_error)?;
-    if !target.binding.matches_execution(&resolved.execution) {
+    if !binding.matches_execution(&resolved.execution) {
         return Err(catalog_error(CatalogError::StaleMetadata(format!(
             "procedure target binding changed after planning: {}",
             table.join(".")

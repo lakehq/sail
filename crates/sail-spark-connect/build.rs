@@ -115,12 +115,19 @@ fn build_spark_config(versions: &[&str]) -> Result<(), Box<dyn std::error::Error
         key.replace('.', "_").to_uppercase()
     };
 
+    let delta_config_path = "data/config/delta.json";
+    println!("cargo:rerun-if-changed={delta_config_path}");
+    let delta_config = serde_json::from_str::<Vec<SparkConfigEntry>>(&std::fs::read_to_string(
+        delta_config_path,
+    )?)?;
+
     let mut configs = Vec::with_capacity(versions.len());
     for &version in versions {
         let path = format!("data/config/spark-{version}.json");
         println!("cargo:rerun-if-changed={path}");
         let mut config = serde_json::from_str::<SparkConfig>(&std::fs::read_to_string(&path)?)?;
         apply_spark_config_overrides(&mut config);
+        config.entries.extend(delta_config.iter().cloned());
         configs.push((version, config));
     }
 
