@@ -200,12 +200,6 @@ def test_table_rename_preserves_storage_and_schema(spark, lake_table):
         spark.sql(f"DROP TABLE IF EXISTS {renamed}")
 
 
-# FIXME: Isolate storage when recreating a renamed managed table's old name.
-# Delta/Parquet reuse its data; Iceberg rejects the existing metadata.
-@pytest.mark.xfail(
-    reason="Recreating a renamed managed table reuses its storage location",
-    strict=True,
-)
 @pytest.mark.parametrize("fmt", ["delta", "parquet", "iceberg"])
 def test_managed_table_rename_keeps_recreated_name_isolated(spark, tmp_path, fmt):
     database = f"rename_location_{fmt}"

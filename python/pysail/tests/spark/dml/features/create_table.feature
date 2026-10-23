@@ -31,7 +31,7 @@ Feature: CREATE TABLE default location
       | 2  | Bob   |
     Then file tree in db_location matches
       """
-      📂 my_table
+      📂 my_table-<uuid>
         📄 part-<id>.<codec>.parquet
       """
 
@@ -68,7 +68,7 @@ Feature: CREATE TABLE default location
       | 3  | Charlie | 30.25 |
     Then file tree in db_location matches
       """
-      📂 ctas_table
+      📂 ctas_table-<uuid>
         📄 part-<id>.<codec>.parquet
       """
 
@@ -103,7 +103,7 @@ Feature: CREATE TABLE default location
       | 2  |
     Then file tree in db_location matches
       """
-      📂 myu+0040table
+      📂 myu+0040table-<uuid>
         📄 part-<id>.<codec>.parquet
       """
 
