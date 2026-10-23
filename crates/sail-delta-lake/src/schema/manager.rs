@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use icu_casemap::CaseMapper;
+use icu_casemap::{CaseMapper, CaseMapperBorrowed};
 use indexmap::IndexSet;
 use regex::Regex;
 use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
@@ -208,7 +208,11 @@ static JDK_17_ASSIGNED_CHARACTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\p{Age:13.0}$").expect("JDK 17 Unicode age pattern should be valid")
 });
 
-fn spark_case_insensitive_name_eq(case_mapper: &CaseMapper, left: &str, right: &str) -> bool {
+fn spark_case_insensitive_name_eq(
+    case_mapper: &CaseMapperBorrowed<'_>,
+    left: &str,
+    right: &str,
+) -> bool {
     let mut left_chars = left.chars();
     let mut right_chars = right.chars();
 
@@ -221,7 +225,7 @@ fn spark_case_insensitive_name_eq(case_mapper: &CaseMapper, left: &str, right: &
     }
 }
 
-fn java_char_eq_ignore_case(case_mapper: &CaseMapper, left: char, right: char) -> bool {
+fn java_char_eq_ignore_case(case_mapper: &CaseMapperBorrowed<'_>, left: char, right: char) -> bool {
     if left == right {
         return true;
     }

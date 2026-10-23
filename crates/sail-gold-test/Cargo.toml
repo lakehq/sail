@@ -2,6 +2,7 @@
 name = "sail-gold-test"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [dependencies]
 sail-spark-connect = { path = "../sail-spark-connect" }

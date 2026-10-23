@@ -78,6 +78,32 @@ def test_checkpoint_preserves_field_metadata(spark):
     assert checkpointed.schema["value"].metadata == {"source": "checkpoint-test"}
 
 
+@pytest.mark.parametrize("local", [False, True], ids=["checkpoint", "local-checkpoint"])
+@pytest.mark.parametrize(
+    ("expressions", "expected"),
+    [
+        pytest.param(["sum(id) AS value"], [(10,)], id="sum"),
+        pytest.param(["max(id) AS value"], [(4,)], id="max"),
+        pytest.param(
+            ["id", "sum(id) OVER (ORDER BY id) AS value"],
+            [(0, 0), (1, 1), (2, 3), (3, 6), (4, 10)],
+            id="window-sum",
+        ),
+        pytest.param(
+            ["id", "row_number() OVER (ORDER BY id) AS value"],
+            [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)],
+            id="row-number",
+        ),
+    ],
+)
+def test_checkpoint_preserves_aggregate_and_window_results(spark, local, expressions, expected):
+    source = spark.range(5, numPartitions=2).selectExpr(*expressions)
+    checkpointed = source.localCheckpoint() if local else source.checkpoint()
+
+    assert checkpointed.schema == source.schema
+    assert sorted(tuple(row) for row in checkpointed.collect()) == expected
+
+
 def _weakly_connected_components(nodes, pairs):
     forward = pairs.select(sf.col("a").alias("source"), sf.col("b").alias("target"))
     reverse = pairs.select(sf.col("b").alias("source"), sf.col("a").alias("target"))

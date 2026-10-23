@@ -126,7 +126,7 @@ fn validate_pattern_field(symbol: char, count: usize, pattern_use: PatternUse) -
     }
     if pattern_use == PatternUse::Parsing && matches!(symbol, 'E' | 'F' | 'q' | 'Q') {
         return exec_err!(
-            "invalid datetime pattern: pattern letter '{symbol}' is unsupported for parsing"
+            "Unrecognized datetime pattern: pattern letter '{symbol}' is unsupported for parsing"
         );
     }
 

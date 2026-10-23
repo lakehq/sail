@@ -473,6 +473,36 @@ impl IcebergRestCatalogProvider {
         Ok(())
     }
 
+    fn validate_create_table_write_schema(
+        expected: &crate::r#gen::Schema,
+        result: &crate::r#gen::LoadTableResult,
+    ) -> CatalogResult<()> {
+        let schema = find_by_id_or_last(
+            result.metadata.schemas.as_ref(),
+            result.metadata.current_schema_id,
+            |schema| schema.schema_id,
+        )
+        .ok_or_else(|| CatalogError::External("Created Iceberg table has no schema".to_string()))?;
+        let parse_schema =
+            |schema: &crate::r#gen::Schema| -> CatalogResult<sail_iceberg::spec::Schema> {
+                serde_json::to_value(schema)
+                    .and_then(serde_json::from_value)
+                    .map_err(|error| {
+                        CatalogError::External(format!("Invalid Iceberg write schema: {error}"))
+                    })
+            };
+        let actual = parse_schema(schema)?;
+        let expected = parse_schema(expected)?;
+        // CTAS writers are planned before the catalog creates the table.
+        // Parse both REST schemas to normalize collection element names and type spellings.
+        if actual.fields() != expected.fields() {
+            return Err(CatalogError::UnsupportedCapability(
+                "Iceberg REST catalog changed the schema or field IDs for create+write; create the table first and then insert into it".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
     fn load_table_result_to_status(
         catalog: &str,
@@ -1249,8 +1279,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .with_identifier_field_ids(identifier_field_ids.clone())
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
-        let schema = crate::r#gen::Schema::try_from(schema)?;
-
         let partition_spec = build_partition_spec(&partition_by, bucket_by.as_ref(), &name_to_id)?;
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
@@ -1265,7 +1293,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let request = crate::r#gen::CreateTableRequest {
             name: table.to_string(),
             location,
-            schema: Box::new(schema),
+            schema: Box::new(crate::r#gen::Schema::try_from(schema)?),
             partition_spec,
             write_order,
             stage_create: Some(false),
@@ -1286,6 +1314,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
         if is_write_precondition {
+            Self::validate_create_table_write_schema(&request.schema, &result)?;
             Self::validate_create_table_access_session_requirements(
                 &self.name,
                 database,
@@ -1369,6 +1398,35 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let config = self.resolved_catalog_config().await?;
+        let prefix = config.prefix().map(ToOwned::to_owned);
+        let body = crate::r#gen::RenameTableRequest {
+            source: Box::new(crate::r#gen::TableIdentifier {
+                name: table.into(),
+                namespace: Box::new(crate::r#gen::Namespace(database.clone().into())),
+            }),
+            destination: Box::new(crate::r#gen::TableIdentifier {
+                name: destination_table.into(),
+                namespace: Box::new(crate::r#gen::Namespace(destination_database.clone().into())),
+            }),
+        };
+        self.with_auth_retry(|client| {
+            let prefix = prefix.clone();
+            let body = body.clone();
+            async move { client.rename_table(prefix, body).await }
+        })
+        .await?
+        .map(|_| ())
+        .map_err(|e| CatalogError::External(format!("Failed to rename Iceberg table: {e}")))
     }
 
     async fn alter_table(
@@ -2218,7 +2276,7 @@ fn parse_unary_sort_transform(
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use sail_catalog::credentials::{EmptyCatalogCredentials, FileCatalogCredentials};
     use sail_catalog::lakehouse::TableAccessPurpose;
     use sail_common::spec;
@@ -3694,6 +3752,43 @@ mod tests {
             .unwrap();
 
         assert_eq!(status.name, "table1");
+    }
+
+    #[tokio::test]
+    async fn create_table_validates_nested_field_ids_before_writing() {
+        for is_write_precondition in [false, true] {
+            let ctx = TestContext::new(Some("test")).await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let mut response = create_table_response_with_access_session_hints();
+            response["metadata"]["schemas"][0]["fields"][0]["type"] = serde_json::json!({
+                "type": "list",
+                "element-id": 99,
+                "element": "string",
+                "element-required": true
+            });
+            ctx.mock_post_json(&ctx.path("/namespaces/db1/tables"), response)
+                .await;
+            let mut options = simple_create_table_options();
+            options.is_write_precondition = is_write_precondition;
+            options.columns[0].data_type =
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, false)));
+
+            let result = ctx
+                .catalog
+                .create_table(&namespace, "table1", options)
+                .await;
+            if is_write_precondition {
+                let error = result.unwrap_err();
+                assert!(matches!(error, CatalogError::UnsupportedCapability(_)));
+                assert!(
+                    error
+                        .to_string()
+                        .contains("changed the schema or field IDs")
+                );
+            } else {
+                assert!(result.is_ok());
+            }
+        }
     }
 
     #[tokio::test]

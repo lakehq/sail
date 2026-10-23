@@ -3,16 +3,15 @@ import path from "path";
 import type { DefaultTheme, MarkdownOptions, PageData } from "vitepress";
 import tailwindcss from "@tailwindcss/vite";
 import markdownItDeflist from "markdown-it-deflist";
-import markdownItFootnote from "markdown-it-footnote";
 import { defineConfig, HeadConfig } from "vitepress";
 
-import type { SphinxPage } from "./theme/utils/sphinx";
-import PyCon from "./theme/languages/pycon";
-import { PageLink } from "./theme/utils/link";
-import { loadPages } from "./theme/utils/page";
-import { SPHINX_BUILD_OUTPUT } from "./theme/utils/sphinx";
-import { withSphinxPages } from "./theme/utils/sphinx-plugins";
-import { TreeNode } from "./theme/utils/tree";
+import type { SphinxPage } from "./theme/utils/sphinx.ts";
+import PyCon from "./theme/languages/pycon.ts";
+import { PageLink } from "./theme/utils/link.ts";
+import { loadPages } from "./theme/utils/page.ts";
+import { withSphinxPages } from "./theme/utils/sphinx-plugins.ts";
+import { SPHINX_BUILD_OUTPUT } from "./theme/utils/sphinx.ts";
+import { TreeNode } from "./theme/utils/tree.ts";
 
 // The documentation build process can be configured using the following environment variables:
 // - SAIL_SITE_URL: The URL of the documentation site.
@@ -101,7 +100,6 @@ class Markdown {
     return {
       theme: { light: "min-light", dark: "min-dark" },
       config: (md) => {
-        md.use(markdownItFootnote);
         md.use(markdownItDeflist);
       },
       languages: [PyCon.language()],
@@ -164,7 +162,7 @@ class Sidebar {
    * but we cannot reference the configuration since it does not exist yet
    * when configuring the sidebar.
    */
-  private static readonly srcDir = path.join(__dirname, "..");
+  private static readonly srcDir = path.join(import.meta.dirname, "..");
 
   private static items(
     trees: TreeNode<PageLink | null>[],

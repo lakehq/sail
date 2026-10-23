@@ -226,28 +226,34 @@ mod tests {
             ])
             .build()?;
         let spec = UnboundPartitionSpec {
+            spec_id: None,
             fields: vec![
                 UnboundPartitionField {
+                    field_id: None,
                     source_id: 1,
                     name: "time_part".to_string(),
                     transform: Transform::Identity,
                 },
                 UnboundPartitionField {
+                    field_id: None,
                     source_id: 2,
                     name: "decimal_part".to_string(),
                     transform: Transform::Identity,
                 },
                 UnboundPartitionField {
+                    field_id: None,
                     source_id: 3,
                     name: "uuid_part".to_string(),
                     transform: Transform::Identity,
                 },
                 UnboundPartitionField {
+                    field_id: None,
                     source_id: 4,
                     name: "fixed_part".to_string(),
                     transform: Transform::Identity,
                 },
                 UnboundPartitionField {
+                    field_id: None,
                     source_id: 5,
                     name: "binary_part".to_string(),
                     transform: Transform::Identity,

@@ -212,7 +212,7 @@ pub(crate) fn variant_type_from_spark_type(s: &str) -> Result<InferredType> {
         "VARIANT" => return Ok(InferredType::Variant),
         _ => {}
     }
-    if let Some(inner) = s.strip_prefix("DECIMAL(").and_then(|s| s.strip_suffix(')')) {
+    if let Some(inner) = s.strip_circumfix("DECIMAL(", ')') {
         let (precision, scale) = inner.split_once(',').ok_or_else(|| {
             DataFusionError::Execution(format!("invalid inferred decimal type '{s}'"))
         })?;
@@ -224,12 +224,12 @@ pub(crate) fn variant_type_from_spark_type(s: &str) -> Result<InferredType> {
         })?;
         return Ok(InferredType::Decimal(precision, scale));
     }
-    if let Some(inner) = s.strip_prefix("ARRAY<").and_then(|s| s.strip_suffix('>')) {
+    if let Some(inner) = s.strip_circumfix("ARRAY<", '>') {
         return Ok(InferredType::Array(Box::new(variant_type_from_spark_type(
             inner,
         )?)));
     }
-    if let Some(inner) = s.strip_prefix("OBJECT<").and_then(|s| s.strip_suffix('>')) {
+    if let Some(inner) = s.strip_circumfix("OBJECT<", '>') {
         let mut fields = Vec::new();
         for field in split_top_level(inner) {
             let (name, ty) = field.split_once(": ").ok_or_else(|| {

@@ -13,7 +13,7 @@ use datafusion_expr::{
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
-use sail_common::utils::datetime::time_unit_to_multiplier;
+use sail_common::utils::datetime::{MICROS_PER_DAY, time_unit_to_multiplier};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
@@ -35,6 +35,7 @@ use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_python_udf::udf::expr_contains_python_udf;
 use sail_sql_analyzer::literal::interval::IntervalValue;
 use sail_sql_analyzer::parser::parse_interval;
 
@@ -42,8 +43,7 @@ use super::lambda::lambda_with_fresh_parameter;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    ScalarFunction, ScalarFunctionInput, expr_contains_python_udf,
-    expr_contains_spark_cast_to_variant,
+    ScalarFunction, ScalarFunctionInput, expr_contains_spark_cast_to_variant,
 };
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
@@ -1060,8 +1060,6 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     .end()?)
 }
 
-const MICROS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
-
 /// Parses a `window` duration/start-time argument (interval string, day-time
 /// interval, or integer number of microseconds, matching Spark's
 /// `TimeWindow.parseExpression`) into microseconds. Months/years are rejected
@@ -1409,7 +1407,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::binary(trunc)),
-        ("try_make_interval", F::unknown("try_make_interval")),
+        ("try_make_interval", F::udf(SparkMakeInterval::new())),
         (
             "try_make_timestamp",
             F::custom(|input| make_timestamp(input, true)),
