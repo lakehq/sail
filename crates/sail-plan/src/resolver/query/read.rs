@@ -42,6 +42,7 @@ impl PlanResolver<'_> {
         &self,
         table: spec::ReadNamedTable,
         state: &mut PlanResolverState,
+        is_streaming: bool,
     ) -> PlanResult<LogicalPlan> {
         let spec::ReadNamedTable {
             name,
@@ -66,7 +67,9 @@ impl PlanResolver<'_> {
                     paths: vec![path.as_ref().to_string()],
                     predicates: vec![],
                 };
-                let plan = self.resolve_query_read_data_source(source, state).await?;
+                let plan = self
+                    .resolve_query_read_data_source(source, state, is_streaming)
+                    .await?;
                 return if let Some(table_sample) = sample {
                     self.apply_table_sample(plan, table_sample, state).await
                 } else {
@@ -224,10 +227,12 @@ impl PlanResolver<'_> {
                             .await?
                     }
                     None => {
-                        data_source_registry
-                            .get_data_source(&format)?
-                            .create_source(&self.ctx.state(), info)
-                            .await?
+                        let source = data_source_registry.get_data_source(&format)?;
+                        if is_streaming {
+                            source.create_stream_source(&self.ctx.state(), info).await?
+                        } else {
+                            source.create_source(&self.ctx.state(), info).await?
+                        }
                     }
                 };
                 self.resolve_table_source_with_rename(
@@ -279,6 +284,7 @@ impl PlanResolver<'_> {
         &self,
         table: spec::ReadDynamicTable,
         state: &mut PlanResolverState,
+        is_streaming: bool,
     ) -> PlanResult<LogicalPlan> {
         let spec::ReadDynamicTable {
             name,
@@ -299,6 +305,7 @@ impl PlanResolver<'_> {
                 options,
             },
             state,
+            is_streaming,
         )
         .await
     }
@@ -549,6 +556,7 @@ impl PlanResolver<'_> {
         &self,
         source: spec::ReadDataSource,
         state: &mut PlanResolverState,
+        is_streaming: bool,
     ) -> PlanResult<LogicalPlan> {
         let spec::ReadDataSource {
             format,
@@ -580,10 +588,12 @@ impl PlanResolver<'_> {
             read_case_sensitive: self.config.case_sensitive,
         };
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
-        let table_source = registry
-            .get_data_source(&format)?
-            .create_source(&self.ctx.state(), info)
-            .await?;
+        let source = registry.get_data_source(&format)?;
+        let table_source = if is_streaming {
+            source.create_stream_source(&self.ctx.state(), info).await?
+        } else {
+            source.create_source(&self.ctx.state(), info).await?
+        };
         self.resolve_table_source_with_rename(
             table_source,
             UNNAMED_TABLE,

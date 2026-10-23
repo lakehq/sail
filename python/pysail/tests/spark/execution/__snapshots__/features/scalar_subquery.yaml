@@ -494,6 +494,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC]
@@ -1017,6 +1020,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -1555,6 +1561,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -2329,6 +2338,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc)], dist_by=SinglePartition
@@ -2976,6 +2988,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc), (#13@1, asc)], dist_by=SinglePartition
@@ -3504,6 +3519,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -3942,6 +3960,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -4436,6 +4457,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -4961,6 +4985,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -5449,6 +5476,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -5889,6 +5919,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -6403,6 +6436,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -6897,6 +6933,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7383,6 +7422,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7848,6 +7890,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -8337,6 +8382,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -8879,6 +8927,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc)], dist_by=SinglePartition
@@ -9409,6 +9460,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc), (#8@1, asc)], dist_by=SinglePartition
@@ -9889,6 +9943,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -10380,6 +10437,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -10822,6 +10882,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -11260,6 +11323,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -11730,6 +11796,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -12213,6 +12282,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:

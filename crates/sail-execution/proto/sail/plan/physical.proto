@@ -77,7 +77,26 @@ message ExtendedPhysicalPlanNode {
     IcebergFileTasksExecNode iceberg_file_tasks = 62;
     IcebergRewriteExecNode iceberg_rewrite = 63;
     InputFileMetadataExecNode input_file_metadata = 64;
+    StreamAggregateExecNode stream_aggregate = 65;
+    DeltaStreamExecNode delta_stream = 66;
+    StreamProjectionExecNode stream_projection = 67;
   }
+}
+
+message StreamAggregateExecNode {
+  bytes input = 1;
+  // A single-stage AggregateExec over an empty data input carries the expressions.
+  bytes aggregate = 2;
+}
+
+message DeltaStreamExecNode {
+  string config_json = 1;
+  bytes table_schema = 2;
+  repeated uint64 projection = 3;
+}
+
+message StreamProjectionExecNode {
+  bytes projection = 1;
 }
 
 message InputFileMetadataExecNode {

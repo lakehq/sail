@@ -477,6 +477,15 @@ pub trait DataSource: Send + Sync {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
 
+    /// Creates a source for an explicit streaming read.
+    async fn create_stream_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableSource>> {
+        self.create_source(ctx, info).await
+    }
+
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         Ok(self.create_source(ctx, info).await?.schema())

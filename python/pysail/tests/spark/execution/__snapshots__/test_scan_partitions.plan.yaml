@@ -416,6 +416,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -895,6 +898,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -1379,6 +1385,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -1861,6 +1870,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -2340,6 +2352,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -2824,6 +2839,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -3304,6 +3322,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -3787,6 +3808,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -4267,6 +4291,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PreserveStreamProjectionOrder:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:

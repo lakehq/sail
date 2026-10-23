@@ -61,7 +61,7 @@ pub(crate) fn validate_schema(schema: &Schema) -> Result<()> {
     Ok(())
 }
 
-fn feed_schema(schema: &Schema) -> SchemaRef {
+pub(crate) fn feed_schema(schema: &Schema) -> SchemaRef {
     let mut fields = schema
         .fields()
         .iter()

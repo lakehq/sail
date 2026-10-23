@@ -135,6 +135,7 @@ use sail_delta_lake::schema::PhysicalPartitionColumn;
 use sail_delta_lake::spec::{
     Action, ColumnMappingMode, ColumnMetadataKey, DeltaOperation, StructType,
 };
+use sail_delta_lake::streaming::DeltaStreamExec;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -304,9 +305,11 @@ use sail_physical_plan::remote_checkpoint::{
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
+use sail_physical_plan::streaming::aggregate::StreamAggregateExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
+use sail_physical_plan::streaming::projection::StreamProjectionExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
@@ -1410,6 +1413,59 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let path = object_store::path::Path::parse(path)
                     .map_err(|e| plan_datafusion_err!("invalid file delete path: {e}"))?;
                 Ok(Arc::new(FileDeleteExec::new(object_store_url, path)))
+            }
+            NodeKind::StreamAggregate(r#gen::StreamAggregateExecNode { input, aggregate }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let aggregate = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &aggregate,
+                )?;
+                let aggregate = aggregate
+                    .downcast_ref::<datafusion::physical_plan::aggregates::AggregateExec>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("invalid streaming aggregate expressions")
+                    })?;
+                Ok(Arc::new(StreamAggregateExec::try_new(
+                    input,
+                    Arc::new(aggregate.clone()),
+                )?))
+            }
+            NodeKind::DeltaStream(r#gen::DeltaStreamExecNode {
+                config_json,
+                table_schema,
+                projection,
+            }) => {
+                let config = serde_json::from_str(&config_json)
+                    .map_err(|e| plan_datafusion_err!("invalid Delta stream config: {e}"))?;
+                let schema = Arc::new(try_decode_schema(&table_schema)?);
+                let projection = projection
+                    .into_iter()
+                    .map(|index| {
+                        usize::try_from(index).map_err(|e| {
+                            plan_datafusion_err!("invalid Delta stream projection: {e}")
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(DeltaStreamExec::try_new(
+                    config, schema, projection,
+                )?))
+            }
+            NodeKind::StreamProjection(r#gen::StreamProjectionExecNode { projection }) => {
+                let plan = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &projection,
+                )?;
+                let projection = plan
+                    .downcast_ref::<datafusion::physical_plan::projection::ProjectionExec>()
+                    .ok_or_else(|| plan_datafusion_err!("invalid stream projection plan"))?;
+                Ok(Arc::new(StreamProjectionExec::try_new(Arc::new(
+                    projection.clone(),
+                ))?))
             }
             NodeKind::StreamCollector(r#gen::StreamCollectorExecNode { input }) => {
                 let input =
@@ -2818,6 +2874,39 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             } else {
                 return plan_err!("unsupported data sink node: {data_sink:?}");
             }
+        } else if let Some(stream_aggregate) = node.downcast_ref::<StreamAggregateExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                stream_aggregate.input().clone(),
+            )?;
+            let aggregate = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                stream_aggregate.aggregate().clone(),
+            )?;
+            NodeKind::StreamAggregate(r#gen::StreamAggregateExecNode { input, aggregate })
+        } else if let Some(stream) = node.downcast_ref::<DeltaStreamExec>() {
+            let config_json = serde_json::to_string(stream.config())
+                .map_err(|e| plan_datafusion_err!("cannot encode Delta stream config: {e}"))?;
+            let table_schema = try_encode_schema(stream.table_schema())?;
+            let projection = stream
+                .projection()
+                .iter()
+                .map(|&index| index as u64)
+                .collect();
+            NodeKind::DeltaStream(r#gen::DeltaStreamExecNode {
+                config_json,
+                table_schema,
+                projection,
+            })
+        } else if let Some(stream_projection) = node.downcast_ref::<StreamProjectionExec>() {
+            let projection = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                stream_projection.projection().clone(),
+            )?;
+            NodeKind::StreamProjection(r#gen::StreamProjectionExecNode { projection })
         } else if let Some(stream_collector) = node.downcast_ref::<StreamCollectorExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
