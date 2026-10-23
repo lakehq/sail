@@ -1,3 +1,5 @@
+from datetime import date
+
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyspark.errors import AnalysisException
@@ -93,6 +95,55 @@ def test_get_item_nested_map(spark):
     assert df.select(df.a.getItem("b").getItem(1)).collect() == [Row(**{"a.b[1]": 2})]
     df = spark.sql("SELECT map('b', map(1, 2)) AS a")
     assert df.select(df.a.getItem("b").getItem(1)).collect() == [Row(**{"a[b][1]": 2})]
+
+
+def test_string_to_date_accepts_t_separator(spark):
+    """Accept an ISO `T` separator when casting strings to dates.
+
+    See: https://github.com/lakehq/sail/issues/2769
+    """
+    values = [
+        ("2023-01-31", date(2023, 1, 31)),
+        ("2023-01-31 13:45:00", date(2023, 1, 31)),
+        ("2023-01-31T00:00:00", date(2023, 1, 31)),
+        ("2023-01-31T13:45:00.123", date(2023, 1, 31)),
+        ("2023-01-31T01:30:00+02:00", date(2023, 1, 31)),
+        ("2023-1-5T10:00:00", date(2023, 1, 5)),
+        ("2023-01-31T", date(2023, 1, 31)),
+    ]
+    source = spark.createDataFrame([(index, value) for index, (value, _) in enumerate(values)], "id INT, v STRING")
+    original_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        projected = (
+            source.select(
+                "id",
+                F.col("v").cast("date").alias("cast_col"),
+                F.expr("try_cast(v AS date)").alias("try_col"),
+                F.to_date("v").alias("to_date_col"),
+            )
+            .orderBy("id")
+            .collect()
+        )
+        assert projected == [
+            Row(id=index, cast_col=expected, try_col=expected, to_date_col=expected)
+            for index, (_, expected) in enumerate(values)
+        ]
+
+        malformed = spark.createDataFrame([(0, "2023-01-31Z")], "id INT, v STRING")
+        spark.conf.set("spark.sql.ansi.enabled", "false")
+        assert malformed.select(
+            F.col("v").cast("date").alias("cast_col"),
+            F.expr("try_cast(v AS date)").alias("try_col"),
+            F.to_date("v").alias("to_date_col"),
+        ).collect() == [Row(cast_col=None, try_col=None, to_date_col=None)]
+
+        spark.conf.set("spark.sql.ansi.enabled", "true")
+        with pytest.raises(Exception, match="CAST_INVALID_INPUT"):
+            malformed.select(F.col("v").cast("date")).collect()
+        assert malformed.select(F.expr("try_cast(v AS date)").alias("try_col")).collect() == [Row(try_col=None)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original_ansi)
 
 
 def test_try_cast_invalid_date(spark):
