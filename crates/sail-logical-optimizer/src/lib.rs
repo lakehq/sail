@@ -8,6 +8,7 @@ mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
 mod scalar_subquery_keys;
+mod utils;
 
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;

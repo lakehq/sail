@@ -7550,9 +7550,12 @@ dependencies = [
 name = "sail-logical-optimizer"
 version = "0.7.2"
 dependencies = [
+ "arrow",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-physical-expr",
+ "log",
  "sail-logical-plan",
  "sail-python-udf",
 ]
