@@ -83,6 +83,7 @@ where
             mode,
             distribution,
             placement,
+            plan,
             status,
             created_at,
         } => write_stage_created_event(
@@ -96,6 +97,7 @@ where
             mode,
             distribution,
             placement,
+            plan,
             status,
             created_at,
         ),
@@ -128,6 +130,30 @@ where
         } => write_task_updated_event(
             writer, session_id, job_id, stage, partition, attempt, status, updated_at,
         ),
+        SystemEvent::TaskOutputRecorded {
+            session_id,
+            job_id,
+            stage,
+            partition,
+            attempt,
+            statistics,
+        } => writer
+            .table_mut::<TaskTable>()
+            .update_if_present(
+                &TaskPrimaryKey {
+                    session_id,
+                    job_id,
+                    stage,
+                    partition,
+                    attempt,
+                },
+                |row| {
+                    if row.status == "SUCCEEDED" && row.output_statistics.is_none() {
+                        row.output_statistics = Some(statistics);
+                    }
+                },
+            )
+            .map(|_| ()),
         SystemEvent::WorkerCreated {
             session_id,
             worker_id,
@@ -269,6 +295,7 @@ fn write_stage_created_event<W: StoreWriter>(
     mode: String,
     distribution: String,
     placement: String,
+    plan: String,
     status: String,
     created_at: DateTime<Utc>,
 ) -> WriteResult<W> {
@@ -290,6 +317,7 @@ fn write_stage_created_event<W: StoreWriter>(
                 mode,
                 distribution,
                 placement,
+                plan,
                 status,
                 created_at,
                 stopped_at: None,
@@ -350,6 +378,7 @@ fn write_task_created_event<W: StoreWriter>(
                 stage,
                 partition,
                 attempt,
+                output_statistics: None,
                 status,
                 created_at,
                 stopped_at: None,
@@ -531,4 +560,122 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::access::{Commit, DirectStoreBackend, TransactionalStoreBackend};
+    use crate::backend::{FjallBackend, MemoryBackend};
+    use crate::types::{TaskOutputPartitionStatistics, TaskOutputStatistics};
+
+    fn statistics() -> TaskOutputStatistics {
+        TaskOutputStatistics {
+            complete: false,
+            partitions: vec![
+                TaskOutputPartitionStatistics {
+                    num_rows: 5,
+                    batch_bytes: 40,
+                    stored_bytes: None,
+                },
+                TaskOutputPartitionStatistics {
+                    stored_bytes: Some(0),
+                    ..Default::default()
+                },
+            ],
+        }
+    }
+
+    fn key() -> TaskPrimaryKey {
+        TaskPrimaryKey {
+            session_id: "session".into(),
+            job_id: 1,
+            stage: 2,
+            partition: 3,
+            attempt: 4,
+        }
+    }
+
+    fn write_output<W: StoreWriter>(writer: &mut W) -> WriteResult<W> {
+        let key = key();
+        let report = |statistics| SystemEvent::TaskOutputRecorded {
+            session_id: key.session_id.clone(),
+            job_id: key.job_id,
+            stage: key.stage,
+            partition: key.partition,
+            attempt: key.attempt,
+            statistics,
+        };
+        // No task row or a still-running task must not acquire output statistics.
+        write_event(writer, report(statistics()))?;
+        write_task_created_event(
+            writer,
+            key.session_id.clone(),
+            key.job_id,
+            key.stage,
+            key.partition,
+            key.attempt,
+            "RUNNING".into(),
+            Utc::now(),
+        )?;
+        write_event(writer, report(statistics()))?;
+        assert_eq!(
+            writer
+                .table::<TaskTable>()
+                .get(&key)?
+                .and_then(|row| row.output_statistics),
+            None
+        );
+        write_task_updated_event(
+            writer,
+            key.session_id.clone(),
+            key.job_id,
+            key.stage,
+            key.partition,
+            key.attempt,
+            "SUCCEEDED".into(),
+            Utc::now(),
+        )?;
+        write_event(writer, report(statistics()))?;
+        write_event(
+            writer,
+            report(TaskOutputStatistics {
+                complete: true,
+                partitions: vec![],
+            }),
+        )?;
+        assert_eq!(
+            writer
+                .table::<TaskTable>()
+                .get(&key)?
+                .and_then(|row| row.output_statistics),
+            Some(statistics())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn task_output_is_immutable_in_memory() -> Result<(), std::convert::Infallible> {
+        write_output(&mut MemoryBackend::default().write())
+    }
+
+    #[test]
+    fn task_output_survives_disk_reopen() -> crate::SystemStoreResult<()> {
+        let directory = tempfile::tempdir().map_err(fjall::Error::from)?;
+        let store = FjallBackend::open(directory.path())?;
+        let mut transaction = store.transaction()?;
+        write_output(&mut transaction)?;
+        transaction.commit()?;
+        drop(store);
+        let reopened = FjallBackend::open(directory.path())?;
+        assert_eq!(
+            reopened
+                .snapshot()?
+                .table::<TaskTable>()
+                .get(&key())?
+                .and_then(|row| row.output_statistics),
+            Some(statistics())
+        );
+        Ok(())
+    }
 }

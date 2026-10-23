@@ -10,6 +10,14 @@ pub enum TaskStreamWriteState {
     Closed,
 }
 
+/// Commit metadata for one output channel. An early consumer close is successful
+/// execution, but must not be mistaken for a complete materialized output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskStreamSinkCompletion {
+    pub complete: bool,
+    pub stored_bytes: Option<u64>,
+}
+
 #[tonic::async_trait]
 pub trait TaskStreamWriter: fmt::Debug + Send + Sync {
     async fn open(&self, partition: usize) -> Result<Box<dyn TaskStreamSink>>;
@@ -21,7 +29,7 @@ pub trait TaskStreamSink: Send {
     /// Write at most one batch per output channel concurrently. Calls are ordered
     /// so that each channel preserves its input batch order.
     async fn write(&mut self, batches: Vec<Option<RecordBatch>>) -> Result<TaskStreamWriteState>;
-    async fn commit(self: Box<Self>) -> Result<()>;
+    async fn commit(self: Box<Self>) -> Result<Vec<TaskStreamSinkCompletion>>;
     async fn abort(self: Box<Self>) -> Result<()>;
 }
 
@@ -29,7 +37,7 @@ pub trait TaskStreamSink: Send {
 #[tonic::async_trait]
 pub trait TaskStreamChannelSink: Send {
     async fn write(&mut self, batch: RecordBatch) -> Result<TaskStreamWriteState>;
-    async fn commit(self: Box<Self>) -> Result<()>;
+    async fn commit(self: Box<Self>) -> Result<TaskStreamSinkCompletion>;
     async fn abort(self: Box<Self>) -> Result<()>;
 }
 
@@ -71,13 +79,21 @@ impl TaskStreamSink for MultiChannelTaskStreamSink {
         })
     }
 
-    async fn commit(self: Box<Self>) -> Result<()> {
+    async fn commit(self: Box<Self>) -> Result<Vec<TaskStreamSinkCompletion>> {
         // A consumer may finish without reading one channel (for example, an
         // empty hash-join build partition). Do not let that channel's buffered
         // data prevent other channels from reaching end-of-stream. Once the
         // consumers finish, stage cleanup releases any unread channels.
-        try_join_all(self.sinks.into_iter().flatten().map(|sink| sink.commit())).await?;
-        Ok(())
+        try_join_all(self.sinks.into_iter().map(|sink| async move {
+            match sink {
+                Some(sink) => sink.commit().await,
+                None => Ok(TaskStreamSinkCompletion {
+                    complete: false,
+                    stored_bytes: None,
+                }),
+            }
+        }))
+        .await
     }
 
     async fn abort(self: Box<Self>) -> Result<()> {
@@ -118,8 +134,11 @@ mod tests {
             Ok(self.state)
         }
 
-        async fn commit(self: Box<Self>) -> Result<()> {
-            Ok(())
+        async fn commit(self: Box<Self>) -> Result<TaskStreamSinkCompletion> {
+            Ok(TaskStreamSinkCompletion {
+                complete: true,
+                stored_bytes: None,
+            })
         }
 
         async fn abort(self: Box<Self>) -> Result<()> {
@@ -155,7 +174,9 @@ mod tests {
                     .map_err(|error| DataFusionError::External(Box::new(error)))??;
             assert_eq!(state, TaskStreamWriteState::Active);
         }
-        Box::new(sink).commit().await
+        let completions = Box::new(sink).commit().await?;
+        assert!(completions.iter().all(|x| x.complete));
+        Ok(())
     }
 
     #[tokio::test]
@@ -180,6 +201,9 @@ mod tests {
             sink.write(vec![batch(), batch()]).await?,
             TaskStreamWriteState::Closed
         );
+        let completions = Box::new(sink).commit().await?;
+        assert_eq!(completions.len(), 2);
+        assert!(completions.iter().all(|x| !x.complete));
         Ok(())
     }
 

@@ -10,6 +10,7 @@ use sail_celeborn::lifecycle::LifecycleManagerActor;
 use sail_common::actor::ActorHandle;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_system_store::types::TaskOutputStatistics;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -69,6 +70,7 @@ pub enum DriverMessage {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        output_statistics: Option<TaskOutputStatistics>,
         /// The sequence number from the worker,
         /// or [None] if it is a forced update within the driver.
         sequence: Option<u64>,
@@ -217,6 +219,7 @@ impl SpanAssociation for DriverMessage {
                 message,
                 cause,
                 sequence: _,
+                output_statistics: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));

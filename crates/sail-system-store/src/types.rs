@@ -77,7 +77,6 @@ pub enum MetricValue {
     Histogram(MetricHistogram),
 }
 
-#[expect(unused)]
 pub(crate) fn boolean() -> DataType {
     DataType::Boolean
 }
@@ -116,6 +115,50 @@ impl_numeric_type!(f64, DataType::Float64);
 pub struct StageInput {
     pub stage: u64,
     pub mode: String,
+}
+
+/// Statistics for one task attempt. Partition entries are ordered by shuffle channel.
+/// Counts describe the observed prefix unless `complete` is true.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskOutputStatistics {
+    pub complete: bool,
+    pub partitions: Vec<TaskOutputPartitionStatistics>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskOutputPartitionStatistics {
+    pub num_rows: u64,
+    /// Sum of Arrow buffer sizes, deduplicated within each batch only. This is an
+    /// estimate of data volume, not compact logical size or peak memory usage.
+    pub batch_bytes: u64,
+    /// Committed storage bytes including framing and compression, when available.
+    pub stored_bytes: Option<u64>,
+}
+
+pub(crate) fn task_output_statistics() -> DataType {
+    DataType::Struct(
+        vec![
+            Field::new("complete", boolean(), false),
+            Field::new(
+                "partitions",
+                DataType::List(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    DataType::Struct(
+                        vec![
+                            Field::new("num_rows", numeric::<u64>(), false),
+                            Field::new("batch_bytes", numeric::<u64>(), false),
+                            Field::new("stored_bytes", numeric::<u64>(), true),
+                        ]
+                        .into(),
+                    ),
+                    // Match SQL ARRAY element nullability, as in stage_input_list().
+                    true,
+                ))),
+                false,
+            ),
+        ]
+        .into(),
+    )
 }
 
 pub(crate) fn stage_input_list() -> DataType {

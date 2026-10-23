@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::sync::{Arc, OnceLock};
 
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::Span;
@@ -8,6 +9,7 @@ use sail_common::actor::ActorHandle;
 use sail_common::telemetry::SpanAttribute;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
+use sail_system_store::types::TaskOutputStatistics;
 use tokio::sync::oneshot;
 use tokio_util::task::AbortOnDropHandle;
 
@@ -20,6 +22,7 @@ pub struct TaskMonitor {
     key: TaskKey,
     stream: SendableRecordBatchStream,
     signal: oneshot::Receiver<()>,
+    output_statistics: Arc<OnceLock<TaskOutputStatistics>>,
 }
 
 impl TaskMonitor {
@@ -28,12 +31,14 @@ impl TaskMonitor {
         key: TaskKey,
         stream: SendableRecordBatchStream,
         signal: oneshot::Receiver<()>,
+        output_statistics: Arc<OnceLock<TaskOutputStatistics>>,
     ) -> Self {
         Self {
             handle,
             key,
             stream,
             signal,
+            output_statistics,
         }
     }
 
@@ -43,10 +48,11 @@ impl TaskMonitor {
             key,
             stream,
             signal,
+            output_statistics,
         } = self;
         let _ = handle.send(Self::running(key.clone())).await;
         let message = tokio::select! {
-            x = Self::execute(key.clone(), stream) => x,
+            x = Self::execute(key.clone(), stream, output_statistics) => x,
             x = Self::cancel(key.clone(), signal) => x,
         };
         let _ = handle.send(message).await;
@@ -118,6 +124,7 @@ impl TaskMonitor {
             status,
             message,
             cause,
+            output_statistics: None,
         }
     }
 
@@ -142,10 +149,20 @@ impl TaskMonitor {
         )
     }
 
-    async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> TaskRunnerMessage {
+    async fn execute(
+        key: TaskKey,
+        mut stream: SendableRecordBatchStream,
+        output_statistics: Arc<OnceLock<TaskOutputStatistics>>,
+    ) -> TaskRunnerMessage {
         loop {
             let Some(batch) = stream.next().await else {
-                break Self::status(key, TaskStatus::Succeeded, None, None);
+                break TaskRunnerMessage::ReportTaskStatus {
+                    key,
+                    status: TaskStatus::Succeeded,
+                    message: None,
+                    cause: None,
+                    output_statistics: output_statistics.get().cloned(),
+                };
             };
             if let Err(error) = batch {
                 break Self::status(
@@ -165,6 +182,57 @@ mod tests {
 
     use super::*;
     use crate::id::JobId;
+
+    #[tokio::test]
+    async fn only_successful_completion_carries_statistics() {
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::common::DataFusionError;
+        use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+
+        let statistics = Arc::new(OnceLock::from(TaskOutputStatistics {
+            complete: false,
+            partitions: vec![],
+        }));
+        let empty = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::new(Schema::empty()),
+            futures::stream::empty(),
+        ));
+        let message = TaskMonitor::execute(task_key(), empty, statistics.clone()).await;
+        assert!(matches!(
+            message,
+            TaskRunnerMessage::ReportTaskStatus {
+                status: TaskStatus::Succeeded,
+                output_statistics: Some(TaskOutputStatistics {
+                    complete: false,
+                    ..
+                }),
+                ..
+            }
+        ));
+        let failed = Box::pin(RecordBatchStreamAdapter::new(
+            Arc::new(Schema::empty()),
+            futures::stream::iter(vec![Err(DataFusionError::Execution("failed".into()))]),
+        ));
+        let message = TaskMonitor::execute(task_key(), failed, statistics).await;
+        assert!(matches!(
+            message,
+            TaskRunnerMessage::ReportTaskStatus {
+                status: TaskStatus::Failed,
+                output_statistics: None,
+                ..
+            }
+        ));
+        let (tx, rx) = oneshot::channel();
+        drop(tx);
+        assert!(matches!(
+            TaskMonitor::cancel(task_key(), rx).await,
+            TaskRunnerMessage::ReportTaskStatus {
+                status: TaskStatus::Canceled,
+                output_statistics: None,
+                ..
+            }
+        ));
+    }
 
     fn task_key() -> TaskKey {
         TaskKey {
@@ -209,6 +277,7 @@ mod tests {
             status: TaskStatus::Failed,
             message: Some(message),
             cause: Some(CommonErrorCause::Internal(cause)),
+            output_statistics: None,
         } = message
         else {
             return Err("expected a failed task status".to_string());
