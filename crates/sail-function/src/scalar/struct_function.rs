@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StructArray};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -79,14 +79,32 @@ impl ScalarUDFImpl for StructFunction {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_struct_function::return_type(_arg_types)
+        datafusion_common::internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::scalar_struct_function::return_field_from_args(
-            &self.field_names,
-            args,
-        )
+        let fields: Vec<Field> = args
+            .arg_fields
+            .iter()
+            .zip(self.field_names.iter())
+            .map(|(arg_field, field_name)| {
+                Field::new(
+                    field_name.clone(),
+                    arg_field.data_type().clone(),
+                    arg_field.is_nullable(),
+                )
+                .with_metadata(arg_field.metadata().clone())
+            })
+            .collect();
+
+        // The struct value itself is never NULL — only child fields may be.
+        // StructArray::from() creates no null bitmap, and Spark's struct()
+        // always returns non-nullable.
+        let struct_type = DataType::Struct(Fields::from(fields));
+        Ok(Arc::new(Field::new(self.name(), struct_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

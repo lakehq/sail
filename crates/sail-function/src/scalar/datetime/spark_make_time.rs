@@ -1,16 +1,19 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, PrimitiveBuilder};
-use datafusion::arrow::datatypes::{DataType, Time64MicrosecondType};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion::arrow::datatypes::{DataType, Time64MicrosecondType, TimeUnit};
+use datafusion_common::types::NativeType;
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common::utils::datetime::{MICROS_PER_HOUR, MICROS_PER_MINUTE};
+
+use crate::scalar::datetime::utils::{to_decimal128_array, to_int32_array};
+
 // Seconds argument is coerced to Decimal128(16, 6) — matching Spark's DecimalType(16, 6).
 // The unscaled i128 value is therefore already in microseconds (value * 10^-6 gives seconds,
 // so unscaled directly equals whole_seconds * 1_000_000 + microsecond_fraction).
-use sail_type_system::policies::datetime_spark_make_time::{SECONDS_PRECISION, SECONDS_SCALE};
-
-use crate::scalar::datetime::utils::{to_decimal128_array, to_int32_array};
+const SECONDS_PRECISION: u8 = 16;
+const SECONDS_SCALE: i8 = 6;
 
 // Scale factor: 10^6, the number of microseconds per whole second.
 const SCALE_FACTOR: i128 = 1_000_000;
@@ -44,7 +47,7 @@ impl ScalarUDFImpl for SparkMakeTime {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::datetime_spark_make_time::return_type(_arg_types)
+        Ok(DataType::Time64(TimeUnit::Microsecond))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -96,7 +99,31 @@ impl ScalarUDFImpl for SparkMakeTime {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::datetime_spark_make_time::coerce_types(arg_types)
+        if arg_types.len() != 3 {
+            return exec_err!(
+                "Spark `make_time` function requires 3 arguments, got {}",
+                arg_types.len()
+            );
+        }
+
+        let hour: NativeType = (&arg_types[0]).into();
+        let minute: NativeType = (&arg_types[1]).into();
+        let second: NativeType = (&arg_types[2]).into();
+
+        if (hour.is_integer() || matches!(hour, NativeType::String | NativeType::Null))
+            && (minute.is_integer() || matches!(minute, NativeType::String | NativeType::Null))
+            && (second.is_numeric() || matches!(second, NativeType::String | NativeType::Null))
+        {
+            // Use Decimal128(16, 6) for seconds, matching Spark's DecimalType(16, 6).
+            // This avoids f64 rounding errors (e.g. 59.9999999 rounding up to 60 seconds).
+            Ok(vec![
+                DataType::Int32,
+                DataType::Int32,
+                DataType::Decimal128(SECONDS_PRECISION, SECONDS_SCALE),
+            ])
+        } else {
+            plan_err!("The arguments of Spark `make_time` must be (integer, integer, numeric)")
+        }
     }
 }
 

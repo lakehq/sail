@@ -12,7 +12,9 @@ use datafusion_expr::{
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
-use crate::scalar::map::utils::map_from_keys_values_offsets_nulls;
+use crate::scalar::map::utils::{
+    map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
+};
 use crate::scalar::string::spark_split::{SparkSplit, parse_regex, split_to_array};
 
 /// Spark-compatible `str_to_map` expression
@@ -53,7 +55,10 @@ impl ScalarUDFImpl for StrToMap {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_map_str_to_map_typing::str_to_map_return_type(_arg_types)
+        Ok(map_type_from_key_value_types(
+            &DataType::Utf8,
+            &DataType::Utf8,
+        ))
     }
 
     fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {

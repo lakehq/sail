@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow_schema::{DataType, TimeUnit};
 use datafusion_common::ScalarValue;
-use datafusion_expr::{HigherOrderUDF, ScalarUDF};
+use datafusion_expr::{HigherOrderUDF, ScalarUDF, ScalarUDFImpl};
 use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
@@ -35,12 +35,8 @@ impl Resolver<'_, '_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         let config = &self.context.config;
-        let targets = sail_type_system::policies::sequence_arguments::coerce_types(
-            &config.session_timezone,
-            config.ansi_mode,
-            &types,
-        )?;
         let udf = SparkSequence::new(config.session_timezone.clone(), config.ansi_mode);
+        let targets = udf.coerce_types(&types)?;
         let arguments = arguments
             .into_iter()
             .zip(types)

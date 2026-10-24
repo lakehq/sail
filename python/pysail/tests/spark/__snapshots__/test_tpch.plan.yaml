@@ -4,14 +4,14 @@ name: "test_derived_tpch_query_plan[01]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_42@0 as l_returnflag, __sail_attribute_43@1 as l_linestatus, __sail_attribute_44@2 as sum_qty, __sail_attribute_45@3 as sum_base_price, __sail_attribute_46@4 as sum_disc_price, __sail_attribute_47@5 as sum_charge, __sail_attribute_48@6 as avg_qty, __sail_attribute_49@7 as avg_price, __sail_attribute_50@8 as avg_disc, __sail_attribute_51@9 as count_order]
-      SortPreservingMergeExec: [__sail_attribute_42@0 ASC, __sail_attribute_43@1 ASC]
-        ProjectionExec: expr=[__sail_attribute_32@0 as __sail_attribute_42, __sail_attribute_33@1 as __sail_attribute_43, __sail_attribute_34@2 as __sail_attribute_44, __sail_attribute_35@3 as __sail_attribute_45, __sail_attribute_36@4 as __sail_attribute_46, __sail_attribute_37@5 as __sail_attribute_47, __sail_attribute_38@6 as __sail_attribute_48, __sail_attribute_39@7 as __sail_attribute_49, __sail_attribute_40@8 as __sail_attribute_50, __sail_attribute_41@9 as __sail_attribute_51]
-          SortExec: expr=[__sail_attribute_32@0 ASC, __sail_attribute_33@1 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_32@0 as __sail_attribute_32, __sail_attribute_33@1 as __sail_attribute_33], aggr=[sum(__sail_attribute_4) as __sail_attribute_34, sum(__sail_attribute_5) as __sail_attribute_35, sum(__common_expr_1) as __sail_attribute_36, sum(__common_expr_1 * 1 + __sail_attribute_7) as __sail_attribute_37, avg(__sail_attribute_4) as __sail_attribute_38, avg(__sail_attribute_5) as __sail_attribute_39, avg(__sail_attribute_6) as __sail_attribute_40, count(1) as __sail_attribute_41]
-              RepartitionExec: partitioning=Hash([__sail_attribute_32@0, __sail_attribute_33@1], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_8@5 as __sail_attribute_32, __sail_attribute_9@6 as __sail_attribute_33], aggr=[sum(__sail_attribute_4) as __sail_attribute_34, sum(__sail_attribute_5) as __sail_attribute_35, sum(__common_expr_1) as __sail_attribute_36, sum(__common_expr_1 * 1 + __sail_attribute_7) as __sail_attribute_37, avg(__sail_attribute_4) as __sail_attribute_38, avg(__sail_attribute_5) as __sail_attribute_39, avg(__sail_attribute_6) as __sail_attribute_40, count(1) as __sail_attribute_41]
-                  ProjectionExec: expr=[_5@1 * (1 - _6@2) as __common_expr_1, _4@0 as __sail_attribute_4, _5@1 as __sail_attribute_5, _6@2 as __sail_attribute_6, _7@3 as __sail_attribute_7, _8@4 as __sail_attribute_8, _9@5 as __sail_attribute_9]
+    ProjectionExec: expr=[#42@0 as l_returnflag, #43@1 as l_linestatus, #44@2 as sum_qty, #45@3 as sum_base_price, #46@4 as sum_disc_price, #47@5 as sum_charge, #48@6 as avg_qty, #49@7 as avg_price, #50@8 as avg_disc, #51@9 as count_order]
+      SortPreservingMergeExec: [#42@0 ASC, #43@1 ASC]
+        ProjectionExec: expr=[#32@0 as #42, #33@1 as #43, #34@2 as #44, #35@3 as #45, #36@4 as #46, #37@5 as #47, #38@6 as #48, #39@7 as #49, #40@8 as #50, #41@9 as #51]
+          SortExec: expr=[#32@0 ASC, #33@1 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#32@0 as #32, #33@1 as #33], aggr=[sum(#4) as #34, sum(#5) as #35, sum(__common_expr_1) as #36, sum(__common_expr_1 * 1 + #7) as #37, avg(#4) as #38, avg(#5) as #39, avg(#6) as #40, count(1) as #41]
+              RepartitionExec: partitioning=Hash([#32@0, #33@1], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#8@5 as #32, #9@6 as #33], aggr=[sum(#4) as #34, sum(#5) as #35, sum(__common_expr_1) as #36, sum(__common_expr_1 * 1 + #7) as #37, avg(#4) as #38, avg(#5) as #39, avg(#6) as #40, count(1) as #41]
+                  ProjectionExec: expr=[_5@1 * (1 - _6@2) as __common_expr_1, _4@0 as #4, _5@1 as #5, _6@2 as #6, _7@3 as #7, _8@4 as #8, _9@5 as #9]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                       FilterExec: _10@6 <= 1998-09-24
                         DataSourceExec: partitions=1, partition_sizes=[1]
@@ -20,72 +20,72 @@ name: "test_derived_tpch_query_plan[02]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_96@0 as s_acctbal, __sail_attribute_97@1 as s_name, __sail_attribute_98@2 as n_name, __sail_attribute_99@3 as p_partkey, __sail_attribute_100@4 as p_mfgr, __sail_attribute_101@5 as s_address, __sail_attribute_102@6 as s_phone, __sail_attribute_103@7 as s_comment]
-      SortPreservingMergeExec: [__sail_attribute_96@0 DESC NULLS LAST, __sail_attribute_98@2 ASC, __sail_attribute_97@1 ASC, __sail_attribute_99@3 ASC], fetch=100
-        SortExec: TopK(fetch=100), expr=[__sail_attribute_96@0 DESC NULLS LAST, __sail_attribute_98@2 ASC, __sail_attribute_97@1 ASC, __sail_attribute_99@3 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[__sail_attribute_23@0 as __sail_attribute_96, __sail_attribute_19@1 as __sail_attribute_97, __sail_attribute_43@2 as __sail_attribute_98, __sail_attribute_0@3 as __sail_attribute_99, __sail_attribute_2@4 as __sail_attribute_100, __sail_attribute_20@5 as __sail_attribute_101, __sail_attribute_22@6 as __sail_attribute_102, __sail_attribute_24@7 as __sail_attribute_103]
-            HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_56@1), (__sail_attribute_35@7, __sail_attribute_95@0)], projection=[__sail_attribute_23@5, __sail_attribute_19@2, __sail_attribute_43@8, __sail_attribute_0@0, __sail_attribute_2@1, __sail_attribute_20@3, __sail_attribute_22@4, __sail_attribute_24@6]
+    ProjectionExec: expr=[#96@0 as s_acctbal, #97@1 as s_name, #98@2 as n_name, #99@3 as p_partkey, #100@4 as p_mfgr, #101@5 as s_address, #102@6 as s_phone, #103@7 as s_comment]
+      SortPreservingMergeExec: [#96@0 DESC NULLS LAST, #98@2 ASC, #97@1 ASC, #99@3 ASC], fetch=100
+        SortExec: TopK(fetch=100), expr=[#96@0 DESC NULLS LAST, #98@2 ASC, #97@1 ASC, #99@3 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[#23@0 as #96, #19@1 as #97, #43@2 as #98, #0@3 as #99, #2@4 as #100, #20@5 as #101, #22@6 as #102, #24@7 as #103]
+            HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#0@0, #56@1), (#35@7, #95@0)], projection=[#23@5, #19@2, #43@8, #0@0, #2@1, #20@3, #22@4, #24@6]
               CoalescePartitionsExec
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_50@0, __sail_attribute_44@9)], projection=[__sail_attribute_0@1, __sail_attribute_2@2, __sail_attribute_19@3, __sail_attribute_20@4, __sail_attribute_22@5, __sail_attribute_23@6, __sail_attribute_24@7, __sail_attribute_35@8, __sail_attribute_43@9]
-                  ProjectionExec: expr=[_0@0 as __sail_attribute_50]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#50@0, #44@9)], projection=[#0@1, #2@2, #19@3, #20@4, #22@5, #23@6, #24@7, #35@8, #43@9]
+                  ProjectionExec: expr=[_0@0 as #50]
                     FilterExec: _1@1 = ASIA, projection=[_0@0]
                       DataSourceExec: partitions=1, partition_sizes=[1]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_21@4, __sail_attribute_42@0)], projection=[__sail_attribute_0@0, __sail_attribute_2@1, __sail_attribute_19@2, __sail_attribute_20@3, __sail_attribute_22@5, __sail_attribute_23@6, __sail_attribute_24@7, __sail_attribute_35@8, __sail_attribute_43@10, __sail_attribute_44@11]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#21@4, #42@0)], projection=[#0@0, #2@1, #19@2, #20@3, #22@5, #23@6, #24@7, #35@8, #43@10, #44@11]
                       CoalescePartitionsExec
-                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_18@0, __sail_attribute_33@2)], projection=[__sail_attribute_0@7, __sail_attribute_2@8, __sail_attribute_19@1, __sail_attribute_20@2, __sail_attribute_21@3, __sail_attribute_22@4, __sail_attribute_23@5, __sail_attribute_24@6, __sail_attribute_35@10]
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_18, _1@1 as __sail_attribute_19, _2@2 as __sail_attribute_20, _3@3 as __sail_attribute_21, _4@4 as __sail_attribute_22, _5@5 as __sail_attribute_23, _6@6 as __sail_attribute_24]
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#18@0, #33@2)], projection=[#0@7, #2@8, #19@1, #20@2, #21@3, #22@4, #23@5, #24@6, #35@10]
+                          ProjectionExec: expr=[_0@0 as #18, _1@1 as #19, _2@2 as #20, _3@3 as #21, _4@4 as #22, _5@5 as #23, _6@6 as #24]
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_32@0, __sail_attribute_0@0)], projection=[__sail_attribute_0@3, __sail_attribute_2@4, __sail_attribute_33@1, __sail_attribute_35@2]
-                            ProjectionExec: expr=[_0@0 as __sail_attribute_32, _1@1 as __sail_attribute_33, _3@2 as __sail_attribute_35]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#32@0, #0@0)], projection=[#0@3, #2@4, #33@1, #35@2]
+                            ProjectionExec: expr=[_0@0 as #32, _1@1 as #33, _3@2 as #35]
                               DataSourceExec: partitions=1, partition_sizes=[1]
                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_0, _2@1 as __sail_attribute_2]
+                              ProjectionExec: expr=[_0@0 as #0, _2@1 as #2]
                                 FilterExec: _5@3 = 48 AND _4@2 LIKE %TIN, projection=[_0@0, _2@1]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_42, _1@1 as __sail_attribute_43, _2@2 as __sail_attribute_44]
+                      ProjectionExec: expr=[_0@0 as #42, _1@1 as #43, _2@2 as #44]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[__sail_attribute_94@1 as __sail_attribute_95, __sail_attribute_56@0 as __sail_attribute_56]
-                AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_56@0 as __sail_attribute_56], aggr=[min(__sail_attribute_59) as __sail_attribute_94]
-                  RepartitionExec: partitioning=Hash([__sail_attribute_56@0], 4), input_partitions=4
-                    AggregateExec: mode=Partial, gby=[__sail_attribute_56@0 as __sail_attribute_56], aggr=[min(__sail_attribute_59) as __sail_attribute_94]
-                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_88@0, __sail_attribute_82@2)], projection=[__sail_attribute_56@1, __sail_attribute_59@2]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_88]
+              ProjectionExec: expr=[#94@1 as #95, #56@0 as #56]
+                AggregateExec: mode=FinalPartitioned, gby=[#56@0 as #56], aggr=[min(#59) as #94]
+                  RepartitionExec: partitioning=Hash([#56@0], 4), input_partitions=4
+                    AggregateExec: mode=Partial, gby=[#56@0 as #56], aggr=[min(#59) as #94]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#88@0, #82@2)], projection=[#56@1, #59@2]
+                        ProjectionExec: expr=[_0@0 as #88]
                           FilterExec: _1@1 = ASIA, projection=[_0@0]
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_80@0, __sail_attribute_69@2)], projection=[__sail_attribute_56@2, __sail_attribute_59@3, __sail_attribute_82@1]
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_80, _2@1 as __sail_attribute_82]
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#80@0, #69@2)], projection=[#56@2, #59@3, #82@1]
+                          ProjectionExec: expr=[_0@0 as #80, _2@1 as #82]
                             DataSourceExec: partitions=1, partition_sizes=[1]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_66@0, __sail_attribute_57@1)], projection=[__sail_attribute_56@2, __sail_attribute_59@4, __sail_attribute_69@1]
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_66, _3@1 as __sail_attribute_69]
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#66@0, #57@1)], projection=[#56@2, #59@4, #69@1]
+                              ProjectionExec: expr=[_0@0 as #66, _3@1 as #69]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_56, _1@1 as __sail_attribute_57, _3@2 as __sail_attribute_59]
+                              ProjectionExec: expr=[_0@0 as #56, _1@1 as #57, _3@2 as #59]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[03]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_70@0 as l_orderkey, __sail_attribute_71@1 as revenue, __sail_attribute_72@2 as o_orderdate, __sail_attribute_73@3 as o_shippriority]
-      SortPreservingMergeExec: [__sail_attribute_71@1 DESC NULLS LAST, __sail_attribute_72@2 ASC], fetch=10
-        ProjectionExec: expr=[__sail_attribute_66@0 as __sail_attribute_70, __sail_attribute_69@3 as __sail_attribute_71, __sail_attribute_67@1 as __sail_attribute_72, __sail_attribute_68@2 as __sail_attribute_73]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_69@3 DESC NULLS LAST, __sail_attribute_67@1 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_66@0 as __sail_attribute_66, __sail_attribute_67@1 as __sail_attribute_67, __sail_attribute_68@2 as __sail_attribute_68], aggr=[sum(__sail_attribute_39 * 1 - __sail_attribute_40) as __sail_attribute_69]
-              RepartitionExec: partitioning=Hash([__sail_attribute_66@0, __sail_attribute_67@1, __sail_attribute_68@2], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_34@2 as __sail_attribute_66, __sail_attribute_20@0 as __sail_attribute_67, __sail_attribute_23@1 as __sail_attribute_68], aggr=[sum(__sail_attribute_39 * 1 - __sail_attribute_40) as __sail_attribute_69]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_16@0, __sail_attribute_34@0)], projection=[__sail_attribute_20@1, __sail_attribute_23@2, __sail_attribute_34@3, __sail_attribute_39@4, __sail_attribute_40@5]
+    ProjectionExec: expr=[#70@0 as l_orderkey, #71@1 as revenue, #72@2 as o_orderdate, #73@3 as o_shippriority]
+      SortPreservingMergeExec: [#71@1 DESC NULLS LAST, #72@2 ASC], fetch=10
+        ProjectionExec: expr=[#66@0 as #70, #69@3 as #71, #67@1 as #72, #68@2 as #73]
+          SortExec: TopK(fetch=10), expr=[#69@3 DESC NULLS LAST, #67@1 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#66@0 as #66, #67@1 as #67, #68@2 as #68], aggr=[sum(#39 * 1 - #40) as #69]
+              RepartitionExec: partitioning=Hash([#66@0, #67@1, #68@2], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#34@2 as #66, #20@0 as #67, #23@1 as #68], aggr=[sum(#39 * 1 - #40) as #69]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@0, #34@0)], projection=[#20@1, #23@2, #34@3, #39@4, #40@5]
                     CoalescePartitionsExec
-                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_17@1)], projection=[__sail_attribute_16@1, __sail_attribute_20@3, __sail_attribute_23@4]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_0]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #17@1)], projection=[#16@1, #20@3, #23@4]
+                        ProjectionExec: expr=[_0@0 as #0]
                           FilterExec: _6@1 = BUILDING, projection=[_0@0]
                             DataSourceExec: partitions=1, partition_sizes=[1]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_16, _1@1 as __sail_attribute_17, _4@2 as __sail_attribute_20, _7@3 as __sail_attribute_23]
+                          ProjectionExec: expr=[_0@0 as #16, _1@1 as #17, _4@2 as #20, _7@3 as #23]
                             FilterExec: _4@2 < 1995-03-15
                               DataSourceExec: partitions=1, partition_sizes=[1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_34, _5@1 as __sail_attribute_39, _6@2 as __sail_attribute_40]
+                      ProjectionExec: expr=[_0@0 as #34, _5@1 as #39, _6@2 as #40]
                         FilterExec: _10@3 > 1995-03-15, projection=[_0@0, _5@1, _6@2]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -93,19 +93,19 @@ name: "test_derived_tpch_query_plan[04]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_68@0 as o_orderpriority, __sail_attribute_69@1 as order_count]
-      SortPreservingMergeExec: [__sail_attribute_68@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_66@0 as __sail_attribute_68, __sail_attribute_67@1 as __sail_attribute_69]
-          SortExec: expr=[__sail_attribute_66@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_66@0 as __sail_attribute_66], aggr=[count(1) as __sail_attribute_67]
-              RepartitionExec: partitioning=Hash([__sail_attribute_66@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_5@0 as __sail_attribute_66], aggr=[count(1) as __sail_attribute_67]
-                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_attribute_18@0, __sail_attribute_0@0)], projection=[__sail_attribute_5@1]
-                    ProjectionExec: expr=[_0@0 as __sail_attribute_18]
+    ProjectionExec: expr=[#68@0 as o_orderpriority, #69@1 as order_count]
+      SortPreservingMergeExec: [#68@0 ASC]
+        ProjectionExec: expr=[#66@0 as #68, #67@1 as #69]
+          SortExec: expr=[#66@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#66@0 as #66], aggr=[count(1) as #67]
+              RepartitionExec: partitioning=Hash([#66@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#5@0 as #66], aggr=[count(1) as #67]
+                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#18@0, #0@0)], projection=[#5@1]
+                    ProjectionExec: expr=[_0@0 as #18]
                       FilterExec: _12@2 > _11@1, projection=[_0@0]
                         DataSourceExec: partitions=1, partition_sizes=[1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_0, _5@1 as __sail_attribute_5]
+                      ProjectionExec: expr=[_0@0 as #0, _5@1 as #5]
                         FilterExec: _4@1 >= 1995-04-01 AND _4@1 < 1995-07-01, projection=[_0@0, _5@2]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -113,49 +113,49 @@ name: "test_derived_tpch_query_plan[05]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_96@0 as n_name, __sail_attribute_97@1 as revenue]
-      SortPreservingMergeExec: [__sail_attribute_97@1 DESC NULLS LAST]
-        ProjectionExec: expr=[__sail_attribute_94@0 as __sail_attribute_96, __sail_attribute_95@1 as __sail_attribute_97]
-          SortExec: expr=[__sail_attribute_95@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_94@0 as __sail_attribute_94], aggr=[sum(__sail_attribute_39 * 1 - __sail_attribute_40) as __sail_attribute_95]
-              RepartitionExec: partitioning=Hash([__sail_attribute_94@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_81@2 as __sail_attribute_94], aggr=[sum(__sail_attribute_39 * 1 - __sail_attribute_40) as __sail_attribute_95]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_88@0, __sail_attribute_82@3)], projection=[__sail_attribute_39@1, __sail_attribute_40@2, __sail_attribute_81@3]
-                    ProjectionExec: expr=[_0@0 as __sail_attribute_88]
+    ProjectionExec: expr=[#96@0 as n_name, #97@1 as revenue]
+      SortPreservingMergeExec: [#97@1 DESC NULLS LAST]
+        ProjectionExec: expr=[#94@0 as #96, #95@1 as #97]
+          SortExec: expr=[#95@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#94@0 as #94], aggr=[sum(#39 * 1 - #40) as #95]
+              RepartitionExec: partitioning=Hash([#94@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#81@2 as #94], aggr=[sum(#39 * 1 - #40) as #95]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#88@0, #82@3)], projection=[#39@1, #40@2, #81@3]
+                    ProjectionExec: expr=[_0@0 as #88]
                       FilterExec: _1@1 = AFRICA, projection=[_0@0]
                         DataSourceExec: partitions=1, partition_sizes=[1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_69@2, __sail_attribute_80@0)], projection=[__sail_attribute_39@0, __sail_attribute_40@1, __sail_attribute_81@4, __sail_attribute_82@5]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#69@2, #80@0)], projection=[#39@0, #40@1, #81@4, #82@5]
                         CoalescePartitionsExec
-                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_66@0, __sail_attribute_36@1), (__sail_attribute_69@1, __sail_attribute_3@0)], projection=[__sail_attribute_39@4, __sail_attribute_40@5, __sail_attribute_69@1]
-                            ProjectionExec: expr=[_0@0 as __sail_attribute_66, _3@1 as __sail_attribute_69]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#66@0, #36@1), (#69@1, #3@0)], projection=[#39@4, #40@5, #69@1]
+                            ProjectionExec: expr=[_0@0 as #66, _3@1 as #69]
                               DataSourceExec: partitions=1, partition_sizes=[1]
                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_16@1, __sail_attribute_34@0)], projection=[__sail_attribute_3@0, __sail_attribute_36@3, __sail_attribute_39@4, __sail_attribute_40@5]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@1, #34@0)], projection=[#3@0, #36@3, #39@4, #40@5]
                                 CoalescePartitionsExec
-                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_17@1)], projection=[__sail_attribute_3@1, __sail_attribute_16@2]
-                                    ProjectionExec: expr=[_0@0 as __sail_attribute_0, _3@1 as __sail_attribute_3]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #17@1)], projection=[#3@1, #16@2]
+                                    ProjectionExec: expr=[_0@0 as #0, _3@1 as #3]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                      ProjectionExec: expr=[_0@0 as __sail_attribute_16, _1@1 as __sail_attribute_17]
+                                      ProjectionExec: expr=[_0@0 as #16, _1@1 as #17]
                                         FilterExec: _4@2 >= 1994-01-01 AND _4@2 < 1995-01-01, projection=[_0@0, _1@1]
                                           DataSourceExec: partitions=1, partition_sizes=[1]
-                                ProjectionExec: expr=[_0@0 as __sail_attribute_34, _2@1 as __sail_attribute_36, _5@2 as __sail_attribute_39, _6@3 as __sail_attribute_40]
+                                ProjectionExec: expr=[_0@0 as #34, _2@1 as #36, _5@2 as #39, _6@3 as #40]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_80, _1@1 as __sail_attribute_81, _2@2 as __sail_attribute_82]
+                        ProjectionExec: expr=[_0@0 as #80, _1@1 as #81, _2@2 as #82]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[06]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_33@0 as revenue]
-      ProjectionExec: expr=[__sail_attribute_32@0 as __sail_attribute_33]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(__sail_attribute_5 * __sail_attribute_6) as __sail_attribute_32]
+    ProjectionExec: expr=[#33@0 as revenue]
+      ProjectionExec: expr=[#32@0 as #33]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(#5 * #6) as #32]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(__sail_attribute_5 * __sail_attribute_6) as __sail_attribute_32]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(#5 * #6) as #32]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                ProjectionExec: expr=[_5@0 as __sail_attribute_5, _6@1 as __sail_attribute_6]
+                ProjectionExec: expr=[_5@0 as #5, _6@1 as #6]
                   FilterExec: _10@3 >= 1994-01-01 AND _10@3 < 1995-01-01 AND _6@2 >= 0.03 AND _6@2 <= 0.05 AND _4@0 < 24.00, projection=[_5@1, _6@2]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -163,37 +163,37 @@ name: "test_derived_tpch_query_plan[07]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_104@0 as supp_nation, __sail_attribute_105@1 as cust_nation, __sail_attribute_106@2 as l_year, __sail_attribute_107@3 as revenue]
-      SortPreservingMergeExec: [__sail_attribute_104@0 ASC, __sail_attribute_105@1 ASC, __sail_attribute_106@2 ASC]
-        ProjectionExec: expr=[__sail_attribute_100@0 as __sail_attribute_104, __sail_attribute_101@1 as __sail_attribute_105, __sail_attribute_102@2 as __sail_attribute_106, __sail_attribute_103@3 as __sail_attribute_107]
-          SortExec: expr=[__sail_attribute_100@0 ASC, __sail_attribute_101@1 ASC, __sail_attribute_102@2 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_100@0 as __sail_attribute_100, __sail_attribute_101@1 as __sail_attribute_101, __sail_attribute_102@2 as __sail_attribute_102], aggr=[sum(__sail_attribute_99) as __sail_attribute_103]
-              RepartitionExec: partitioning=Hash([__sail_attribute_100@0, __sail_attribute_101@1, __sail_attribute_102@2], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_96@0 as __sail_attribute_100, __sail_attribute_97@1 as __sail_attribute_101, __sail_attribute_98@2 as __sail_attribute_102], aggr=[sum(__sail_attribute_99) as __sail_attribute_103]
-                  ProjectionExec: expr=[__sail_attribute_81@0 as __sail_attribute_96, __sail_attribute_89@1 as __sail_attribute_97, date_part(year, __sail_attribute_24@2) as __sail_attribute_98, __sail_attribute_19@3 * (1 - __sail_attribute_20@4) as __sail_attribute_99]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_67@3, __sail_attribute_88@0)], filter=__sail_attribute_81@0 = GERMANY AND __sail_attribute_89@1 = IRAQ OR __sail_attribute_81@0 = IRAQ AND __sail_attribute_89@1 = GERMANY, projection=[__sail_attribute_81@4, __sail_attribute_89@6, __sail_attribute_24@2, __sail_attribute_19@0, __sail_attribute_20@1]
+    ProjectionExec: expr=[#104@0 as supp_nation, #105@1 as cust_nation, #106@2 as l_year, #107@3 as revenue]
+      SortPreservingMergeExec: [#104@0 ASC, #105@1 ASC, #106@2 ASC]
+        ProjectionExec: expr=[#100@0 as #104, #101@1 as #105, #102@2 as #106, #103@3 as #107]
+          SortExec: expr=[#100@0 ASC, #101@1 ASC, #102@2 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#100@0 as #100, #101@1 as #101, #102@2 as #102], aggr=[sum(#99) as #103]
+              RepartitionExec: partitioning=Hash([#100@0, #101@1, #102@2], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#96@0 as #100, #97@1 as #101, #98@2 as #102], aggr=[sum(#99) as #103]
+                  ProjectionExec: expr=[#81@0 as #96, #89@1 as #97, date_part(year, #24@2) as #98, #19@3 * (1 - #20@4) as #99]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#67@3, #88@0)], filter=#81@0 = GERMANY AND #89@1 = IRAQ OR #81@0 = IRAQ AND #89@1 = GERMANY, projection=[#81@4, #89@6, #24@2, #19@0, #20@1]
                       CoalescePartitionsExec
-                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_3@0, __sail_attribute_80@0)], projection=[__sail_attribute_19@1, __sail_attribute_20@2, __sail_attribute_24@3, __sail_attribute_67@4, __sail_attribute_81@6]
-                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_47@4, __sail_attribute_64@0)], projection=[__sail_attribute_3@0, __sail_attribute_19@1, __sail_attribute_20@2, __sail_attribute_24@3, __sail_attribute_67@6]
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_14@1, __sail_attribute_46@0)], projection=[__sail_attribute_3@0, __sail_attribute_19@2, __sail_attribute_20@3, __sail_attribute_24@4, __sail_attribute_47@6]
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#3@0, #80@0)], projection=[#19@1, #20@2, #24@3, #67@4, #81@6]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#47@4, #64@0)], projection=[#3@0, #19@1, #20@2, #24@3, #67@6]
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#14@1, #46@0)], projection=[#3@0, #19@2, #20@3, #24@4, #47@6]
                               CoalescePartitionsExec
-                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_16@1)], projection=[__sail_attribute_3@1, __sail_attribute_14@2, __sail_attribute_19@4, __sail_attribute_20@5, __sail_attribute_24@6]
-                                  ProjectionExec: expr=[_0@0 as __sail_attribute_0, _3@1 as __sail_attribute_3]
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #16@1)], projection=[#3@1, #14@2, #19@4, #20@5, #24@6]
+                                  ProjectionExec: expr=[_0@0 as #0, _3@1 as #3]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
                                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                    ProjectionExec: expr=[_0@0 as __sail_attribute_14, _2@1 as __sail_attribute_16, _5@2 as __sail_attribute_19, _6@3 as __sail_attribute_20, _10@4 as __sail_attribute_24]
+                                    ProjectionExec: expr=[_0@0 as #14, _2@1 as #16, _5@2 as #19, _6@3 as #20, _10@4 as #24]
                                       FilterExec: _10@4 >= 1995-01-01 AND _10@4 <= 1996-12-31
                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_46, _1@1 as __sail_attribute_47]
+                              ProjectionExec: expr=[_0@0 as #46, _1@1 as #47]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
-                            ProjectionExec: expr=[_0@0 as __sail_attribute_64, _3@1 as __sail_attribute_67]
+                            ProjectionExec: expr=[_0@0 as #64, _3@1 as #67]
                               DataSourceExec: partitions=1, partition_sizes=[1]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            ProjectionExec: expr=[_0@0 as __sail_attribute_80, _1@1 as __sail_attribute_81]
+                            ProjectionExec: expr=[_0@0 as #80, _1@1 as #81]
                               FilterExec: _1@1 = GERMANY OR _1@1 = IRAQ
                                 DataSourceExec: partitions=1, partition_sizes=[1]
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_88, _1@1 as __sail_attribute_89]
+                        ProjectionExec: expr=[_0@0 as #88, _1@1 as #89]
                           FilterExec: _1@1 = IRAQ OR _1@1 = GERMANY
                             DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -201,105 +201,105 @@ name: "test_derived_tpch_query_plan[08]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_127@0 as o_year, __sail_attribute_128@1 as mkt_share]
-      SortPreservingMergeExec: [__sail_attribute_127@0 ASC]
-        SortExec: expr=[__sail_attribute_127@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[__sail_attribute_123@0 as __sail_attribute_127, __sail_attribute_124@2 / CASE WHEN __common_expr_1@1 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE __common_expr_1@1 END as __sail_attribute_128]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_123@0 as __sail_attribute_123], aggr=[sum(__sail_attribute_121) as __common_expr_1, sum(CASE WHEN __sail_attribute_122 = IRAQ THEN __sail_attribute_121 ELSE 0.0000 END) as __sail_attribute_124]
-              RepartitionExec: partitioning=Hash([__sail_attribute_123@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_120@0 as __sail_attribute_123], aggr=[sum(__sail_attribute_121) as __common_expr_1, sum(CASE WHEN __sail_attribute_122 = IRAQ THEN __sail_attribute_121 ELSE 0.0000 END) as __sail_attribute_124]
-                  ProjectionExec: expr=[date_part(year, __sail_attribute_68@0) as __sail_attribute_120, __sail_attribute_37@1 * (1 - __sail_attribute_38@2) as __sail_attribute_121, __sail_attribute_107@3 as __sail_attribute_122]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_114@0, __sail_attribute_100@3)], projection=[__sail_attribute_68@3, __sail_attribute_37@1, __sail_attribute_38@2, __sail_attribute_107@5]
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_114]
+    ProjectionExec: expr=[#127@0 as o_year, #128@1 as mkt_share]
+      SortPreservingMergeExec: [#127@0 ASC]
+        SortExec: expr=[#127@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[#123@0 as #127, #124@2 / CASE WHEN __common_expr_1@1 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE __common_expr_1@1 END as #128]
+            AggregateExec: mode=FinalPartitioned, gby=[#123@0 as #123], aggr=[sum(#121) as __common_expr_1, sum(CASE WHEN #122 = IRAQ THEN #121 ELSE 0.0000 END) as #124]
+              RepartitionExec: partitioning=Hash([#123@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#120@0 as #123], aggr=[sum(#121) as __common_expr_1, sum(CASE WHEN #122 = IRAQ THEN #121 ELSE 0.0000 END) as #124]
+                  ProjectionExec: expr=[date_part(year, #68@0) as #120, #37@1 * (1 - #38@2) as #121, #107@3 as #122]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#114@0, #100@3)], projection=[#68@3, #37@1, #38@2, #107@5]
+                      ProjectionExec: expr=[_0@0 as #114]
                         FilterExec: _1@1 = MIDDLE EAST, projection=[_0@0]
                           DataSourceExec: partitions=1, partition_sizes=[1]
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_21@2, __sail_attribute_106@0)], projection=[__sail_attribute_37@0, __sail_attribute_38@1, __sail_attribute_68@3, __sail_attribute_100@4, __sail_attribute_107@6]
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#21@2, #106@0)], projection=[#37@0, #38@1, #68@3, #100@4, #107@6]
                           CoalescePartitionsExec
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_98@0, __sail_attribute_85@4)], projection=[__sail_attribute_37@2, __sail_attribute_38@3, __sail_attribute_21@4, __sail_attribute_68@5, __sail_attribute_100@1]
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_98, _2@1 as __sail_attribute_100]
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#98@0, #85@4)], projection=[#37@2, #38@3, #21@4, #68@5, #100@1]
+                              ProjectionExec: expr=[_0@0 as #98, _2@1 as #100]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
                               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_65@3, __sail_attribute_82@0)], projection=[__sail_attribute_37@0, __sail_attribute_38@1, __sail_attribute_21@2, __sail_attribute_68@4, __sail_attribute_85@6]
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#65@3, #82@0)], projection=[#37@0, #38@1, #21@2, #68@4, #85@6]
                                   CoalescePartitionsExec
-                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_32@0, __sail_attribute_64@0)], projection=[__sail_attribute_37@1, __sail_attribute_38@2, __sail_attribute_21@3, __sail_attribute_65@5, __sail_attribute_68@6]
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#32@0, #64@0)], projection=[#37@1, #38@2, #21@3, #65@5, #68@6]
                                       CoalescePartitionsExec
-                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_18@0, __sail_attribute_34@1)], projection=[__sail_attribute_32@2, __sail_attribute_37@4, __sail_attribute_38@5, __sail_attribute_21@1]
-                                          ProjectionExec: expr=[_0@0 as __sail_attribute_18, _3@1 as __sail_attribute_21]
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#18@0, #34@1)], projection=[#32@2, #37@4, #38@5, #21@1]
+                                          ProjectionExec: expr=[_0@0 as #18, _3@1 as #21]
                                             DataSourceExec: partitions=1, partition_sizes=[1]
                                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_33@1)], projection=[__sail_attribute_32@1, __sail_attribute_34@3, __sail_attribute_37@4, __sail_attribute_38@5]
-                                              ProjectionExec: expr=[_0@0 as __sail_attribute_0]
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #33@1)], projection=[#32@1, #34@3, #37@4, #38@5]
+                                              ProjectionExec: expr=[_0@0 as #0]
                                                 FilterExec: _4@1 = LARGE PLATED STEEL, projection=[_0@0]
                                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                                              ProjectionExec: expr=[_0@0 as __sail_attribute_32, _1@1 as __sail_attribute_33, _2@2 as __sail_attribute_34, _5@3 as __sail_attribute_37, _6@4 as __sail_attribute_38]
+                                              ProjectionExec: expr=[_0@0 as #32, _1@1 as #33, _2@2 as #34, _5@3 as #37, _6@4 as #38]
                                                 DataSourceExec: partitions=1, partition_sizes=[1]
                                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                        ProjectionExec: expr=[_0@0 as __sail_attribute_64, _1@1 as __sail_attribute_65, _4@2 as __sail_attribute_68]
+                                        ProjectionExec: expr=[_0@0 as #64, _1@1 as #65, _4@2 as #68]
                                           FilterExec: _4@2 >= 1995-01-01 AND _4@2 <= 1996-12-31
                                             DataSourceExec: partitions=1, partition_sizes=[1]
-                                  ProjectionExec: expr=[_0@0 as __sail_attribute_82, _3@1 as __sail_attribute_85]
+                                  ProjectionExec: expr=[_0@0 as #82, _3@1 as #85]
                                     DataSourceExec: partitions=1, partition_sizes=[1]
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_106, _1@1 as __sail_attribute_107]
+                          ProjectionExec: expr=[_0@0 as #106, _1@1 as #107]
                             DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[09]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_106@0 as nation, __sail_attribute_107@1 as o_year, __sail_attribute_108@2 as sum_profit]
-      SortPreservingMergeExec: [__sail_attribute_106@0 ASC, __sail_attribute_107@1 DESC NULLS LAST]
-        ProjectionExec: expr=[__sail_attribute_103@0 as __sail_attribute_106, __sail_attribute_104@1 as __sail_attribute_107, __sail_attribute_105@2 as __sail_attribute_108]
-          SortExec: expr=[__sail_attribute_103@0 ASC, __sail_attribute_104@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_103@0 as __sail_attribute_103, __sail_attribute_104@1 as __sail_attribute_104], aggr=[sum(__sail_attribute_102) as __sail_attribute_105]
-              RepartitionExec: partitioning=Hash([__sail_attribute_103@0, __sail_attribute_104@1], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_100@0 as __sail_attribute_103, __sail_attribute_101@1 as __sail_attribute_104], aggr=[sum(__sail_attribute_102) as __sail_attribute_105]
-                  ProjectionExec: expr=[__sail_attribute_93@7 as __sail_attribute_100, date_part(year, __sail_attribute_78@5) as __sail_attribute_101, __sail_attribute_37@1 * (1 - __sail_attribute_38@2) - __sail_attribute_67@4 * __sail_attribute_36@0 as __sail_attribute_102]
+    ProjectionExec: expr=[#106@0 as nation, #107@1 as o_year, #108@2 as sum_profit]
+      SortPreservingMergeExec: [#106@0 ASC, #107@1 DESC NULLS LAST]
+        ProjectionExec: expr=[#103@0 as #106, #104@1 as #107, #105@2 as #108]
+          SortExec: expr=[#103@0 ASC, #104@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#103@0 as #103, #104@1 as #104], aggr=[sum(#102) as #105]
+              RepartitionExec: partitioning=Hash([#103@0, #104@1], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#100@0 as #103, #101@1 as #104], aggr=[sum(#102) as #105]
+                  ProjectionExec: expr=[#93@7 as #100, date_part(year, #78@5) as #101, #37@1 * (1 - #38@2) - #67@4 * #36@0 as #102]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_21@3, __sail_attribute_92@0)]
-                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_32@0, __sail_attribute_74@0)], projection=[__sail_attribute_36@1, __sail_attribute_37@2, __sail_attribute_38@3, __sail_attribute_21@4, __sail_attribute_67@5, __sail_attribute_78@7]
-                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_34@2, __sail_attribute_65@1), (__sail_attribute_33@1, __sail_attribute_64@0)], projection=[__sail_attribute_32@0, __sail_attribute_36@3, __sail_attribute_37@4, __sail_attribute_38@5, __sail_attribute_21@6, __sail_attribute_67@9]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#21@3, #92@0)]
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#32@0, #74@0)], projection=[#36@1, #37@2, #38@3, #21@4, #67@5, #78@7]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#34@2, #65@1), (#33@1, #64@0)], projection=[#32@0, #36@3, #37@4, #38@5, #21@6, #67@9]
                             CoalescePartitionsExec
-                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_18@0, __sail_attribute_34@2)], projection=[__sail_attribute_32@2, __sail_attribute_33@3, __sail_attribute_34@4, __sail_attribute_36@5, __sail_attribute_37@6, __sail_attribute_38@7, __sail_attribute_21@1]
-                                ProjectionExec: expr=[_0@0 as __sail_attribute_18, _3@1 as __sail_attribute_21]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#18@0, #34@2)], projection=[#32@2, #33@3, #34@4, #36@5, #37@6, #38@7, #21@1]
+                                ProjectionExec: expr=[_0@0 as #18, _3@1 as #21]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_33@1)], projection=[__sail_attribute_32@1, __sail_attribute_33@2, __sail_attribute_34@3, __sail_attribute_36@4, __sail_attribute_37@5, __sail_attribute_38@6]
-                                    ProjectionExec: expr=[_0@0 as __sail_attribute_0]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #33@1)], projection=[#32@1, #33@2, #34@3, #36@4, #37@5, #38@6]
+                                    ProjectionExec: expr=[_0@0 as #0]
                                       FilterExec: _1@1 LIKE %moccasin%, projection=[_0@0]
                                         DataSourceExec: partitions=1, partition_sizes=[1]
-                                    ProjectionExec: expr=[_0@0 as __sail_attribute_32, _1@1 as __sail_attribute_33, _2@2 as __sail_attribute_34, _4@3 as __sail_attribute_36, _5@4 as __sail_attribute_37, _6@5 as __sail_attribute_38]
+                                    ProjectionExec: expr=[_0@0 as #32, _1@1 as #33, _2@2 as #34, _4@3 as #36, _5@4 as #37, _6@5 as #38]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
-                            ProjectionExec: expr=[_0@0 as __sail_attribute_64, _1@1 as __sail_attribute_65, _3@2 as __sail_attribute_67]
+                            ProjectionExec: expr=[_0@0 as #64, _1@1 as #65, _3@2 as #67]
                               DataSourceExec: partitions=1, partition_sizes=[1]
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_74, _4@1 as __sail_attribute_78]
+                          ProjectionExec: expr=[_0@0 as #74, _4@1 as #78]
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_92, _1@1 as __sail_attribute_93]
+                        ProjectionExec: expr=[_0@0 as #92, _1@1 as #93]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[10]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_82@0 as c_custkey, __sail_attribute_83@1 as c_name, __sail_attribute_84@2 as revenue, __sail_attribute_85@3 as c_acctbal, __sail_attribute_86@4 as n_name, __sail_attribute_87@5 as c_address, __sail_attribute_88@6 as c_phone, __sail_attribute_89@7 as c_comment]
-      SortPreservingMergeExec: [__sail_attribute_84@2 DESC NULLS LAST], fetch=20
-        ProjectionExec: expr=[__sail_attribute_74@0 as __sail_attribute_82, __sail_attribute_75@1 as __sail_attribute_83, __sail_attribute_81@7 as __sail_attribute_84, __sail_attribute_76@2 as __sail_attribute_85, __sail_attribute_78@4 as __sail_attribute_86, __sail_attribute_79@5 as __sail_attribute_87, __sail_attribute_77@3 as __sail_attribute_88, __sail_attribute_80@6 as __sail_attribute_89]
-          SortExec: TopK(fetch=20), expr=[__sail_attribute_81@7 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_74@0 as __sail_attribute_74, __sail_attribute_75@1 as __sail_attribute_75, __sail_attribute_76@2 as __sail_attribute_76, __sail_attribute_77@3 as __sail_attribute_77, __sail_attribute_78@4 as __sail_attribute_78, __sail_attribute_79@5 as __sail_attribute_79, __sail_attribute_80@6 as __sail_attribute_80], aggr=[sum(__sail_attribute_39 * 1 - __sail_attribute_40) as __sail_attribute_81]
-              RepartitionExec: partitioning=Hash([__sail_attribute_74@0, __sail_attribute_75@1, __sail_attribute_76@2, __sail_attribute_77@3, __sail_attribute_78@4, __sail_attribute_79@5, __sail_attribute_80@6], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_0@0 as __sail_attribute_74, __sail_attribute_1@1 as __sail_attribute_75, __sail_attribute_5@4 as __sail_attribute_76, __sail_attribute_4@3 as __sail_attribute_77, __sail_attribute_67@8 as __sail_attribute_78, __sail_attribute_2@2 as __sail_attribute_79, __sail_attribute_7@5 as __sail_attribute_80], aggr=[sum(__sail_attribute_39 * 1 - __sail_attribute_40) as __sail_attribute_81]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_66@0, __sail_attribute_3@3)], projection=[__sail_attribute_0@2, __sail_attribute_1@3, __sail_attribute_2@4, __sail_attribute_4@6, __sail_attribute_5@7, __sail_attribute_7@8, __sail_attribute_39@9, __sail_attribute_40@10, __sail_attribute_67@1]
-                    ProjectionExec: expr=[_0@0 as __sail_attribute_66, _1@1 as __sail_attribute_67]
+    ProjectionExec: expr=[#82@0 as c_custkey, #83@1 as c_name, #84@2 as revenue, #85@3 as c_acctbal, #86@4 as n_name, #87@5 as c_address, #88@6 as c_phone, #89@7 as c_comment]
+      SortPreservingMergeExec: [#84@2 DESC NULLS LAST], fetch=20
+        ProjectionExec: expr=[#74@0 as #82, #75@1 as #83, #81@7 as #84, #76@2 as #85, #78@4 as #86, #79@5 as #87, #77@3 as #88, #80@6 as #89]
+          SortExec: TopK(fetch=20), expr=[#81@7 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#74@0 as #74, #75@1 as #75, #76@2 as #76, #77@3 as #77, #78@4 as #78, #79@5 as #79, #80@6 as #80], aggr=[sum(#39 * 1 - #40) as #81]
+              RepartitionExec: partitioning=Hash([#74@0, #75@1, #76@2, #77@3, #78@4, #79@5, #80@6], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#0@0 as #74, #1@1 as #75, #5@4 as #76, #4@3 as #77, #67@8 as #78, #2@2 as #79, #7@5 as #80], aggr=[sum(#39 * 1 - #40) as #81]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#66@0, #3@3)], projection=[#0@2, #1@3, #2@4, #4@6, #5@7, #7@8, #39@9, #40@10, #67@1]
+                    ProjectionExec: expr=[_0@0 as #66, _1@1 as #67]
                       DataSourceExec: partitions=1, partition_sizes=[1]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_16@7, __sail_attribute_34@0)], projection=[__sail_attribute_0@0, __sail_attribute_1@1, __sail_attribute_2@2, __sail_attribute_3@3, __sail_attribute_4@4, __sail_attribute_5@5, __sail_attribute_7@6, __sail_attribute_39@9, __sail_attribute_40@10]
-                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_17@1, __sail_attribute_0@0)], projection=[__sail_attribute_0@2, __sail_attribute_1@3, __sail_attribute_2@4, __sail_attribute_3@5, __sail_attribute_4@6, __sail_attribute_5@7, __sail_attribute_7@8, __sail_attribute_16@0]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_16, _1@1 as __sail_attribute_17]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@7, #34@0)], projection=[#0@0, #1@1, #2@2, #3@3, #4@4, #5@5, #7@6, #39@9, #40@10]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#17@1, #0@0)], projection=[#0@2, #1@3, #2@4, #3@5, #4@6, #5@7, #7@8, #16@0]
+                        ProjectionExec: expr=[_0@0 as #16, _1@1 as #17]
                           FilterExec: _4@2 >= 1993-07-01 AND _4@2 < 1993-10-01, projection=[_0@0, _1@1]
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_0, _1@1 as __sail_attribute_1, _2@2 as __sail_attribute_2, _3@3 as __sail_attribute_3, _4@4 as __sail_attribute_4, _5@5 as __sail_attribute_5, _7@6 as __sail_attribute_7]
+                        ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3, _4@4 as #4, _5@5 as #5, _7@6 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_34, _5@1 as __sail_attribute_39, _6@2 as __sail_attribute_40]
+                        ProjectionExec: expr=[_0@0 as #34, _5@1 as #39, _6@2 as #40]
                           FilterExec: _8@3 = R, projection=[_0@0, _5@1, _6@2]
                             DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -307,57 +307,57 @@ name: "test_derived_tpch_query_plan[11]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_69@0 as ps_partkey, __sail_attribute_70@1 as value]
+    ProjectionExec: expr=[#69@0 as ps_partkey, #70@1 as value]
       ScalarSubqueryExec: subqueries=1
-        SortPreservingMergeExec: [__sail_attribute_70@1 DESC NULLS LAST]
-          ProjectionExec: expr=[__sail_attribute_66@0 as __sail_attribute_69, __common_expr_2@1 as __sail_attribute_70]
+        SortPreservingMergeExec: [#70@1 DESC NULLS LAST]
+          ProjectionExec: expr=[#66@0 as #69, __common_expr_2@1 as #70]
             SortExec: expr=[__common_expr_2@1 DESC NULLS LAST], preserve_partitioning=[true]
               FilterExec: CAST(__common_expr_2@1 AS Decimal128(38, 12)) > scalar_subquery(<pending>)
-                AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_66@0 as __sail_attribute_66], aggr=[sum(__common_expr_1) as __common_expr_2]
-                  RepartitionExec: partitioning=Hash([__sail_attribute_66@0], 4), input_partitions=4
-                    AggregateExec: mode=Partial, gby=[__sail_attribute_0@1 as __sail_attribute_66], aggr=[sum(__common_expr_1) as __common_expr_2]
-                      ProjectionExec: expr=[__sail_attribute_3@0 * CAST(__sail_attribute_2@1 AS Decimal128(20, 0)) as __common_expr_1, __sail_attribute_0@2 as __sail_attribute_0]
-                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_24@0, __sail_attribute_13@3)], projection=[__sail_attribute_3@3, __sail_attribute_2@2, __sail_attribute_0@1]
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_24]
+                AggregateExec: mode=FinalPartitioned, gby=[#66@0 as #66], aggr=[sum(__common_expr_1) as __common_expr_2]
+                  RepartitionExec: partitioning=Hash([#66@0], 4), input_partitions=4
+                    AggregateExec: mode=Partial, gby=[#0@1 as #66], aggr=[sum(__common_expr_1) as __common_expr_2]
+                      ProjectionExec: expr=[#3@0 * CAST(#2@1 AS Decimal128(20, 0)) as __common_expr_1, #0@2 as #0]
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#24@0, #13@3)], projection=[#3@3, #2@2, #0@1]
+                          ProjectionExec: expr=[_0@0 as #24]
                             FilterExec: _1@1 = ALGERIA, projection=[_0@0]
                               DataSourceExec: partitions=1, partition_sizes=[1]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_10@0, __sail_attribute_1@1)], projection=[__sail_attribute_0@2, __sail_attribute_2@4, __sail_attribute_3@5, __sail_attribute_13@1]
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_10, _3@1 as __sail_attribute_13]
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#10@0, #1@1)], projection=[#0@2, #2@4, #3@5, #13@1]
+                              ProjectionExec: expr=[_0@0 as #10, _3@1 as #13]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_0, _1@1 as __sail_attribute_1, _2@2 as __sail_attribute_2, _3@3 as __sail_attribute_3]
+                              ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[__sail_attribute_64@0 * 0.0001000000 as __sail_attribute_65]
-          AggregateExec: mode=Final, gby=[], aggr=[sum(__sail_attribute_35 * __sail_attribute_34) as __sail_attribute_64]
+        ProjectionExec: expr=[#64@0 * 0.0001000000 as #65]
+          AggregateExec: mode=Final, gby=[], aggr=[sum(#35 * #34) as #64]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[sum(__sail_attribute_35 * __sail_attribute_34) as __sail_attribute_64]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_56@0, __sail_attribute_45@2)], projection=[__sail_attribute_34@1, __sail_attribute_35@2]
-                  ProjectionExec: expr=[_0@0 as __sail_attribute_56]
+              AggregateExec: mode=Partial, gby=[], aggr=[sum(#35 * #34) as #64]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#56@0, #45@2)], projection=[#34@1, #35@2]
+                  ProjectionExec: expr=[_0@0 as #56]
                     FilterExec: _1@1 = ALGERIA, projection=[_0@0]
                       DataSourceExec: partitions=1, partition_sizes=[1]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_42@0, __sail_attribute_33@0)], projection=[__sail_attribute_34@3, __sail_attribute_35@4, __sail_attribute_45@1]
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_42, _3@1 as __sail_attribute_45]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#42@0, #33@0)], projection=[#34@3, #35@4, #45@1]
+                      ProjectionExec: expr=[_0@0 as #42, _3@1 as #45]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_1@0 as __sail_attribute_33, _2@1 as __sail_attribute_34, _3@2 as __sail_attribute_35]
+                      ProjectionExec: expr=[_1@0 as #33, _2@1 as #34, _3@2 as #35]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[12]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_53@0 as l_shipmode, __sail_attribute_54@1 as high_line_count, __sail_attribute_55@2 as low_line_count]
-      SortPreservingMergeExec: [__sail_attribute_53@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_50@0 as __sail_attribute_53, __sail_attribute_51@1 as __sail_attribute_54, __sail_attribute_52@2 as __sail_attribute_55]
-          SortExec: expr=[__sail_attribute_50@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_50@0 as __sail_attribute_50], aggr=[sum(CASE WHEN __sail_attribute_5 = 1-URGENT OR __sail_attribute_5 = 2-HIGH THEN 1 ELSE 0 END) as __sail_attribute_51, sum(CASE WHEN __sail_attribute_5 != 1-URGENT AND __sail_attribute_5 != 2-HIGH THEN 1 ELSE 0 END) as __sail_attribute_52]
-              RepartitionExec: partitioning=Hash([__sail_attribute_50@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_32@1 as __sail_attribute_50], aggr=[sum(CASE WHEN __sail_attribute_5 = 1-URGENT OR __sail_attribute_5 = 2-HIGH THEN 1 ELSE 0 END) as __sail_attribute_51, sum(CASE WHEN __sail_attribute_5 != 1-URGENT AND __sail_attribute_5 != 2-HIGH THEN 1 ELSE 0 END) as __sail_attribute_52]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_18@0)], projection=[__sail_attribute_5@1, __sail_attribute_32@3]
-                    ProjectionExec: expr=[_0@0 as __sail_attribute_0, _5@1 as __sail_attribute_5]
+    ProjectionExec: expr=[#53@0 as l_shipmode, #54@1 as high_line_count, #55@2 as low_line_count]
+      SortPreservingMergeExec: [#53@0 ASC]
+        ProjectionExec: expr=[#50@0 as #53, #51@1 as #54, #52@2 as #55]
+          SortExec: expr=[#50@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#50@0 as #50], aggr=[sum(CASE WHEN #5 = 1-URGENT OR #5 = 2-HIGH THEN 1 ELSE 0 END) as #51, sum(CASE WHEN #5 != 1-URGENT AND #5 != 2-HIGH THEN 1 ELSE 0 END) as #52]
+              RepartitionExec: partitioning=Hash([#50@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#32@1 as #50], aggr=[sum(CASE WHEN #5 = 1-URGENT OR #5 = 2-HIGH THEN 1 ELSE 0 END) as #51, sum(CASE WHEN #5 != 1-URGENT AND #5 != 2-HIGH THEN 1 ELSE 0 END) as #52]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #18@0)], projection=[#5@1, #32@3]
+                    ProjectionExec: expr=[_0@0 as #0, _5@1 as #5]
                       DataSourceExec: partitions=1, partition_sizes=[1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_18, _14@1 as __sail_attribute_32]
+                      ProjectionExec: expr=[_0@0 as #18, _14@1 as #32]
                         FilterExec: (_14@4 = FOB OR _14@4 = SHIP) AND _12@3 > _11@2 AND _11@2 > _10@1 AND _12@3 >= 1995-01-01 AND _12@3 < 1996-01-01, projection=[_0@0, _14@4]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -365,22 +365,22 @@ name: "test_derived_tpch_query_plan[13]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_42@0 as c_count, __sail_attribute_43@1 as custdist]
-      SortPreservingMergeExec: [__sail_attribute_43@1 DESC NULLS LAST, __sail_attribute_42@0 DESC NULLS LAST]
-        ProjectionExec: expr=[__sail_attribute_40@0 as __sail_attribute_42, __sail_attribute_41@1 as __sail_attribute_43]
-          SortExec: expr=[__sail_attribute_41@1 DESC NULLS LAST, __sail_attribute_40@0 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_40@0 as __sail_attribute_40], aggr=[count(1) as __sail_attribute_41]
-              RepartitionExec: partitioning=Hash([__sail_attribute_40@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_39@0 as __sail_attribute_40], aggr=[count(1) as __sail_attribute_41]
-                  ProjectionExec: expr=[__sail_attribute_35@1 as __sail_attribute_39]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_34@0 as __sail_attribute_34], aggr=[count(__sail_attribute_16) as __sail_attribute_35]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_34@0], 4), input_partitions=4
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_0@0 as __sail_attribute_34], aggr=[count(__sail_attribute_16) as __sail_attribute_35]
-                          HashJoinExec: mode=CollectLeft, join_type=Left, on=[(__sail_attribute_0@0, __sail_attribute_17@1)], projection=[__sail_attribute_0@0, __sail_attribute_16@1]
-                            ProjectionExec: expr=[_0@0 as __sail_attribute_0]
+    ProjectionExec: expr=[#42@0 as c_count, #43@1 as custdist]
+      SortPreservingMergeExec: [#43@1 DESC NULLS LAST, #42@0 DESC NULLS LAST]
+        ProjectionExec: expr=[#40@0 as #42, #41@1 as #43]
+          SortExec: expr=[#41@1 DESC NULLS LAST, #40@0 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#40@0 as #40], aggr=[count(1) as #41]
+              RepartitionExec: partitioning=Hash([#40@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#39@0 as #40], aggr=[count(1) as #41]
+                  ProjectionExec: expr=[#35@1 as #39]
+                    AggregateExec: mode=FinalPartitioned, gby=[#34@0 as #34], aggr=[count(#16) as #35]
+                      RepartitionExec: partitioning=Hash([#34@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#0@0 as #34], aggr=[count(#16) as #35]
+                          HashJoinExec: mode=CollectLeft, join_type=Left, on=[(#0@0, #17@1)], projection=[#0@0, #16@1]
+                            ProjectionExec: expr=[_0@0 as #0]
                               DataSourceExec: partitions=1, partition_sizes=[1]
                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_16, _1@1 as __sail_attribute_17]
+                              ProjectionExec: expr=[_0@0 as #16, _1@1 as #17]
                                 FilterExec: _8@2 NOT LIKE %express%requests%, projection=[_0@0, _1@1]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -388,17 +388,17 @@ name: "test_derived_tpch_query_plan[14]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_53@0 as promo_revenue]
-      ProjectionExec: expr=[100.00 * __sail_attribute_50@1 / CASE WHEN __common_expr_2@0 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE __common_expr_2@0 END as __sail_attribute_53]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(__common_expr_1) as __common_expr_2, sum(CASE WHEN __sail_attribute_36 LIKE PROMO% THEN __common_expr_1 ELSE 0.0000 END) as __sail_attribute_50]
+    ProjectionExec: expr=[#53@0 as promo_revenue]
+      ProjectionExec: expr=[100.00 * #50@1 / CASE WHEN __common_expr_2@0 = 0.0000 THEN CAST(raise_error(Division by zero) AS Decimal128(31, 4)) ELSE __common_expr_2@0 END as #53]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(__common_expr_1) as __common_expr_2, sum(CASE WHEN #36 LIKE PROMO% THEN __common_expr_1 ELSE 0.0000 END) as #50]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(__common_expr_1) as __common_expr_2, sum(CASE WHEN __sail_attribute_36 LIKE PROMO% THEN __common_expr_1 ELSE 0.0000 END) as __sail_attribute_50]
-              ProjectionExec: expr=[__sail_attribute_5@0 * (1 - __sail_attribute_6@1) as __common_expr_1, __sail_attribute_36@2 as __sail_attribute_36]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_32@0, __sail_attribute_1@0)], projection=[__sail_attribute_5@3, __sail_attribute_6@4, __sail_attribute_36@1]
-                  ProjectionExec: expr=[_0@0 as __sail_attribute_32, _4@1 as __sail_attribute_36]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(__common_expr_1) as __common_expr_2, sum(CASE WHEN #36 LIKE PROMO% THEN __common_expr_1 ELSE 0.0000 END) as #50]
+              ProjectionExec: expr=[#5@0 * (1 - #6@1) as __common_expr_1, #36@2 as #36]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#32@0, #1@0)], projection=[#5@3, #6@4, #36@1]
+                  ProjectionExec: expr=[_0@0 as #32, _4@1 as #36]
                     DataSourceExec: partitions=1, partition_sizes=[1]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                    ProjectionExec: expr=[_1@0 as __sail_attribute_1, _5@1 as __sail_attribute_5, _6@2 as __sail_attribute_6]
+                    ProjectionExec: expr=[_1@0 as #1, _5@1 as #5, _6@2 as #6]
                       FilterExec: _10@3 >= 1995-02-01 AND _10@3 < 1995-03-01, projection=[_1@0, _5@1, _6@2]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -406,41 +406,41 @@ name: "test_derived_tpch_query_plan[15]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as value]
-      ProjectionExec: expr=[value@0 as __sail_attribute_0]
+    ProjectionExec: expr=[#0@0 as value]
+      ProjectionExec: expr=[value@0 as #0]
         DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[15].1"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_92@0 as s_suppkey, __sail_attribute_93@1 as s_name, __sail_attribute_94@2 as s_address, __sail_attribute_95@3 as s_phone, __sail_attribute_96@4 as total_revenue]
+    ProjectionExec: expr=[#92@0 as s_suppkey, #93@1 as s_name, #94@2 as s_address, #95@3 as s_phone, #96@4 as total_revenue]
       ScalarSubqueryExec: subqueries=1
-        SortPreservingMergeExec: [__sail_attribute_92@0 ASC]
-          SortExec: expr=[__sail_attribute_92@0 ASC], preserve_partitioning=[true]
-            ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_92, __sail_attribute_1@1 as __sail_attribute_93, __sail_attribute_2@2 as __sail_attribute_94, __sail_attribute_4@3 as __sail_attribute_95, __sail_attribute_15@4 as __sail_attribute_96]
-              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_14@0)], projection=[__sail_attribute_0@0, __sail_attribute_1@1, __sail_attribute_2@2, __sail_attribute_4@3, __sail_attribute_15@5]
-                ProjectionExec: expr=[_0@0 as __sail_attribute_0, _1@1 as __sail_attribute_1, _2@2 as __sail_attribute_2, _4@3 as __sail_attribute_4]
+        SortPreservingMergeExec: [#92@0 ASC]
+          SortExec: expr=[#92@0 ASC], preserve_partitioning=[true]
+            ProjectionExec: expr=[#0@0 as #92, #1@1 as #93, #2@2 as #94, #4@3 as #95, #15@4 as #96]
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #14@0)], projection=[#0@0, #1@1, #2@2, #4@3, #15@5]
+                ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _4@3 as #4]
                   DataSourceExec: partitions=1, partition_sizes=[1]
-                ProjectionExec: expr=[__sail_attribute_20@0 as __sail_attribute_14, __sail_attribute_19@1 as __sail_attribute_15]
-                  FilterExec: __sail_attribute_19@1 = scalar_subquery(<pending>)
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_20@0 as __sail_attribute_20], aggr=[sum(__sail_attribute_25 * 1 - __sail_attribute_26) as __sail_attribute_19]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_20@0], 4), input_partitions=4
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_17@0 as __sail_attribute_20], aggr=[sum(__sail_attribute_25 * 1 - __sail_attribute_26) as __sail_attribute_19]
+                ProjectionExec: expr=[#20@0 as #14, #19@1 as #15]
+                  FilterExec: #19@1 = scalar_subquery(<pending>)
+                    AggregateExec: mode=FinalPartitioned, gby=[#20@0 as #20], aggr=[sum(#25 * 1 - #26) as #19]
+                      RepartitionExec: partitioning=Hash([#20@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#17@0 as #20], aggr=[sum(#25 * 1 - #26) as #19]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            ProjectionExec: expr=[_2@0 as __sail_attribute_17, _5@1 as __sail_attribute_25, _6@2 as __sail_attribute_26]
+                            ProjectionExec: expr=[_2@0 as #17, _5@1 as #25, _6@2 as #26]
                               FilterExec: _10@3 >= 1996-08-01 AND _10@3 < 1996-11-01, projection=[_2@0, _5@1, _6@2]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[__sail_attribute_90@0 as __sail_attribute_91]
-          AggregateExec: mode=Final, gby=[], aggr=[max(__sail_attribute_53) as __sail_attribute_90]
+        ProjectionExec: expr=[#90@0 as #91]
+          AggregateExec: mode=Final, gby=[], aggr=[max(#53) as #90]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[max(__sail_attribute_53) as __sail_attribute_90]
-                ProjectionExec: expr=[__sail_attribute_57@1 as __sail_attribute_53]
-                  AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_58@0 as __sail_attribute_58], aggr=[sum(__sail_attribute_63 * 1 - __sail_attribute_64) as __sail_attribute_57]
-                    RepartitionExec: partitioning=Hash([__sail_attribute_58@0], 4), input_partitions=4
-                      AggregateExec: mode=Partial, gby=[__sail_attribute_55@0 as __sail_attribute_58], aggr=[sum(__sail_attribute_63 * 1 - __sail_attribute_64) as __sail_attribute_57]
+              AggregateExec: mode=Partial, gby=[], aggr=[max(#53) as #90]
+                ProjectionExec: expr=[#57@1 as #53]
+                  AggregateExec: mode=FinalPartitioned, gby=[#58@0 as #58], aggr=[sum(#63 * 1 - #64) as #57]
+                    RepartitionExec: partitioning=Hash([#58@0], 4), input_partitions=4
+                      AggregateExec: mode=Partial, gby=[#55@0 as #58], aggr=[sum(#63 * 1 - #64) as #57]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          ProjectionExec: expr=[_2@0 as __sail_attribute_55, _5@1 as __sail_attribute_63, _6@2 as __sail_attribute_64]
+                          ProjectionExec: expr=[_2@0 as #55, _5@1 as #63, _6@2 as #64]
                             FilterExec: _10@3 >= 1996-08-01 AND _10@3 < 1996-11-01, projection=[_2@0, _5@1, _6@2]
                               DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -448,32 +448,32 @@ name: "test_derived_tpch_query_plan[15].2"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as value]
-      ProjectionExec: expr=[value@0 as __sail_attribute_0]
+    ProjectionExec: expr=[#0@0 as value]
+      ProjectionExec: expr=[value@0 as #0]
         DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[16]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_48@0 as p_brand, __sail_attribute_49@1 as p_type, __sail_attribute_50@2 as p_size, __sail_attribute_51@3 as supplier_cnt]
-      SortPreservingMergeExec: [__sail_attribute_51@3 DESC NULLS LAST, __sail_attribute_48@0 ASC, __sail_attribute_49@1 ASC, __sail_attribute_50@2 ASC]
-        ProjectionExec: expr=[__sail_attribute_44@0 as __sail_attribute_48, __sail_attribute_45@1 as __sail_attribute_49, __sail_attribute_46@2 as __sail_attribute_50, __sail_attribute_47@3 as __sail_attribute_51]
-          SortExec: expr=[__sail_attribute_47@3 DESC NULLS LAST, __sail_attribute_44@0 ASC, __sail_attribute_45@1 ASC, __sail_attribute_46@2 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_44@0 as __sail_attribute_44, __sail_attribute_45@1 as __sail_attribute_45, __sail_attribute_46@2 as __sail_attribute_46], aggr=[count(DISTINCT __sail_attribute_1) as __sail_attribute_47]
-              RepartitionExec: partitioning=Hash([__sail_attribute_44@0, __sail_attribute_45@1, __sail_attribute_46@2], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_13@1 as __sail_attribute_44, __sail_attribute_14@2 as __sail_attribute_45, __sail_attribute_15@3 as __sail_attribute_46], aggr=[count(DISTINCT __sail_attribute_1) as __sail_attribute_47]
-                  HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(__sail_attribute_1@0, __sail_attribute_43@0)], null_aware
+    ProjectionExec: expr=[#48@0 as p_brand, #49@1 as p_type, #50@2 as p_size, #51@3 as supplier_cnt]
+      SortPreservingMergeExec: [#51@3 DESC NULLS LAST, #48@0 ASC, #49@1 ASC, #50@2 ASC]
+        ProjectionExec: expr=[#44@0 as #48, #45@1 as #49, #46@2 as #50, #47@3 as #51]
+          SortExec: expr=[#47@3 DESC NULLS LAST, #44@0 ASC, #45@1 ASC, #46@2 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#44@0 as #44, #45@1 as #45, #46@2 as #46], aggr=[count(DISTINCT #1) as #47]
+              RepartitionExec: partitioning=Hash([#44@0, #45@1, #46@2], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#13@1 as #44, #14@2 as #45, #15@3 as #46], aggr=[count(DISTINCT #1) as #47]
+                  HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(#1@0, #43@0)], null_aware
                     CoalescePartitionsExec
-                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_10@0)], projection=[__sail_attribute_1@1, __sail_attribute_13@3, __sail_attribute_14@4, __sail_attribute_15@5]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_0, _1@1 as __sail_attribute_1]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #10@0)], projection=[#1@1, #13@3, #14@4, #15@5]
+                        ProjectionExec: expr=[_0@0 as #0, _1@1 as #1]
                           DataSourceExec: partitions=1, partition_sizes=[1]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_10, _3@1 as __sail_attribute_13, _4@2 as __sail_attribute_14, _5@3 as __sail_attribute_15]
+                          ProjectionExec: expr=[_0@0 as #10, _3@1 as #13, _4@2 as #14, _5@3 as #15]
                             FilterExec: _3@1 != Brand#14 AND _5@3 IN (SET) ([14, 6, 5, 31, 49, 15, 41, 47]) AND _4@2 NOT LIKE SMALL PLATED%
                               DataSourceExec: partitions=1, partition_sizes=[1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_43]
+                      ProjectionExec: expr=[_0@0 as #43]
                         FilterExec: _6@1 LIKE %Customer%Complaints%, projection=[_0@0]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -481,68 +481,68 @@ name: "test_derived_tpch_query_plan[17]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_85@0 as avg_yearly]
-      ProjectionExec: expr=[__sail_attribute_84@0 / 7.0 as __sail_attribute_85]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(__sail_attribute_5) as __sail_attribute_84]
+    ProjectionExec: expr=[#85@0 as avg_yearly]
+      ProjectionExec: expr=[#84@0 / 7.0 as #85]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(#5) as #84]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(__sail_attribute_5) as __sail_attribute_84]
-              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(__sail_attribute_32@2, __sail_attribute_51@1)], filter=CAST(__sail_attribute_4@0 AS Decimal128(10, 7)) < __sail_attribute_83@1, projection=[__sail_attribute_5@1]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_32@0, __sail_attribute_1@0)], projection=[__sail_attribute_4@2, __sail_attribute_5@3, __sail_attribute_32@0]
-                  ProjectionExec: expr=[_0@0 as __sail_attribute_32]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(#5) as #84]
+              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#32@2, #51@1)], filter=CAST(#4@0 AS Decimal128(10, 7)) < #83@1, projection=[#5@1]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#32@0, #1@0)], projection=[#4@2, #5@3, #32@0]
+                  ProjectionExec: expr=[_0@0 as #32]
                     FilterExec: _3@1 = Brand#42 AND _6@2 = LG BAG, projection=[_0@0]
                       DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[_1@0 as __sail_attribute_1, _4@1 as __sail_attribute_4, _5@2 as __sail_attribute_5]
+                  ProjectionExec: expr=[_1@0 as #1, _4@1 as #4, _5@2 as #5]
                     DataSourceExec: partitions=1, partition_sizes=[1]
-                ProjectionExec: expr=[0.2 * __sail_attribute_82@1 as __sail_attribute_83, __sail_attribute_51@0 as __sail_attribute_51]
-                  AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_51@0 as __sail_attribute_51], aggr=[avg(__sail_attribute_54) as __sail_attribute_82]
-                    RepartitionExec: partitioning=Hash([__sail_attribute_51@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[__sail_attribute_51@0 as __sail_attribute_51], aggr=[avg(__sail_attribute_54) as __sail_attribute_82]
-                        ProjectionExec: expr=[_1@0 as __sail_attribute_51, _4@1 as __sail_attribute_54]
+                ProjectionExec: expr=[0.2 * #82@1 as #83, #51@0 as #51]
+                  AggregateExec: mode=FinalPartitioned, gby=[#51@0 as #51], aggr=[avg(#54) as #82]
+                    RepartitionExec: partitioning=Hash([#51@0], 4), input_partitions=1
+                      AggregateExec: mode=Partial, gby=[#51@0 as #51], aggr=[avg(#54) as #82]
+                        ProjectionExec: expr=[_1@0 as #51, _4@1 as #54]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[18]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_108@0 as c_name, __sail_attribute_109@1 as c_custkey, __sail_attribute_110@2 as o_orderkey, __sail_attribute_111@3 as o_orderdate, __sail_attribute_112@4 as o_totalprice, __sail_attribute_113@5 as sum(l_quantity)]
-      SortPreservingMergeExec: [__sail_attribute_112@4 DESC NULLS LAST, __sail_attribute_111@3 ASC], fetch=100
-        ProjectionExec: expr=[__sail_attribute_102@0 as __sail_attribute_108, __sail_attribute_103@1 as __sail_attribute_109, __sail_attribute_104@2 as __sail_attribute_110, __sail_attribute_105@3 as __sail_attribute_111, __sail_attribute_106@4 as __sail_attribute_112, __sail_attribute_107@5 as __sail_attribute_113]
-          SortExec: TopK(fetch=100), expr=[__sail_attribute_106@4 DESC NULLS LAST, __sail_attribute_105@3 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_102@0 as __sail_attribute_102, __sail_attribute_103@1 as __sail_attribute_103, __sail_attribute_104@2 as __sail_attribute_104, __sail_attribute_105@3 as __sail_attribute_105, __sail_attribute_106@4 as __sail_attribute_106], aggr=[sum(__sail_attribute_38) as __sail_attribute_107]
-              RepartitionExec: partitioning=Hash([__sail_attribute_102@0, __sail_attribute_103@1, __sail_attribute_104@2, __sail_attribute_105@3, __sail_attribute_106@4], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_1@1 as __sail_attribute_102, __sail_attribute_0@0 as __sail_attribute_103, __sail_attribute_16@2 as __sail_attribute_104, __sail_attribute_20@4 as __sail_attribute_105, __sail_attribute_19@3 as __sail_attribute_106], aggr=[sum(__sail_attribute_38) as __sail_attribute_107]
-                  HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(__sail_attribute_16@2, __sail_attribute_101@0)]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_16@2, __sail_attribute_34@0)], projection=[__sail_attribute_0@0, __sail_attribute_1@1, __sail_attribute_16@2, __sail_attribute_19@3, __sail_attribute_20@4, __sail_attribute_38@6]
-                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_17@1, __sail_attribute_0@0)], projection=[__sail_attribute_0@4, __sail_attribute_1@5, __sail_attribute_16@0, __sail_attribute_19@2, __sail_attribute_20@3]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_16, _1@1 as __sail_attribute_17, _3@2 as __sail_attribute_19, _4@3 as __sail_attribute_20]
+    ProjectionExec: expr=[#108@0 as c_name, #109@1 as c_custkey, #110@2 as o_orderkey, #111@3 as o_orderdate, #112@4 as o_totalprice, #113@5 as sum(l_quantity)]
+      SortPreservingMergeExec: [#112@4 DESC NULLS LAST, #111@3 ASC], fetch=100
+        ProjectionExec: expr=[#102@0 as #108, #103@1 as #109, #104@2 as #110, #105@3 as #111, #106@4 as #112, #107@5 as #113]
+          SortExec: TopK(fetch=100), expr=[#106@4 DESC NULLS LAST, #105@3 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#102@0 as #102, #103@1 as #103, #104@2 as #104, #105@3 as #105, #106@4 as #106], aggr=[sum(#38) as #107]
+              RepartitionExec: partitioning=Hash([#102@0, #103@1, #104@2, #105@3, #106@4], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#1@1 as #102, #0@0 as #103, #16@2 as #104, #20@4 as #105, #19@3 as #106], aggr=[sum(#38) as #107]
+                  HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#16@2, #101@0)]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#16@2, #34@0)], projection=[#0@0, #1@1, #16@2, #19@3, #20@4, #38@6]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#17@1, #0@0)], projection=[#0@4, #1@5, #16@0, #19@2, #20@3]
+                        ProjectionExec: expr=[_0@0 as #16, _1@1 as #17, _3@2 as #19, _4@3 as #20]
                           DataSourceExec: partitions=1, partition_sizes=[1]
-                        ProjectionExec: expr=[_0@0 as __sail_attribute_0, _1@1 as __sail_attribute_1]
+                        ProjectionExec: expr=[_0@0 as #0, _1@1 as #1]
                           DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_34, _4@1 as __sail_attribute_38]
+                      ProjectionExec: expr=[_0@0 as #34, _4@1 as #38]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                    ProjectionExec: expr=[__sail_attribute_98@0 as __sail_attribute_101]
-                      FilterExec: __sail_attribute_99@1 > 313.00, projection=[__sail_attribute_98@0]
-                        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_98@0 as __sail_attribute_98], aggr=[sum(__sail_attribute_70) as __sail_attribute_99]
-                          RepartitionExec: partitioning=Hash([__sail_attribute_98@0], 4), input_partitions=1
-                            AggregateExec: mode=Partial, gby=[__sail_attribute_66@0 as __sail_attribute_98], aggr=[sum(__sail_attribute_70) as __sail_attribute_99]
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_66, _4@1 as __sail_attribute_70]
+                    ProjectionExec: expr=[#98@0 as #101]
+                      FilterExec: #99@1 > 313.00, projection=[#98@0]
+                        AggregateExec: mode=FinalPartitioned, gby=[#98@0 as #98], aggr=[sum(#70) as #99]
+                          RepartitionExec: partitioning=Hash([#98@0], 4), input_partitions=1
+                            AggregateExec: mode=Partial, gby=[#66@0 as #98], aggr=[sum(#70) as #99]
+                              ProjectionExec: expr=[_0@0 as #66, _4@1 as #70]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_derived_tpch_query_plan[19]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_51@0 as revenue]
-      ProjectionExec: expr=[__sail_attribute_50@0 as __sail_attribute_51]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(__sail_attribute_5 * 1 - __sail_attribute_6) as __sail_attribute_50]
+    ProjectionExec: expr=[#51@0 as revenue]
+      ProjectionExec: expr=[#50@0 as #51]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(#5 * 1 - #6) as #50]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(__sail_attribute_5 * 1 - __sail_attribute_6) as __sail_attribute_50]
-              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_32@0, __sail_attribute_1@0)], filter=__sail_attribute_35@1 = Brand#21 AND __sail_attribute_38@3 IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND __sail_attribute_4@0 >= 8.00 AND __sail_attribute_4@0 <= 18.00 AND __sail_attribute_37@2 <= 5 OR __sail_attribute_35@1 = Brand#13 AND __sail_attribute_38@3 IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND __sail_attribute_4@0 >= 20.00 AND __sail_attribute_4@0 <= 30.00 AND __sail_attribute_37@2 <= 10 OR __sail_attribute_35@1 = Brand#52 AND __sail_attribute_38@3 IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND __sail_attribute_4@0 >= 30.00 AND __sail_attribute_4@0 <= 40.00 AND __sail_attribute_37@2 <= 15, projection=[__sail_attribute_5@6, __sail_attribute_6@7]
-                ProjectionExec: expr=[_0@0 as __sail_attribute_32, _3@1 as __sail_attribute_35, _5@2 as __sail_attribute_37, _6@3 as __sail_attribute_38]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(#5 * 1 - #6) as #50]
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#32@0, #1@0)], filter=#35@1 = Brand#21 AND #38@3 IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND #4@0 >= 8.00 AND #4@0 <= 18.00 AND #37@2 <= 5 OR #35@1 = Brand#13 AND #38@3 IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND #4@0 >= 20.00 AND #4@0 <= 30.00 AND #37@2 <= 10 OR #35@1 = Brand#52 AND #38@3 IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND #4@0 >= 30.00 AND #4@0 <= 40.00 AND #37@2 <= 15, projection=[#5@6, #6@7]
+                ProjectionExec: expr=[_0@0 as #32, _3@1 as #35, _5@2 as #37, _6@3 as #38]
                   FilterExec: _5@2 >= 1 AND (_3@1 = Brand#21 AND _6@3 IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND _5@2 <= 5 OR _3@1 = Brand#13 AND _6@3 IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND _5@2 <= 10 OR _3@1 = Brand#52 AND _6@3 IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND _5@2 <= 15)
                     DataSourceExec: partitions=1, partition_sizes=[1]
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                  ProjectionExec: expr=[_1@0 as __sail_attribute_1, _4@1 as __sail_attribute_4, _5@2 as __sail_attribute_5, _6@3 as __sail_attribute_6]
+                  ProjectionExec: expr=[_1@0 as #1, _4@1 as #4, _5@2 as #5, _6@3 as #6]
                     FilterExec: (_14@5 = AIR OR _14@5 = AIR REG) AND _13@4 = DELIVER IN PERSON AND (_4@1 >= 8.00 AND _4@1 <= 18.00 OR _4@1 >= 20.00 AND _4@1 <= 30.00 OR _4@1 >= 30.00 AND _4@1 <= 40.00), projection=[_1@0, _4@1, _5@2, _6@3]
                       DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -550,31 +550,31 @@ name: "test_derived_tpch_query_plan[20]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_88@0 as s_name, __sail_attribute_89@1 as s_address]
-      SortPreservingMergeExec: [__sail_attribute_88@0 ASC]
-        SortExec: expr=[__sail_attribute_88@0 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_88, __sail_attribute_2@1 as __sail_attribute_89]
-            HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_87@0)], projection=[__sail_attribute_1@1, __sail_attribute_2@2]
-              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_14@0, __sail_attribute_3@3)], projection=[__sail_attribute_0@1, __sail_attribute_1@2, __sail_attribute_2@3]
-                ProjectionExec: expr=[_0@0 as __sail_attribute_14]
+    ProjectionExec: expr=[#88@0 as s_name, #89@1 as s_address]
+      SortPreservingMergeExec: [#88@0 ASC]
+        SortExec: expr=[#88@0 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[#1@0 as #88, #2@1 as #89]
+            HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#0@0, #87@0)], projection=[#1@1, #2@2]
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#14@0, #3@3)], projection=[#0@1, #1@2, #2@3]
+                ProjectionExec: expr=[_0@0 as #14]
                   FilterExec: _1@1 = KENYA, projection=[_0@0]
                     DataSourceExec: partitions=1, partition_sizes=[1]
-                ProjectionExec: expr=[_0@0 as __sail_attribute_0, _1@1 as __sail_attribute_1, _2@2 as __sail_attribute_2, _3@3 as __sail_attribute_3]
+                ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
-              ProjectionExec: expr=[__sail_attribute_23@0 as __sail_attribute_87]
-                HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(__sail_attribute_22@0, __sail_attribute_53@1), (__sail_attribute_23@1, __sail_attribute_54@2)], filter=CAST(__sail_attribute_24@0 AS Decimal128(23, 3)) > CAST(__sail_attribute_85@1 AS Decimal128(23, 3)), projection=[__sail_attribute_23@1]
-                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_attribute_51@0, __sail_attribute_22@0)]
-                    ProjectionExec: expr=[_0@0 as __sail_attribute_51]
+              ProjectionExec: expr=[#23@0 as #87]
+                HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#22@0, #53@1), (#23@1, #54@2)], filter=CAST(#24@0 AS Decimal128(23, 3)) > CAST(#85@1 AS Decimal128(23, 3)), projection=[#23@1]
+                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#51@0, #22@0)]
+                    ProjectionExec: expr=[_0@0 as #51]
                       FilterExec: _1@1 LIKE blanched%, projection=[_0@0]
                         DataSourceExec: partitions=1, partition_sizes=[1]
-                    ProjectionExec: expr=[_0@0 as __sail_attribute_22, _1@1 as __sail_attribute_23, _2@2 as __sail_attribute_24]
+                    ProjectionExec: expr=[_0@0 as #22, _1@1 as #23, _2@2 as #24]
                       DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[0.5 * __sail_attribute_84@2 as __sail_attribute_85, __sail_attribute_53@0 as __sail_attribute_53, __sail_attribute_54@1 as __sail_attribute_54]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_53@0 as __sail_attribute_53, __sail_attribute_54@1 as __sail_attribute_54], aggr=[sum(__sail_attribute_56) as __sail_attribute_84]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_53@0, __sail_attribute_54@1], 4), input_partitions=4
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_53@0 as __sail_attribute_53, __sail_attribute_54@1 as __sail_attribute_54], aggr=[sum(__sail_attribute_56) as __sail_attribute_84]
+                  ProjectionExec: expr=[0.5 * #84@2 as #85, #53@0 as #53, #54@1 as #54]
+                    AggregateExec: mode=FinalPartitioned, gby=[#53@0 as #53, #54@1 as #54], aggr=[sum(#56) as #84]
+                      RepartitionExec: partitioning=Hash([#53@0, #54@1], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#53@0 as #53, #54@1 as #54], aggr=[sum(#56) as #84]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            ProjectionExec: expr=[_1@0 as __sail_attribute_53, _2@1 as __sail_attribute_54, _4@2 as __sail_attribute_56]
+                            ProjectionExec: expr=[_1@0 as #53, _2@1 as #54, _4@2 as #56]
                               FilterExec: _10@3 >= 1993-01-01 AND _10@3 < 1994-01-01, projection=[_1@0, _2@1, _4@2]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -582,37 +582,37 @@ name: "test_derived_tpch_query_plan[21]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_170@0 as s_name, __sail_attribute_171@1 as numwait]
-      SortPreservingMergeExec: [__sail_attribute_171@1 DESC NULLS LAST, __sail_attribute_170@0 ASC], fetch=100
-        ProjectionExec: expr=[__sail_attribute_168@0 as __sail_attribute_170, __sail_attribute_169@1 as __sail_attribute_171]
-          SortExec: TopK(fetch=100), expr=[__sail_attribute_169@1 DESC NULLS LAST, __sail_attribute_168@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_168@0 as __sail_attribute_168], aggr=[count(1) as __sail_attribute_169]
-              RepartitionExec: partitioning=Hash([__sail_attribute_168@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_1@0 as __sail_attribute_168], aggr=[count(1) as __sail_attribute_169]
-                  HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(__sail_attribute_14@1, __sail_attribute_120@0)], filter=__sail_attribute_122@1 != __sail_attribute_16@0, projection=[__sail_attribute_1@0]
-                    HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(__sail_attribute_14@1, __sail_attribute_72@0)], filter=__sail_attribute_74@1 != __sail_attribute_16@0
+    ProjectionExec: expr=[#170@0 as s_name, #171@1 as numwait]
+      SortPreservingMergeExec: [#171@1 DESC NULLS LAST, #170@0 ASC], fetch=100
+        ProjectionExec: expr=[#168@0 as #170, #169@1 as #171]
+          SortExec: TopK(fetch=100), expr=[#169@1 DESC NULLS LAST, #168@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#168@0 as #168], aggr=[count(1) as #169]
+              RepartitionExec: partitioning=Hash([#168@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#1@0 as #168], aggr=[count(1) as #169]
+                  HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(#14@1, #120@0)], filter=#122@1 != #16@0, projection=[#1@0]
+                    HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#14@1, #72@0)], filter=#74@1 != #16@0
                       CoalescePartitionsExec
-                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_64@0, __sail_attribute_3@1)], projection=[__sail_attribute_1@1, __sail_attribute_14@3, __sail_attribute_16@4]
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_64]
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#64@0, #3@1)], projection=[#1@1, #14@3, #16@4]
+                          ProjectionExec: expr=[_0@0 as #64]
                             FilterExec: _1@1 = ARGENTINA, projection=[_0@0]
                               DataSourceExec: partitions=1, partition_sizes=[1]
-                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_14@2, __sail_attribute_46@0)], projection=[__sail_attribute_1@0, __sail_attribute_3@1, __sail_attribute_14@2, __sail_attribute_16@3]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#14@2, #46@0)], projection=[#1@0, #3@1, #14@2, #16@3]
                             CoalescePartitionsExec
-                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_16@1)], projection=[__sail_attribute_1@1, __sail_attribute_3@2, __sail_attribute_14@3, __sail_attribute_16@4]
-                                ProjectionExec: expr=[_0@0 as __sail_attribute_0, _1@1 as __sail_attribute_1, _3@2 as __sail_attribute_3]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #16@1)], projection=[#1@1, #3@2, #14@3, #16@4]
+                                ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _3@2 as #3]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
                                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                                  ProjectionExec: expr=[_0@0 as __sail_attribute_14, _2@1 as __sail_attribute_16]
+                                  ProjectionExec: expr=[_0@0 as #14, _2@1 as #16]
                                     FilterExec: _12@3 > _11@2, projection=[_0@0, _2@1]
                                       DataSourceExec: partitions=1, partition_sizes=[1]
                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                              ProjectionExec: expr=[_0@0 as __sail_attribute_46]
+                              ProjectionExec: expr=[_0@0 as #46]
                                 FilterExec: _2@1 = F, projection=[_0@0]
                                   DataSourceExec: partitions=1, partition_sizes=[1]
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_72, _2@1 as __sail_attribute_74]
+                      ProjectionExec: expr=[_0@0 as #72, _2@1 as #74]
                         DataSourceExec: partitions=1, partition_sizes=[1]
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                      ProjectionExec: expr=[_0@0 as __sail_attribute_120, _2@1 as __sail_attribute_122]
+                      ProjectionExec: expr=[_0@0 as #120, _2@1 as #122]
                         FilterExec: _12@3 > _11@2, projection=[_0@0, _2@1]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -620,27 +620,27 @@ name: "test_derived_tpch_query_plan[22]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_66@0 as cntrycode, __sail_attribute_67@1 as numcust, __sail_attribute_68@2 as totacctbal]
+    ProjectionExec: expr=[#66@0 as cntrycode, #67@1 as numcust, #68@2 as totacctbal]
       ScalarSubqueryExec: subqueries=1
-        SortPreservingMergeExec: [__sail_attribute_66@0 ASC]
-          ProjectionExec: expr=[__sail_attribute_63@0 as __sail_attribute_66, __sail_attribute_64@1 as __sail_attribute_67, __sail_attribute_65@2 as __sail_attribute_68]
-            SortExec: expr=[__sail_attribute_63@0 ASC], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_63@0 as __sail_attribute_63], aggr=[count(1) as __sail_attribute_64, sum(__sail_attribute_62) as __sail_attribute_65]
-                RepartitionExec: partitioning=Hash([__sail_attribute_63@0], 4), input_partitions=4
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_61@0 as __sail_attribute_63], aggr=[count(1) as __sail_attribute_64, sum(__sail_attribute_62) as __sail_attribute_65]
-                    ProjectionExec: expr=[substr(__sail_attribute_4@0, 1, 2) as __sail_attribute_61, __sail_attribute_5@1 as __sail_attribute_62]
-                      HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(__sail_attribute_35@0, __sail_attribute_0@0)], projection=[__sail_attribute_4@1, __sail_attribute_5@2]
-                        ProjectionExec: expr=[_1@0 as __sail_attribute_35]
+        SortPreservingMergeExec: [#66@0 ASC]
+          ProjectionExec: expr=[#63@0 as #66, #64@1 as #67, #65@2 as #68]
+            SortExec: expr=[#63@0 ASC], preserve_partitioning=[true]
+              AggregateExec: mode=FinalPartitioned, gby=[#63@0 as #63], aggr=[count(1) as #64, sum(#62) as #65]
+                RepartitionExec: partitioning=Hash([#63@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#61@0 as #63], aggr=[count(1) as #64, sum(#62) as #65]
+                    ProjectionExec: expr=[substr(#4@0, 1, 2) as #61, #5@1 as #62]
+                      HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(#35@0, #0@0)], projection=[#4@1, #5@2]
+                        ProjectionExec: expr=[_1@0 as #35]
                           DataSourceExec: partitions=1, partition_sizes=[1]
                         RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          ProjectionExec: expr=[_0@0 as __sail_attribute_0, _4@1 as __sail_attribute_4, _5@2 as __sail_attribute_5]
+                          ProjectionExec: expr=[_0@0 as #0, _4@1 as #4, _5@2 as #5]
                             FilterExec: substr(_4@1, 1, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]) AND CAST(_5@2 AS Decimal128(10, 6)) > scalar_subquery(<pending>)
                               DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[__sail_attribute_32@0 as __sail_attribute_33]
-          AggregateExec: mode=Final, gby=[], aggr=[avg(__sail_attribute_21) as __sail_attribute_32]
+        ProjectionExec: expr=[#32@0 as #33]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(#21) as #32]
             CoalescePartitionsExec
-              AggregateExec: mode=Partial, gby=[], aggr=[avg(__sail_attribute_21) as __sail_attribute_32]
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(#21) as #32]
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                  ProjectionExec: expr=[_5@0 as __sail_attribute_21]
+                  ProjectionExec: expr=[_5@0 as #21]
                     FilterExec: _5@1 > 0.00 AND substr(_4@0, 1, 2) IN (SET) ([24, 34, 16, 30, 33, 14, 13]), projection=[_5@1]
                       DataSourceExec: partitions=1, partition_sizes=[1]

@@ -459,9 +459,26 @@ impl AggregateUDFImpl for TryAvgFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        sail_type_system::policies::aggregate_try_avg_typing::try_avg_function_return_type(
-            arg_types,
-        )
+        use DataType::*;
+
+        let dt = &arg_types[0];
+        let result_type = match *dt {
+            Null => Float64,
+            Decimal128(p, s) => {
+                let p2 = std::cmp::min(p + 10, 38);
+                Decimal128(p2, s)
+            }
+            Interval(IntervalUnit::YearMonth) => Interval(IntervalUnit::YearMonth),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Float64,
+            Float16 | Float32 | Float64 => Float64,
+            ref other => {
+                return Err(DataFusionError::Plan(format!(
+                    "try_avg: unsupported type: {other:?}"
+                )));
+            }
+        };
+
+        Ok(result_type)
     }
 
     fn accumulator(
@@ -492,9 +509,28 @@ impl AggregateUDFImpl for TryAvgFunction {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> datafusion::common::Result<Vec<DataType>> {
-        sail_type_system::policies::aggregate_try_avg_typing::try_avg_function_coerce_types(
-            arg_types,
-        )
+        use DataType::*;
+        if arg_types.len() != 1 {
+            return Err(DataFusionError::Plan(format!(
+                "try_avg: exactly 1 argument expected, got {}",
+                arg_types.len()
+            )));
+        }
+
+        let dt = &arg_types[0];
+        let coerced = match dt {
+            Null => Float64,
+            Decimal128(p, s) => Decimal128(*p, *s),
+            Interval(IntervalUnit::YearMonth) => Interval(IntervalUnit::YearMonth),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
+            Float16 | Float32 | Float64 => Float64,
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "try_avg: unsupported type: {other:?}"
+                )));
+            }
+        };
+        Ok(vec![coerced])
     }
 
     fn default_value(&self, _data_type: &DataType) -> datafusion::common::Result<ScalarValue> {

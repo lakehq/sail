@@ -7988,10 +7988,8 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "parquet-variant-compute",
- "regex",
  "sail-common",
  "sail-common-datafusion",
- "sail-sql-analyzer",
  "serde_json",
 ]
 

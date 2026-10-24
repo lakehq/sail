@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
+use std::ops::Deref;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/max_min_by.rs>
 use datafusion::arrow::array::ArrayRef;
@@ -107,6 +108,16 @@ impl MaxByFunction {
     }
 }
 
+fn get_min_max_by_result_type(input_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
+    match &input_types[0] {
+        DataType::Dictionary(_, dict_value_type) => {
+            // TODO add checker, if the value type is complex data type
+            Ok(vec![dict_value_type.deref().clone()])
+        }
+        _ => Ok(input_types.to_vec()),
+    }
+}
+
 impl AggregateUDFImpl for MaxByFunction {
     fn name(&self) -> &str {
         "max_by"
@@ -117,9 +128,7 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        sail_type_system::policies::aggregate_max_min_by_typing::max_by_function_return_type(
-            arg_types,
-        )
+        Ok(arg_types[0].to_owned())
     }
 
     fn accumulator(
@@ -178,9 +187,7 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
-        sail_type_system::policies::aggregate_max_min_by_typing::max_by_function_coerce_types(
-            arg_types,
-        )
+        get_min_max_by_result_type(arg_types)
     }
 }
 
@@ -223,9 +230,7 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        sail_type_system::policies::aggregate_max_min_by_typing::min_by_function_return_type(
-            arg_types,
-        )
+        Ok(arg_types[0].to_owned())
     }
 
     fn accumulator(
@@ -284,8 +289,6 @@ impl AggregateUDFImpl for MinByFunction {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>, DataFusionError> {
-        sail_type_system::policies::aggregate_max_min_by_typing::min_by_function_coerce_types(
-            arg_types,
-        )
+        get_min_max_by_result_type(arg_types)
     }
 }

@@ -118,20 +118,6 @@ pub fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
     }
 }
 
-pub fn renamed_field(
-    target: &DataType,
-    args: datafusion_expr::ReturnFieldArgs<'_>,
-) -> datafusion_common::Result<arrow_schema::FieldRef> {
-    let [field] = args.arg_fields else {
-        return datafusion_common::plan_err!("struct metadata conversion requires one argument");
-    };
-    Ok(std::sync::Arc::new(arrow_schema::Field::new(
-        "spark_struct_rename",
-        target.clone(),
-        field.is_nullable(),
-    )))
-}
-
 /// Whether a positional relabel can preserve every physical leaf array.
 /// Field names, nullability and metadata do not change the array layout.
 pub fn same_layout(source: &DataType, target: &DataType) -> bool {

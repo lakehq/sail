@@ -12,13 +12,74 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::kernels::cast;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Int64Type, UInt64Type};
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use jiter::{Jiter, JiterError, Peek};
 
 use crate::scalar::json::common_union::{
     TYPE_ID_NULL, is_json_union, json_from_union_scalar, nested_json_array, nested_json_array_ref,
 };
+
+/// General implementation of `ScalarUDFImpl::return_type`.
+///
+/// # Arguments
+///
+/// * `args` - The arguments to the function
+/// * `fn_name` - The name of the function
+/// * `value_type` - The general return type of the function, might be wrapped in a dictionary depending
+///   on the first argument
+pub fn return_type_check(
+    args: &[DataType],
+    fn_name: &str,
+    value_type: DataType,
+) -> Result<DataType> {
+    let Some(first) = args.first() else {
+        return plan_err!("The '{fn_name}' function requires one or more arguments.");
+    };
+    let first_dict_key_type = dict_key_type(first);
+    if !(is_str(first) || is_json_union(first) || first_dict_key_type.is_some()) {
+        // if !matches!(first, DataType::Utf8 | DataType::LargeUtf8) {
+        return plan_err!(
+            "Unexpected argument type to '{fn_name}' at position 1, expected a string, got {first:?}."
+        );
+    }
+    args.iter().skip(1).enumerate().try_for_each(|(index, arg)| {
+        if is_str(arg) || is_int(arg) || dict_key_type(arg).is_some() {
+            Ok(())
+        } else {
+            plan_err!(
+                "Unexpected argument type to '{fn_name}' at position {}, expected string or int, got {arg:?}.",
+                index + 2
+            )
+        }
+    })?;
+    if first_dict_key_type.is_some() && !value_type.is_primitive() {
+        Ok(DataType::Dictionary(
+            Box::new(DataType::Int64),
+            Box::new(value_type),
+        ))
+    } else {
+        Ok(value_type)
+    }
+}
+
+fn is_str(d: &DataType) -> bool {
+    matches!(d, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+}
+
+fn is_int(d: &DataType) -> bool {
+    // TODO we should support more types of int, but that's a longer task
+    matches!(d, DataType::UInt64 | DataType::Int64)
+}
+
+fn dict_key_type(d: &DataType) -> Option<DataType> {
+    if let DataType::Dictionary(key, value) = d
+        && (is_str(value) || is_json_union(value))
+    {
+        return Some(*key.clone());
+    }
+    None
+}
 
 #[derive(Debug)]
 pub enum JsonPath<'s> {

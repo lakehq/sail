@@ -58,7 +58,7 @@ data:
           DeltaWriterExec(table_path=file://<tmp>/delta_overwrite/)
             UnionExec
               ProjectionExec: expr=[CAST(id@0 AS Int64) as id, CAST(category@1 AS Utf8) as category, CAST(value@2 AS Int64) as value]
-                ProjectionExec: expr=[CAST(__sail_attribute_0@0 AS Int64) as id, __sail_attribute_1@1 as category, CAST(__sail_attribute_2@2 AS Int64) as value]
+                ProjectionExec: expr=[CAST(#0@0 AS Int64) as id, #1@1 as category, CAST(#2@2 AS Int64) as value]
                   DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[CAST(id@0 AS Int64) as id, CAST(category@1 AS Utf8) as category, CAST(value@2 AS Int64) as value]
                 FilterExec: (category@1 = A) IS DISTINCT FROM true
@@ -92,7 +92,7 @@ data:
           DeltaWriterExec(table_path=file://<tmp>/delta_overwrite/)
             UnionExec
               ProjectionExec: expr=[CAST(id@0 AS Int64) as id, CAST(category@1 AS Utf8) as category, CAST(value@2 AS Int64) as value]
-                ProjectionExec: expr=[CAST(__sail_attribute_0@0 AS Int64) as id, __sail_attribute_1@1 as category, CAST(__sail_attribute_2@2 AS Int64) as value]
+                ProjectionExec: expr=[CAST(#0@0 AS Int64) as id, #1@1 as category, CAST(#2@2 AS Int64) as value]
                   DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[CAST(id@0 AS Int64) as id, CAST(category@1 AS Utf8) as category, CAST(value@2 AS Int64) as value]
                 FilterExec: (id@0 >= 0) IS DISTINCT FROM true

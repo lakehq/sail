@@ -8,7 +8,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::scalar::ScalarValue;
 use datafusion_common::exec_err;
-use parquet_variant_compute::cast_to_variant;
+use parquet_variant_compute::{VariantType, cast_to_variant};
 use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 
 use super::spark_parse_json::convert_variant_binaryview_to_binary;
@@ -54,13 +54,23 @@ impl ScalarUDFImpl for SparkCastToVariant {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_variant_spark_cast_to_variant::return_type(_arg_types)
+        Ok(DataType::Struct(Fields::from(vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
+        ])))
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
-        sail_type_system::policies::scalar_variant_spark_cast_to_variant::return_field_from_args(
-            args,
-        )
+        let data_type = self.return_type(
+            args.arg_fields
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
+        Ok(Arc::new(
+            Field::new(self.name(), data_type, true).with_extension_type(VariantType),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

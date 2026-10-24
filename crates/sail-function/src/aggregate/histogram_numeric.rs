@@ -192,7 +192,18 @@ impl AggregateUDFImpl for HistogramNumericFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::aggregate_histogram_numeric::return_type(arg_types)
+        let x_type = arg_types[0].clone();
+        Ok(DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Struct(
+                vec![
+                    Field::new("x", x_type, true),
+                    Field::new("y", DataType::Float64, true),
+                ]
+                .into(),
+            ),
+            true,
+        ))))
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {

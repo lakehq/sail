@@ -5,11 +5,12 @@ use datafusion::arrow::array::{
     as_list_array,
 };
 use datafusion::arrow::datatypes::{DataType, Float32Type};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 
+use super::is_float_vector;
 use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -44,7 +45,17 @@ impl ScalarUDFImpl for VectorNorm {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_vector_norm_typing::vector_norm_return_type(arg_types)
+        let valid = match arg_types {
+            [vector] => is_float_vector(vector),
+            [vector, degree] => is_float_vector(vector) && degree == &DataType::Float32,
+            _ => false,
+        };
+        if !valid {
+            return plan_err!(
+                "vector_norm expects an ARRAY<FLOAT> argument and an optional FLOAT degree, got {arg_types:?}"
+            );
+        }
+        Ok(DataType::Float32)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

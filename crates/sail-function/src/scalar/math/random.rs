@@ -7,6 +7,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use rand::{RngExt, rng};
 
 use super::xorshift::SparkXorShiftRandom;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Random {
@@ -37,7 +38,7 @@ impl ScalarUDFImpl for Random {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::math_random::return_type(_arg_types)
+        Ok(DataType::Float64)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -78,7 +79,29 @@ impl ScalarUDFImpl for Random {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::math_random::coerce_types(arg_types)
+        if arg_types.is_empty() {
+            Ok(vec![])
+        } else if arg_types.len() == 1 {
+            if arg_types[0].is_signed_integer() {
+                Ok(vec![DataType::Int64])
+            } else if arg_types[0].is_unsigned_integer() {
+                Ok(vec![DataType::UInt64])
+            } else if arg_types[0].is_null() {
+                Ok(vec![DataType::Null])
+            } else {
+                Err(unsupported_data_types_exec_err(
+                    "random",
+                    "Integer Type for seed",
+                    arg_types,
+                ))
+            }
+        } else {
+            Err(invalid_arg_count_exec_err(
+                "random",
+                (0, 1),
+                arg_types.len(),
+            ))
+        }
     }
 }
 

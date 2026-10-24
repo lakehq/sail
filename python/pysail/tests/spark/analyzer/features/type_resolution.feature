@@ -89,3 +89,15 @@ Feature: Function coercion and output schemas
     Then query result
       | in_range | in_list |
       | true     | true    |
+
+  Scenario: Internal attribute names do not collide with user names
+    When query
+      """
+      WITH t AS (SELECT 1 AS `#0`, array('-2', '-1') AS `#1`)
+      SELECT l.`#0`, transform(l.`#1`, x -> abs(x)) AS `#1`,
+             (SELECT max(r.`#0`) FROM t r WHERE r.`#0` = l.`#0`) AS `#2`
+      FROM t l JOIN t r ON l.`#0` = r.`#0`
+      """
+    Then query result
+      | #0 | #1         | #2 |
+      | 1  | [2.0, 1.0] | 1  |

@@ -1,8 +1,11 @@
+use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Decimal128Array, DurationMicrosecondArray};
+use datafusion::arrow::compute::kernels::cast_utils::IntervalUnit;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion::arrow::temporal_conversions::MICROSECONDS;
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -112,7 +115,23 @@ impl ScalarUDFImpl for SparkDatePart {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::date_part::return_field_from_args(&self.inner, args)
+        let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
+
+        field
+            .and_then(|sv| sv.try_as_str())
+            .flatten()
+            .filter(|part| !part.is_empty())
+            .filter(|part| {
+                IntervalUnit::from_str(part).is_ok_and(|unit| matches!(unit, IntervalUnit::Second))
+            })
+            .map(|_| {
+                Ok(Arc::new(Field::new(
+                    self.name(),
+                    DataType::Decimal128(8, 6),
+                    true,
+                )))
+            })
+            .unwrap_or_else(|| self.inner.return_field_from_args(args))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

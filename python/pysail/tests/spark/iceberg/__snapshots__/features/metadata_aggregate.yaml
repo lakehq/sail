@@ -4,60 +4,60 @@ name: "test_aggregate_expressions_resolve_aliases_in_subquery_projections"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_11@0 as x, __sail_attribute_12@1 as y, __sail_attribute_13@2 as z]
-      ProjectionExec: expr=[3 as __sail_attribute_11, 2 as __sail_attribute_12, __sail_residual_aggregate_2@0 as __sail_attribute_13]
-        AggregateExec: mode=Single, gby=[], aggr=[sum(__sail_attribute_7) as __sail_residual_aggregate_2]
-          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[a@1 as __sail_attribute_7], file_type=parquet
+    ProjectionExec: expr=[#11@0 as x, #12@1 as y, #13@2 as z]
+      ProjectionExec: expr=[3 as #11, 2 as #12, __sail_residual_aggregate_2@0 as #13]
+        AggregateExec: mode=Single, gby=[], aggr=[sum(#7) as __sail_residual_aggregate_2]
+          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[a@1 as #7], file_type=parquet
 ---
 name: "test_aggregate_filters_retain_their_own_row_selection"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[__sail_residual_aggregate_0@0 as __sail_attribute_9, __sail_residual_aggregate_1@1 as __sail_attribute_10, 3 as __sail_attribute_11]
-        AggregateExec: mode=Single, gby=[], aggr=[count(1) FILTER (WHERE __common_expr_1) as __sail_residual_aggregate_0, min(__sail_attribute_0) FILTER (WHERE __common_expr_1) as __sail_residual_aggregate_1]
-          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 > 2 as __common_expr_1, id@0 as __sail_attribute_0], file_type=parquet
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[__sail_residual_aggregate_0@0 as #9, __sail_residual_aggregate_1@1 as #10, 3 as #11]
+        AggregateExec: mode=Single, gby=[], aggr=[count(1) FILTER (WHERE __common_expr_1) as __sail_residual_aggregate_0, min(#0) FILTER (WHERE __common_expr_1) as __sail_residual_aggregate_1]
+          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 > 2 as __common_expr_1, id@0 as #0], file_type=parquet
 ---
 name: "test_allmatch_file_predicates_permit_metadata_aggregation"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[3 as __sail_attribute_9, 2 as __sail_attribute_10, 10 as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[3 as #9, 2 as #10, 10 as #11]
         PlaceholderRowExec
 ---
 name: "test_an_empty_file_selection_produces_one_aggregate_row"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[0 as __sail_attribute_9, NULL as __sail_attribute_10, NULL as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[0 as #9, NULL as #10, NULL as #11]
         PlaceholderRowExec
 ---
 name: "test_counts_distinguish_rows_nonnull_values_and_allnull_values"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[3 as __sail_attribute_9, 2 as __sail_attribute_10, 0 as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[3 as #9, 2 as #10, 0 as #11]
         PlaceholderRowExec
 ---
 name: "test_empty_snapshots_preserve_counts_and_nullable_extrema"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_6@0 as rows, __sail_attribute_7@1 as distinct_literal, __sail_attribute_8@2 as minimum, __sail_attribute_9@3 as maximum, __sail_attribute_10@4 as total]
-      ProjectionExec: expr=[0 as __sail_attribute_6, 0 as __sail_attribute_7, NULL as __sail_attribute_8, NULL as __sail_attribute_9, __sail_residual_aggregate_4@0 as __sail_attribute_10]
-        AggregateExec: mode=Single, gby=[], aggr=[sum(__sail_attribute_0) as __sail_residual_aggregate_4]
-          ProjectionExec: expr=[id@0 as __sail_attribute_0]
+    ProjectionExec: expr=[#6@0 as rows, #7@1 as distinct_literal, #8@2 as minimum, #9@3 as maximum, #10@4 as total]
+      ProjectionExec: expr=[0 as #6, 0 as #7, NULL as #8, NULL as #9, __sail_residual_aggregate_4@0 as #10]
+        AggregateExec: mode=Single, gby=[], aggr=[sum(#0) as __sail_residual_aggregate_4]
+          ProjectionExec: expr=[id@0 as #0]
             EmptyExec
 ---
 name: "test_fallible_casts_do_not_inherit_source_null_counts"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[__sail_residual_aggregate_0@0 as __sail_attribute_9, __sail_residual_aggregate_1@1 as __sail_attribute_10, 3 as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[__sail_residual_aggregate_0@0 as #9, __sail_residual_aggregate_1@1 as #10, 3 as #11]
         AggregateExec: mode=Single, gby=[], aggr=[count(__common_expr_1) as __sail_residual_aggregate_0, min(__common_expr_1) as __sail_residual_aggregate_1]
           DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[TRY_CAST(text@4 AS Int32) as __common_expr_1], file_type=parquet
 ---
@@ -65,23 +65,23 @@ name: "test_grouped_aggregates_retain_group_cardinality"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as k, __sail_attribute_10@1 as n, __sail_attribute_11@2 as total]
-      SortPreservingMergeExec: [__sail_attribute_9@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_6@0 as __sail_attribute_9, __sail_attribute_7@1 as __sail_attribute_10, __sail_attribute_8@2 as __sail_attribute_11]
-          SortExec: expr=[__sail_attribute_6@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_6@0 as __sail_attribute_6], aggr=[count(1) as __sail_attribute_7, sum(__sail_attribute_1) as __sail_attribute_8]
-              RepartitionExec: partitioning=Hash([__sail_attribute_6@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_0@0 % 2 as __sail_attribute_6], aggr=[count(1) as __sail_attribute_7, sum(__sail_attribute_1) as __sail_attribute_8]
-                  DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 as __sail_attribute_0, a@1 as __sail_attribute_1], file_type=parquet
+    ProjectionExec: expr=[#9@0 as k, #10@1 as n, #11@2 as total]
+      SortPreservingMergeExec: [#9@0 ASC]
+        ProjectionExec: expr=[#6@0 as #9, #7@1 as #10, #8@2 as #11]
+          SortExec: expr=[#6@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[count(1) as #7, sum(#1) as #8]
+              RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#0@0 % 2 as #6], aggr=[count(1) as #7, sum(#1) as #8]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 as #0, a@1 as #1], file_type=parquet
 ---
 name: "test_input_limits_preserve_selected_row_cardinality"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_10@0 as x, __sail_attribute_11@1 as y, __sail_attribute_12@2 as z]
-      ProjectionExec: expr=[__sail_attribute_7@0 as __sail_attribute_10, __sail_attribute_8@1 as __sail_attribute_11, __sail_attribute_9@2 as __sail_attribute_12]
-        AggregateExec: mode=Single, gby=[], aggr=[count(1) as __sail_attribute_7, min(__sail_attribute_6) as __sail_attribute_8, max(__sail_attribute_6) as __sail_attribute_9]
-          ProjectionExec: expr=[id@0 as __sail_attribute_6]
+    ProjectionExec: expr=[#10@0 as x, #11@1 as y, #12@2 as z]
+      ProjectionExec: expr=[#7@0 as #10, #8@1 as #11, #9@2 as #12]
+        AggregateExec: mode=Single, gby=[], aggr=[count(1) as #7, min(#6) as #8, max(#6) as #9]
+          ProjectionExec: expr=[id@0 as #6]
             SortExec: TopK(fetch=2), expr=[id@0 ASC], preserve_partitioning=[false]
               DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[id@0 ASC], dynamic_rg_pruning=eligible
 ---
@@ -89,11 +89,11 @@ name: "test_lazy_reads_return_correct_aggregate_values[COUNT(*)-3]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as value]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_3]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as value]
+      ProjectionExec: expr=[#2@0 as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_2]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #2]
               IcebergScanByDataFilesExec: table_url=file://<table_url>
                 IcebergDiscoveryExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>, partition_scan=false
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -103,12 +103,12 @@ name: "test_lazy_reads_return_correct_aggregate_values[MIN(id)-2]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as value]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_3]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__sail_attribute_0) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as value]
+      ProjectionExec: expr=[#2@0 as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[min(#0) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__sail_attribute_0) as __sail_attribute_2]
-              ProjectionExec: expr=[id@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(#0) as #2]
+              ProjectionExec: expr=[id@0 as #0]
                 IcebergScanByDataFilesExec: table_url=file://<table_url>
                   IcebergDiscoveryExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>, partition_scan=false
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -118,12 +118,12 @@ name: "test_lazy_reads_return_correct_aggregate_values[SUM(a)-120]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as value]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_3]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(__sail_attribute_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as value]
+      ProjectionExec: expr=[#2@0 as #3]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(#1) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(__sail_attribute_1) as __sail_attribute_2]
-              ProjectionExec: expr=[a@0 as __sail_attribute_1]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(#1) as #2]
+              ProjectionExec: expr=[a@0 as #1]
                 IcebergScanByDataFilesExec: table_url=file://<table_url>
                   IcebergDiscoveryExec: table_url=file://<table_url>, snapshot_id=<snapshot_id>, partition_scan=false
                     RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -133,34 +133,34 @@ name: "test_literals_and_distinct_literals_use_snapshot_cardinality"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[3 as __sail_attribute_9, 1 as __sail_attribute_10, 0 as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[3 as #9, 1 as #10, 0 as #11]
         PlaceholderRowExec
 ---
 name: "test_metadata_aggregates_and_row_aggregates_return_consistent_results"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[3 as __sail_attribute_9, 2 as __sail_attribute_10, __sail_residual_aggregate_2@0 as __sail_attribute_11]
-        AggregateExec: mode=Single, gby=[], aggr=[sum(__sail_attribute_1) as __sail_residual_aggregate_2]
-          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[a@1 as __sail_attribute_1], file_type=parquet
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[3 as #9, 2 as #10, __sail_residual_aggregate_2@0 as #11]
+        AggregateExec: mode=Single, gby=[], aggr=[sum(#1) as __sail_residual_aggregate_2]
+          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[a@1 as #1], file_type=parquet
 ---
 name: "test_multiple_nullable_arguments_require_joint_row_evaluation"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[__sail_attribute_6@0 as __sail_attribute_9, __sail_attribute_7@1 as __sail_attribute_10, __sail_attribute_8@2 as __sail_attribute_11]
-        AggregateExec: mode=Single, gby=[], aggr=[count(CASE WHEN __common_expr_1 OR __common_expr_2 THEN NULL ELSE struct(__sail_attribute_0, __sail_attribute_1) END) as __sail_attribute_6, count(CASE WHEN __common_expr_2 OR __sail_attribute_2 IS NULL THEN NULL ELSE struct(__sail_attribute_1, __sail_attribute_2) END) as __sail_attribute_7, count(CASE WHEN __common_expr_1 OR __sail_attribute_3 IS NULL THEN NULL ELSE struct(__sail_attribute_0, __sail_attribute_3) END) as __sail_attribute_8]
-          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 IS NULL as __common_expr_1, a@1 IS NULL as __common_expr_2, id@0 as __sail_attribute_0, a@1 as __sail_attribute_1, b@2 as __sail_attribute_2, z@3 as __sail_attribute_3], file_type=parquet
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[#6@0 as #9, #7@1 as #10, #8@2 as #11]
+        AggregateExec: mode=Single, gby=[], aggr=[count(CASE WHEN __common_expr_1 OR __common_expr_2 THEN NULL ELSE struct(#0, #1) END) as #6, count(CASE WHEN __common_expr_2 OR #2 IS NULL THEN NULL ELSE struct(#1, #2) END) as #7, count(CASE WHEN __common_expr_1 OR #3 IS NULL THEN NULL ELSE struct(#0, #3) END) as #8]
+          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 IS NULL as __common_expr_1, a@1 IS NULL as __common_expr_2, id@0 as #0, a@1 as #1, b@2 as #2, z@3 as #3], file_type=parquet
 ---
 name: "test_nested_field_aggregates_preserve_null_semantics"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[3 as __sail_attribute_9, __sail_residual_aggregate_1@0 as __sail_attribute_10, __sail_residual_aggregate_2@1 as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[3 as #9, __sail_residual_aggregate_1@0 as #10, __sail_residual_aggregate_2@1 as #11]
         AggregateExec: mode=Single, gby=[], aggr=[min(__datafusion_extracted_1) as __sail_residual_aggregate_1, max(__datafusion_extracted_1) as __sail_residual_aggregate_2]
           DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[get_field(payload@5, value) as __datafusion_extracted_1], file_type=parquet
 ---
@@ -168,8 +168,8 @@ name: "test_nonmonotonic_casts_preserve_lexical_extrema"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[__sail_residual_aggregate_0@0 as __sail_attribute_9, __sail_residual_aggregate_1@1 as __sail_attribute_10, 3 as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[__sail_residual_aggregate_0@0 as #9, __sail_residual_aggregate_1@1 as #10, 3 as #11]
         AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as __sail_residual_aggregate_0, max(__common_expr_1) as __sail_residual_aggregate_1]
           DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[CAST(id@0 AS Utf8) as __common_expr_1], file_type=parquet
 ---
@@ -177,20 +177,20 @@ name: "test_numeric_and_allnull_extrema_preserve_their_values"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[2 as __sail_attribute_9, 10 as __sail_attribute_10, NULL as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[2 as #9, 10 as #10, NULL as #11]
         PlaceholderRowExec
 ---
 name: "test_residual_file_predicates_prevent_metadata_aggregation"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[__sail_attribute_6@0 as __sail_attribute_9, __sail_attribute_7@1 as __sail_attribute_10, __sail_attribute_8@2 as __sail_attribute_11]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_6, min(__sail_attribute_0) as __sail_attribute_7, max(__sail_attribute_0) as __sail_attribute_8]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[#6@0 as #9, #7@1 as #10, #8@2 as #11]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #6, min(#0) as #7, max(#0) as #8]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_6, min(__sail_attribute_0) as __sail_attribute_7, max(__sail_attribute_0) as __sail_attribute_8]
-              ProjectionExec: expr=[id@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #6, min(#0) as #7, max(#0) as #8]
+              ProjectionExec: expr=[id@0 as #0]
                 FilterExec: id@0 > 2
                   DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
 ---
@@ -198,37 +198,37 @@ name: "test_scalar_aggregate_subqueries_return_independent_results"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_24@0 as x, __sail_attribute_25@1 as y, __sail_attribute_26@2 as z]
+    ProjectionExec: expr=[#24@0 as x, #25@1 as y, #26@2 as z]
       ScalarSubqueryExec: subqueries=3
-        ProjectionExec: expr=[scalar_subquery(<pending>) as __sail_attribute_24, scalar_subquery(<pending>) as __sail_attribute_25, scalar_subquery(<pending>) as __sail_attribute_26]
+        ProjectionExec: expr=[scalar_subquery(<pending>) as #24, scalar_subquery(<pending>) as #25, scalar_subquery(<pending>) as #26]
           PlaceholderRowExec
-        ProjectionExec: expr=[3 as __sail_attribute_7]
+        ProjectionExec: expr=[3 as #7]
           PlaceholderRowExec
-        ProjectionExec: expr=[2 as __sail_attribute_15]
+        ProjectionExec: expr=[2 as #15]
           PlaceholderRowExec
-        ProjectionExec: expr=[__sail_attribute_22@0 as __sail_attribute_23]
-          AggregateExec: mode=Single, gby=[], aggr=[sum(__sail_attribute_17) as __sail_attribute_22]
-            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[a@1 as __sail_attribute_17], file_type=parquet
+        ProjectionExec: expr=[#22@0 as #23]
+          AggregateExec: mode=Single, gby=[], aggr=[sum(#17) as #22]
+            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[a@1 as #17], file_type=parquet
 ---
 name: "test_sum_and_distinct_counts_preserve_their_results"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[__sail_attribute_6@0 as __sail_attribute_9, __sail_attribute_7@1 as __sail_attribute_10, __sail_attribute_8@2 as __sail_attribute_11]
-        AggregateExec: mode=Single, gby=[], aggr=[sum(__sail_attribute_0) as __sail_attribute_6, count(DISTINCT __sail_attribute_0) as __sail_attribute_7, count(DISTINCT __sail_attribute_1) as __sail_attribute_8]
-          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 as __sail_attribute_0, a@1 as __sail_attribute_1], file_type=parquet
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[#6@0 as #9, #7@1 as #10, #8@2 as #11]
+        AggregateExec: mode=Single, gby=[], aggr=[sum(#0) as #6, count(DISTINCT #0) as #7, count(DISTINCT #1) as #8]
+          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id@0 as #0, a@1 as #1], file_type=parquet
 ---
 name: "test_unsupported_predicates_retain_logical_row_filtering"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[__sail_attribute_6@0 as __sail_attribute_9, __sail_attribute_7@1 as __sail_attribute_10, __sail_attribute_8@2 as __sail_attribute_11]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_6, min(__sail_attribute_0) as __sail_attribute_7, max(__sail_attribute_0) as __sail_attribute_8]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[#6@0 as #9, #7@1 as #10, #8@2 as #11]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #6, min(#0) as #7, max(#0) as #8]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_6, min(__sail_attribute_0) as __sail_attribute_7, max(__sail_attribute_0) as __sail_attribute_8]
-              ProjectionExec: expr=[id@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #6, min(#0) as #7, max(#0) as #8]
+              ProjectionExec: expr=[id@0 as #0]
                 FilterExec: id@0 % 2 = 0
                   DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000000.parquet, <tmp>/iceberg_metadata_aggregates/data/part-<uuid>-00000000000000000001.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 % 2 = 0
 ---
@@ -236,6 +236,6 @@ name: "test_widening_casts_preserve_exact_aggregate_statistics"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as x, __sail_attribute_10@1 as y, __sail_attribute_11@2 as z]
-      ProjectionExec: expr=[2 as __sail_attribute_9, 10 as __sail_attribute_10, 2 as __sail_attribute_11]
+    ProjectionExec: expr=[#9@0 as x, #10@1 as y, #11@2 as z]
+      ProjectionExec: expr=[2 as #9, 10 as #10, 2 as #11]
         PlaceholderRowExec

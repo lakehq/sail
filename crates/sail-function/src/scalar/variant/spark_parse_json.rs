@@ -10,13 +10,13 @@ use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use parquet_variant_compute::VariantArrayBuilder;
+use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::append_json;
 use sail_common_datafusion::variant::{
     VARIANT_METADATA_FIELD_NAME, VARIANT_VALUE_FIELD_NAME, variant_metadata_field,
 };
 
-use crate::error::unsupported_data_type_exec_err;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_utils::make_scalar_function;
 
 /// Returns a Variant from a JSON string.
@@ -180,11 +180,29 @@ impl ScalarUDFImpl for SparkParseJson {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_variant_spark_parse_json_typing::spark_parse_json_return_type(_arg_types)
+        // Use Binary instead of BinaryView for PySpark compatibility.
+        // parquet-variant uses BinaryView internally (zero-copy, more efficient),
+        // but PySpark doesn't support BinaryView in Arrow-to-Python conversion,
+        // failing at gRPC serialization. The ideal approach would be BinaryView
+        // internally and convert to Binary only at the Spark Connect serialization
+        // layer, but that requires a broader refactor of the serialization path.
+        Ok(DataType::Struct(Fields::from(vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
+        ])))
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Arc<Field>> {
-        sail_type_system::policies::scalar_variant_spark_parse_json_typing::spark_parse_json_return_field_from_args(self.name(), args)
+        let data_type = self.return_type(
+            args.arg_fields
+                .iter()
+                .map(|f| f.data_type().clone())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )?;
+        Ok(Arc::new(
+            Field::new(self.name(), data_type, true).with_extension_type(VariantType),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -211,7 +229,28 @@ impl ScalarUDFImpl for SparkParseJson {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::scalar_variant_spark_parse_json_typing::spark_parse_json_coerce_types(self.name(), arg_types)
+        if arg_types.len() != 1 {
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (1, 1),
+                arg_types.len(),
+            ));
+        }
+
+        // Coerce all string types to Utf8View for consistency
+        let coerced_type = match &arg_types[0] {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
+            DataType::Null => DataType::Null,
+            other => {
+                return datafusion_common::plan_err!(
+                    "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{}\" due to data type mismatch: The first parameter requires the \"STRING\" type, however the input has the type \"{}\".",
+                    self.name(),
+                    other
+                );
+            }
+        };
+
+        Ok(vec![coerced_type])
     }
 }
 

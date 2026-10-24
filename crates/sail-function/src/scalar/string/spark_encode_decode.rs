@@ -4,8 +4,8 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArrayType, BinaryBuilder, GenericBinaryBuilder,
     GenericStringBuilder, LargeBinaryBuilder, OffsetSizeTrait, StringArrayType,
 };
-use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, internal_err};
 use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
@@ -39,7 +39,9 @@ impl ScalarUDFImpl for SparkEncode {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_string_spark_encode_decode_typing::spark_encode_return_type(_arg_types)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     /// Spark: `Encode` is `RuntimeReplaceable`; its `StaticInvoke` replacement leaves
@@ -47,7 +49,28 @@ impl ScalarUDFImpl for SparkEncode {
     /// `needNullCheck || returnNullable`.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::scalar_string_spark_encode_decode_typing::spark_encode_return_field_from_args(self.name(), args)
+        // Also reached from plan building, where the coercion analyzer has not run yet, so
+        // the arity check in `coerce_types` has not gated anything: this must not index blindly.
+        let [value, charset] = args.arg_fields else {
+            return exec_err!(
+                "Spark `encode` function requires 2 arguments, got {}",
+                args.arg_fields.len()
+            );
+        };
+        let data_type = if matches!(charset.data_type(), DataType::Null) {
+            DataType::Binary
+        } else {
+            match value.data_type() {
+                DataType::Null | DataType::Utf8 | DataType::Utf8View => DataType::Binary,
+                DataType::LargeUtf8 => DataType::LargeBinary,
+                other => {
+                    return exec_err!(
+                        "Spark `encode` function: Expected a STRING type, got {other:?}"
+                    );
+                }
+            }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -221,7 +244,23 @@ impl ScalarUDFImpl for SparkEncode {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::scalar_string_spark_encode_decode_typing::spark_encode_coerce_types(arg_types)
+        if arg_types.len() != 2 {
+            return exec_err!(
+                "Spark `encode` function requires 2 arguments, got {}",
+                arg_types.len()
+            );
+        }
+        arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {
+                    Ok(arg_type.clone())
+                }
+                other => {
+                    exec_err!("Spark `encode` function: Expected a STRING type, got {other:?}")
+                }
+            })
+            .collect::<Result<Vec<_>>>()
     }
 }
 
@@ -254,7 +293,9 @@ impl ScalarUDFImpl for SparkDecode {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_string_spark_encode_decode_typing::spark_decode_return_type(_arg_types)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     /// Spark: `StringDecode` is `RuntimeReplaceable`; its `StaticInvoke` replacement leaves
@@ -262,7 +303,33 @@ impl ScalarUDFImpl for SparkDecode {
     /// `needNullCheck || returnNullable`.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/objects/objects.scala#L334>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::scalar_string_spark_encode_decode_typing::spark_decode_return_field_from_args(self.name(), args)
+        // Also reached from plan building, where the coercion analyzer has not run yet, so
+        // the arity check in `coerce_types` has not gated anything: this must not index blindly.
+        let [value, charset] = args.arg_fields else {
+            return exec_err!(
+                "Spark `decode` function requires 2 arguments, got {}",
+                args.arg_fields.len()
+            );
+        };
+        let data_type = if matches!(charset.data_type(), DataType::Null) {
+            DataType::Utf8
+        } else {
+            match value.data_type() {
+                DataType::Null
+                | DataType::Binary
+                | DataType::FixedSizeBinary(_)
+                | DataType::BinaryView
+                | DataType::Utf8
+                | DataType::Utf8View => DataType::Utf8,
+                DataType::LargeUtf8 | DataType::LargeBinary => DataType::LargeUtf8,
+                other => {
+                    return exec_err!(
+                        "Spark `decode` function: Expected a BINARY type, got {other:?}"
+                    );
+                }
+            }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -436,7 +503,31 @@ impl ScalarUDFImpl for SparkDecode {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::scalar_string_spark_encode_decode_typing::spark_decode_coerce_types(arg_types)
+        if arg_types.len() != 2 {
+            return exec_err!(
+                "Spark `decode` function requires 2 arguments, got {}",
+                arg_types.len()
+            );
+        }
+        let bytes = &arg_types[0];
+        let char_set = &arg_types[1];
+
+        let bytes = match bytes {
+            DataType::Null | DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
+                Ok(bytes.clone())
+            }
+            DataType::FixedSizeBinary(_) => Ok(DataType::Binary),
+            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Binary),
+            DataType::LargeUtf8 => Ok(DataType::LargeBinary),
+            other => exec_err!("Spark `decode` function: Expected a BINARY type, got {other:?}"),
+        }?;
+        let char_set = match char_set {
+            DataType::Null | DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                Ok(char_set.clone())
+            }
+            other => exec_err!("Spark `decode` function: Expected a STRING type, got {other:?}"),
+        }?;
+        Ok(vec![bytes, char_set])
     }
 }
 

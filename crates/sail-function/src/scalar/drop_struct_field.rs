@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -25,10 +25,44 @@ impl DropStructField {
     }
 
     fn drop_nested_field(data_type: &DataType, field_names: &[String]) -> Result<DataType> {
-        sail_type_system::policies::scalar_drop_struct_field::drop_nested_field(
-            data_type,
-            field_names,
-        )
+        match data_type {
+            DataType::Struct(fields) => {
+                if field_names.is_empty() {
+                    return plan_err!("Field name cannot be empty");
+                }
+
+                let current_field = &field_names[0];
+                let mut new_fields = Vec::new();
+
+                for field in fields.iter() {
+                    if field.name() == current_field {
+                        if field_names.len() == 1 {
+                            continue;
+                        } else {
+                            let new_data_type =
+                                Self::drop_nested_field(field.data_type(), &field_names[1..])?;
+                            new_fields.push(Arc::new(Field::new(
+                                field.name(),
+                                new_data_type,
+                                field.is_nullable(),
+                            )));
+                        }
+                    } else {
+                        new_fields.push(Arc::clone(field));
+                    }
+                }
+
+                // Spark's `dropFields` silently ignores field names that do not
+                // exist (the struct is returned unchanged), but raises when every
+                // field would be dropped.
+                if new_fields.is_empty() {
+                    plan_err!("[CANNOT_DROP_ALL_FIELDS] Cannot drop all fields in struct")
+                } else {
+                    Ok(DataType::Struct(new_fields.into()))
+                }
+            }
+            _ => plan_err!("Expected Struct, found {data_type}"),
+        }
     }
 
     fn drop_nested_field_from_array(array: &ArrayRef, field_names: &[String]) -> Result<ArrayRef> {
@@ -75,10 +109,13 @@ impl ScalarUDFImpl for DropStructField {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_drop_struct_field::return_type(
-            &self.field_names,
-            arg_types,
-        )
+        if arg_types.len() != 1 {
+            return exec_err!(
+                "drop_struct_field function requires 1 argument, got {}",
+                arg_types.len()
+            );
+        }
+        Self::drop_nested_field(&arg_types[0], &self.field_names)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

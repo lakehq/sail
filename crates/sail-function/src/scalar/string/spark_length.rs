@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
 use datafusion::arrow::compute::kernels::length::{bit_length, length};
-use datafusion::arrow::datatypes::{DataType, FieldRef, Int32Type, Int64Type};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int32Type, Int64Type};
 use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -67,7 +67,8 @@ macro_rules! define_length_udf {
             }
 
             fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-                sail_type_system::scalar::length_field(self.name(), args)
+                let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+                Ok(Arc::new(Field::new(self.name(), DataType::Int32, nullable)))
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

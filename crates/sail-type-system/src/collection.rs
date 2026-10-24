@@ -1,4 +1,4 @@
-//! Collection type policies shared by query construction and kernel typing.
+//! Collection type rules for query analysis.
 use std::sync::Arc;
 
 use arrow_schema::{DataType, FieldRef};

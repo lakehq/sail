@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int32Array};
-use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_expr::{
@@ -44,11 +44,11 @@ impl ScalarUDFImpl for SparkCastStringToInt32 {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::spark_cast_string_to_int32::return_type(_arg_types)
+        Ok(DataType::Int32)
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::spark_cast_string_to_int32::return_field_from_args(_args)
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -142,7 +142,6 @@ fn is_spark_trim_byte(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::Field;
     use datafusion::arrow::array::{Array, LargeStringArray, StringArray, StringViewArray};
     use datafusion_common::exec_err;
 

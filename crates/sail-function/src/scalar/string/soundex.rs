@@ -37,7 +37,10 @@ impl ScalarUDFImpl for Soundex {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::string_soundex::return_type(arg_types)
+        match &arg_types[0] {
+            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+            _ => Ok(DataType::Utf8),
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

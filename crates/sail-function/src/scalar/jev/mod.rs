@@ -4,17 +4,19 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, ListArray, MapArray, StructArray, new_empty_array};
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use async_trait::async_trait;
-use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
-use parquet_variant_compute::{VariantArray, unshred_variant};
+use parquet_variant_compute::{VariantArray, VariantType, unshred_variant};
 use parquet_variant_json::VariantToJson;
-use sail_common_datafusion::variant::is_variant_storage_field;
+use sail_common_datafusion::variant::{
+    VARIANT_VALUE_FIELD_NAME, is_variant_storage_field, variant_metadata_field,
+};
 use serde::Serialize;
 use serde_json::value::{RawValue, to_raw_value};
 use serde_json::{Map, Value};
@@ -23,10 +25,62 @@ pub(crate) mod contract;
 mod output;
 pub(crate) mod transport;
 
-pub use sail_type_system::policies::jev::JevKind;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JevKind {
+    Noul,
+    Choice,
+    Score,
+    SystemOne,
+    Models,
+}
+
+impl JevKind {
+    pub const ALL: [Self; 5] = [
+        Self::Noul,
+        Self::Choice,
+        Self::Score,
+        Self::SystemOne,
+        Self::Models,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Noul => "jev_noul",
+            Self::Choice => "jev_choice",
+            Self::Score => "jev_score",
+            Self::SystemOne => "jev_system_one",
+            Self::Models => "jev_models",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+
+    fn arity(self) -> (usize, usize) {
+        match self {
+            Self::Noul => (2, 4),
+            Self::Choice | Self::Score => (3, 4),
+            Self::SystemOne => (2, 3),
+            Self::Models => (0, 1),
+        }
+    }
+
+    pub fn options_index(self) -> usize {
+        match self {
+            Self::Noul | Self::Choice | Self::Score => 3,
+            Self::SystemOne => 2,
+            Self::Models => 0,
+        }
+    }
+
+    pub fn udf(self) -> ScalarUDF {
+        AsyncScalarUDF::new(Arc::new(Jev::new(self))).into_scalar_udf()
+    }
+}
 
 pub fn jev_udf(kind: JevKind) -> ScalarUDF {
-    AsyncScalarUDF::new(Arc::new(Jev::new(kind))).into_scalar_udf()
+    kind.udf()
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -59,8 +113,52 @@ impl Jev {
     }
 
     fn validate_fields(&self, fields: &[FieldRef]) -> Result<()> {
-        sail_type_system::policies::jev::validate_fields(self.kind, fields)
+        let (min, max) = self.kind.arity();
+        if !(min..=max).contains(&fields.len()) {
+            return plan_err!("{} requires {min} to {max} arguments", self.name());
+        }
+        for (index, field) in fields.iter().enumerate() {
+            let ty = field.data_type();
+            let valid = if matches!(ty, DataType::Null) {
+                true
+            } else if index == self.kind.options_index() {
+                string_map(ty)
+            } else if self.kind == JevKind::SystemOne && index == 1 {
+                is_variant_storage_field(field)
+            } else if index == 2 {
+                is_variant_storage_field(field)
+                    || match self.kind {
+                        JevKind::Score => {
+                            matches!(ty, DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _) | DataType::ListView(item) | DataType::LargeListView(item) if string_type(item.data_type()))
+                        }
+                        _ => string_map(ty),
+                    }
+            } else {
+                string_type(ty) || is_variant_storage_field(field)
+            };
+            if !valid {
+                return plan_err!(
+                    "{} argument {} has unsupported type {ty}; use STRING/VARIANT for content, the documented criteria type, and MAP<STRING,STRING> for options",
+                    self.name(),
+                    index + 1
+                );
+            }
+        }
+        Ok(())
     }
+}
+
+fn string_type(ty: &DataType) -> bool {
+    matches!(
+        ty,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
+fn string_map(ty: &DataType) -> bool {
+    matches!(ty, DataType::Map(entry, _) if matches!(entry.data_type(), DataType::Struct(fields)
+        if fields.len() == 2 && string_type(fields[0].data_type())
+            && (string_type(fields[1].data_type()) || fields[1].data_type() == &DataType::Null)))
 }
 
 impl ScalarUDFImpl for Jev {
@@ -73,11 +171,22 @@ impl ScalarUDFImpl for Jev {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::jev::return_type(self.kind, arg_types)
+        self.validate_fields(
+            &arg_types
+                .iter()
+                .map(|ty| Arc::new(Field::new("argument", ty.clone(), true)))
+                .collect::<Vec<_>>(),
+        )?;
+        Ok(DataType::Struct(output::fields(self.kind)))
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::jev::return_field_from_args(self.kind, args)
+        self.validate_fields(args.arg_fields)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::Struct(output::fields(self.kind)),
+            true,
+        )))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -373,4 +482,16 @@ fn json_list(array: ArrayRef, field: &Field) -> Result<Value> {
             .map(|i| json_value(array.as_ref(), field, i).map(|value| value.unwrap_or(Value::Null)))
             .collect::<Result<Vec<_>>>()?,
     ))
+}
+
+fn variant_field(name: &str, nullable: bool) -> Field {
+    Field::new(
+        name,
+        DataType::Struct(Fields::from(vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
+        ])),
+        nullable,
+    )
+    .with_extension_type(VariantType)
 }

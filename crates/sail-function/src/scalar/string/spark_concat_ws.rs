@@ -14,8 +14,8 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, GenericListArray, LargeStringArray, OffsetSizeTrait, StringArray,
     StringBuilder, StringViewArray, new_null_array,
 };
-use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::{Result, ScalarValue};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -53,7 +53,10 @@ impl ScalarUDFImpl for SparkConcatWs {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::string_spark_concat_ws::return_type(_arg_types)
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
+        )
     }
 
     /// `concat_ws` is null only when the separator is null; null value arguments
@@ -63,7 +66,8 @@ impl ScalarUDFImpl for SparkConcatWs {
     /// Set here (not in the deprecated `is_nullable`, which DataFusion no longer
     /// consults to derive the output field).
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::string_spark_concat_ws::return_field_from_args(args)
+        let nullable = args.arg_fields.first().is_none_or(|sep| sep.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
     }
 
     /// Plan-time simplifications that mirror Spark's `concat_ws` semantics, so the
@@ -120,7 +124,32 @@ impl ScalarUDFImpl for SparkConcatWs {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::string_spark_concat_ws::coerce_types(arg_types)
+        // Spark errors on `concat_ws()` with no separator (WRONG_NUM_ARGS).
+        if arg_types.is_empty() {
+            return Err(invalid_arg_count_exec_err("concat_ws", (1, i32::MAX), 0));
+        }
+        arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+                DataType::Null => Ok(DataType::Null),
+                DataType::Utf8 | DataType::Utf8View => Ok(DataType::Utf8),
+                DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+                DataType::List(field)
+                | DataType::ListView(field)
+                | DataType::FixedSizeList(field, _) => Ok(DataType::List(Arc::clone(field))),
+                DataType::LargeList(field) | DataType::LargeListView(field) => {
+                    Ok(DataType::LargeList(Arc::clone(field)))
+                }
+                // Spark casts any other scalar (numbers, booleans, dates, binary, …) to STRING.
+                other => {
+                    if other.is_nested() {
+                        Ok(other.clone())
+                    } else {
+                        Ok(DataType::Utf8)
+                    }
+                }
+            })
+            .collect()
     }
 }
 

@@ -8,17 +8,17 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: __sail_attribute_21 ASC NULLS FIRST
-      Projection: __sail_attribute_17 AS __sail_attribute_21, __sail_attribute_18 AS __sail_expression_58 AS __sail_attribute_22, __sail_attribute_19 AS __sail_expression_62 AS __sail_attribute_23, __sail_attribute_20 AS __sail_expression_66 AS __sail_attribute_24
-        Aggregate: groupBy=[[__sail_attribute_16 AS __sail_attribute_17]], aggr=[[count(Int64(1)) AS __sail_attribute_18, sum(__sail_attribute_12) AS __sail_attribute_19, sum(__sail_attribute_13) AS __sail_attribute_20]]
-          Projection: __sail_attribute_6 AS __sail_attribute_11, __sail_attribute_7 AS __sail_attribute_12, __sail_attribute_8 AS __sail_attribute_13, __sail_attribute_9 AS __sail_attribute_14, __sail_attribute_10 AS __sail_attribute_15, __sail_attribute_6 % CAST(CASE WHEN Int32(4) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(4) END AS Int64) AS __sail_expression_31 AS __sail_attribute_16
-            Projection: __sail_attribute_1 AS __sail_attribute_6, __sail_attribute_2 AS __sail_attribute_7, __sail_attribute_5 AS __sail_attribute_8, __sail_attribute_1 AS __sail_attribute_9, __sail_attribute_4 AS __sail_attribute_10
-              Inner Join:  Filter: __sail_attribute_1 = __sail_attribute_4
-                ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_1]
-                  Projection: __sail_attribute_0 AS __sail_expression_0 AS __sail_attribute_1, __sail_attribute_0 * Int64(2) AS __sail_expression_2 AS __sail_attribute_2
+    Sort: #21 ASC NULLS FIRST
+      Projection: #17 AS #21, #18 AS __sail_expression_58 AS #22, #19 AS __sail_expression_62 AS #23, #20 AS __sail_expression_66 AS #24
+        Aggregate: groupBy=[[#16 AS #17]], aggr=[[count(Int64(1)) AS #18, sum(#12) AS #19, sum(#13) AS #20]]
+          Projection: #6 AS #11, #7 AS #12, #8 AS #13, #9 AS #14, #10 AS #15, #6 % CAST(CASE WHEN Int32(4) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(4) END AS Int64) AS __sail_expression_31 AS #16
+            Projection: #1 AS #6, #2 AS #7, #5 AS #8, #1 AS #9, #4 AS #10
+              Inner Join:  Filter: #1 = #4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
+                  Projection: #0 AS __sail_expression_0 AS #1, #0 * Int64(2) AS __sail_expression_2 AS #2
                     Range: start=0, end=64, step=1, num_partitions=4
-                ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_4]
-                  Projection: __sail_attribute_3 AS __sail_expression_9 AS __sail_attribute_4, __sail_attribute_3 + Int64(1) AS __sail_expression_11 AS __sail_attribute_5
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
+                  Projection: #3 AS __sail_expression_9 AS #4, #3 + Int64(1) AS __sail_expression_11 AS #5
                     Range: start=0, end=64, step=1, num_partitions=4
 
     logical_plan after resolve_grouping_function:
@@ -43,17 +43,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
-    Sort: __sail_attribute_21 ASC NULLS FIRST
-      Projection: __sail_attribute_17 AS __sail_attribute_21, __sail_attribute_18 AS __sail_expression_58 AS __sail_attribute_22, __sail_attribute_19 AS __sail_expression_62 AS __sail_attribute_23, __sail_attribute_20 AS __sail_expression_66 AS __sail_attribute_24
-        Aggregate: groupBy=[[__sail_attribute_16 AS __sail_attribute_17]], aggr=[[count(Int64(1)) AS __sail_attribute_18, sum(__sail_attribute_12) AS __sail_attribute_19, sum(__sail_attribute_13) AS __sail_attribute_20]]
-          Projection: __sail_attribute_6 AS __sail_attribute_11, __sail_attribute_7 AS __sail_attribute_12, __sail_attribute_8 AS __sail_attribute_13, __sail_attribute_9 AS __sail_attribute_14, __sail_attribute_10 AS __sail_attribute_15, __sail_attribute_6 % Int64(4) AS __sail_expression_31 AS __sail_attribute_16
-            Projection: __sail_attribute_1 AS __sail_attribute_6, __sail_attribute_2 AS __sail_attribute_7, __sail_attribute_5 AS __sail_attribute_8, __sail_attribute_1 AS __sail_attribute_9, __sail_attribute_4 AS __sail_attribute_10
-              Inner Join:  Filter: __sail_attribute_1 = __sail_attribute_4
-                ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_1]
-                  Projection: __sail_attribute_0 AS __sail_expression_0 AS __sail_attribute_1, __sail_attribute_0 * Int64(2) AS __sail_expression_2 AS __sail_attribute_2
+    Sort: #21 ASC NULLS FIRST
+      Projection: #17 AS #21, #18 AS __sail_expression_58 AS #22, #19 AS __sail_expression_62 AS #23, #20 AS __sail_expression_66 AS #24
+        Aggregate: groupBy=[[#16 AS #17]], aggr=[[count(Int64(1)) AS #18, sum(#12) AS #19, sum(#13) AS #20]]
+          Projection: #6 AS #11, #7 AS #12, #8 AS #13, #9 AS #14, #10 AS #15, #6 % Int64(4) AS __sail_expression_31 AS #16
+            Projection: #1 AS #6, #2 AS #7, #5 AS #8, #1 AS #9, #4 AS #10
+              Inner Join:  Filter: #1 = #4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
+                  Projection: #0 AS __sail_expression_0 AS #1, #0 * Int64(2) AS __sail_expression_2 AS #2
                     Range: start=0, end=64, step=1, num_partitions=4
-                ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_4]
-                  Projection: __sail_attribute_3 AS __sail_expression_9 AS __sail_attribute_4, __sail_attribute_3 + Int64(1) AS __sail_expression_11 AS __sail_attribute_5
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
+                  Projection: #3 AS __sail_expression_9 AS #4, #3 + Int64(1) AS __sail_expression_11 AS #5
                     Range: start=0, end=64, step=1, num_partitions=4
 
     logical_plan after replace_distinct_aggregate:
@@ -72,17 +72,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: __sail_attribute_21 ASC NULLS FIRST
-      Projection: __sail_attribute_17 AS __sail_attribute_21, __sail_attribute_18 AS __sail_expression_58 AS __sail_attribute_22, __sail_attribute_19 AS __sail_expression_62 AS __sail_attribute_23, __sail_attribute_20 AS __sail_expression_66 AS __sail_attribute_24
-        Aggregate: groupBy=[[__sail_attribute_16 AS __sail_attribute_17]], aggr=[[count(Int64(1)) AS __sail_attribute_18, sum(__sail_attribute_12) AS __sail_attribute_19, sum(__sail_attribute_13) AS __sail_attribute_20]]
-          Projection: __sail_attribute_6 AS __sail_attribute_11, __sail_attribute_7 AS __sail_attribute_12, __sail_attribute_8 AS __sail_attribute_13, __sail_attribute_9 AS __sail_attribute_14, __sail_attribute_10 AS __sail_attribute_15, __sail_attribute_6 % Int64(4) AS __sail_expression_31 AS __sail_attribute_16
-            Projection: __sail_attribute_1 AS __sail_attribute_6, __sail_attribute_2 AS __sail_attribute_7, __sail_attribute_5 AS __sail_attribute_8, __sail_attribute_1 AS __sail_attribute_9, __sail_attribute_4 AS __sail_attribute_10
-              Inner Join: __sail_attribute_1 = __sail_attribute_4
-                ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_1]
-                  Projection: __sail_attribute_0 AS __sail_expression_0 AS __sail_attribute_1, __sail_attribute_0 * Int64(2) AS __sail_expression_2 AS __sail_attribute_2
+    Sort: #21 ASC NULLS FIRST
+      Projection: #17 AS #21, #18 AS __sail_expression_58 AS #22, #19 AS __sail_expression_62 AS #23, #20 AS __sail_expression_66 AS #24
+        Aggregate: groupBy=[[#16 AS #17]], aggr=[[count(Int64(1)) AS #18, sum(#12) AS #19, sum(#13) AS #20]]
+          Projection: #6 AS #11, #7 AS #12, #8 AS #13, #9 AS #14, #10 AS #15, #6 % Int64(4) AS __sail_expression_31 AS #16
+            Projection: #1 AS #6, #2 AS #7, #5 AS #8, #1 AS #9, #4 AS #10
+              Inner Join: #1 = #4
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
+                  Projection: #0 AS __sail_expression_0 AS #1, #0 * Int64(2) AS __sail_expression_2 AS #2
                     Range: start=0, end=64, step=1, num_partitions=4
-                ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_4]
-                  Projection: __sail_attribute_3 AS __sail_expression_9 AS __sail_attribute_4, __sail_attribute_3 + Int64(1) AS __sail_expression_11 AS __sail_attribute_5
+                ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
+                  Projection: #3 AS __sail_expression_9 AS #4, #3 + Int64(1) AS __sail_expression_11 AS #5
                     Range: start=0, end=64, step=1, num_partitions=4
 
     logical_plan after eliminate_duplicated_expr:
@@ -125,16 +125,16 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: __sail_attribute_21 ASC NULLS FIRST
-      Projection: __sail_attribute_17 AS __sail_attribute_21, __sail_attribute_18 AS __sail_expression_58 AS __sail_attribute_22, __sail_attribute_19 AS __sail_expression_62 AS __sail_attribute_23, __sail_attribute_20 AS __sail_expression_66 AS __sail_attribute_24
-        Aggregate: groupBy=[[__sail_attribute_16 AS __sail_attribute_17]], aggr=[[count(Int64(1)) AS __sail_attribute_18, sum(__sail_attribute_12) AS __sail_attribute_19, sum(__sail_attribute_13) AS __sail_attribute_20]]
-          Projection: __sail_attribute_2 AS __sail_attribute_12, __sail_attribute_5 AS __sail_attribute_13, __sail_attribute_1 % Int64(4) AS __sail_attribute_16
-            Inner Join: __sail_attribute_1 = __sail_attribute_4
-              ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_1]
-                Projection: __sail_attribute_0 AS __sail_expression_0 AS __sail_attribute_1, __sail_attribute_0 * Int64(2) AS __sail_expression_2 AS __sail_attribute_2
+    Sort: #21 ASC NULLS FIRST
+      Projection: #17 AS #21, #18 AS __sail_expression_58 AS #22, #19 AS __sail_expression_62 AS #23, #20 AS __sail_expression_66 AS #24
+        Aggregate: groupBy=[[#16 AS #17]], aggr=[[count(Int64(1)) AS #18, sum(#12) AS #19, sum(#13) AS #20]]
+          Projection: #2 AS #12, #5 AS #13, #1 % Int64(4) AS #16
+            Inner Join: #1 = #4
+              ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
+                Projection: #0 AS __sail_expression_0 AS #1, #0 * Int64(2) AS __sail_expression_2 AS #2
                   Range: start=0, end=64, step=1, num_partitions=4
-              ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_4]
-                Projection: __sail_attribute_3 AS __sail_expression_9 AS __sail_attribute_4, __sail_attribute_3 + Int64(1) AS __sail_expression_11 AS __sail_attribute_5
+              ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
+                Projection: #3 AS __sail_expression_9 AS #4, #3 + Int64(1) AS __sail_expression_11 AS #5
                   Range: start=0, end=64, step=1, num_partitions=4
 
     logical_plan after rewrite_binary_grouping:
@@ -219,76 +219,76 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: __sail_attribute_21 ASC NULLS FIRST
-      Projection: __sail_attribute_17 AS __sail_attribute_21, __sail_attribute_18 AS __sail_expression_58 AS __sail_attribute_22, __sail_attribute_19 AS __sail_expression_62 AS __sail_attribute_23, __sail_attribute_20 AS __sail_expression_66 AS __sail_attribute_24
-        Aggregate: groupBy=[[__sail_attribute_16 AS __sail_attribute_17]], aggr=[[count(Int64(1)) AS __sail_attribute_18, sum(__sail_attribute_12) AS __sail_attribute_19, sum(__sail_attribute_13) AS __sail_attribute_20]]
-          Projection: __sail_attribute_2 AS __sail_attribute_12, __sail_attribute_5 AS __sail_attribute_13, __sail_attribute_1 % Int64(4) AS __sail_attribute_16
-            Inner Join: __sail_attribute_1 = __sail_attribute_4
-              ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_1]
-                Projection: __sail_attribute_0 AS __sail_expression_0 AS __sail_attribute_1, __sail_attribute_0 * Int64(2) AS __sail_expression_2 AS __sail_attribute_2
+    Sort: #21 ASC NULLS FIRST
+      Projection: #17 AS #21, #18 AS __sail_expression_58 AS #22, #19 AS __sail_expression_62 AS #23, #20 AS __sail_expression_66 AS #24
+        Aggregate: groupBy=[[#16 AS #17]], aggr=[[count(Int64(1)) AS #18, sum(#12) AS #19, sum(#13) AS #20]]
+          Projection: #2 AS #12, #5 AS #13, #1 % Int64(4) AS #16
+            Inner Join: #1 = #4
+              ExplicitRepartition: kind=hash, n=Some(8), expr=[#1]
+                Projection: #0 AS __sail_expression_0 AS #1, #0 * Int64(2) AS __sail_expression_2 AS #2
                   Range: start=0, end=64, step=1, num_partitions=4
-              ExplicitRepartition: kind=hash, n=Some(8), expr=[__sail_attribute_4]
-                Projection: __sail_attribute_3 AS __sail_expression_9 AS __sail_attribute_4, __sail_attribute_3 + Int64(1) AS __sail_expression_11 AS __sail_attribute_5
+              ExplicitRepartition: kind=hash, n=Some(8), expr=[#4]
+                Projection: #3 AS __sail_expression_9 AS #4, #3 + Int64(1) AS __sail_expression_11 AS #5
                   Range: start=0, end=64, step=1, num_partitions=4
 
     initial_physical_plan:
-    SortExec: expr=[__sail_attribute_21@0 ASC], preserve_partitioning=[false]
-      ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-          AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-            ProjectionExec: expr=[__sail_attribute_2@1 as __sail_attribute_12, __sail_attribute_5@3 as __sail_attribute_13, __sail_attribute_1@0 % 4 as __sail_attribute_16]
-              HashJoinExec: mode=Auto, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)]
-                ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                  ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+    SortExec: expr=[#21@0 ASC], preserve_partitioning=[false]
+      ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+        AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+          AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+            ProjectionExec: expr=[#2@1 as #12, #5@3 as #13, #1@0 % 4 as #16]
+              HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+                ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                  ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                     RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                  ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                  ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                     RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     initial_physical_plan_with_stats:
-    SortExec: expr=[__sail_attribute_21@0 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
-      ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
-          AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
-            ProjectionExec: expr=[__sail_attribute_2@1 as __sail_attribute_12, __sail_attribute_5@3 as __sail_attribute_13, __sail_attribute_1@0 % 4 as __sail_attribute_16], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:)]]
-              HashJoinExec: mode=Auto, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)], statistics=[Rows=Inexact(64), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:),(Col[2]: Null=Exact(0)),(Col[3]:)]]
-                ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4, statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-                  ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2], statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+    SortExec: expr=[#21@0 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
+      ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
+        AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
+          AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
+            ProjectionExec: expr=[#2@1 as #12, #5@3 as #13, #1@0 % 4 as #16], statistics=[Rows=Inexact(64), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:)]]
+              HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(64), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:),(Col[2]: Null=Exact(0)),(Col[3]:)]]
+                ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4, statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+                  ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2], statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
                     RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], statistics=[Rows=Exact(64), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-                ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4, statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-                  ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5], statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+                ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4, statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+                  ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5], statistics=[Rows=Exact(64), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
                     RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], statistics=[Rows=Exact(64), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
-    SortExec: expr=[__sail_attribute_21@0 ASC], preserve_partitioning=[false], schema=[__sail_attribute_21:Int64, __sail_attribute_22:Int64, __sail_attribute_23:Int64;N, __sail_attribute_24:Int64;N]
-      ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24], schema=[__sail_attribute_21:Int64, __sail_attribute_22:Int64, __sail_attribute_23:Int64;N, __sail_attribute_24:Int64;N]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20], schema=[__sail_attribute_17:Int64, __sail_attribute_18:Int64, __sail_attribute_19:Int64;N, __sail_attribute_20:Int64;N]
-          AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20], schema=[__sail_attribute_17:Int64, __sail_attribute_18[count]:Int64, __sail_attribute_19[sum]:Int64;N, __sail_attribute_20[sum]:Int64;N]
-            ProjectionExec: expr=[__sail_attribute_2@1 as __sail_attribute_12, __sail_attribute_5@3 as __sail_attribute_13, __sail_attribute_1@0 % 4 as __sail_attribute_16], schema=[__sail_attribute_12:Int64, __sail_attribute_13:Int64, __sail_attribute_16:Int64]
-              HashJoinExec: mode=Auto, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)], schema=[__sail_attribute_1:Int64, __sail_attribute_2:Int64, __sail_attribute_4:Int64, __sail_attribute_5:Int64]
-                ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4, schema=[__sail_attribute_1:Int64, __sail_attribute_2:Int64]
-                  ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2], schema=[__sail_attribute_1:Int64, __sail_attribute_2:Int64]
-                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], schema=[__sail_attribute_0:Int64]
-                ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4, schema=[__sail_attribute_4:Int64, __sail_attribute_5:Int64]
-                  ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5], schema=[__sail_attribute_4:Int64, __sail_attribute_5:Int64]
-                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], schema=[__sail_attribute_3:Int64]
+    SortExec: expr=[#21@0 ASC], preserve_partitioning=[false], schema=[#21:Int64, #22:Int64, #23:Int64;N, #24:Int64;N]
+      ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24], schema=[#21:Int64, #22:Int64, #23:Int64;N, #24:Int64;N]
+        AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20], schema=[#17:Int64, #18:Int64, #19:Int64;N, #20:Int64;N]
+          AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20], schema=[#17:Int64, #18[count]:Int64, #19[sum]:Int64;N, #20[sum]:Int64;N]
+            ProjectionExec: expr=[#2@1 as #12, #5@3 as #13, #1@0 % 4 as #16], schema=[#12:Int64, #13:Int64, #16:Int64]
+              HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #2:Int64, #4:Int64, #5:Int64]
+                ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4, schema=[#1:Int64, #2:Int64]
+                  ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2], schema=[#1:Int64, #2:Int64]
+                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], schema=[#0:Int64]
+                ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4, schema=[#4:Int64, #5:Int64]
+                  ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5], schema=[#4:Int64, #5:Int64]
+                    RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0], schema=[#3:Int64]
 
 
     physical_plan after OutputRequirements:
-    OutputRequirementExec: order_by=[(__sail_attribute_21@0, asc)], dist_by=SinglePartition
-      SortExec: expr=[__sail_attribute_21@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-          AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-            AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-              ProjectionExec: expr=[__sail_attribute_2@1 as __sail_attribute_12, __sail_attribute_5@3 as __sail_attribute_13, __sail_attribute_1@0 % 4 as __sail_attribute_16]
-                HashJoinExec: mode=Auto, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)]
-                  ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                    ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+    OutputRequirementExec: order_by=[(#21@0, asc)], dist_by=SinglePartition
+      SortExec: expr=[#21@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+          AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+            AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+              ProjectionExec: expr=[#2@1 as #12, #5@3 as #13, #1@0 % 4 as #16]
+                HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
+                  ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                    ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                       RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                  ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                    ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                  ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                    ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                       RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
@@ -296,18 +296,18 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
-    OutputRequirementExec: order_by=[(__sail_attribute_21@0, asc)], dist_by=SinglePartition
-      SortExec: expr=[__sail_attribute_21@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-          AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-            AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-              ProjectionExec: expr=[__sail_attribute_2@1 as __sail_attribute_12, __sail_attribute_5@3 as __sail_attribute_13, __sail_attribute_1@0 % 4 as __sail_attribute_16]
-                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)]
-                  ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                    ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+    OutputRequirementExec: order_by=[(#21@0, asc)], dist_by=SinglePartition
+      SortExec: expr=[#21@0 ASC], preserve_partitioning=[false]
+        ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+          AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+            AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+              ProjectionExec: expr=[#2@1 as #12, #5@3 as #13, #1@0 % 4 as #16]
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)]
+                  ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                    ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                       RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                  ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                    ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                  ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                    ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                       RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
@@ -330,21 +330,21 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
-    OutputRequirementExec: order_by=[(__sail_attribute_21@0, asc)], dist_by=SinglePartition
-      SortPreservingMergeExec: [__sail_attribute_21@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-          SortExec: expr=[__sail_attribute_17@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-              RepartitionExec: partitioning=Hash([__sail_attribute_17@0], 4), input_partitions=8
-                AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-                  ProjectionExec: expr=[__sail_attribute_2@1 as __sail_attribute_12, __sail_attribute_5@3 as __sail_attribute_13, __sail_attribute_1@0 % 4 as __sail_attribute_16]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)]
+    OutputRequirementExec: order_by=[(#21@0, asc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [#21@0 ASC]
+        ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+          SortExec: expr=[#17@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+              RepartitionExec: partitioning=Hash([#17@0], 4), input_partitions=8
+                AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+                  ProjectionExec: expr=[#2@1 as #12, #5@3 as #13, #1@0 % 4 as #16]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)]
                       CoalescePartitionsExec
-                        ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+                        ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                          ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                             RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                      ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                        ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                      ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                        ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                           RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
@@ -358,39 +358,39 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after ProjectionPushdown:
-    OutputRequirementExec: order_by=[(__sail_attribute_21@0, asc)], dist_by=SinglePartition
-      SortPreservingMergeExec: [__sail_attribute_21@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-          SortExec: expr=[__sail_attribute_17@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-              RepartitionExec: partitioning=Hash([__sail_attribute_17@0], 4), input_partitions=8
-                AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-                  ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_12, __sail_attribute_5@1 as __sail_attribute_13, __sail_attribute_1@2 % 4 as __sail_attribute_16]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)], projection=[__sail_attribute_2@1, __sail_attribute_5@3, __sail_attribute_1@0]
+    OutputRequirementExec: order_by=[(#21@0, asc)], dist_by=SinglePartition
+      SortPreservingMergeExec: [#21@0 ASC]
+        ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+          SortExec: expr=[#17@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+              RepartitionExec: partitioning=Hash([#17@0], 4), input_partitions=8
+                AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+                  ProjectionExec: expr=[#2@0 as #12, #5@1 as #13, #1@2 % 4 as #16]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
                       CoalescePartitionsExec
-                        ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+                        ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                          ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                             RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                      ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                        ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                      ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                        ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                           RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     physical_plan after OutputRequirements:
-    SortPreservingMergeExec: [__sail_attribute_21@0 ASC]
-      ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-        SortExec: expr=[__sail_attribute_17@0 ASC], preserve_partitioning=[true]
-          AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-            RepartitionExec: partitioning=Hash([__sail_attribute_17@0], 4), input_partitions=8
-              AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-                ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_12, __sail_attribute_5@1 as __sail_attribute_13, __sail_attribute_1@2 % 4 as __sail_attribute_16]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)], projection=[__sail_attribute_2@1, __sail_attribute_5@3, __sail_attribute_1@0]
+    SortPreservingMergeExec: [#21@0 ASC]
+      ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+        SortExec: expr=[#17@0 ASC], preserve_partitioning=[true]
+          AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+            RepartitionExec: partitioning=Hash([#17@0], 4), input_partitions=8
+              AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+                ProjectionExec: expr=[#2@0 as #12, #5@1 as #13, #1@2 % 4 as #16]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
                     CoalescePartitionsExec
-                      ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                        ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+                      ExplicitRepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                        ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                           RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                    ExplicitRepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                      ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                    ExplicitRepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                      ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                         RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
@@ -425,20 +425,20 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
-    SortPreservingMergeExec: [__sail_attribute_21@0 ASC]
-      ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-        SortExec: expr=[__sail_attribute_17@0 ASC], preserve_partitioning=[true]
-          AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-            RepartitionExec: partitioning=Hash([__sail_attribute_17@0], 4), input_partitions=8
-              AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-                ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_12, __sail_attribute_5@1 as __sail_attribute_13, __sail_attribute_1@2 % 4 as __sail_attribute_16]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)], projection=[__sail_attribute_2@1, __sail_attribute_5@3, __sail_attribute_1@0]
+    SortPreservingMergeExec: [#21@0 ASC]
+      ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+        SortExec: expr=[#17@0 ASC], preserve_partitioning=[true]
+          AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+            RepartitionExec: partitioning=Hash([#17@0], 4), input_partitions=8
+              AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+                ProjectionExec: expr=[#2@0 as #12, #5@1 as #13, #1@2 % 4 as #16]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
                     CoalescePartitionsExec
-                      RepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                        ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+                      RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                        ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                           RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                    RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                      ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                    RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                      ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                         RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
@@ -452,40 +452,40 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan:
-    ProjectionExec: expr=[__sail_attribute_21@0 as g, __sail_attribute_22@1 as count, __sail_attribute_23@2 as s1, __sail_attribute_24@3 as s2]
-      SortPreservingMergeExec: [__sail_attribute_21@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-          SortExec: expr=[__sail_attribute_17@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-              RepartitionExec: partitioning=Hash([__sail_attribute_17@0], 4), input_partitions=8
-                AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-                  ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_12, __sail_attribute_5@1 as __sail_attribute_13, __sail_attribute_1@2 % 4 as __sail_attribute_16]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)], projection=[__sail_attribute_2@1, __sail_attribute_5@3, __sail_attribute_1@0]
+    ProjectionExec: expr=[#21@0 as g, #22@1 as count, #23@2 as s1, #24@3 as s2]
+      SortPreservingMergeExec: [#21@0 ASC]
+        ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+          SortExec: expr=[#17@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+              RepartitionExec: partitioning=Hash([#17@0], 4), input_partitions=8
+                AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+                  ProjectionExec: expr=[#2@0 as #12, #5@1 as #13, #1@2 % 4 as #16]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
                       CoalescePartitionsExec
-                        RepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+                        RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                          ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                             RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                        ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                      RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                        ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                           RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_21@0 as g, __sail_attribute_22@1 as count, __sail_attribute_23@2 as s1, __sail_attribute_24@3 as s2]
-      SortPreservingMergeExec: [__sail_attribute_21@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-          SortExec: expr=[__sail_attribute_17@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-              RepartitionExec: partitioning=Hash([__sail_attribute_17@0], 4), input_partitions=8
-                AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-                  ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_12, __sail_attribute_5@1 as __sail_attribute_13, __sail_attribute_1@2 % 4 as __sail_attribute_16]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)], projection=[__sail_attribute_2@1, __sail_attribute_5@3, __sail_attribute_1@0]
+    ProjectionExec: expr=[#21@0 as g, #22@1 as count, #23@2 as s1, #24@3 as s2]
+      SortPreservingMergeExec: [#21@0 ASC]
+        ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+          SortExec: expr=[#17@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+              RepartitionExec: partitioning=Hash([#17@0], 4), input_partitions=8
+                AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+                  ProjectionExec: expr=[#2@0 as #12, #5@1 as #13, #1@2 % 4 as #16]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
                       CoalescePartitionsExec
-                        RepartitionExec: partitioning=Hash([__sail_attribute_1@0], 8), input_partitions=4
-                          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+                        RepartitionExec: partitioning=Hash([#1@0], 8), input_partitions=4
+                          ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
                             RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 8), input_partitions=4
-                        ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+                      RepartitionExec: partitioning=Hash([#4@0], 8), input_partitions=4
+                        ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
                           RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
 
@@ -494,9 +494,9 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=4
-    distribution=Hash(keys=[__sail_attribute_1@0], channels=8)
+    distribution=Hash(keys=[#1@0], channels=8)
     placement=Worker
-    ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_1, __sail_attribute_0@0 * 2 as __sail_attribute_2]
+    ProjectionExec: expr=[#0@0 as #1, #0@0 * 2 as #2]
       RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
     === stage 1 ===
@@ -505,7 +505,7 @@ data:
     partitions=8
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    StageInputExec: input=0, partitioning=Hash([__sail_attribute_1@0], 8)
+    StageInputExec: input=0, partitioning=Hash([#1@0], 8)
 
     === stage 2 ===
     inputs=[StageInput(stage=1, mode=Forward)]
@@ -513,7 +513,7 @@ data:
     partitions=8
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    StageInputExec: input=0, partitioning=Hash([__sail_attribute_1@0], 8)
+    StageInputExec: input=0, partitioning=Hash([#1@0], 8)
 
     === stage 3 ===
     inputs=[StageInput(stage=2, mode=Broadcast)]
@@ -527,9 +527,9 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=4
-    distribution=Hash(keys=[__sail_attribute_4@0], channels=8)
+    distribution=Hash(keys=[#4@0], channels=8)
     placement=Worker
-    ProjectionExec: expr=[__sail_attribute_3@0 as __sail_attribute_4, __sail_attribute_3@0 + 1 as __sail_attribute_5]
+    ProjectionExec: expr=[#3@0 as #4, #3@0 + 1 as #5]
       RangeExec: start=0, end=64, step=1, num_partitions=4, projection=[0]
 
     === stage 5 ===
@@ -538,19 +538,19 @@ data:
     partitions=8
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    StageInputExec: input=0, partitioning=Hash([__sail_attribute_4@0], 8)
+    StageInputExec: input=0, partitioning=Hash([#4@0], 8)
 
     === stage 6 ===
     inputs=[StageInput(stage=3, mode=Forward), StageInput(stage=5, mode=Forward)]
     mode=Pipelined
     partitions=8
-    distribution=Hash(keys=[__sail_attribute_17@0], channels=4)
+    distribution=Hash(keys=[#17@0], channels=4)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[__sail_attribute_16@2 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_12, __sail_attribute_5@1 as __sail_attribute_13, __sail_attribute_1@2 % 4 as __sail_attribute_16]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_1@0, __sail_attribute_4@0)], projection=[__sail_attribute_2@1, __sail_attribute_5@3, __sail_attribute_1@0]
+    AggregateExec: mode=Partial, gby=[#16@2 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+      ProjectionExec: expr=[#2@0 as #12, #5@1 as #13, #1@2 % 4 as #16]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#1@0, #4@0)], projection=[#2@1, #5@3, #1@0]
           StageInputExec: input=0, partitioning=UnknownPartitioning(1)
-          StageInputExec: input=1, partitioning=Hash([__sail_attribute_4@0], 8)
+          StageInputExec: input=1, partitioning=Hash([#4@0], 8)
 
     === stage 7 ===
     inputs=[StageInput(stage=6, mode=Shuffle)]
@@ -558,7 +558,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    StageInputExec: input=0, partitioning=Hash([__sail_attribute_17@0], 4)
+    StageInputExec: input=0, partitioning=Hash([#17@0], 4)
 
     === stage 8 ===
     inputs=[StageInput(stage=7, mode=Forward)]
@@ -566,10 +566,10 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    ProjectionExec: expr=[__sail_attribute_17@0 as __sail_attribute_21, __sail_attribute_18@1 as __sail_attribute_22, __sail_attribute_19@2 as __sail_attribute_23, __sail_attribute_20@3 as __sail_attribute_24]
-      SortExec: expr=[__sail_attribute_17@0 ASC], preserve_partitioning=[true]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_17@0 as __sail_attribute_17], aggr=[count(1) as __sail_attribute_18, sum(__sail_attribute_12) as __sail_attribute_19, sum(__sail_attribute_13) as __sail_attribute_20]
-          StageInputExec: input=0, partitioning=Hash([__sail_attribute_17@0], 4)
+    ProjectionExec: expr=[#17@0 as #21, #18@1 as #22, #19@2 as #23, #20@3 as #24]
+      SortExec: expr=[#17@0 ASC], preserve_partitioning=[true]
+        AggregateExec: mode=FinalPartitioned, gby=[#17@0 as #17], aggr=[count(1) as #18, sum(#12) as #19, sum(#13) as #20]
+          StageInputExec: input=0, partitioning=Hash([#17@0], 4)
 
     === stage 9 ===
     inputs=[StageInput(stage=8, mode=Merge)]
@@ -577,6 +577,6 @@ data:
     partitions=1
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    ProjectionExec: expr=[__sail_attribute_21@0 as g, __sail_attribute_22@1 as count, __sail_attribute_23@2 as s1, __sail_attribute_24@3 as s2]
-      SortPreservingMergeExec: [__sail_attribute_21@0 ASC]
-        StageInputExec: input=0, partitioning=Hash([__sail_attribute_21@0], 4)
+    ProjectionExec: expr=[#21@0 as g, #22@1 as count, #23@2 as s1, #24@3 as s2]
+      SortPreservingMergeExec: [#21@0 ASC]
+        StageInputExec: input=0, partitioning=Hash([#21@0], 4)

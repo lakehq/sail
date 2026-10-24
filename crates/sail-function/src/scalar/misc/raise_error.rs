@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
@@ -50,13 +52,15 @@ impl ScalarUDFImpl for RaiseError {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::misc_raise_error::return_type(_arg_types)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     /// Spark: `RaiseError.nullable = true`, unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/misc.scala#L86>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::misc_raise_error::return_field_from_args(_args)
+        Ok(Arc::new(Field::new(self.name(), DataType::Null, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

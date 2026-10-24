@@ -4,13 +4,15 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
-use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common::spec::{self, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_sql_analyzer::data_type::from_ast_data_type;
+use sail_sql_analyzer::parser as sail_parser;
 use xee_xpath::Documents;
 
 use crate::functions_utils::make_scalar_function;
@@ -172,22 +174,48 @@ impl ScalarUDFImpl for SparkFromXml {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_xml_from_xml_typing::spark_from_xml_return_type(
-            _arg_types,
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
         )
     }
 
     /// Spark: `XmlToStructs.nullable = true`, unconditional.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L70>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::from_xml_schema::return_field_from_args(
-            &self.session_timezone,
-            args,
-        )
+        let schema_str = match args.scalar_arguments.get(1) {
+            Some(Some(
+                ScalarValue::Utf8(Some(s))
+                | ScalarValue::LargeUtf8(Some(s))
+                | ScalarValue::Utf8View(Some(s)),
+            )) => s.as_str(),
+            _ => {
+                return plan_err!(
+                    "`{}` requires the schema argument to be a string literal",
+                    Self::FROM_XML_NAME
+                );
+            }
+        };
+        let dt = parse_xml_schema(schema_str, &self.session_timezone)?;
+        Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::from_xml_schema::coerce_types(arg_types)
+        match arg_types {
+            [
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+            ] => Ok(vec![DataType::Utf8, DataType::Utf8]),
+            [
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(_, _),
+            ] => Ok(vec![DataType::Utf8, DataType::Utf8, arg_types[2].clone()]),
+            _ => plan_err!(
+                "`{}` requires 2 or 3 arguments: xml STRING, schema STRING, options MAP (optional), got {:?}",
+                Self::FROM_XML_NAME,
+                arg_types
+            ),
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -272,7 +300,31 @@ fn spark_from_xml_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     finish_struct_builder(builder)
 }
 
-use sail_type_system::schema::parse_xml_schema;
+fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
+    let schema = schema.trim();
+    let ast_result = sail_parser::parse_data_type(schema)
+        .or_else(|_| sail_parser::parse_data_type(&format!("STRUCT<{schema}>")));
+    let ast = ast_result
+        .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
+    let spec_dt = from_ast_data_type(ast)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
+    spec_to_arrow_data_type(&spec_dt, session_timezone)
+}
+
+fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+    let resolver = sail_type_system::data_type::TypeResolver {
+        session_timezone: Arc::from(session_timezone),
+        default_timestamp_ltz: true,
+        use_large_var_types: false,
+    };
+    let dt = match dt {
+        spec::DataType::UserDefined { sql_type, .. } => sql_type,
+        dt => dt,
+    };
+    resolver
+        .resolve_data_type(dt)
+        .map_err(|e| DataFusionError::Plan(e.to_string()))
+}
 
 enum XmlFieldBuilder {
     Boolean(BooleanBuilder),

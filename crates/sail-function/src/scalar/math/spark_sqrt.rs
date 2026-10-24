@@ -34,7 +34,7 @@ impl ScalarUDFImpl for SparkSqrt {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::math_spark_sqrt::return_type(_arg_types)
+        Ok(DataType::Float64)
     }
 
     fn is_strict(&self) -> bool {

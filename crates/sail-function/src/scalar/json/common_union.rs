@@ -2,17 +2,24 @@
 //
 // [Credit]: https://github.com/datafusion-contrib/datafusion-functions-json/blob/78c5abbf7222510ff221517f5d2e3c344969da98/src/common_union.rs
 
-use std::sync::{Arc, LazyLock};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, Float64Array, Int64Array, NullArray, StringArray,
     UnionArray,
 };
 use datafusion::arrow::buffer::{Buffer, ScalarBuffer};
-use datafusion::arrow::datatypes::{DataType, UnionFields, UnionMode};
+use datafusion::arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
 use datafusion::arrow::error::ArrowError;
 use datafusion::common::ScalarValue;
-pub use sail_type_system::policies::json_union_typing::is_json_union;
+
+pub fn is_json_union(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Union(fields, UnionMode::Sparse) => fields == &union_fields(),
+        _ => false,
+    }
+}
 
 /// Extract nested JSON from a `JsonUnion` `UnionArray`
 ///
@@ -167,7 +174,51 @@ const TYPE_ID_STR: i8 = 4;
 const TYPE_ID_ARRAY: i8 = 5;
 const TYPE_ID_OBJECT: i8 = 6;
 
-use sail_type_system::policies::json_union_typing::union_fields;
+fn union_fields() -> UnionFields {
+    static FIELDS: OnceLock<UnionFields> = OnceLock::new();
+    FIELDS
+        .get_or_init(|| {
+            let json_metadata: HashMap<String, String> =
+                HashMap::from_iter(vec![("is_json".to_string(), "true".to_string())]);
+            UnionFields::from_iter([
+                (
+                    TYPE_ID_NULL,
+                    Arc::new(Field::new("null", DataType::Null, true)),
+                ),
+                (
+                    TYPE_ID_BOOL,
+                    Arc::new(Field::new("bool", DataType::Boolean, false)),
+                ),
+                (
+                    TYPE_ID_INT,
+                    Arc::new(Field::new("int", DataType::Int64, false)),
+                ),
+                (
+                    TYPE_ID_FLOAT,
+                    Arc::new(Field::new("float", DataType::Float64, false)),
+                ),
+                (
+                    TYPE_ID_STR,
+                    Arc::new(Field::new("str", DataType::Utf8, false)),
+                ),
+                (
+                    TYPE_ID_ARRAY,
+                    Arc::new(
+                        Field::new("array", DataType::Utf8, false)
+                            .with_metadata(json_metadata.clone()),
+                    ),
+                ),
+                (
+                    TYPE_ID_OBJECT,
+                    Arc::new(
+                        Field::new("object", DataType::Utf8, false)
+                            .with_metadata(json_metadata.clone()),
+                    ),
+                ),
+            ])
+        })
+        .clone()
+}
 
 impl JsonUnionField {
     fn type_id(&self) -> i8 {

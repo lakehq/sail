@@ -35,8 +35,11 @@ impl ScalarUDFImpl for TableInput {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::table_input::return_type(arg_types)
+    fn return_type(&self, _: &[DataType]) -> Result<DataType> {
+        plan_err!(
+            "{} should be rewritten during logical plan analysis",
+            self.name()
+        )
     }
 
     fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {

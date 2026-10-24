@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use datafusion::arrow::datatypes::{DataType, FieldRef};
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -48,15 +50,16 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_math_spark_pmod_typing::spark_pmod_return_type(
-            _arg_types,
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
         )
     }
 
     /// Spark: `Pmod.nullable = true`, unconditional (not narrowed by ANSI mode).
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L1061>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::pmod_field::return_field_from_args(&self.inner, args)
+        let field = self.inner.return_field_from_args(args)?;
+        Ok(Arc::new(field.as_ref().clone().with_nullable(true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

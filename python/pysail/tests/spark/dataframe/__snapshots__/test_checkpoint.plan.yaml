@@ -4,57 +4,57 @@ name: "test_checkpoint_preserves_partitioning_and_ordering[checkpoint]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_4@0 as key, __sail_attribute_5@1 as count]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_4, __sail_attribute_3@1 as __sail_attribute_5]
-        AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_1@0 as __sail_attribute_2], aggr=[count(1) as __sail_attribute_3], ordering_mode=Sorted
-          ProjectionExec: expr=[__sail_attribute_1@1 as __sail_attribute_1]
-            DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as __sail_attribute_0, _c1@1 as __sail_attribute_1], file_type=parquet
+    ProjectionExec: expr=[#4@0 as key, #5@1 as count]
+      ProjectionExec: expr=[#2@0 as #4, #3@1 as #5]
+        AggregateExec: mode=SinglePartitioned, gby=[#1@0 as #2], aggr=[count(1) as #3], ordering_mode=Sorted
+          ProjectionExec: expr=[#1@1 as #1]
+            DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as #0, _c1@1 as #1], file_type=parquet
 ---
 name: "test_checkpoint_preserves_partitioning_and_ordering[checkpoint].1"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as id, __sail_attribute_1@1 as key]
-      DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as __sail_attribute_0, _c1@1 as __sail_attribute_1], file_type=parquet
+    ProjectionExec: expr=[#0@0 as id, #1@1 as key]
+      DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as #0, _c1@1 as #1], file_type=parquet
 ---
 name: "test_checkpoint_preserves_partitioning_and_ordering[local-checkpoint]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_4@0 as key, __sail_attribute_5@1 as count]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_4, __sail_attribute_3@1 as __sail_attribute_5]
-        AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_1@0 as __sail_attribute_2], aggr=[count(1) as __sail_attribute_3], ordering_mode=Sorted
-          ProjectionExec: expr=[__sail_attribute_1@1 as __sail_attribute_1]
-            DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as __sail_attribute_0, _c1@1 as __sail_attribute_1], file_type=parquet
+    ProjectionExec: expr=[#4@0 as key, #5@1 as count]
+      ProjectionExec: expr=[#2@0 as #4, #3@1 as #5]
+        AggregateExec: mode=SinglePartitioned, gby=[#1@0 as #2], aggr=[count(1) as #3], ordering_mode=Sorted
+          ProjectionExec: expr=[#1@1 as #1]
+            DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as #0, _c1@1 as #1], file_type=parquet
 ---
 name: "test_checkpoint_preserves_partitioning_and_ordering[local-checkpoint].1"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as id, __sail_attribute_1@1 as key]
-      DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as __sail_attribute_0, _c1@1 as __sail_attribute_1], file_type=parquet
+    ProjectionExec: expr=[#0@0 as id, #1@1 as key]
+      DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as #0, _c1@1 as #1], file_type=parquet
 ---
 name: "test_checkpoint_supports_iterative_weakly_connected_components"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_36@0 as node, __sail_attribute_37@1 as label]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_36, least(__sail_attribute_1@1, CASE WHEN __sail_attribute_30@2 IS NOT NULL THEN __sail_attribute_30@2 ELSE __sail_attribute_1@1 END) as __sail_attribute_37]
-        HashJoinExec: mode=CollectLeft, join_type=Left, on=[(__sail_attribute_0@0, __sail_attribute_29@0)], projection=[__sail_attribute_0@0, __sail_attribute_1@1, __sail_attribute_30@3]
+    ProjectionExec: expr=[#36@0 as node, #37@1 as label]
+      ProjectionExec: expr=[#0@0 as #36, least(#1@1, CASE WHEN #30@2 IS NOT NULL THEN #30@2 ELSE #1@1 END) as #37]
+        HashJoinExec: mode=CollectLeft, join_type=Left, on=[(#0@0, #29@0)], projection=[#0@0, #1@1, #30@3]
           CoalescePartitionsExec
-            DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as __sail_attribute_0, _c1@1 as __sail_attribute_1], file_type=parquet
-          ProjectionExec: expr=[__sail_attribute_25@0 as __sail_attribute_29, __sail_attribute_26@1 as __sail_attribute_30]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_25@0 as __sail_attribute_25], aggr=[min(__sail_attribute_22) as __sail_attribute_26]
-              RepartitionExec: partitioning=Hash([__sail_attribute_25@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_21@0 as __sail_attribute_25], aggr=[min(__sail_attribute_22) as __sail_attribute_26]
+            DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as #0, _c1@1 as #1], file_type=parquet
+          ProjectionExec: expr=[#25@0 as #29, #26@1 as #30]
+            AggregateExec: mode=FinalPartitioned, gby=[#25@0 as #25], aggr=[min(#22) as #26]
+              RepartitionExec: partitioning=Hash([#25@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#21@0 as #25], aggr=[min(#22) as #26]
                   RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
-                    ProjectionExec: expr=[__sail_attribute_10@0 as __sail_attribute_21, __sail_attribute_19@1 as __sail_attribute_22]
-                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_18@0, __sail_attribute_11@1)], projection=[__sail_attribute_10@2, __sail_attribute_19@1]
+                    ProjectionExec: expr=[#10@0 as #21, #19@1 as #22]
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#18@0, #11@1)], projection=[#10@2, #19@1]
                         CoalescePartitionsExec
-                          ProjectionExec: expr=[__sail_attribute_16@0 as __sail_attribute_18, __sail_attribute_17@1 as __sail_attribute_19]
-                            DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as __sail_attribute_16, _c1@1 as __sail_attribute_17], file_type=parquet
+                          ProjectionExec: expr=[#16@0 as #18, #17@1 as #19]
+                            DataSourceExec: file_groups={4 groups: <checkpoint files>}, projection=[_c0@0 as #16, _c1@1 as #17], file_type=parquet
                         UnionExec
-                          ProjectionExec: expr=[a@0 as __sail_attribute_10, b@1 as __sail_attribute_11]
+                          ProjectionExec: expr=[a@0 as #10, b@1 as #11]
                             DataSourceExec: partitions=1, partition_sizes=[1]
-                          ProjectionExec: expr=[b@1 as __sail_attribute_10, a@0 as __sail_attribute_11]
+                          ProjectionExec: expr=[b@1 as #10, a@0 as #11]
                             DataSourceExec: partitions=1, partition_sizes=[1]

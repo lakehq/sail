@@ -38,14 +38,21 @@ impl ScalarUDFImpl for SparkMonotonicallyIncreasingId {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::misc_monotonically_increasing_id::return_type(_arg_types)
+        Ok(DataType::Int64)
     }
 
     fn return_field_from_args(
         &self,
         args: datafusion_expr::ReturnFieldArgs,
     ) -> Result<datafusion::arrow::datatypes::FieldRef> {
-        sail_type_system::policies::misc_monotonically_increasing_id::return_field(args)
+        if !args.arg_fields.is_empty() {
+            return datafusion_common::plan_err!("row identity functions take no arguments");
+        }
+        Ok(std::sync::Arc::new(arrow_schema::Field::new(
+            "",
+            self.return_type(&[])?,
+            false,
+        )))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

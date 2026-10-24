@@ -100,7 +100,11 @@ impl AggregateUDFImpl for Regr {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::regr::return_type(self.regr_type == RegrType::Count, _arg_types)
+        if self.regr_type == RegrType::Count {
+            Ok(DataType::UInt64)
+        } else {
+            Ok(DataType::Float64)
+        }
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

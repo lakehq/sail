@@ -8,10 +8,11 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, take};
 use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion_common::{DataFusionError, Result, arrow_err, exec_err};
+use datafusion_common::{DataFusionError, Result, arrow_err, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
 use crate::scalar::struct_function::to_struct_array;
 
@@ -61,7 +62,38 @@ impl ScalarUDFImpl for ArraysZip {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::arrays_zip::return_type(&self.field_names, arg_types)
+        let params = arg_types
+            .iter()
+            .map(get_list_params)
+            .collect::<Result<Vec<_>>>()?;
+
+        let field_names = self.get_field_names(params.len());
+        let struct_field = struct_result_field(
+            &params
+                .iter()
+                .map(|row| row.inner_field.clone())
+                .collect::<Vec<_>>(),
+            &field_names,
+        );
+
+        let is_large = params.iter().any(|row| row.is_large);
+
+        let fixed_size_opt = params
+            .iter()
+            .map(|row| row.fixed_size_opt)
+            .try_fold(None, |prev, item| match (prev, item) {
+                (None, x) => Ok(x),
+                (Some(p), Some(x)) if p == x => Ok(Some(p)),
+                _ => Err(()),
+            })
+            .ok()
+            .flatten();
+
+        Ok(match (is_large, fixed_size_opt) {
+            (true, _) => DataType::LargeList(struct_field),
+            (false, Some(fixed_size)) => DataType::FixedSizeList(struct_field, fixed_size),
+            _ => DataType::List(struct_field),
+        })
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -119,9 +151,58 @@ fn build_empty_zip_result(num_rows: usize) -> Result<ArrayRef> {
     )?))
 }
 
+struct ListParams {
+    inner_field: Arc<Field>,
+    is_large: bool,
+    fixed_size_opt: Option<i32>,
+}
+
+impl ListParams {
+    pub fn new(inner_field: Arc<Field>, is_large: bool, fixed_size_opt: Option<i32>) -> Self {
+        Self {
+            inner_field,
+            is_large,
+            fixed_size_opt,
+        }
+    }
+}
+
+fn get_list_params(data_type: &DataType) -> Result<ListParams> {
+    match data_type {
+        DataType::List(field) | DataType::ListView(field) => {
+            Ok(ListParams::new(field.clone(), false, None))
+        }
+        DataType::FixedSizeList(field, size) => {
+            Ok(ListParams::new(field.clone(), false, Some(*size)))
+        }
+        DataType::LargeList(field) | DataType::LargeListView(field) => {
+            Ok(ListParams::new(field.clone(), true, None))
+        }
+        // Spark coerces bare untyped NULL to `array<void>`.
+        DataType::Null => Ok(ListParams::new(
+            Arc::new(Field::new_list_field(DataType::Null, true)),
+            false,
+            None,
+        )),
+        _ => plan_err!("`arrays_zip` can only accept List, LargeList or FixedSizeList."),
+    }
+}
+
+fn default_field_names(count: usize) -> Vec<String> {
+    (0..count).map(|i| format!("{i}")).collect::<Vec<_>>()
+}
+
 /// Build the struct field for the list result, preserving metadata from inner fields.
-use sail_type_system::policies::arrays_zip::struct_result_field;
-use sail_type_system::policies::arrays_zip::{default_field_names, get_list_params};
+fn struct_result_field(inner_fields: &[Arc<Field>], field_names: &[String]) -> Arc<Field> {
+    let fields = field_names
+        .iter()
+        .zip(inner_fields)
+        .map(|(name, f)| {
+            Field::new(name, f.data_type().clone(), true).with_metadata(f.metadata().clone())
+        })
+        .collect::<Vec<_>>();
+    Arc::new(Field::new_struct(SAIL_LIST_FIELD_NAME, fields, false))
+}
 
 fn num_rows_inner_fields_and_names(
     args: &[ArrayRef],

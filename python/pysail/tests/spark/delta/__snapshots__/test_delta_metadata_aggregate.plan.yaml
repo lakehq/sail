@@ -4,32 +4,32 @@ name: "test_cast_aggregates_preserve_order_and_null_counts[constant-files-driver
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[6 as __sail_attribute_5, __sail_residual_aggregate_1@0 as __sail_attribute_6, __sail_residual_aggregate_2@1 as __sail_attribute_7, __sail_residual_aggregate_3@2 as __sail_attribute_8]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[6 as #5, __sail_residual_aggregate_1@0 as #6, __sail_residual_aggregate_2@1 as #7, __sail_residual_aggregate_3@2 as #8]
         AggregateExec: mode=Single, gby=[], aggr=[count(__common_expr_1) as __sail_residual_aggregate_1, min(__common_expr_1) as __sail_residual_aggregate_2, max(__common_expr_1) as __sail_residual_aggregate_3]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet, <tmp>/delta_cast_aggregates/part-1.parquet, <tmp>/delta_cast_aggregates/part-2.parquet]]}, projection=[CAST(v@0 AS Utf8) as __common_expr_1], file_type=parquet
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Single, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet, <tmp>/delta_cast_aggregates/part-1.parquet, <tmp>/delta_cast_aggregates/part-2.parquet]]}, projection=[v@0 as __sail_attribute_0], file_type=parquet
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Single, gby=[], aggr=[count(#0) as #1]
+          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet, <tmp>/delta_cast_aggregates/part-1.parquet, <tmp>/delta_cast_aggregates/part-2.parquet]]}, projection=[v@0 as #0], file_type=parquet
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet, <tmp>/delta_cast_aggregates/part-1.parquet, <tmp>/delta_cast_aggregates/part-2.parquet]]}, projection=[CAST(v@0 AS Utf8) as __common_expr_1], file_type=parquet
 ---
 name: "test_cast_aggregates_preserve_order_and_null_counts[constant-files-metadata]"
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_5, __sail_attribute_2@1 as __sail_attribute_6, __sail_attribute_3@2 as __sail_attribute_7, __sail_attribute_4@3 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[#1@0 as #5, #2@1 as #6, #3@2 as #7, #4@3 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
               ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -40,12 +40,12 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Final, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[count(#0) as #1]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-              ProjectionExec: expr=[v@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(#0) as #1]
+              ProjectionExec: expr=[v@0 as #0]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
                     DeltaLogReplayExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, mode=sort)
@@ -55,11 +55,11 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
               ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -73,32 +73,32 @@ name: "test_cast_aggregates_preserve_order_and_null_counts[constant-overflow-dri
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[2 as __sail_attribute_5, __sail_residual_aggregate_1@0 as __sail_attribute_6, __sail_residual_aggregate_2@1 as __sail_attribute_7, __sail_residual_aggregate_3@2 as __sail_attribute_8]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[2 as #5, __sail_residual_aggregate_1@0 as #6, __sail_residual_aggregate_2@1 as #7, __sail_residual_aggregate_3@2 as #8]
         AggregateExec: mode=Single, gby=[], aggr=[count(__common_expr_1) as __sail_residual_aggregate_1, min(__common_expr_1) as __sail_residual_aggregate_2, max(__common_expr_1) as __sail_residual_aggregate_3]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[TRY_CAST(v@0 AS Int8) as __common_expr_1], file_type=parquet
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Single, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as __sail_attribute_0], file_type=parquet
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Single, gby=[], aggr=[count(#0) as #1]
+          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as #0], file_type=parquet
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[TRY_CAST(v@0 AS Int8) as __common_expr_1], file_type=parquet
 ---
 name: "test_cast_aggregates_preserve_order_and_null_counts[constant-overflow-metadata]"
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_5, __sail_attribute_2@1 as __sail_attribute_6, __sail_attribute_3@2 as __sail_attribute_7, __sail_attribute_4@3 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[#1@0 as #5, #2@1 as #6, #3@2 as #7, #4@3 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
               ProjectionExec: expr=[TRY_CAST(v@0 AS Int8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -109,12 +109,12 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Final, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[count(#0) as #1]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-              ProjectionExec: expr=[v@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(#0) as #1]
+              ProjectionExec: expr=[v@0 as #0]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
                     DeltaLogReplayExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, mode=sort)
@@ -124,11 +124,11 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
               ProjectionExec: expr=[TRY_CAST(v@0 AS Int8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -142,32 +142,32 @@ name: "test_cast_aggregates_preserve_order_and_null_counts[invalid-string-driver
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[4 as __sail_attribute_5, __sail_residual_aggregate_1@0 as __sail_attribute_6, __sail_residual_aggregate_2@1 as __sail_attribute_7, __sail_residual_aggregate_3@2 as __sail_attribute_8]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[4 as #5, __sail_residual_aggregate_1@0 as #6, __sail_residual_aggregate_2@1 as #7, __sail_residual_aggregate_3@2 as #8]
         AggregateExec: mode=Single, gby=[], aggr=[count(__common_expr_1) as __sail_residual_aggregate_1, min(__common_expr_1) as __sail_residual_aggregate_2, max(__common_expr_1) as __sail_residual_aggregate_3]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[TRY_CAST(v@0 AS Int32) as __common_expr_1], file_type=parquet
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Single, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as __sail_attribute_0], file_type=parquet
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Single, gby=[], aggr=[count(#0) as #1]
+          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as #0], file_type=parquet
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[TRY_CAST(v@0 AS Int32) as __common_expr_1], file_type=parquet
 ---
 name: "test_cast_aggregates_preserve_order_and_null_counts[invalid-string-metadata]"
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_5, __sail_attribute_2@1 as __sail_attribute_6, __sail_attribute_3@2 as __sail_attribute_7, __sail_attribute_4@3 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[#1@0 as #5, #2@1 as #6, #3@2 as #7, #4@3 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
               ProjectionExec: expr=[TRY_CAST(v@0 AS Int32) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -178,12 +178,12 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Final, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[count(#0) as #1]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-              ProjectionExec: expr=[v@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(#0) as #1]
+              ProjectionExec: expr=[v@0 as #0]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
                     DeltaLogReplayExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, mode=sort)
@@ -193,11 +193,11 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
               ProjectionExec: expr=[TRY_CAST(v@0 AS Int32) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -211,32 +211,32 @@ name: "test_cast_aggregates_preserve_order_and_null_counts[mixed-overflow-driver
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[4 as __sail_attribute_5, __sail_residual_aggregate_1@0 as __sail_attribute_6, __sail_residual_aggregate_2@1 as __sail_attribute_7, __sail_residual_aggregate_3@2 as __sail_attribute_8]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[4 as #5, __sail_residual_aggregate_1@0 as #6, __sail_residual_aggregate_2@1 as #7, __sail_residual_aggregate_3@2 as #8]
         AggregateExec: mode=Single, gby=[], aggr=[count(__common_expr_1) as __sail_residual_aggregate_1, min(__common_expr_1) as __sail_residual_aggregate_2, max(__common_expr_1) as __sail_residual_aggregate_3]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[TRY_CAST(v@0 AS Int8) as __common_expr_1], file_type=parquet
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Single, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as __sail_attribute_0], file_type=parquet
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Single, gby=[], aggr=[count(#0) as #1]
+          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as #0], file_type=parquet
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[TRY_CAST(v@0 AS Int8) as __common_expr_1], file_type=parquet
 ---
 name: "test_cast_aggregates_preserve_order_and_null_counts[mixed-overflow-metadata]"
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_5, __sail_attribute_2@1 as __sail_attribute_6, __sail_attribute_3@2 as __sail_attribute_7, __sail_attribute_4@3 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[#1@0 as #5, #2@1 as #6, #3@2 as #7, #4@3 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
               ProjectionExec: expr=[TRY_CAST(v@0 AS Int8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -247,12 +247,12 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Final, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[count(#0) as #1]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-              ProjectionExec: expr=[v@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(#0) as #1]
+              ProjectionExec: expr=[v@0 as #0]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
                     DeltaLogReplayExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, mode=sort)
@@ -262,11 +262,11 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
               ProjectionExec: expr=[TRY_CAST(v@0 AS Int8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -280,32 +280,32 @@ name: "test_cast_aggregates_preserve_order_and_null_counts[numeric-strings-drive
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[4 as __sail_attribute_5, __sail_residual_aggregate_1@0 as __sail_attribute_6, __sail_residual_aggregate_2@1 as __sail_attribute_7, __sail_residual_aggregate_3@2 as __sail_attribute_8]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[4 as #5, __sail_residual_aggregate_1@0 as #6, __sail_residual_aggregate_2@1 as #7, __sail_residual_aggregate_3@2 as #8]
         AggregateExec: mode=Single, gby=[], aggr=[count(__common_expr_1) as __sail_residual_aggregate_1, min(__common_expr_1) as __sail_residual_aggregate_2, max(__common_expr_1) as __sail_residual_aggregate_3]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[CAST(v@0 AS Int32) as __common_expr_1], file_type=parquet
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Single, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as __sail_attribute_0], file_type=parquet
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Single, gby=[], aggr=[count(#0) as #1]
+          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as #0], file_type=parquet
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[CAST(v@0 AS Int32) as __common_expr_1], file_type=parquet
 ---
 name: "test_cast_aggregates_preserve_order_and_null_counts[numeric-strings-metadata]"
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_5, __sail_attribute_2@1 as __sail_attribute_6, __sail_attribute_3@2 as __sail_attribute_7, __sail_attribute_4@3 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[#1@0 as #5, #2@1 as #6, #3@2 as #7, #4@3 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
               ProjectionExec: expr=[CAST(v@0 AS Int32) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -316,12 +316,12 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Final, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[count(#0) as #1]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-              ProjectionExec: expr=[v@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(#0) as #1]
+              ProjectionExec: expr=[v@0 as #0]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
                     DeltaLogReplayExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, mode=sort)
@@ -331,11 +331,11 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
               ProjectionExec: expr=[CAST(v@0 AS Int32) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -349,32 +349,32 @@ name: "test_cast_aggregates_preserve_order_and_null_counts[varying-numbers-drive
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[4 as __sail_attribute_5, __sail_residual_aggregate_1@0 as __sail_attribute_6, __sail_residual_aggregate_2@1 as __sail_attribute_7, __sail_residual_aggregate_3@2 as __sail_attribute_8]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[4 as #5, __sail_residual_aggregate_1@0 as #6, __sail_residual_aggregate_2@1 as #7, __sail_residual_aggregate_3@2 as #8]
         AggregateExec: mode=Single, gby=[], aggr=[count(__common_expr_1) as __sail_residual_aggregate_1, min(__common_expr_1) as __sail_residual_aggregate_2, max(__common_expr_1) as __sail_residual_aggregate_3]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[CAST(v@0 AS Utf8) as __common_expr_1], file_type=parquet
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Single, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as __sail_attribute_0], file_type=parquet
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Single, gby=[], aggr=[count(#0) as #1]
+          DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[v@0 as #0], file_type=parquet
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Single, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/part-0.parquet]]}, projection=[CAST(v@0 AS Utf8) as __common_expr_1], file_type=parquet
 ---
 name: "test_cast_aggregates_preserve_order_and_null_counts[varying-numbers-metadata]"
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_5@0 as rows, __sail_attribute_6@1 as present, __sail_attribute_7@2 as minimum, __sail_attribute_8@3 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_5, __sail_attribute_2@1 as __sail_attribute_6, __sail_attribute_3@2 as __sail_attribute_7, __sail_attribute_4@3 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+    ProjectionExec: expr=[#5@0 as rows, #6@1 as present, #7@2 as minimum, #8@3 as maximum]
+      ProjectionExec: expr=[#1@0 as #5, #2@1 as #6, #3@2 as #7, #4@3 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_1, count(__common_expr_1) as __sail_attribute_2, min(__common_expr_1) as __sail_attribute_3, max(__common_expr_1) as __sail_attribute_4]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #1, count(__common_expr_1) as #2, min(__common_expr_1) as #3, max(__common_expr_1) as #4]
               ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -385,12 +385,12 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   count: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as present]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_2]
-        AggregateExec: mode=Final, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
+    ProjectionExec: expr=[#2@0 as present]
+      ProjectionExec: expr=[#1@0 as #2]
+        AggregateExec: mode=Final, gby=[], aggr=[count(#0) as #1]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(__sail_attribute_0) as __sail_attribute_1]
-              ProjectionExec: expr=[v@0 as __sail_attribute_0]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(#0) as #1]
+              ProjectionExec: expr=[v@0 as #0]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
                     DeltaLogReplayExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, mode=sort)
@@ -400,11 +400,11 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_cast_aggregates/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_3@0 as minimum, __sail_attribute_4@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_1@0 as __sail_attribute_3, __sail_attribute_2@1 as __sail_attribute_4]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+    ProjectionExec: expr=[#3@0 as minimum, #4@1 as maximum]
+      ProjectionExec: expr=[#1@0 as #3, #2@1 as #4]
+        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_1, max(__common_expr_1) as __sail_attribute_2]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as #1, max(__common_expr_1) as #2]
               ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_cast_aggregates/, version=0, projection=Some([0]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_cast_aggregates/)
@@ -418,31 +418,31 @@ name: "test_partition_cast_extrema_preserve_lexical_order[driver]"
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_6@0 as rows, __sail_attribute_7@1 as present, __sail_attribute_8@2 as minimum, __sail_attribute_9@3 as maximum]
-      ProjectionExec: expr=[7 as __sail_attribute_6, 6 as __sail_attribute_7, __sail_residual_aggregate_2@0 as __sail_attribute_8, __sail_residual_aggregate_3@1 as __sail_attribute_9]
+    ProjectionExec: expr=[#6@0 as rows, #7@1 as present, #8@2 as minimum, #9@3 as maximum]
+      ProjectionExec: expr=[7 as #6, 6 as #7, __sail_residual_aggregate_2@0 as #8, __sail_residual_aggregate_3@1 as #9]
         AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_residual_aggregate_2, max(__common_expr_1) as __sail_residual_aggregate_3]
           CoalescePartitionsExec
             AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_residual_aggregate_2, max(__common_expr_1) as __sail_residual_aggregate_3]
               DataSourceExec: file_groups={1 group: [[<tmp>/delta_partition_cast/v=10/part-<id>.snappy.parquet:<range>, <tmp>/delta_partition_cast/v=2/part-<id>.snappy.parquet:<range>, <tmp>/delta_partition_cast/v=3/part-<id>.snappy.parquet:<range>, <tmp>/delta_partition_cast/v=__HIVE_DEFAULT_PARTITION__/part-<id>.snappy.parquet:<range>]]}, projection=[CAST(v@1 AS Utf8) as __common_expr_1], file_type=parquet
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_4@0 as minimum, __sail_attribute_5@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_4, __sail_attribute_3@1 as __sail_attribute_5]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_2, max(__common_expr_1) as __sail_attribute_3]
+    ProjectionExec: expr=[#4@0 as minimum, #5@1 as maximum]
+      ProjectionExec: expr=[#2@0 as #4, #3@1 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as #2, max(__common_expr_1) as #3]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_2, max(__common_expr_1) as __sail_attribute_3]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as #2, max(__common_expr_1) as #3]
               DataSourceExec: file_groups={1 group: [[<tmp>/delta_partition_cast/v=10/part-<id>.snappy.parquet:<range>, <tmp>/delta_partition_cast/v=2/part-<id>.snappy.parquet:<range>, <tmp>/delta_partition_cast/v=3/part-<id>.snappy.parquet:<range>, <tmp>/delta_partition_cast/v=__HIVE_DEFAULT_PARTITION__/part-<id>.snappy.parquet:<range>]]}, projection=[CAST(v@1 AS Utf8) as __common_expr_1], file_type=parquet
 ---
 name: "test_partition_cast_extrema_preserve_lexical_order[metadata]"
 data:
   combined: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_6@0 as rows, __sail_attribute_7@1 as present, __sail_attribute_8@2 as minimum, __sail_attribute_9@3 as maximum]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_6, __sail_attribute_3@1 as __sail_attribute_7, __sail_attribute_4@2 as __sail_attribute_8, __sail_attribute_5@3 as __sail_attribute_9]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_2, count(__sail_attribute_1) as __sail_attribute_3, min(__common_expr_1) as __sail_attribute_4, max(__common_expr_1) as __sail_attribute_5]
+    ProjectionExec: expr=[#6@0 as rows, #7@1 as present, #8@2 as minimum, #9@3 as maximum]
+      ProjectionExec: expr=[#2@0 as #6, #3@1 as #7, #4@2 as #8, #5@3 as #9]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #2, count(#1) as #3, min(__common_expr_1) as #4, max(__common_expr_1) as #5]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_2, count(__sail_attribute_1) as __sail_attribute_3, min(__common_expr_1) as __sail_attribute_4, max(__common_expr_1) as __sail_attribute_5]
-              ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1, v@0 as __sail_attribute_1]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #2, count(#1) as #3, min(__common_expr_1) as #4, max(__common_expr_1) as #5]
+              ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1, v@0 as #1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_partition_cast/, version=0, projection=Some([1]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_partition_cast/)
                     DeltaLogReplayExec(table_path=file://<tmp>/delta_partition_cast/, version=0, mode=sort)
@@ -452,11 +452,11 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/delta_partition_cast/_delta_log/00000000000000000000.json]]}, projection=[add, remove, __sail_delta_log_version], file_type=json
   extrema: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_4@0 as minimum, __sail_attribute_5@1 as maximum]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_4, __sail_attribute_3@1 as __sail_attribute_5]
-        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_2, max(__common_expr_1) as __sail_attribute_3]
+    ProjectionExec: expr=[#4@0 as minimum, #5@1 as maximum]
+      ProjectionExec: expr=[#2@0 as #4, #3@1 as #5]
+        AggregateExec: mode=Final, gby=[], aggr=[min(__common_expr_1) as #2, max(__common_expr_1) as #3]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as __sail_attribute_2, max(__common_expr_1) as __sail_attribute_3]
+            AggregateExec: mode=Partial, gby=[], aggr=[min(__common_expr_1) as #2, max(__common_expr_1) as #3]
               ProjectionExec: expr=[CAST(v@0 AS Utf8) as __common_expr_1]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delta_partition_cast/, version=0, projection=Some([1]), limit=None, pushdown=false)
                   DeltaDiscoveryExec(table_path=file://<tmp>/delta_partition_cast/)

@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use chrono::{Duration, NaiveDate};
 use datafusion::arrow::array::{Array, PrimitiveArray, PrimitiveBuilder};
-use datafusion::arrow::datatypes::{DataType, TimestampMicrosecondType};
+use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::cast::{
     as_date32_array, as_float64_array, as_int32_array, as_time64_microsecond_array, as_uint32_array,
 };
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::types::NativeType;
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common::utils::datetime::MICROS_PER_DAY;
 
@@ -39,7 +40,7 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::datetime_spark_make_timestamp_ntz::return_type(_arg_types)
+        Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -156,7 +157,58 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::datetime_spark_make_timestamp_ntz::coerce_types(arg_types)
+        if arg_types.len() == 2 {
+            return Ok(vec![
+                DataType::Date32,
+                DataType::Time64(TimeUnit::Microsecond),
+            ]);
+        }
+
+        if let [years, months, days, hours, mins, secs] = arg_types {
+            let years: NativeType = years.into();
+            let months: NativeType = months.into();
+            let days: NativeType = days.into();
+            let hours: NativeType = hours.into();
+            let mins: NativeType = mins.into();
+            let secs: NativeType = secs.into();
+            if (years.is_integer()
+                || matches!(years, NativeType::String)
+                || matches!(years, NativeType::Null))
+                && (months.is_integer()
+                    || matches!(months, NativeType::String)
+                    || matches!(months, NativeType::Null))
+                && (days.is_integer()
+                    || matches!(days, NativeType::String)
+                    || matches!(days, NativeType::Null))
+                && (hours.is_integer()
+                    || matches!(hours, NativeType::String)
+                    || matches!(hours, NativeType::Null))
+                && (mins.is_integer()
+                    || matches!(mins, NativeType::String)
+                    || matches!(mins, NativeType::Null))
+                && (secs.is_numeric()
+                    || matches!(secs, NativeType::String)
+                    || matches!(secs, NativeType::Null))
+            {
+                return Ok(vec![
+                    DataType::Int32,
+                    DataType::UInt32,
+                    DataType::UInt32,
+                    DataType::UInt32,
+                    DataType::UInt32,
+                    DataType::Float64,
+                ]);
+            } else {
+                return plan_err!(
+                    "The arguments of Spark `make_timestamp_ntz` must be integer or string or null"
+                );
+            }
+        }
+
+        exec_err!(
+            "Spark `make_timestamp_ntz` function requires 2 or 6 arguments, got {}",
+            arg_types.len()
+        )
     }
 }
 

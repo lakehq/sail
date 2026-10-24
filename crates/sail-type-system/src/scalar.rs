@@ -81,31 +81,3 @@ pub fn resolve(
         result,
     })
 }
-
-/// String formatting preserves the value's nullability; an optional interval
-/// qualifier is analysis metadata and does not affect the result field.
-pub fn formatted_string_field(
-    name: &str,
-    kind: arrow_schema::DataType,
-    args: ReturnFieldArgs,
-) -> Result<FieldRef> {
-    let ([value] | [value, _]) = args.arg_fields else {
-        return plan_err!(
-            "{name} expects one or two arguments, got {}",
-            args.arg_fields.len()
-        );
-    };
-    Ok(std::sync::Arc::new(arrow_schema::Field::new(
-        name,
-        kind,
-        value.is_nullable(),
-    )))
-}
-
-pub fn length_field(name: &str, args: ReturnFieldArgs) -> Result<FieldRef> {
-    Ok(std::sync::Arc::new(arrow_schema::Field::new(
-        name,
-        arrow_schema::DataType::Int32,
-        args.arg_fields.iter().any(|f| f.is_nullable()),
-    )))
-}

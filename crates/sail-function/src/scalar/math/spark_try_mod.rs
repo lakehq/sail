@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
 use datafusion::arrow::array::builder::PrimitiveBuilder;
 use datafusion::arrow::array::{Array, AsArray, PrimitiveArray};
-use datafusion::arrow::datatypes::{DataType, Decimal128Type, FieldRef, Int32Type, Int64Type};
-use datafusion_common::Result;
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, DecimalType, Field, FieldRef, Int32Type, Int64Type,
+};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -33,12 +37,13 @@ impl SparkTryMod {
         precision_right: &u8,
         scale_right: &i8,
     ) -> (i8, u8) {
-        sail_type_system::policies::scalar_math_spark_try_mod::get_scale_and_precision(
-            precision_left,
-            scale_left,
-            precision_right,
-            scale_right,
-        )
+        let result_scale: i8 = (*scale_left).max(*scale_right);
+        let int_digits_l: i8 = *precision_left as i8 - *scale_left;
+        let int_digits_r: i8 = *precision_right as i8 - *scale_right;
+        let result_precision: u8 = (result_scale.saturating_add(int_digits_l.min(int_digits_r))
+            as u8)
+            .min(Decimal128Type::MAX_PRECISION);
+        (result_scale, result_precision)
     }
 }
 
@@ -52,14 +57,31 @@ impl ScalarUDFImpl for SparkTryMod {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_math_spark_try_mod::return_type(_arg_types)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     /// Spark: `TryMod` is `RuntimeReplaceable`; both replacement branches declare `true`.
     /// numeric  <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L236>
     /// fallback <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::scalar_math_spark_try_mod::return_field_from_args(args)
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = if let [DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)] =
+            arg_types.as_slice()
+        {
+            let (result_scale, result_precision) = Self::get_scale_and_precision(pl, sl, pr, sr);
+            DataType::Decimal128(result_precision, result_scale)
+        } else if arg_types.contains(&DataType::Int64) {
+            DataType::Int64
+        } else {
+            DataType::Int32
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -134,7 +156,51 @@ impl ScalarUDFImpl for SparkTryMod {
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::scalar_math_spark_try_mod::coerce_types(types)
+        if types.len() != 2 {
+            return Err(invalid_arg_count_exec_err(
+                "spark_try_mod",
+                (2, 2),
+                types.len(),
+            ));
+        }
+
+        let left = &types[0];
+        let right = &types[1];
+
+        if *left == DataType::Null {
+            return Ok(vec![right.clone(), right.clone()]);
+        } else if *right == DataType::Null {
+            return Ok(vec![left.clone(), left.clone()]);
+        }
+
+        let is_int = |t: &DataType| matches!(t, DataType::Int32 | DataType::Int64);
+
+        match (left, right) {
+            (DataType::Decimal128(pl, sl), DataType::Decimal128(pr, sr)) => Ok(vec![
+                DataType::Decimal128(*pl, *sl),
+                DataType::Decimal128(*pr, *sr),
+            ]),
+            (DataType::Decimal128(p, s), r) if is_int(r) => Ok(vec![
+                DataType::Decimal128(*p, *s),
+                DataType::Decimal128(*p, *s),
+            ]),
+            (l, DataType::Decimal128(p, s)) if is_int(l) => Ok(vec![
+                DataType::Decimal128(*p, *s),
+                DataType::Decimal128(*p, *s),
+            ]),
+            (l, r) if is_int(l) && is_int(r) => {
+                if *l == DataType::Int64 || *r == DataType::Int64 {
+                    Ok(vec![DataType::Int64, DataType::Int64])
+                } else {
+                    Ok(vec![DataType::Int32, DataType::Int32])
+                }
+            }
+            _ => Err(unsupported_data_types_exec_err(
+                "spark_try_mod",
+                "Int32, Int64 or Decimal128",
+                types,
+            )),
+        }
     }
 }
 

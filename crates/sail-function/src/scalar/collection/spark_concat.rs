@@ -1,11 +1,15 @@
+use std::cmp::Ordering;
+use std::sync::Arc;
+
 use datafusion::arrow::array::BooleanArray;
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::compute::kernels::boolean::{is_null, or};
 use datafusion::arrow::compute::kernels::concat_elements::concat_elements_dyn;
 use datafusion::arrow::compute::kernels::nullif::nullif;
-use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions::string::concat::ConcatFunc;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::utils::list_ndims;
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -42,13 +46,14 @@ impl ScalarUDFImpl for SparkConcat {
     }
 
     fn coerce_types(&self, arguments: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::scalar_collection_spark_concat_typing::coerce_types(arguments)
+        let target = concat_return_type(arguments)?;
+        Ok(vec![target; arguments.len()])
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_collection_spark_concat_typing::spark_concat_return_type(
-            self.name(),
-            _arg_types,
+        internal_err!(
+            "{}: `return_type` should not be called; `return_field_from_args` is used instead",
+            self.name()
         )
     }
 
@@ -56,7 +61,14 @@ impl ScalarUDFImpl for SparkConcat {
     /// (mirrors Spark `Concat.nullable`). Set here rather than in the deprecated
     /// `is_nullable`, which DataFusion no longer consults to derive the field.
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::scalar_collection_spark_concat_typing::spark_concat_return_field_from_args(self.name(), args)
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let return_type = concat_return_type(&data_types)?;
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 
     /// Plan-time simplifications that mirror Spark's `concat` semantics.
@@ -241,4 +253,92 @@ fn flatten_nested_concats(args: Vec<Expr>, info: &SimplifyContext) -> Result<Vec
 /// or string (widest of Utf8View / LargeUtf8 / Utf8).
 ///
 /// [Credit]: <https://github.com/apache/datafusion/blob/7ccc6d7c55ae9dbcb7dee031f394bf11a03000ba/datafusion/functions-nested/src/concat.rs#L276-L310>
-use sail_type_system::policies::scalar_collection_spark_concat_typing::concat_return_type;
+fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
+    if arg_types.is_empty() {
+        return Ok(DataType::Utf8);
+    }
+    if arg_types
+        .iter()
+        .any(|arg_type| matches!(arg_type, DataType::List(_)))
+    {
+        let mut expr_type: Option<DataType> = None;
+        let mut max_dims = 0;
+        for arg_type in arg_types {
+            match arg_type {
+                DataType::List(field) => {
+                    if !field.data_type().equals_datatype(&DataType::Null) {
+                        let dims = list_ndims(arg_type);
+                        expr_type = Some(match max_dims.cmp(&dims) {
+                            Ordering::Greater => expr_type.unwrap_or_else(|| arg_type.clone()),
+                            Ordering::Equal => {
+                                if let Some(expr_type) = expr_type {
+                                    merge_list_types(&expr_type, arg_type).ok_or_else(|| {
+                                        datafusion_common::plan_datafusion_err!(
+                                            "It is not possible to concatenate arrays of different types. Expected: {expr_type}, got: {arg_type}"
+                                        )
+                                    })?
+                                } else {
+                                    arg_type.clone()
+                                }
+                            }
+                            Ordering::Less => {
+                                max_dims = dims;
+                                arg_type.clone()
+                            }
+                        });
+                    }
+                }
+                _ => {
+                    return plan_err!(
+                        "The array_concat function can only accept list as the args."
+                    );
+                }
+            }
+        }
+        // All arrays had Null element type (e.g. array() + array()) — keep as List(Null)
+        Ok(expr_type.unwrap_or_else(|| arg_types[0].clone()))
+    } else if arg_types
+        .iter()
+        .all(|arg_type| matches!(arg_type, DataType::Binary))
+    {
+        Ok(DataType::Binary)
+    } else if arg_types
+        .iter()
+        .all(|arg_type| matches!(arg_type, DataType::Binary | DataType::LargeBinary))
+    {
+        Ok(DataType::LargeBinary)
+    } else {
+        Ok(arg_types
+            .iter()
+            .find(|&arg_type| matches!(arg_type, &DataType::Utf8View))
+            .or_else(|| {
+                arg_types
+                    .iter()
+                    .find(|&arg_type| matches!(arg_type, &DataType::LargeUtf8))
+            })
+            .unwrap_or(&DataType::Utf8)
+            .clone())
+    }
+}
+
+fn merge_list_types(left: &DataType, right: &DataType) -> Option<DataType> {
+    match (left, right) {
+        (DataType::List(left), DataType::List(right)) => {
+            let data_type =
+                merge_list_types(left.data_type(), right.data_type()).or_else(|| {
+                    // Leaf list item types may only differ by field/nullability metadata.
+                    left.data_type()
+                        .equals_datatype(right.data_type())
+                        .then(|| left.data_type().clone())
+                })?;
+            Some(DataType::List(Arc::new(
+                left.as_ref()
+                    .clone()
+                    .with_data_type(data_type)
+                    .with_nullable(left.is_nullable() || right.is_nullable()),
+            )))
+        }
+        _ if left.equals_datatype(right) => Some(left.clone()),
+        _ => None,
+    }
+}

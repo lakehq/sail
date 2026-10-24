@@ -57,7 +57,15 @@ macro_rules! define_to_string_udf {
             }
 
             fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-                sail_type_system::scalar::formatted_string_field(self.name(), $return_type, args)
+                let ([arg] | [arg, _]) = args.arg_fields else {
+                    return exec_err!(
+                        "{} expects one or two arguments, got {}",
+                        self.name(),
+                        args.arg_fields.len()
+                    );
+                };
+                let nullable = arg.is_nullable();
+                Ok(Arc::new(Field::new(self.name(), $return_type, nullable)))
             }
 
             fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

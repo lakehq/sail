@@ -22,9 +22,9 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::compute::{filter as arrow_filter, take_arrays};
-use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values_row_number};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
@@ -96,15 +96,31 @@ impl HigherOrderUDFImpl for SparkArrayFilter {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        sail_type_system::higher_order::list_parameters(self.name(), fields, true, self.index_first)
+        let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
+
+        let element = match list.data_type() {
+            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+            other => return plan_err!("{} expected a list, got {other}", self.name()),
+        };
+
+        // Spark lambdas may declare one parameter (the element) or two (the
+        // element and its 0-based index).
+        let index = Arc::new(Field::new("", DataType::Int32, false));
+        let params = if self.index_first {
+            vec![index, element]
+        } else {
+            vec![element, index]
+        };
+        Ok(LambdaParametersProgress::Complete(vec![params]))
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::higher_order::list_result(
-            self.name(),
-            args,
-            sail_type_system::higher_order::ListResult::Filter,
-        )
+        let (list, _lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
+        Ok(Arc::new(Field::new(
+            "",
+            list.data_type().clone(),
+            list.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
@@ -266,7 +282,6 @@ pub(crate) fn filter_list_values<O: OffsetSizeTrait>(
 mod tests {
     use std::collections::HashMap;
 
-    use arrow_schema::Field;
     use datafusion::arrow::array::{Int32Array, RecordBatch};
     use datafusion::arrow::buffer::NullBuffer;
     use datafusion_common::DFSchema;

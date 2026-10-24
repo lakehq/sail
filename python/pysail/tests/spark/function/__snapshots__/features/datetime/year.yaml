@@ -4,34 +4,34 @@ name: "test_explain_where_yearcol__2022_rewrites_to_upperbound_date_predicate"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as d]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
-        FilterExec: __sail_attribute_0@0 < 2023-01-01
+    ProjectionExec: expr=[#2@0 as d]
+      ProjectionExec: expr=[#0@0 as #2]
+        FilterExec: #0@0 < 2023-01-01
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_where_yearcol__2023_rewrites_to_date_range_no_udf_in_plan"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as d]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
-        FilterExec: __sail_attribute_0@0 >= 2023-01-01 AND __sail_attribute_0@0 < 2024-01-01
+    ProjectionExec: expr=[#2@0 as d]
+      ProjectionExec: expr=[#0@0 as #2]
+        FilterExec: #0@0 >= 2023-01-01 AND #0@0 < 2024-01-01
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_where_yearcol__2023_rewrites_to_disjunction"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as d]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
-        FilterExec: __sail_attribute_0@0 < 2023-01-01 OR __sail_attribute_0@0 >= 2024-01-01
+    ProjectionExec: expr=[#2@0 as d]
+      ProjectionExec: expr=[#0@0 as #2]
+        FilterExec: #0@0 < 2023-01-01 OR #0@0 >= 2024-01-01
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_where_yearcol__9999_also_rewrites_naivedate_supports_year_10000"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as d]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
-        FilterExec: __sail_attribute_0@0 >= 9999-01-01 AND __sail_attribute_0@0 < +10000-01-01
+    ProjectionExec: expr=[#2@0 as d]
+      ProjectionExec: expr=[#0@0 as #2]
+        FilterExec: #0@0 >= 9999-01-01 AND #0@0 < +10000-01-01
           DataSourceExec: partitions=1, partition_sizes=[1]

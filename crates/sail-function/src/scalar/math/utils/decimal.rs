@@ -1,9 +1,9 @@
-//! Shared type utilities.
-
 use std::cmp::{max, min};
 
-use arrow_schema::{DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
+use datafusion::arrow::datatypes::{DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
 
+// https://github.com/apache/spark/blob/50a328ba98577ea12bbae50f2cbf406438b01a2f/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L1491-L1508
+#[inline]
 pub fn round_decimal_base(
     precision: i32,
     scale: i32,

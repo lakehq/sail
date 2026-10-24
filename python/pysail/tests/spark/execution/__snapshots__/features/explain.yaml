@@ -8,9 +8,9 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Projection: __sail_attribute_4 AS __sail_attribute_6, __sail_attribute_5 AS __sail_expression_16 AS __sail_attribute_7
-      Aggregate: groupBy=[[__sail_attribute_2 AS __sail_attribute_4]], aggr=[[sum(CAST(__sail_attribute_3 AS Int64)) AS __sail_attribute_5]]
-        Projection: __sail_attribute_0 AS __sail_expression_4 AS __sail_attribute_2, __sail_attribute_1 AS __sail_expression_6 AS __sail_attribute_3
+    Projection: #4 AS #6, #5 AS __sail_expression_16 AS #7
+      Aggregate: groupBy=[[#2 AS #4]], aggr=[[sum(CAST(#3 AS Int64)) AS #5]]
+        Projection: #0 AS __sail_expression_4 AS #2, #1 AS __sail_expression_6 AS #3
           Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
     logical_plan after resolve_grouping_function:
@@ -101,41 +101,41 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Projection: __sail_attribute_4 AS __sail_attribute_6, __sail_attribute_5 AS __sail_expression_16 AS __sail_attribute_7
-      Aggregate: groupBy=[[__sail_attribute_2 AS __sail_attribute_4]], aggr=[[sum(CAST(__sail_attribute_3 AS Int64)) AS __sail_attribute_5]]
-        Projection: __sail_attribute_0 AS __sail_expression_4 AS __sail_attribute_2, __sail_attribute_1 AS __sail_expression_6 AS __sail_attribute_3
+    Projection: #4 AS #6, #5 AS __sail_expression_16 AS #7
+      Aggregate: groupBy=[[#2 AS #4]], aggr=[[sum(CAST(#3 AS Int64)) AS #5]]
+        Projection: #0 AS __sail_expression_4 AS #2, #1 AS __sail_expression_6 AS #3
           Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
     initial_physical_plan:
-    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7]
-      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3]
+    ProjectionExec: expr=[#4@0 as #6, #5@1 as #7]
+      AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5]
+        AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5]
+          ProjectionExec: expr=[#0@0 as #2, #1@1 as #3]
             DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     initial_physical_plan_with_stats:
-    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+    ProjectionExec: expr=[#4@0 as #6, #5@1 as #7], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+      AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+        AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+          ProjectionExec: expr=[#0@0 as #2, #1@1 as #3], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
-    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7], schema=[__sail_attribute_6:Int32, __sail_attribute_7:Int64;N]
-      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5], schema=[__sail_attribute_4:Int32, __sail_attribute_5:Int64;N]
-        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5], schema=[__sail_attribute_4:Int32, __sail_attribute_5[sum]:Int64;N]
-          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3], schema=[__sail_attribute_2:Int32, __sail_attribute_3:Int32]
-            DataSourceExec: partitions=1, partition_sizes=[1], schema=[__sail_attribute_0:Int32, __sail_attribute_1:Int32]
+    ProjectionExec: expr=[#4@0 as #6, #5@1 as #7], schema=[#6:Int32, #7:Int64;N]
+      AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5], schema=[#4:Int32, #5:Int64;N]
+        AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5], schema=[#4:Int32, #5[sum]:Int64;N]
+          ProjectionExec: expr=[#0@0 as #2, #1@1 as #3], schema=[#2:Int32, #3:Int32]
+            DataSourceExec: partitions=1, partition_sizes=[1], schema=[#0:Int32, #1:Int32]
 
 
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
-      ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-          AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-            ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3]
+      ProjectionExec: expr=[#4@0 as #6, #5@1 as #7]
+        AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5]
+          AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5]
+            ProjectionExec: expr=[#0@0 as #2, #1@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -165,11 +165,11 @@ data:
 
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
-      ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-          RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-            AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-              ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3]
+      ProjectionExec: expr=[#4@0 as #6, #5@1 as #7]
+        AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5]
+          RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+            AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5]
+              ProjectionExec: expr=[#0@0 as #2, #1@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -186,11 +186,11 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after OutputRequirements:
-    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7]
-      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-        RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-          AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-            ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3]
+    ProjectionExec: expr=[#4@0 as #6, #5@1 as #7]
+      AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5]
+        RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+          AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5]
+            ProjectionExec: expr=[#0@0 as #2, #1@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -237,22 +237,22 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan:
-    ProjectionExec: expr=[__sail_attribute_6@0 as k, __sail_attribute_7@1 as total]
-      ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-          RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-            AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-              ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3]
+    ProjectionExec: expr=[#6@0 as k, #7@1 as total]
+      ProjectionExec: expr=[#4@0 as #6, #5@1 as #7]
+        AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5]
+          RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+            AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5]
+              ProjectionExec: expr=[#0@0 as #2, #1@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_6@0 as k, __sail_attribute_7@1 as total]
-      ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-          RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-            AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-              ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3]
+    ProjectionExec: expr=[#6@0 as k, #7@1 as total]
+      ProjectionExec: expr=[#4@0 as #6, #5@1 as #7]
+        AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5]
+          RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+            AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5]
+              ProjectionExec: expr=[#0@0 as #2, #1@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -261,10 +261,10 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=Hash(keys=[__sail_attribute_4@0], channels=4)
+    distribution=Hash(keys=[#4@0], channels=4)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2, __sail_attribute_1@1 as __sail_attribute_3]
+    AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[sum(#3) as #5]
+      ProjectionExec: expr=[#0@0 as #2, #1@1 as #3]
         DataSourceExec: partitions=1, partition_sizes=[1]
 
     === stage 1 ===
@@ -273,7 +273,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    ProjectionExec: expr=[__sail_attribute_6@0 as k, __sail_attribute_7@1 as total]
-      ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6, __sail_attribute_5@1 as __sail_attribute_7]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[sum(__sail_attribute_3) as __sail_attribute_5]
-          StageInputExec: input=0, partitioning=Hash([__sail_attribute_4@0], 4)
+    ProjectionExec: expr=[#6@0 as k, #7@1 as total]
+      ProjectionExec: expr=[#4@0 as #6, #5@1 as #7]
+        AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[sum(#3) as #5]
+          StageInputExec: input=0, partitioning=Hash([#4@0], 4)

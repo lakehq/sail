@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, ListBuilder, StringArray, StringBuilder};
-use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -40,18 +40,40 @@ impl ScalarUDFImpl for Xpath {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::xml_xpath::return_type(_arg_types)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     /// Spark: `XPathExtract.nullable = true`, unconditional; `XPathList` inherits it and
     /// declares no `nullable` of its own.
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xml/xpath.scala#L40>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::xml_xpath::return_field_from_args(_args)
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+            true,
+        )))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::xml_xpath::coerce_types(arg_types)
+        if arg_types.len() != 2 {
+            return plan_err!(
+                "`xpath` function requires 2 arguments, got {}",
+                arg_types.len()
+            );
+        }
+        arg_types
+            .iter()
+            .map(|data_type| match data_type {
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null => {
+                    Ok(DataType::Utf8)
+                }
+                other => {
+                    plan_err!("The `xpath` function can only accept strings, but got {other:?}.")
+                }
+            })
+            .collect()
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

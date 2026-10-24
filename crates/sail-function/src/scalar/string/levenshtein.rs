@@ -8,6 +8,7 @@ use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureClass};
+use datafusion_expr_common::type_coercion::binary::{binary_to_string_coercion, string_coercion};
 
 use crate::functions_utils::make_scalar_function;
 
@@ -68,7 +69,19 @@ impl ScalarUDFImpl for Levenshtein {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::string_levenshtein::return_type(arg_types)
+        if let Some(coercion_data_type) = string_coercion(&arg_types[0], &arg_types[1])
+            .or_else(|| binary_to_string_coercion(&arg_types[0], &arg_types[1]))
+        {
+            match coercion_data_type {
+                DataType::LargeUtf8 => Ok(DataType::Int64),
+                DataType::Utf8 | DataType::Utf8View => Ok(DataType::Int32),
+                other => exec_err!("levenshtein requires Utf8, LargeUtf8 or Utf8View, got {other}"),
+            }
+        } else {
+            exec_err!(
+                "Unsupported data types for levenshtein. Expected Utf8, LargeUtf8 or Utf8View"
+            )
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

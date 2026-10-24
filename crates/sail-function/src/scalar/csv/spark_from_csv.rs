@@ -1,15 +1,19 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, exec_err};
+use datafusion_common::{ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_expr_common::signature::Volatility;
+use sail_common::spec;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_sql_analyzer::data_type::from_ast_data_type;
+use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
@@ -143,17 +147,37 @@ impl ScalarUDFImpl for SparkFromCSV {
 
     /// The base return type is unknown until arguments are provided
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_csv_spark_from_csv_typing::spark_from_c_s_v_return_type(
-            _arg_types,
-        )
+        // We cannot know the final DataType result without knowing the schema input args
+        Ok(DataType::Struct(Fields::empty()))
     }
 
     /// Determines the return type of the function based on the schema string and separator
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::from_csv_schema::return_field_from_args(
-            &self.session_timezone,
-            args,
-        )
+        let ReturnFieldArgs {
+            scalar_arguments, ..
+        } = args;
+        let schema_str = if let Some(schema) = scalar_arguments.get(1) {
+            match schema {
+                Some(ScalarValue::Utf8(Some(s)))
+                | Some(ScalarValue::LargeUtf8(Some(s)))
+                | Some(ScalarValue::Utf8View(Some(s))) => s.as_str(),
+                None | Some(_) => {
+                    return plan_err!(
+                        "`{}` function requires the schema argument to be a string literal",
+                        Self::FROM_CSV_NAME
+                    );
+                }
+            }
+        } else {
+            return plan_err!(
+                "`{}` function requires 2 or 3 arguments, got {}",
+                Self::FROM_CSV_NAME,
+                scalar_arguments.len()
+            );
+        };
+
+        let dt = DataType::Struct(parse_fields(schema_str, &self.session_timezone)?);
+        Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     /// Executes the function with given arguments and produces the resulting array
@@ -167,7 +191,25 @@ impl ScalarUDFImpl for SparkFromCSV {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::from_csv_schema::coerce_types(arg_types)
+        match arg_types {
+            [DataType::Utf8, DataType::Utf8] | [DataType::LargeUtf8, DataType::Utf8] => {
+                Ok(vec![arg_types[0].clone(), arg_types[1].clone()])
+            }
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(_, _),
+            ] => Ok(vec![
+                arg_types[0].clone(),
+                arg_types[1].clone(),
+                arg_types[2].clone(),
+            ]),
+            _ => plan_err!(
+                "`{}` function requires 2 or 3 arguments, got {}",
+                Self::FROM_CSV_NAME,
+                arg_types.len()
+            ),
+        }
     }
 }
 
@@ -487,14 +529,72 @@ fn parse_date(
 /// # Errors
 /// Returns an error if the schema string is invalid, such as if it contains
 /// duplicate field names or uses an unsupported field type syntax.
-use sail_type_system::schema::parse_fields;
+fn parse_fields(schema: &str, session_timezone: &str) -> Result<Fields> {
+    let schema = schema.trim();
+    let type_str = if schema
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case("struct"))
+        && schema.get(6..).is_some_and(|p| p.starts_with('<'))
+        && schema.ends_with('>')
+    {
+        schema.to_string()
+    } else {
+        // Schema string is a list of fields. Wrap it into `STRUCT<...>`.
+        format!("STRUCT<{schema}>")
+    };
+
+    let ast = sail_parser::parse_data_type(&type_str)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
+    let spec_dt = from_ast_data_type(ast)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
+    let spec::DataType::Struct { fields } = spec_dt else {
+        return Err(DataFusionError::Plan(format!(
+            "Expected STRUCT schema, got: {spec_dt:?}"
+        )));
+    };
+
+    let mut out: Vec<Arc<Field>> = Vec::with_capacity(fields.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(fields.len());
+    for f in fields.iter() {
+        let name = f.name.clone();
+        if !seen.insert(name.clone()) {
+            return Err(DataFusionError::Plan(format!(
+                "Duplicate field name '{name}'"
+            )));
+        }
+        let dt = spec_to_arrow_data_type(&f.data_type, session_timezone)?;
+        out.push(Arc::new(Field::new(name, dt, f.nullable)));
+    }
+    Ok(Fields::from(out))
+}
 
 /// Parses a raw SQL type string into an Arrow `DataType`.
 pub fn parse_data_type(raw: &str) -> Result<DataType> {
     parse_data_type_with_session_timezone(raw, DEFAULT_SESSION_TIMEZONE)
 }
 
-use sail_type_system::schema::parse_data_type_with_session_timezone;
+fn parse_data_type_with_session_timezone(raw: &str, session_timezone: &str) -> Result<DataType> {
+    let ast = sail_parser::parse_data_type(raw)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to parse SQL type '{raw}': {e}")))?;
+    let spec_dt = from_ast_data_type(ast)
+        .map_err(|e| DataFusionError::Plan(format!("Failed to analyze SQL type '{raw}': {e}")))?;
+    spec_to_arrow_data_type(&spec_dt, session_timezone)
+}
+
+fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
+    let resolver = sail_type_system::data_type::TypeResolver {
+        session_timezone: Arc::from(session_timezone),
+        default_timestamp_ltz: true,
+        use_large_var_types: false,
+    };
+    let dt = match dt {
+        spec::DataType::UserDefined { sql_type, .. } => sql_type,
+        dt => dt,
+    };
+    resolver
+        .resolve_data_type(dt)
+        .map_err(|e| DataFusionError::Plan(e.to_string()))
+}
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]

@@ -4,7 +4,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, GenericStringArray, Int32Array, ListArray, ListBuilder, OffsetSizeTrait,
     StringBuilder,
 };
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::Hint;
@@ -13,7 +13,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 use regex::Regex;
 
-use crate::error::{generic_exec_err, generic_internal_err};
+use crate::error::{generic_exec_err, generic_internal_err, unsupported_data_types_exec_err};
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::{StrMemo, make_scalar_function};
 
@@ -46,11 +46,39 @@ impl ScalarUDFImpl for SparkSplit {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_string_spark_split::return_type(_arg_types)
+        Ok(DataType::List(Arc::new(Field::new_list_field(
+            DataType::Utf8,
+            true,
+        ))))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::scalar_string_spark_split::coerce_types(arg_types)
+        let err = || {
+            Err(unsupported_data_types_exec_err(
+                Self::NAME,
+                "Expected (STRING, STRING) or (STRING, STRING, INT). Adjust the value to match the syntax, or change its target type. Use try_cast to handle malformed input and return NULL instead",
+                arg_types,
+            ))
+        };
+
+        let mut res_types = vec![];
+        for i in 0..=1 {
+            res_types.push(match arg_types.get(i) {
+                Some(DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8) => {
+                    Ok(arg_types[i].clone())
+                }
+                Some(DataType::Null) => Ok(DataType::Utf8),
+                _ => err(),
+            });
+        }
+        if arg_types.len() == 3 {
+            res_types.push(if arg_types[2].is_null() || arg_types[2].is_integer() {
+                Ok(DataType::Int32)
+            } else {
+                err()
+            });
+        }
+        res_types.into_iter().collect::<Result<Vec<_>>>()
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

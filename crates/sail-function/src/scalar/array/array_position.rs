@@ -7,13 +7,14 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
-    Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Field, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValue, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr::type_coercion::binary::comparison_coercion;
 use num::Float;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -45,7 +46,7 @@ impl ScalarUDFImpl for SparkArrayPosition {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> DataFusionResult<DataType> {
-        sail_type_system::policies::scalar_array_array_position::return_type(_arg_types)
+        Ok(DataType::Int64)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DataFusionResult<ColumnarValue> {
@@ -53,7 +54,56 @@ impl ScalarUDFImpl for SparkArrayPosition {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> DataFusionResult<Vec<DataType>> {
-        sail_type_system::policies::scalar_array_array_position::coerce_types(arg_types)
+        if arg_types.len() != 2 {
+            return exec_err!("array_position function takes exactly two arguments");
+        }
+
+        let element_type = &arg_types[1];
+        let (array_type, element_type) = match &arg_types[0] {
+            DataType::List(field)
+            | DataType::ListView(field)
+            | DataType::FixedSizeList(field, _) => {
+                let element_type = coerced_element_type(field.data_type(), element_type)?;
+                (
+                    DataType::List(Arc::new(Field::new_list_field(
+                        element_type.clone(),
+                        field.is_nullable(),
+                    ))),
+                    element_type,
+                )
+            }
+            DataType::LargeList(field) | DataType::LargeListView(field) => {
+                let element_type = coerced_element_type(field.data_type(), element_type)?;
+                (
+                    DataType::LargeList(Arc::new(Field::new_list_field(
+                        element_type.clone(),
+                        field.is_nullable(),
+                    ))),
+                    element_type,
+                )
+            }
+            array_type => {
+                return exec_err!("array_position does not support type '{array_type:?}'");
+            }
+        };
+
+        Ok(vec![array_type, element_type])
+    }
+}
+
+fn coerced_element_type(left: &DataType, right: &DataType) -> DataFusionResult<DataType> {
+    if left == right {
+        Ok(left.clone())
+    } else if left.is_null() {
+        Ok(right.clone())
+    } else if right.is_null() {
+        Ok(left.clone())
+    } else {
+        comparison_coercion(left, right).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "array_position does not support element types '{left:?}' and '{right:?}'"
+            ))
+        })
     }
 }
 

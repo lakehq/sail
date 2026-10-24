@@ -52,7 +52,16 @@ impl ScalarUDFImpl for SparkStructRename {
         &self,
         args: datafusion_expr::ReturnFieldArgs,
     ) -> Result<datafusion::arrow::datatypes::FieldRef> {
-        sail_type_system::cast::renamed_field(&self.target_type, args)
+        let [field] = args.arg_fields else {
+            return datafusion_common::plan_err!(
+                "struct metadata conversion requires one argument"
+            );
+        };
+        Ok(std::sync::Arc::new(arrow_schema::Field::new(
+            "spark_struct_rename",
+            self.target_type.clone(),
+            field.is_nullable(),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

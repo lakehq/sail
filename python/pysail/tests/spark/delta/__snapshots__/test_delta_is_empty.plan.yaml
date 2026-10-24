@@ -93,15 +93,15 @@ name: "test_limit_preserves_row_filters_and_ordering"
 data:
   filtered: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as id]
-      ProjectionExec: expr=[id@0 as __sail_attribute_0]
+    ProjectionExec: expr=[#0@0 as id]
+      ProjectionExec: expr=[id@0 as #0]
         CoalescePartitionsExec: fetch=2
           FilterExec: id@0 > 2, fetch=2
             DataSourceExec: file_groups={1 group: [[<tmp>/filtered_limit/part-0.parquet, <tmp>/filtered_limit/part-1.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 2 AND id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2 AND id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
   ordered: |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as id]
-      ProjectionExec: expr=[id@0 as __sail_attribute_0]
+    ProjectionExec: expr=[#0@0 as id]
+      ProjectionExec: expr=[id@0 as #0]
         SortExec: TopK(fetch=2), expr=[id@0 DESC NULLS LAST], preserve_partitioning=[false]
           DataSourceExec: file_groups={1 group: [[<tmp>/filtered_limit/part-0.parquet, <tmp>/filtered_limit/part-1.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], sort_order_for_reorder=[id@0 DESC NULLS LAST], reverse_row_groups=true, dynamic_rg_pruning=eligible
 ---
@@ -109,19 +109,19 @@ name: "test_limit_reads_only_enough_known_files[1]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as id]
-      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet]]}, projection=[id@0 as __sail_attribute_0], limit=1, file_type=parquet
+    ProjectionExec: expr=[#0@0 as id]
+      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet]]}, projection=[id@0 as #0], limit=1, file_type=parquet
 ---
 name: "test_limit_reads_only_enough_known_files[2]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as id]
-      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet]]}, projection=[id@0 as __sail_attribute_0], limit=2, file_type=parquet
+    ProjectionExec: expr=[#0@0 as id]
+      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet]]}, projection=[id@0 as #0], limit=2, file_type=parquet
 ---
 name: "test_limit_reads_only_enough_known_files[3]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_0@0 as id]
-      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet, <tmp>/limited_files/part-3.parquet]]}, projection=[id@0 as __sail_attribute_0], limit=3, file_type=parquet
+    ProjectionExec: expr=[#0@0 as id]
+      DataSourceExec: file_groups={1 group: [[<tmp>/limited_files/part-2.parquet, <tmp>/limited_files/part-3.parquet]]}, projection=[id@0 as #0], limit=3, file_type=parquet

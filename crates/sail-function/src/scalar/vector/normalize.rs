@@ -3,12 +3,13 @@ use std::sync::Arc;
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, GenericListArray, OffsetSizeTrait, as_large_list_array, as_list_array,
 };
-use datafusion::arrow::datatypes::{DataType, Float32Type};
-use datafusion_common::{Result, exec_err};
+use datafusion::arrow::datatypes::{DataType, Field, Float32Type};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 
+use super::is_float_vector;
 use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -43,9 +44,23 @@ impl ScalarUDFImpl for VectorNormalize {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_vector_normalize_typing::vector_normalize_return_type(
-            arg_types,
-        )
+        // Spark 4.2 only accepts `ARRAY<FLOAT>` with an optional `FLOAT` degree and does not
+        // implicitly cast other numeric types, so wider element types are rejected here as well.
+        let valid = match arg_types {
+            [vector] => is_float_vector(vector),
+            [vector, degree] => is_float_vector(vector) && degree == &DataType::Float32,
+            _ => false,
+        };
+        if !valid {
+            return plan_err!(
+                "vector_normalize expects an ARRAY<FLOAT> argument and an optional FLOAT degree, got {arg_types:?}"
+            );
+        }
+        let field = Arc::new(Field::new_list_field(DataType::Float32, true));
+        match &arg_types[0] {
+            DataType::LargeList(_) => Ok(DataType::LargeList(field)),
+            _ => Ok(DataType::List(field)),
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -50,7 +50,7 @@ impl AggregateUDFImpl for SchemaOfVariantAggFunction {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::aggregate_schema_of_variant_agg::return_type(_arg_types)
+        Ok(DataType::Utf8)
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {

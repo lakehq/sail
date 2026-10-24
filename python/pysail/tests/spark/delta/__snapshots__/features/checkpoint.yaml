@@ -4,9 +4,9 @@ name: "test_explain_select_references_checkpoint_parquet_and_later_json_commits_
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_1@0 as id]
-      SortPreservingMergeExec: [__sail_attribute_1@0 ASC]
-        ProjectionExec: expr=[id@0 as __sail_attribute_1]
+    ProjectionExec: expr=[#1@0 as id]
+      SortPreservingMergeExec: [#1@0 ASC]
+        ProjectionExec: expr=[id@0 as #1]
           SortExec: expr=[id@0 ASC], preserve_partitioning=[true]
             DeltaScanByAddsExec(table_path=file://<tmp>/delta_checkpoint_and_json_explain/, version=5, projection=Some([0]), limit=None, pushdown=false)
               DeltaDiscoveryExec(table_path=file://<tmp>/delta_checkpoint_and_json_explain/)
@@ -22,9 +22,9 @@ name: "test_explain_select_references_checkpoint_parquet_in_log_replay"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_1@0 as id]
-      SortPreservingMergeExec: [__sail_attribute_1@0 ASC]
-        ProjectionExec: expr=[id@0 as __sail_attribute_1]
+    ProjectionExec: expr=[#1@0 as id]
+      SortPreservingMergeExec: [#1@0 ASC]
+        ProjectionExec: expr=[id@0 as #1]
           SortExec: expr=[id@0 ASC], preserve_partitioning=[true]
             DeltaScanByAddsExec(table_path=file://<tmp>/delta_checkpoint_explain/, version=2, projection=Some([0]), limit=None, pushdown=false)
               DeltaDiscoveryExec(table_path=file://<tmp>/delta_checkpoint_explain/)

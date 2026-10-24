@@ -56,7 +56,7 @@ struct LoweringContext {
 }
 
 pub(super) fn backend_name(id: AttributeId) -> String {
-    format!("__sail_attribute_{}", id.0)
+    format!("#{}", id.0)
 }
 
 fn backend_schema(schema: &PlanSchema) -> PlanResult<DFSchemaRef> {

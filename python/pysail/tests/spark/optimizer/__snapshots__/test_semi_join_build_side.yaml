@@ -4,505 +4,505 @@ name: "test_grouped_filter_builds_on_keys[reorder-off-swap-on-False-False]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(__sail_attribute_11@0, __sail_attribute_0@0)]
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11]
-                  FilterExec: __sail_attribute_7@1 <= 5, projection=[__sail_attribute_4@0]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_7@2 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#11@0, #0@0)]
+                ProjectionExec: expr=[#4@0 as #11]
+                  FilterExec: #7@1 <= 5, projection=[#4@0]
+                    ProjectionExec: expr=[#4@0 as #4, #7@2 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-off-swap-on-False-True]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(__sail_attribute_11@0, __sail_attribute_0@0)], NullsEqual: true
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11]
-                  FilterExec: __sail_attribute_7@1 <= 5, projection=[__sail_attribute_4@0]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_7@2 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#11@0, #0@0)], NullsEqual: true
+                ProjectionExec: expr=[#4@0 as #11]
+                  FilterExec: #7@1 <= 5, projection=[#4@0]
+                    ProjectionExec: expr=[#4@0 as #4, #7@2 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-off-swap-on-True-False]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(__sail_attribute_11@0, __sail_attribute_0@0)], filter=__sail_attribute_1@0 < __sail_attribute_12@1, projection=[__sail_attribute_0@0]
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11, __sail_attribute_5@1 as __sail_attribute_12]
-                  FilterExec: __sail_attribute_7@2 <= 5, projection=[__sail_attribute_4@0, __sail_attribute_5@1]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5, __sail_attribute_7@3 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_5, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0, ticket@1 as __sail_attribute_1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#11@0, #0@0)], filter=#1@0 < #12@1, projection=[#0@0]
+                ProjectionExec: expr=[#4@0 as #11, #5@1 as #12]
+                  FilterExec: #7@2 <= 5, projection=[#4@0, #5@1]
+                    ProjectionExec: expr=[#4@0 as #4, #5@1 as #5, #7@3 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #5, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-off-swap-on-True-True]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(__sail_attribute_11@0, __sail_attribute_0@0)], filter=__sail_attribute_1@0 < __sail_attribute_12@1, projection=[__sail_attribute_0@0], NullsEqual: true
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11, __sail_attribute_5@1 as __sail_attribute_12]
-                  FilterExec: __sail_attribute_7@2 <= 5, projection=[__sail_attribute_4@0, __sail_attribute_5@1]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5, __sail_attribute_7@3 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_5, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0, ticket@1 as __sail_attribute_1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#11@0, #0@0)], filter=#1@0 < #12@1, projection=[#0@0], NullsEqual: true
+                ProjectionExec: expr=[#4@0 as #11, #5@1 as #12]
+                  FilterExec: #7@2 <= 5, projection=[#4@0, #5@1]
+                    ProjectionExec: expr=[#4@0 as #4, #5@1 as #5, #7@3 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #5, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-False-False]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_11@0)]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11]
-                  FilterExec: __sail_attribute_7@1 <= 5, projection=[__sail_attribute_4@0]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_7@2 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #11@0)]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                ProjectionExec: expr=[#4@0 as #11]
+                  FilterExec: #7@1 <= 5, projection=[#4@0]
+                    ProjectionExec: expr=[#4@0 as #4, #7@2 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-False-True]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_11@0)], NullsEqual: true
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11]
-                  FilterExec: __sail_attribute_7@1 <= 5, projection=[__sail_attribute_4@0]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_7@2 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #11@0)], NullsEqual: true
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                ProjectionExec: expr=[#4@0 as #11]
+                  FilterExec: #7@1 <= 5, projection=[#4@0]
+                    ProjectionExec: expr=[#4@0 as #4, #7@2 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-True-False]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_11@0)], filter=__sail_attribute_1@0 < __sail_attribute_12@1, projection=[__sail_attribute_0@0]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0, ticket@1 as __sail_attribute_1], file_type=parquet
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11, __sail_attribute_5@1 as __sail_attribute_12]
-                  FilterExec: __sail_attribute_7@2 <= 5, projection=[__sail_attribute_4@0, __sail_attribute_5@1]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5, __sail_attribute_7@3 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_5, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #11@0)], filter=#1@0 < #12@1, projection=[#0@0]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet
+                ProjectionExec: expr=[#4@0 as #11, #5@1 as #12]
+                  FilterExec: #7@2 <= 5, projection=[#4@0, #5@1]
+                    ProjectionExec: expr=[#4@0 as #4, #5@1 as #5, #7@3 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #5, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-off-True-True]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_11@0)], filter=__sail_attribute_1@0 < __sail_attribute_12@1, projection=[__sail_attribute_0@0], NullsEqual: true
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0, ticket@1 as __sail_attribute_1], file_type=parquet
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11, __sail_attribute_5@1 as __sail_attribute_12]
-                  FilterExec: __sail_attribute_7@2 <= 5, projection=[__sail_attribute_4@0, __sail_attribute_5@1]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5, __sail_attribute_7@3 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_5, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #11@0)], filter=#1@0 < #12@1, projection=[#0@0], NullsEqual: true
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet
+                ProjectionExec: expr=[#4@0 as #11, #5@1 as #12]
+                  FilterExec: #7@2 <= 5, projection=[#4@0, #5@1]
+                    ProjectionExec: expr=[#4@0 as #4, #5@1 as #5, #7@3 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #5, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-False-False]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(__sail_attribute_11@0, __sail_attribute_0@0)]
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11]
-                  FilterExec: __sail_attribute_7@1 <= 5, projection=[__sail_attribute_4@0]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_7@2 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#11@0, #0@0)]
+                ProjectionExec: expr=[#4@0 as #11]
+                  FilterExec: #7@1 <= 5, projection=[#4@0]
+                    ProjectionExec: expr=[#4@0 as #4, #7@2 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-False-True]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(__sail_attribute_11@0, __sail_attribute_0@0)], NullsEqual: true
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11]
-                  FilterExec: __sail_attribute_7@1 <= 5, projection=[__sail_attribute_4@0]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_7@2 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#11@0, #0@0)], NullsEqual: true
+                ProjectionExec: expr=[#4@0 as #11]
+                  FilterExec: #7@1 <= 5, projection=[#4@0]
+                    ProjectionExec: expr=[#4@0 as #4, #7@2 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-True-False]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(__sail_attribute_11@0, __sail_attribute_0@0)], filter=__sail_attribute_1@0 < __sail_attribute_12@1, projection=[__sail_attribute_0@0]
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11, __sail_attribute_5@1 as __sail_attribute_12]
-                  FilterExec: __sail_attribute_7@2 <= 5, projection=[__sail_attribute_4@0, __sail_attribute_5@1]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5, __sail_attribute_7@3 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_5, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0, ticket@1 as __sail_attribute_1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#11@0, #0@0)], filter=#1@0 < #12@1, projection=[#0@0]
+                ProjectionExec: expr=[#4@0 as #11, #5@1 as #12]
+                  FilterExec: #7@2 <= 5, projection=[#4@0, #5@1]
+                    ProjectionExec: expr=[#4@0 as #4, #5@1 as #5, #7@3 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #5, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_grouped_filter_builds_on_keys[reorder-on-swap-on-True-True]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as k, __sail_attribute_16@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_15@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_15, __sail_attribute_14@1 as __sail_attribute_16]
-          SortExec: expr=[__sail_attribute_13@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=SinglePartitioned, gby=[__sail_attribute_0@0 as __sail_attribute_13], aggr=[count(1) as __sail_attribute_14]
-              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(__sail_attribute_11@0, __sail_attribute_0@0)], filter=__sail_attribute_1@0 < __sail_attribute_12@1, projection=[__sail_attribute_0@0], NullsEqual: true
-                ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_11, __sail_attribute_5@1 as __sail_attribute_12]
-                  FilterExec: __sail_attribute_7@2 <= 5, projection=[__sail_attribute_4@0, __sail_attribute_5@1]
-                    ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5, __sail_attribute_7@3 as __sail_attribute_7]
-                      BoundedWindowAggExec: wdw=[__sail_attribute_7: Field { "__sail_attribute_7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                        ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_4, __common_expr_1@1 as __sail_attribute_5, __common_expr_1@1 as __sail_attribute_6]
-                          SortExec: expr=[__sail_attribute_4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-                            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                              RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                                AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[count(1) as __common_expr_1]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0, ticket@1 as __sail_attribute_1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+    ProjectionExec: expr=[#15@0 as k, #16@1 as n]
+      SortPreservingMergeExec: [#15@0 ASC]
+        ProjectionExec: expr=[#13@0 as #15, #14@1 as #16]
+          SortExec: expr=[#13@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=SinglePartitioned, gby=[#0@0 as #13], aggr=[count(1) as #14]
+              HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(#11@0, #0@0)], filter=#1@0 < #12@1, projection=[#0@0], NullsEqual: true
+                ProjectionExec: expr=[#4@0 as #11, #5@1 as #12]
+                  FilterExec: #7@2 <= 5, projection=[#4@0, #5@1]
+                    ProjectionExec: expr=[#4@0 as #4, #5@1 as #5, #7@3 as #7]
+                      BoundedWindowAggExec: wdw=[#7: Field { "#7": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                        ProjectionExec: expr=[#4@0 as #4, __common_expr_1@1 as #5, __common_expr_1@1 as #6]
+                          SortExec: expr=[#4@0 ASC NULLS LAST, __common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
+                            AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[count(1) as __common_expr_1]
+                              RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                                AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[count(1) as __common_expr_1]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0, ticket@1 as #1], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-off-swap-on-SELECT k FROM (SELECT k FROM semi_join_facts UNION ALL SELECT k FROM semi_join_facts) GROUP BY k]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_14@0 as n]
-      ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_14]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_13]
+    ProjectionExec: expr=[#14@0 as n]
+      ProjectionExec: expr=[#13@0 as #14]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #13]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_13]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_12@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                ProjectionExec: expr=[__sail_attribute_11@0 as __sail_attribute_12]
-                  AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_11@0 as __sail_attribute_11], aggr=[]
-                    RepartitionExec: partitioning=Hash([__sail_attribute_11@0], 4), input_partitions=2
-                      AggregateExec: mode=Partial, gby=[__sail_attribute_8@0 as __sail_attribute_11], aggr=[]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #13]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #12@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                ProjectionExec: expr=[#11@0 as #12]
+                  AggregateExec: mode=FinalPartitioned, gby=[#11@0 as #11], aggr=[]
+                    RepartitionExec: partitioning=Hash([#11@0], 4), input_partitions=2
+                      AggregateExec: mode=Partial, gby=[#8@0 as #11], aggr=[]
                         UnionExec
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_8], file_type=parquet
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_8], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #8], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #8], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-off-swap-on-SELECT k FROM semi_join_facts GROUP BY GROUPING SETS ((k), ())]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_8@0 as n]
-      ProjectionExec: expr=[__sail_attribute_7@0 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_7]
+    ProjectionExec: expr=[#8@0 as n]
+      ProjectionExec: expr=[#7@0 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #7]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_7]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_6@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_6@0], 4), input_partitions=4
-                  ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4, __grouping_id@1 as __grouping_id], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0, __grouping_id@1], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[(__sail_attribute_2@0 as __sail_attribute_4), (NULL as __sail_attribute_4)], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #7]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #6@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=4
+                  ProjectionExec: expr=[#4@0 as #6]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4, __grouping_id@1 as __grouping_id], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0, __grouping_id@1], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[(#2@0 as #4), (NULL as #4)], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-off-swap-on-SELECT k, ticket FROM semi_join_facts GROUP BY k, ticket]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as n]
-      ProjectionExec: expr=[__sail_attribute_8@0 as __sail_attribute_9]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_8]
+    ProjectionExec: expr=[#9@0 as n]
+      ProjectionExec: expr=[#8@0 as #9]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #8]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_8]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_6@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_6@0], 4), input_partitions=4
-                  ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0, __sail_attribute_5@1], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4, __sail_attribute_3@1 as __sail_attribute_5], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2, ticket@1 as __sail_attribute_3], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #8]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #6@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=4
+                  ProjectionExec: expr=[#4@0 as #6]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4, #5@1 as #5], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0, #5@1], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[#2@0 as #4, #3@1 as #5], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-off-swap-on-SELECT reverse(k) AS k FROM semi_join_facts GROUP BY k]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_7@0 as n]
-      ProjectionExec: expr=[__sail_attribute_6@0 as __sail_attribute_7]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_6]
+    ProjectionExec: expr=[#7@0 as n]
+      ProjectionExec: expr=[#6@0 as #7]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #6]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_6]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_5@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_5@0], 4), input_partitions=4
-                  ProjectionExec: expr=[spark_reverse(__sail_attribute_4@0) as __sail_attribute_5]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #6]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #5@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#5@0], 4), input_partitions=4
+                  ProjectionExec: expr=[spark_reverse(#4@0) as #5]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-off-SELECT k FROM (SELECT k FROM semi_join_facts UNION ALL SELECT k FROM semi_join_facts) GROUP BY k]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_14@0 as n]
-      ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_14]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_13]
+    ProjectionExec: expr=[#14@0 as n]
+      ProjectionExec: expr=[#13@0 as #14]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #13]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_13]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_12@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                ProjectionExec: expr=[__sail_attribute_11@0 as __sail_attribute_12]
-                  AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_11@0 as __sail_attribute_11], aggr=[]
-                    RepartitionExec: partitioning=Hash([__sail_attribute_11@0], 4), input_partitions=2
-                      AggregateExec: mode=Partial, gby=[__sail_attribute_8@0 as __sail_attribute_11], aggr=[]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #13]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #12@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                ProjectionExec: expr=[#11@0 as #12]
+                  AggregateExec: mode=FinalPartitioned, gby=[#11@0 as #11], aggr=[]
+                    RepartitionExec: partitioning=Hash([#11@0], 4), input_partitions=2
+                      AggregateExec: mode=Partial, gby=[#8@0 as #11], aggr=[]
                         UnionExec
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_8], file_type=parquet
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_8], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #8], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #8], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-off-SELECT k FROM semi_join_facts GROUP BY GROUPING SETS ((k), ())]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_8@0 as n]
-      ProjectionExec: expr=[__sail_attribute_7@0 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_7]
+    ProjectionExec: expr=[#8@0 as n]
+      ProjectionExec: expr=[#7@0 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #7]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_7]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_6@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_6@0], 4), input_partitions=4
-                  ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4, __grouping_id@1 as __grouping_id], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0, __grouping_id@1], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[(__sail_attribute_2@0 as __sail_attribute_4), (NULL as __sail_attribute_4)], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #7]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #6@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=4
+                  ProjectionExec: expr=[#4@0 as #6]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4, __grouping_id@1 as __grouping_id], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0, __grouping_id@1], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[(#2@0 as #4), (NULL as #4)], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-off-SELECT k, ticket FROM semi_join_facts GROUP BY k, ticket]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as n]
-      ProjectionExec: expr=[__sail_attribute_8@0 as __sail_attribute_9]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_8]
+    ProjectionExec: expr=[#9@0 as n]
+      ProjectionExec: expr=[#8@0 as #9]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #8]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_8]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_6@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_6@0], 4), input_partitions=4
-                  ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0, __sail_attribute_5@1], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4, __sail_attribute_3@1 as __sail_attribute_5], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2, ticket@1 as __sail_attribute_3], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #8]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #6@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=4
+                  ProjectionExec: expr=[#4@0 as #6]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4, #5@1 as #5], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0, #5@1], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[#2@0 as #4, #3@1 as #5], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-off-SELECT reverse(k) AS k FROM semi_join_facts GROUP BY k]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_7@0 as n]
-      ProjectionExec: expr=[__sail_attribute_6@0 as __sail_attribute_7]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_6]
+    ProjectionExec: expr=[#7@0 as n]
+      ProjectionExec: expr=[#6@0 as #7]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #6]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_6]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_5@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_5@0], 4), input_partitions=4
-                  ProjectionExec: expr=[spark_reverse(__sail_attribute_4@0) as __sail_attribute_5]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #6]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #5@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#5@0], 4), input_partitions=4
+                  ProjectionExec: expr=[spark_reverse(#4@0) as #5]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-on-SELECT k FROM (SELECT k FROM semi_join_facts UNION ALL SELECT k FROM semi_join_facts) GROUP BY k]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_14@0 as n]
-      ProjectionExec: expr=[__sail_attribute_13@0 as __sail_attribute_14]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_13]
+    ProjectionExec: expr=[#14@0 as n]
+      ProjectionExec: expr=[#13@0 as #14]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #13]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_13]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_12@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                ProjectionExec: expr=[__sail_attribute_11@0 as __sail_attribute_12]
-                  AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_11@0 as __sail_attribute_11], aggr=[]
-                    RepartitionExec: partitioning=Hash([__sail_attribute_11@0], 4), input_partitions=2
-                      AggregateExec: mode=Partial, gby=[__sail_attribute_8@0 as __sail_attribute_11], aggr=[]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #13]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #12@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                ProjectionExec: expr=[#11@0 as #12]
+                  AggregateExec: mode=FinalPartitioned, gby=[#11@0 as #11], aggr=[]
+                    RepartitionExec: partitioning=Hash([#11@0], 4), input_partitions=2
+                      AggregateExec: mode=Partial, gby=[#8@0 as #11], aggr=[]
                         UnionExec
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_8], file_type=parquet
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_8], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #8], file_type=parquet
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #8], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-on-SELECT k FROM semi_join_facts GROUP BY GROUPING SETS ((k), ())]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_8@0 as n]
-      ProjectionExec: expr=[__sail_attribute_7@0 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_7]
+    ProjectionExec: expr=[#8@0 as n]
+      ProjectionExec: expr=[#7@0 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #7]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_7]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_6@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_6@0], 4), input_partitions=4
-                  ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4, __grouping_id@1 as __grouping_id], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0, __grouping_id@1], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[(__sail_attribute_2@0 as __sail_attribute_4), (NULL as __sail_attribute_4)], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #7]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #6@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=4
+                  ProjectionExec: expr=[#4@0 as #6]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4, __grouping_id@1 as __grouping_id], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0, __grouping_id@1], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[(#2@0 as #4), (NULL as #4)], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-on-SELECT k, ticket FROM semi_join_facts GROUP BY k, ticket]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_9@0 as n]
-      ProjectionExec: expr=[__sail_attribute_8@0 as __sail_attribute_9]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_8]
+    ProjectionExec: expr=[#9@0 as n]
+      ProjectionExec: expr=[#8@0 as #9]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #8]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_8]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_6@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_6@0], 4), input_partitions=4
-                  ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_6]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4, __sail_attribute_5@1 as __sail_attribute_5], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0, __sail_attribute_5@1], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4, __sail_attribute_3@1 as __sail_attribute_5], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2, ticket@1 as __sail_attribute_3], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #8]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #6@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=4
+                  ProjectionExec: expr=[#4@0 as #6]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4, #5@1 as #5], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0, #5@1], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[#2@0 as #4, #3@1 as #5], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3], file_type=parquet
 ---
 name: "test_unsupported_or_larger_filter_keeps_build_side[reorder-on-swap-on-SELECT reverse(k) AS k FROM semi_join_facts GROUP BY k]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_7@0 as n]
-      ProjectionExec: expr=[__sail_attribute_6@0 as __sail_attribute_7]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_6]
+    ProjectionExec: expr=[#7@0 as n]
+      ProjectionExec: expr=[#6@0 as #7]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #6]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_6]
-              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(__sail_attribute_0@0, __sail_attribute_5@0)], projection=[]
-                RepartitionExec: partitioning=Hash([__sail_attribute_0@0], 4), input_partitions=1
-                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet
-                RepartitionExec: partitioning=Hash([__sail_attribute_5@0], 4), input_partitions=4
-                  ProjectionExec: expr=[spark_reverse(__sail_attribute_4@0) as __sail_attribute_5]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_4@0 as __sail_attribute_4], aggr=[]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_4@0], 4), input_partitions=1
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_4], aggr=[]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_2], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #6]
+              HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(#0@0, #5@0)], projection=[]
+                RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=1
+                  DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #0], file_type=parquet
+                RepartitionExec: partitioning=Hash([#5@0], 4), input_partitions=4
+                  ProjectionExec: expr=[spark_reverse(#4@0) as #5]
+                    AggregateExec: mode=FinalPartitioned, gby=[#4@0 as #4], aggr=[]
+                      RepartitionExec: partitioning=Hash([#4@0], 4), input_partitions=1
+                        AggregateExec: mode=Partial, gby=[#2@0 as #4], aggr=[]
+                          DataSourceExec: file_groups={1 group: [[<tmp>/facts/<id>_0.zst.parquet:<range>, <tmp>/facts/<id>_1.zst.parquet:<range>, <tmp>/facts/<id>_2.zst.parquet:<range>, <tmp>/facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2], file_type=parquet

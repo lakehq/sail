@@ -16,9 +16,9 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::take_arrays;
-use datafusion::arrow::datatypes::{DataType, FieldRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, list_values_row_number};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
@@ -64,15 +64,19 @@ impl HigherOrderUDFImpl for SparkArrayExists {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        sail_type_system::higher_order::list_parameters(self.name(), fields, false, false)
+        let (list, _lambda) = value_lambda_pair(self.name(), fields)?;
+        let element = match list.data_type() {
+            DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
+            other => return plan_err!("{} expected a list, got {other}", self.name()),
+        };
+        Ok(LambdaParametersProgress::Complete(vec![vec![element]]))
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::higher_order::list_result(
-            self.name(),
-            args,
-            sail_type_system::higher_order::ListResult::Predicate,
-        )
+        let (_list, _lambda) = value_lambda_pair(self.name(), args.arg_fields)?;
+        // Boolean per row, nullable: three-valued logic can yield NULL even when
+        // the input array column is not nullable.
+        Ok(Arc::new(Field::new("", DataType::Boolean, true)))
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {

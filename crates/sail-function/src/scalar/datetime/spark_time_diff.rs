@@ -6,7 +6,7 @@ use datafusion::arrow::array::{
     new_null_array,
 };
 use datafusion::arrow::compute::binary;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
@@ -54,7 +54,7 @@ impl ScalarUDFImpl for SparkTimeDiff {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::datetime_spark_time_diff::return_type(_arg_types)
+        Ok(DataType::Int64)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -164,7 +164,17 @@ impl ScalarUDFImpl for SparkTimeDiff {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::datetime_spark_time_diff::coerce_types(arg_types)
+        if arg_types.len() != 3 {
+            return exec_err!(
+                "Spark `time_diff` function requires 3 arguments, got {}",
+                arg_types.len()
+            );
+        }
+        Ok(vec![
+            DataType::Utf8,
+            DataType::Time64(TimeUnit::Microsecond),
+            DataType::Time64(TimeUnit::Microsecond),
+        ])
     }
 }
 

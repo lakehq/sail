@@ -32,11 +32,18 @@ impl ArrayItemWithPosition {
     }
 
     fn item_fields<P: ArrowPrimitiveType>(field: &FieldRef) -> Fields {
-        sail_type_system::policies::array_item_with_position::item_fields(field, P::DATA_TYPE)
+        Fields::from(vec![
+            Arc::new(Field::new("pos", P::DATA_TYPE, field.is_nullable())),
+            Arc::new(Field::new(
+                "col",
+                field.data_type().clone(),
+                field.is_nullable(),
+            )),
+        ])
     }
 
     fn item_type<P: ArrowPrimitiveType>(field: &FieldRef) -> DataType {
-        sail_type_system::policies::array_item_with_position::item_type(field, P::DATA_TYPE)
+        DataType::Struct(Self::item_fields::<P>(field))
     }
 
     fn general_array_item_with_position<P: ArrowPrimitiveType>(
@@ -85,7 +92,30 @@ impl ScalarUDFImpl for ArrayItemWithPosition {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::array_item_with_position::return_type(arg_types)
+        let out = match arg_types {
+            [DataType::List(f)] => DataType::List(Arc::new(Field::new_list_field(
+                Self::item_type::<Int32Type>(f),
+                f.is_nullable(),
+            ))),
+            [DataType::LargeList(f)] => DataType::LargeList(Arc::new(Field::new_list_field(
+                Self::item_type::<Int64Type>(f),
+                f.is_nullable(),
+            ))),
+            [DataType::FixedSizeList(f, n)] => DataType::FixedSizeList(
+                Arc::new(Field::new_list_field(
+                    Self::item_type::<Int32Type>(f),
+                    f.is_nullable(),
+                )),
+                *n,
+            ),
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "{} should only be called with a list",
+                    self.name()
+                )));
+            }
+        };
+        Ok(out)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -70,7 +70,7 @@ impl AggregateUDFImpl for ProductFunction {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::aggregate_product::return_type(_arg_types)
+        Ok(DataType::Float64)
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

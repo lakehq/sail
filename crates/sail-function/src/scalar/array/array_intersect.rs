@@ -14,7 +14,7 @@ use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    DataFusionError, HashSet, Result, assert_eq_or_internal_err, internal_err,
+    DataFusionError, HashSet, Result, assert_eq_or_internal_err, exec_err, internal_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -57,11 +57,57 @@ impl ScalarUDFImpl for ArrayIntersect {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::array_array_intersect::return_type(arg_types)
+        let [array1, array2] = take_function_args(self.name(), arg_types)?;
+
+        match (array1, array2) {
+            (DataType::Null, DataType::Null) => Ok(DataType::new_list(DataType::Null, true)),
+            (DataType::Null, dt) | (dt, DataType::Null) => Ok(dt.clone()),
+
+            (DataType::List(field1), DataType::List(field2)) => {
+                let field = if field1.data_type().is_null() {
+                    field2
+                } else {
+                    field1
+                };
+                Ok(DataType::List(field.clone()))
+            }
+
+            (DataType::LargeList(field1), DataType::LargeList(field2)) => {
+                let field = if field1.data_type().is_null() {
+                    field2
+                } else {
+                    field1
+                };
+                Ok(DataType::LargeList(field.clone()))
+            }
+
+            (DataType::List(field1), DataType::LargeList(field2))
+            | (DataType::LargeList(field1), DataType::List(field2)) => {
+                let field = if field1.data_type().is_null() {
+                    field2
+                } else {
+                    field1
+                };
+                Ok(DataType::LargeList(field.clone()))
+            }
+
+            (dt, _) => Ok(dt.clone()),
+        }
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::array_array_intersect::return_field_from_args(args)
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let return_type = self.return_type(&arg_types)?;
+
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            args.arg_fields.iter().any(|field| field.is_nullable()),
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -69,7 +115,42 @@ impl ScalarUDFImpl for ArrayIntersect {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::array_array_intersect::coerce_types(arg_types)
+        if arg_types.len() != 2 {
+            return exec_err!(
+                "Spark `array_intersect` requires exactly 2 arguments, but got {}",
+                arg_types.len()
+            );
+        }
+
+        let arg_types = arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+                DataType::Null => Ok(DataType::Null),
+                DataType::List(field)
+                | DataType::ListView(field)
+                | DataType::FixedSizeList(field, _) => Ok(DataType::List(field.clone())),
+                DataType::LargeList(field) | DataType::LargeListView(field) => {
+                    Ok(DataType::LargeList(field.clone()))
+                }
+                other => {
+                    exec_err!(
+                        "Spark `array_intersect` requires list or null types, but got '{other:?}'"
+                    )
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        match arg_types.as_slice() {
+            [DataType::List(field), DataType::LargeList(_)] => Ok(vec![
+                DataType::LargeList(field.clone()),
+                arg_types[1].clone(),
+            ]),
+            [DataType::LargeList(_), DataType::List(field)] => Ok(vec![
+                arg_types[0].clone(),
+                DataType::LargeList(field.clone()),
+            ]),
+            _ => Ok(arg_types),
+        }
     }
 }
 

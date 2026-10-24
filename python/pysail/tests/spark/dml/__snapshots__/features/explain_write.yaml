@@ -7,7 +7,7 @@ data:
     BarrierExec
       CatalogCommandExec: CreateTable
       DataSinkExec: sink=ParquetSink(file_groups=[])
-        ProjectionExec: expr=[__sail_attribute_0@0 as id, __sail_attribute_1@1 as name]
+        ProjectionExec: expr=[#0@0 as id, #1@1 as name]
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_insert_into_shows_physical_plan_with_catalog_command"
@@ -15,5 +15,5 @@ data:
   |-
     == Physical Plan ==
     DataSinkExec: sink=ParquetSink(file_groups=[])
-      ProjectionExec: expr=[__sail_attribute_0@0 as id, __sail_attribute_1@1 as name]
+      ProjectionExec: expr=[#0@0 as id, #1@1 as name]
         DataSourceExec: partitions=1, partition_sizes=[1]

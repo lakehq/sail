@@ -5,11 +5,11 @@ use datafusion::arrow::array::{Array, AsArray, Date32Array};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::TimeUnit::Microsecond;
 use datafusion::arrow::datatypes::{
-    DataType, Date32Type, DurationMicrosecondType, FieldRef, Int32Type, Int64Type,
+    DataType, Date32Type, DurationMicrosecondType, Field, FieldRef, Int32Type, Int64Type,
     IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalYearMonthType,
     TimestampMicrosecondType,
 };
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -50,14 +50,51 @@ impl ScalarUDFImpl for SparkTrySubtract {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::math_spark_try_subtract::return_type(_arg_types)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     /// Spark: `TrySubtract` is `RuntimeReplaceable`; both replacement branches declare `true`.
     /// numeric  <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L236>
     /// fallback <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/TryEval.scala#L50>
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::math_spark_try_subtract::return_field_from_args(args)
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        let data_type = match arg_types.as_slice() {
+            [DataType::Int32, DataType::Int32] => DataType::Int32,
+            [DataType::Int64, DataType::Int64]
+            | [DataType::Int32, DataType::Int64]
+            | [DataType::Int64, DataType::Int32] => DataType::Int64,
+            [DataType::Date32, DataType::Int32]
+            | [DataType::Date32, DataType::Interval(YearMonth)]
+            | [DataType::Date32, DataType::Interval(MonthDayNano)]
+            | [DataType::Int32, DataType::Date32]
+            | [DataType::Interval(YearMonth), DataType::Date32]
+            | [DataType::Interval(MonthDayNano), DataType::Date32] => DataType::Date32,
+            [DataType::Interval(YearMonth), DataType::Interval(YearMonth)] => {
+                DataType::Interval(YearMonth)
+            }
+            [
+                DataType::Interval(MonthDayNano),
+                DataType::Interval(MonthDayNano),
+            ] => DataType::Interval(MonthDayNano),
+            [
+                DataType::Timestamp(Microsecond, _),
+                DataType::Duration(Microsecond),
+            ] => DataType::Timestamp(Microsecond, None),
+            _ => {
+                return Err(unsupported_data_types_exec_err(
+                    "try_subtract",
+                    "Int32, Int64, Date32, Interval(YearMonth), Interval(MonthDayNano), Timestamp(Microsecond), Duration(Microsecond)",
+                    &arg_types,
+                ));
+            }
+        };
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -170,6 +207,52 @@ impl ScalarUDFImpl for SparkTrySubtract {
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::math_spark_try_subtract::coerce_types(types)
+        if types.len() != 2 {
+            return Err(invalid_arg_count_exec_err(
+                "spark_try_subtract",
+                (2, 2),
+                types.len(),
+            ));
+        }
+        let left: &DataType = &types[0];
+        let right: &DataType = &types[1];
+
+        if *left == DataType::Null {
+            return Ok(vec![right.clone(), right.clone()]);
+        } else if *right == DataType::Null {
+            return Ok(vec![left.clone(), left.clone()]);
+        }
+
+        match (left, right) {
+            (DataType::Int32, DataType::Int32) => Ok(vec![left.clone(), right.clone()]),
+            (DataType::Int64, DataType::Int64) => Ok(vec![left.clone(), right.clone()]),
+            (DataType::Int32, DataType::Int64) | (DataType::Int64, DataType::Int32) => {
+                Ok(vec![DataType::Int64, DataType::Int64])
+            }
+            (DataType::Date32, DataType::Int32) => Ok(vec![left.clone(), right.clone()]),
+            (DataType::Date32, DataType::Interval(YearMonth)) => {
+                Ok(vec![left.clone(), right.clone()])
+            }
+            (DataType::Date32, DataType::Interval(MonthDayNano)) => {
+                Ok(vec![left.clone(), right.clone()])
+            }
+            (DataType::Interval(YearMonth), DataType::Interval(YearMonth)) => {
+                Ok(vec![left.clone(), right.clone()])
+            }
+            (DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)) => {
+                Ok(vec![left.clone(), right.clone()])
+            }
+            (DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)) => Ok(vec![
+                DataType::Timestamp(Microsecond, None),
+                DataType::Duration(Microsecond),
+            ]),
+            (DataType::Utf8, DataType::Int32) => Ok(vec![DataType::Date32, DataType::Int32]),
+
+            _ => Err(unsupported_data_types_exec_err(
+                "spark_try_subtract",
+                "Int32, Int64, Date32 or Interval(YearMonth)",
+                types,
+            )),
+        }
     }
 }

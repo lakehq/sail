@@ -39,11 +39,12 @@ impl ScalarUDFImpl for StAsBinary {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::geo_st_asbinary::return_type(_arg_types)
+        Ok(DataType::Binary)
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Arc<Field>> {
-        sail_type_system::policies::geo_st_asbinary::return_field_from_args(_args)
+        // st_asbinary strips metadata, so return a plain Binary field
+        Ok(Arc::new(Field::new(self.name(), DataType::Binary, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

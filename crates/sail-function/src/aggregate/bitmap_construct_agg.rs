@@ -77,7 +77,7 @@ impl AggregateUDFImpl for BitmapConstructAggFunction {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::aggregate_bitmap_construct_agg::return_type(_arg_types)
+        Ok(DataType::Binary)
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

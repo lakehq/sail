@@ -4,21 +4,21 @@ name: "test_a_selective_filter_does_not_make_an_expensive_dimension_scan_cheap_t
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_21@0 as k, __sail_attribute_22@1 as total]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_21, __sail_attribute_20@1 as __sail_attribute_22]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_19@0)], projection=[__sail_attribute_0@0, __sail_attribute_20@2]
+    ProjectionExec: expr=[#21@0 as k, #22@1 as total]
+      ProjectionExec: expr=[#0@0 as #21, #20@1 as #22]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #19@0)], projection=[#0@0, #20@2]
           CoalescePartitionsExec
-            ProjectionExec: expr=[k@0 as __sail_attribute_0]
+            ProjectionExec: expr=[k@0 as #0]
               FilterExec: marker@1 = 1, projection=[k@0]
                 DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_1.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_2.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_3.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
-          ProjectionExec: expr=[__sail_attribute_16@0 as __sail_attribute_19, __common_expr_1@1 as __sail_attribute_20]
+          ProjectionExec: expr=[#16@0 as #19, __common_expr_1@1 as #20]
             FilterExec: __common_expr_1@1 > 5
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_16@0 as __sail_attribute_16], aggr=[sum(__sail_attribute_8) as __common_expr_1]
-                RepartitionExec: partitioning=Hash([__sail_attribute_16@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_4@0 as __sail_attribute_16], aggr=[sum(__sail_attribute_8) as __common_expr_1]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_4@0, __sail_attribute_10@0), (__sail_attribute_6@1, __sail_attribute_12@1)], projection=[__sail_attribute_4@0, __sail_attribute_8@2]
+              AggregateExec: mode=FinalPartitioned, gby=[#16@0 as #16], aggr=[sum(#8) as __common_expr_1]
+                RepartitionExec: partitioning=Hash([#16@0], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#4@0 as #16], aggr=[sum(#8) as __common_expr_1]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #10@0), (#6@1, #12@1)], projection=[#4@0, #8@2]
                       CoalescePartitionsExec
-                        ProjectionExec: expr=[k@0 as __sail_attribute_4, ticket@1 as __sail_attribute_6, amount@2 as __sail_attribute_8]
+                        ProjectionExec: expr=[k@0 as #4, ticket@1 as #6, amount@2 as #8]
                           HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
                             AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
                               CoalescePartitionsExec
@@ -26,62 +26,62 @@ data:
                                   FilterExec: marker@1 = 1, projection=[k@0]
                                     DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_1.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_2.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_3.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
                             DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k, ticket, amount], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_10, ticket@1 as __sail_attribute_12], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #10, ticket@1 as #12], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_a_selective_filter_does_not_make_an_expensive_dimension_scan_cheap_to_duplicate[131073]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_21@0 as k, __sail_attribute_22@1 as total]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_21, __sail_attribute_20@1 as __sail_attribute_22]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_19@0)], projection=[__sail_attribute_0@0, __sail_attribute_20@2]
+    ProjectionExec: expr=[#21@0 as k, #22@1 as total]
+      ProjectionExec: expr=[#0@0 as #21, #20@1 as #22]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #19@0)], projection=[#0@0, #20@2]
           CoalescePartitionsExec
-            ProjectionExec: expr=[k@0 as __sail_attribute_0]
+            ProjectionExec: expr=[k@0 as #0]
               FilterExec: marker@1 = 1, projection=[k@0]
                 DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_1.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_2.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_3.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
-          ProjectionExec: expr=[__sail_attribute_16@0 as __sail_attribute_19, __common_expr_1@1 as __sail_attribute_20]
+          ProjectionExec: expr=[#16@0 as #19, __common_expr_1@1 as #20]
             FilterExec: __common_expr_1@1 > 5
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_16@0 as __sail_attribute_16], aggr=[sum(__sail_attribute_8) as __common_expr_1]
-                RepartitionExec: partitioning=Hash([__sail_attribute_16@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_4@0 as __sail_attribute_16], aggr=[sum(__sail_attribute_8) as __common_expr_1]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_10@0, __sail_attribute_4@0), (__sail_attribute_12@1, __sail_attribute_6@1)], projection=[__sail_attribute_4@2, __sail_attribute_8@4]
+              AggregateExec: mode=FinalPartitioned, gby=[#16@0 as #16], aggr=[sum(#8) as __common_expr_1]
+                RepartitionExec: partitioning=Hash([#16@0], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#4@0 as #16], aggr=[sum(#8) as __common_expr_1]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#10@0, #4@0), (#12@1, #6@1)], projection=[#4@2, #8@4]
                       CoalescePartitionsExec
-                        DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_10, ticket@1 as __sail_attribute_12], file_type=parquet
-                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as __sail_attribute_4, ticket@1 as __sail_attribute_6, amount@2 as __sail_attribute_8], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                        DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #10, ticket@1 as #12], file_type=parquet
+                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #4, ticket@1 as #6, amount@2 as #8], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_a_semi_join_that_only_filters_by_a_scan_is_not_a_reduction_boundary[k + 0]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as ticket]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_15]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_11@0, __sail_attribute_0@0)], projection=[__sail_attribute_2@2]
+    ProjectionExec: expr=[#15@0 as ticket]
+      ProjectionExec: expr=[#2@0 as #15]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#11@0, #0@0)], projection=[#2@2]
           CoalescePartitionsExec
-            ProjectionExec: expr=[k@0 as __sail_attribute_11]
+            ProjectionExec: expr=[k@0 as #11]
               FilterExec: color@1 = red, projection=[k@0]
                 DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-            HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_attribute_10@0, __sail_attribute_0@0)]
+            HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#10@0, #0@0)]
               CoalescePartitionsExec
-                ProjectionExec: expr=[k@0 + 0 as __sail_attribute_10]
+                ProjectionExec: expr=[k@0 + 0 as #10]
                   FilterExec: color@1 = blue OR color@1 = red, projection=[k@0]
                     DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = blue OR color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= blue AND blue <= color_max@1 OR color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (blue, red)]
-              DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k@0 as __sail_attribute_0, ticket@1 as __sail_attribute_2], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+              DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k@0 as #0, ticket@1 as #2], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_a_semi_join_that_only_filters_by_a_scan_is_not_a_reduction_boundary[k]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_15@0 as ticket]
-      ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_15]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_11@0)], projection=[__sail_attribute_2@1]
-          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_attribute_10@0, __sail_attribute_0@0)]
+    ProjectionExec: expr=[#15@0 as ticket]
+      ProjectionExec: expr=[#2@0 as #15]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #11@0)], projection=[#2@1]
+          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#10@0, #0@0)]
             CoalescePartitionsExec
-              ProjectionExec: expr=[k@0 as __sail_attribute_10]
+              ProjectionExec: expr=[k@0 as #10]
                 FilterExec: color@1 = blue OR color@1 = red, projection=[k@0]
                   DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = blue OR color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= blue AND blue <= color_max@1 OR color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (blue, red)]
-            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k@0 as __sail_attribute_0, ticket@1 as __sail_attribute_2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-          ProjectionExec: expr=[k@0 as __sail_attribute_11]
+            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k@0 as #0, ticket@1 as #2], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+          ProjectionExec: expr=[k@0 as #11]
             FilterExec: color@1 = red, projection=[k@0]
               DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
 ---
@@ -89,25 +89,25 @@ name: "test_composite_restrictions_keep_key_tuples_together"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_25@0 as k, __sail_attribute_26@1 as n]
-      SortPreservingMergeExec: [__sail_attribute_25@0 ASC]
-        ProjectionExec: expr=[__sail_attribute_23@0 as __sail_attribute_25, __sail_attribute_24@1 as __sail_attribute_26]
-          SortExec: expr=[__sail_attribute_23@0 ASC], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_23@0 as __sail_attribute_23], aggr=[count(1) as __sail_attribute_24]
-              RepartitionExec: partitioning=Hash([__sail_attribute_23@0], 4), input_partitions=4
-                AggregateExec: mode=Partial, gby=[__sail_attribute_0@0 as __sail_attribute_23], aggr=[count(1) as __sail_attribute_24]
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_21@0), (__sail_attribute_2@1, __sail_attribute_22@1)], projection=[__sail_attribute_0@0], NullsEqual: true
+    ProjectionExec: expr=[#25@0 as k, #26@1 as n]
+      SortPreservingMergeExec: [#25@0 ASC]
+        ProjectionExec: expr=[#23@0 as #25, #24@1 as #26]
+          SortExec: expr=[#23@0 ASC], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#23@0 as #23], aggr=[count(1) as #24]
+              RepartitionExec: partitioning=Hash([#23@0], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#0@0 as #23], aggr=[count(1) as #24]
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #21@0), (#2@1, #22@1)], projection=[#0@0], NullsEqual: true
                     CoalescePartitionsExec
-                      ProjectionExec: expr=[k@0 as __sail_attribute_0, shade@1 as __sail_attribute_2]
+                      ProjectionExec: expr=[k@0 as #0, shade@1 as #2]
                         FilterExec: tag@2 = x, projection=[k@0, shade@1]
                           DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, shade, tag], file_type=parquet, predicate=tag@2 = x, pruning_predicate=tag_null_count@2 != row_count@3 AND tag_min@0 <= x AND x <= tag_max@1, required_guarantees=[tag in (x)]
-                    ProjectionExec: expr=[__sail_attribute_18@0 as __sail_attribute_21, __sail_attribute_19@1 as __sail_attribute_22]
-                      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_18@0 as __sail_attribute_18, __sail_attribute_19@1 as __sail_attribute_19, __sail_attribute_20@2 as __sail_attribute_20], aggr=[]
-                        RepartitionExec: partitioning=Hash([__sail_attribute_18@0, __sail_attribute_19@1, __sail_attribute_20@2], 4), input_partitions=4
-                          AggregateExec: mode=Partial, gby=[__sail_attribute_12@0 as __sail_attribute_18, __sail_attribute_16@2 as __sail_attribute_19, __sail_attribute_14@1 as __sail_attribute_20], aggr=[]
+                    ProjectionExec: expr=[#18@0 as #21, #19@1 as #22]
+                      AggregateExec: mode=FinalPartitioned, gby=[#18@0 as #18, #19@1 as #19, #20@2 as #20], aggr=[]
+                        RepartitionExec: partitioning=Hash([#18@0, #19@1, #20@2], 4), input_partitions=4
+                          AggregateExec: mode=Partial, gby=[#12@0 as #18, #16@2 as #19, #14@1 as #20], aggr=[]
                             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(__sail_attribute_14@1, __sail_attribute_8@0)]
-                                ProjectionExec: expr=[k@0 as __sail_attribute_12, ticket@1 as __sail_attribute_14, shade@2 as __sail_attribute_16]
+                              HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#14@1, #8@0)]
+                                ProjectionExec: expr=[k@0 as #12, ticket@1 as #14, shade@2 as #16]
                                   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0), (__early_join_key_1@1, shade@2)], NullsEqual: true
                                     AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0, __early_join_key_1@1 as __early_join_key_1], aggr=[]
                                       CoalescePartitionsExec
@@ -115,29 +115,29 @@ data:
                                           FilterExec: tag@2 = x, projection=[k@0, shade@1]
                                             DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, shade, tag], file_type=parquet, predicate=tag@2 = x, pruning_predicate=tag_null_count@2 != row_count@3 AND tag_min@0 <= x AND x <= tag_max@1, required_guarantees=[tag in (x)]
                                     DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket, shade], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-                                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[ticket@1 as __sail_attribute_8], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[ticket@1 as #8], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_early_reductions_avoid_fact_inputs_already_restricted_to_eligible_keys"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_20@0 as k, __sail_attribute_21@1 as total]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_20, __sail_attribute_19@1 as __sail_attribute_21]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_18@0)], projection=[__sail_attribute_0@0, __sail_attribute_19@2]
+    ProjectionExec: expr=[#20@0 as k, #21@1 as total]
+      ProjectionExec: expr=[#0@0 as #20, #19@1 as #21]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #18@0)], projection=[#0@0, #19@2]
           CoalescePartitionsExec
-            ProjectionExec: expr=[k@0 as __sail_attribute_0]
+            ProjectionExec: expr=[k@0 as #0]
               FilterExec: color@1 = red, projection=[k@0]
                 DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
-          ProjectionExec: expr=[__sail_attribute_16@0 as __sail_attribute_18, __sail_attribute_17@1 as __sail_attribute_19]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_16@0 as __sail_attribute_16], aggr=[sum(__sail_attribute_8) as __sail_attribute_17], ordering_mode=Sorted
-              RepartitionExec: partitioning=Hash([__sail_attribute_16@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_4@0 as __sail_attribute_16], aggr=[sum(__sail_attribute_8) as __sail_attribute_17], ordering_mode=Sorted
-                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_10@0, __sail_attribute_4@0), (__sail_attribute_12@1, __sail_attribute_6@1)], projection=[__sail_attribute_4@2, __sail_attribute_8@4]
+          ProjectionExec: expr=[#16@0 as #18, #17@1 as #19]
+            AggregateExec: mode=FinalPartitioned, gby=[#16@0 as #16], aggr=[sum(#8) as #17], ordering_mode=Sorted
+              RepartitionExec: partitioning=Hash([#16@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#4@0 as #16], aggr=[sum(#8) as #17], ordering_mode=Sorted
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#10@0, #4@0), (#12@1, #6@1)], projection=[#4@2, #8@4]
                     CoalescePartitionsExec
-                      ProjectionExec: expr=[k@0 as __sail_attribute_10, ticket@1 as __sail_attribute_12]
+                      ProjectionExec: expr=[k@0 as #10, ticket@1 as #12]
                         FilterExec: k@0 = 1
                           DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=k@0 = 1, pruning_predicate=k_null_count@2 != row_count@3 AND k_min@0 <= 1 AND 1 <= k_max@1, required_guarantees=[k in (1)]
-                    ProjectionExec: expr=[k@0 as __sail_attribute_4, ticket@1 as __sail_attribute_6, amount@2 as __sail_attribute_8]
+                    ProjectionExec: expr=[k@0 as #4, ticket@1 as #6, amount@2 as #8]
                       FilterExec: k@0 = 1
                         DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket, amount], file_type=parquet, predicate=k@0 = 1 AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=k_null_count@2 != row_count@3 AND k_min@0 <= 1 AND 1 <= k_max@1, required_guarantees=[k in (1)]
 ---
@@ -145,23 +145,23 @@ name: "test_early_reductions_survive_parquet_filter_pushdown_on_the_dimension_sc
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_19@0 as k, __sail_attribute_20@1 as total]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_19, __sail_attribute_18@1 as __sail_attribute_20]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_17@0)], projection=[__sail_attribute_0@0, __sail_attribute_18@2]
-          DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k@0 as __sail_attribute_0], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
-          ProjectionExec: expr=[__sail_attribute_14@0 as __sail_attribute_17, __common_expr_1@1 as __sail_attribute_18]
+    ProjectionExec: expr=[#19@0 as k, #20@1 as total]
+      ProjectionExec: expr=[#0@0 as #19, #18@1 as #20]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #17@0)], projection=[#0@0, #18@2]
+          DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k@0 as #0], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
+          ProjectionExec: expr=[#14@0 as #17, __common_expr_1@1 as #18]
             FilterExec: __common_expr_1@1 > 5
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_14@0 as __sail_attribute_14], aggr=[sum(__sail_attribute_6) as __common_expr_1]
-                RepartitionExec: partitioning=Hash([__sail_attribute_14@0], 4), input_partitions=4
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_2@0 as __sail_attribute_14], aggr=[sum(__sail_attribute_6) as __common_expr_1]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_8@0, __sail_attribute_2@0), (__sail_attribute_10@1, __sail_attribute_4@1)], projection=[__sail_attribute_2@2, __sail_attribute_6@4]
-                      ProjectionExec: expr=[k@0 as __sail_attribute_8, ticket@1 as __sail_attribute_10]
+              AggregateExec: mode=FinalPartitioned, gby=[#14@0 as #14], aggr=[sum(#6) as __common_expr_1]
+                RepartitionExec: partitioning=Hash([#14@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#2@0 as #14], aggr=[sum(#6) as __common_expr_1]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#8@0, #2@0), (#10@1, #4@1)], projection=[#2@2, #6@4]
+                      ProjectionExec: expr=[k@0 as #8, ticket@1 as #10]
                         HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
                           AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
                             DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k@0 as __early_join_key_0], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
                           DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        ProjectionExec: expr=[k@0 as __sail_attribute_2, ticket@1 as __sail_attribute_4, amount@2 as __sail_attribute_6]
+                        ProjectionExec: expr=[k@0 as #2, ticket@1 as #4, amount@2 as #6]
                           HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
                             AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
                               DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k@0 as __early_join_key_0], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
@@ -171,8 +171,8 @@ name: "test_inner_joins_in_the_same_reorder_region_as_the_dimension_get_no_early
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_16@0 as ticket, __sail_attribute_17@1 as amount]
-      ProjectionExec: expr=[ticket@0 as __sail_attribute_16, amount@1 as __sail_attribute_17]
+    ProjectionExec: expr=[#16@0 as ticket, #17@1 as amount]
+      ProjectionExec: expr=[ticket@0 as #16, amount@1 as #17]
         HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0), (ticket@1, ticket@1)], projection=[ticket@1, amount@2]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], projection=[k@1, ticket@2, amount@3]
             CoalescePartitionsExec
@@ -185,20 +185,20 @@ name: "test_selective_grouping_keys_reach_both_fact_inputs_in_the_physical_plan"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_21@0 as k, __sail_attribute_22@1 as total]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_21, __sail_attribute_20@1 as __sail_attribute_22]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_19@0)], projection=[__sail_attribute_0@0, __sail_attribute_20@2]
+    ProjectionExec: expr=[#21@0 as k, #22@1 as total]
+      ProjectionExec: expr=[#0@0 as #21, #20@1 as #22]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #19@0)], projection=[#0@0, #20@2]
           CoalescePartitionsExec
-            ProjectionExec: expr=[k@0 as __sail_attribute_0]
+            ProjectionExec: expr=[k@0 as #0]
               FilterExec: color@1 = red, projection=[k@0]
                 DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
-          ProjectionExec: expr=[__sail_attribute_16@0 as __sail_attribute_19, __common_expr_1@1 as __sail_attribute_20]
+          ProjectionExec: expr=[#16@0 as #19, __common_expr_1@1 as #20]
             FilterExec: __common_expr_1@1 > 5
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_16@0 as __sail_attribute_16], aggr=[sum(__sail_attribute_8) as __common_expr_1]
-                RepartitionExec: partitioning=Hash([__sail_attribute_16@0], 4), input_partitions=4
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_4@0 as __sail_attribute_16], aggr=[sum(__sail_attribute_8) as __common_expr_1]
-                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_10@0, __sail_attribute_4@0), (__sail_attribute_12@1, __sail_attribute_6@1)], projection=[__sail_attribute_4@2, __sail_attribute_8@4]
-                      ProjectionExec: expr=[k@0 as __sail_attribute_10, ticket@1 as __sail_attribute_12]
+              AggregateExec: mode=FinalPartitioned, gby=[#16@0 as #16], aggr=[sum(#8) as __common_expr_1]
+                RepartitionExec: partitioning=Hash([#16@0], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#4@0 as #16], aggr=[sum(#8) as __common_expr_1]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#10@0, #4@0), (#12@1, #6@1)], projection=[#4@2, #8@4]
+                      ProjectionExec: expr=[k@0 as #10, ticket@1 as #12]
                         HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
                           AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
                             CoalescePartitionsExec
@@ -207,7 +207,7 @@ data:
                                   DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
                           DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
                       RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                        ProjectionExec: expr=[k@0 as __sail_attribute_4, ticket@1 as __sail_attribute_6, amount@2 as __sail_attribute_8]
+                        ProjectionExec: expr=[k@0 as #4, ticket@1 as #6, amount@2 as #8]
                           HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
                             AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
                               CoalescePartitionsExec
@@ -220,23 +220,23 @@ name: "test_selective_keys_reach_the_fact_inputs_below_a_semi_join_filtered_by_a
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_27@0 as k, __sail_attribute_28@1 as ticket]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_27, __sail_attribute_26@1 as __sail_attribute_28]
-        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_0@0, __sail_attribute_25@0)], projection=[__sail_attribute_0@0, __sail_attribute_26@2]
+    ProjectionExec: expr=[#27@0 as k, #28@1 as ticket]
+      ProjectionExec: expr=[#0@0 as #27, #26@1 as #28]
+        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#0@0, #25@0)], projection=[#0@0, #26@2]
           CoalescePartitionsExec
-            ProjectionExec: expr=[k@0 as __sail_attribute_0]
+            ProjectionExec: expr=[k@0 as #0]
               FilterExec: color@1 = red, projection=[k@0]
                 DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
-          ProjectionExec: expr=[__sail_attribute_4@0 as __sail_attribute_25, __sail_attribute_6@1 as __sail_attribute_26]
-            HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__sail_attribute_24@0, __sail_attribute_4@0)]
+          ProjectionExec: expr=[#4@0 as #25, #6@1 as #26]
+            HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#24@0, #4@0)]
               CoalescePartitionsExec
-                ProjectionExec: expr=[__sail_attribute_22@0 as __sail_attribute_24]
-                  FilterExec: __sail_attribute_23@1 > 5, projection=[__sail_attribute_22@0]
-                    AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_22@0 as __sail_attribute_22], aggr=[count(1) as __sail_attribute_23]
-                      RepartitionExec: partitioning=Hash([__sail_attribute_22@0], 4), input_partitions=4
-                        AggregateExec: mode=Partial, gby=[__sail_attribute_16@0 as __sail_attribute_22], aggr=[count(1) as __sail_attribute_23]
+                ProjectionExec: expr=[#22@0 as #24]
+                  FilterExec: #23@1 > 5, projection=[#22@0]
+                    AggregateExec: mode=FinalPartitioned, gby=[#22@0 as #22], aggr=[count(1) as #23]
+                      RepartitionExec: partitioning=Hash([#22@0], 4), input_partitions=4
+                        AggregateExec: mode=Partial, gby=[#16@0 as #22], aggr=[count(1) as #23]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            ProjectionExec: expr=[k@0 as __sail_attribute_16]
+                            ProjectionExec: expr=[k@0 as #16]
                               HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
                                 AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
                                   CoalescePartitionsExec
@@ -244,8 +244,8 @@ data:
                                       FilterExec: color@1 = red, projection=[k@0]
                                         DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
                                 DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_attribute_4@0, __sail_attribute_10@0), (__sail_attribute_6@1, __sail_attribute_12@1)], projection=[__sail_attribute_4@0, __sail_attribute_6@1]
-                ProjectionExec: expr=[k@0 as __sail_attribute_4, ticket@1 as __sail_attribute_6]
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #10@0), (#6@1, #12@1)], projection=[#4@0, #6@1]
+                ProjectionExec: expr=[k@0 as #4, ticket@1 as #6]
                   HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
                     AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
                       CoalescePartitionsExec
@@ -254,7 +254,7 @@ data:
                             DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_dimension/<id>_0.zst.parquet]]}, projection=[k, color], file_type=parquet, predicate=color@1 = red, pruning_predicate=color_null_count@2 != row_count@3 AND color_min@0 <= red AND red <= color_max@1, required_guarantees=[color in (red)]
                     DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet]]}, projection=[k, ticket], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
                 RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                  ProjectionExec: expr=[k@0 as __sail_attribute_10, ticket@1 as __sail_attribute_12]
+                  ProjectionExec: expr=[k@0 as #10, ticket@1 as #12]
                     HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(__early_join_key_0@0, k@0)]
                       AggregateExec: mode=Single, gby=[__early_join_key_0@0 as __early_join_key_0], aggr=[]
                         CoalescePartitionsExec

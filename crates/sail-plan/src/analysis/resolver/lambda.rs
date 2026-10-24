@@ -194,7 +194,7 @@ impl Resolver<'_, '_> {
                 .data_type
                 == DataType::Null
         {
-            let kind = sail_type_system::policies::map_typing::map_type_from_key_value_types(
+            let kind = sail_function::scalar::map::utils::map_type_from_key_value_types(
                 &DataType::Null,
                 &DataType::Null,
             );

@@ -4,41 +4,41 @@ name: "test_anonymous_union_aliases_preserve_column_values"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_8@0 as n]
-      ProjectionExec: expr=[__sail_attribute_7@0 as __sail_attribute_8]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(__sail_attribute_4) as __sail_attribute_7]
+    ProjectionExec: expr=[#8@0 as n]
+      ProjectionExec: expr=[#7@0 as #8]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(#4) as #7]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(__sail_attribute_4) as __sail_attribute_7]
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(#4) as #7]
               UnionExec
-                ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_4]
+                ProjectionExec: expr=[#0@0 as #4]
                   RangeExec: start=0, end=1000, step=1, num_partitions=1, projection=[0]
-                ProjectionExec: expr=[__sail_attribute_2@0 as __sail_attribute_4]
+                ProjectionExec: expr=[#2@0 as #4]
                   RangeExec: start=0, end=1000, step=1, num_partitions=1, projection=[0]
 ---
 name: "test_nested_anonymous_derived_tables_add_no_alias_layers"
 data:
   |-
     == Parsed Logical Plan ==
-    Projection: __sail_attribute_3 AS __sail_attribute_4
-      Projection: __sail_attribute_2 AS __sail_attribute_3
-        Projection: __sail_attribute_1 AS __sail_attribute_2
-          Projection: __sail_attribute_0 AS __sail_expression_1 AS __sail_attribute_1
+    Projection: #3 AS #4
+      Projection: #2 AS #3
+        Projection: #1 AS #2
+          Projection: #0 AS __sail_expression_1 AS #1
             Range: start=0, end=3, step=1, num_partitions=1
 
     == Analyzed Logical Plan ==
-    __sail_attribute_4: Int64
-    Projection: __sail_attribute_3 AS __sail_attribute_4
-      Projection: __sail_attribute_2 AS __sail_attribute_3
-        Projection: __sail_attribute_1 AS __sail_attribute_2
-          Projection: __sail_attribute_0 AS __sail_expression_1 AS __sail_attribute_1
+    #4: Int64
+    Projection: #3 AS #4
+      Projection: #2 AS #3
+        Projection: #1 AS #2
+          Projection: #0 AS __sail_expression_1 AS #1
             Range: start=0, end=3, step=1, num_partitions=1
 
     == Optimized Logical Plan ==
-    Projection: __sail_attribute_0 AS __sail_attribute_4
+    Projection: #0 AS #4
       Range: start=0, end=3, step=1, num_partitions=1
 
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_4@0 as x]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_4]
+    ProjectionExec: expr=[#4@0 as x]
+      ProjectionExec: expr=[#0@0 as #4]
         CooperativeExec
           RangeExec: start=0, end=3, step=1, num_partitions=1, projection=[0]

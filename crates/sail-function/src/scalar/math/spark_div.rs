@@ -4,12 +4,15 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use datafusion::arrow::compute::kernels::numeric::div;
 use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{
-    DataType, FieldRef, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    DataType, Field, FieldRef, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType,
 };
-use datafusion_common::Result;
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Expr, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility, cast,
 };
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
@@ -45,14 +48,16 @@ impl ScalarUDFImpl for SparkDiv {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::math_spark_div::return_type(_arg_types)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     /// Spark: `div` is `IntegralDivide`, which extends `DivModLike`:
     /// `nullable = true`, unconditional (ANSI does not narrow it).
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L658>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
-        sail_type_system::policies::math_spark_div::return_field_from_args(_args)
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -80,7 +85,45 @@ impl ScalarUDFImpl for SparkDiv {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        sail_type_system::policies::math_spark_div::coerce_types(arg_types)
+        if arg_types.len() != 2 {
+            return Err(invalid_arg_count_exec_err(
+                "spark_div",
+                (2, 2),
+                arg_types.len(),
+            ));
+        }
+
+        if matches!(
+            (&arg_types[0], &arg_types[1]),
+            (DataType::Interval(_), DataType::Interval(_))
+        ) {
+            return Ok(arg_types.to_vec());
+        }
+
+        // Resolve the common type first; decimal operands must not be truncated to BIGINT.
+        let (left, right) = BinaryTypeCoercer::new(&arg_types[0], &Operator::Divide, &arg_types[1])
+            .get_input_types()?;
+        Ok([left, right]
+            .into_iter()
+            .map(|data_type| match data_type {
+                DataType::Int8 | DataType::Int16 | DataType::Int32 => DataType::Int64,
+                data_type => data_type,
+            })
+            .collect())
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let [left, right] = args.as_slice() else {
+            return Err(invalid_arg_count_exec_err(self.name(), (2, 2), args.len()));
+        };
+        if matches!(info.get_data_type(left)?, DataType::Interval(_)) {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
+        // Native coercion has resolved child plans and widened small integers by this point.
+        Ok(ExprSimplifyResult::Simplified(cast(
+            left.clone() / right.clone(),
+            DataType::Int64,
+        )))
     }
 }
 

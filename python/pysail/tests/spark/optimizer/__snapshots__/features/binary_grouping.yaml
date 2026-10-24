@@ -9,8 +9,8 @@ data:
     == Plan Steps ==
     initial_logical_plan:
     Distinct:
-      Projection: __sail_attribute_1 AS __sail_attribute_2
-        Projection: __sail_attribute_0 AS __sail_expression_2 AS __sail_attribute_1
+      Projection: #1 AS #2
+        Projection: #0 AS __sail_expression_2 AS #1
           Values: (Binary("1")), (Binary("1"))
 
     logical_plan after resolve_grouping_function:
@@ -38,9 +38,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after replace_distinct_aggregate:
-    Aggregate: groupBy=[[__sail_attribute_2]], aggr=[[]]
-      Projection: __sail_attribute_1 AS __sail_attribute_2
-        Projection: __sail_attribute_0 AS __sail_expression_2 AS __sail_attribute_1
+    Aggregate: groupBy=[[#2]], aggr=[[]]
+      Projection: #1 AS #2
+        Projection: #0 AS __sail_expression_2 AS #1
           Values: (Binary("1")), (Binary("1"))
 
     logical_plan after eliminate_join:
@@ -98,14 +98,14 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Aggregate: groupBy=[[__sail_attribute_2]], aggr=[[]]
-      Projection: __sail_attribute_0 AS __sail_attribute_2
+    Aggregate: groupBy=[[#2]], aggr=[[]]
+      Projection: #0 AS #2
         Values: (Binary("1")), (Binary("1"))
 
     logical_plan after rewrite_binary_grouping:
-    Projection: CAST(CAST(__sail_attribute_2 || LargeBinary("") AS BinaryView) AS Binary) AS __sail_attribute_2
-      Aggregate: groupBy=[[CAST(__sail_attribute_2 AS LargeBinary) AS __sail_attribute_2]], aggr=[[]]
-        Projection: __sail_attribute_0 AS __sail_attribute_2
+    Projection: CAST(CAST(#2 || LargeBinary("") AS BinaryView) AS Binary) AS #2
+      Aggregate: groupBy=[[CAST(#2 AS LargeBinary) AS #2]], aggr=[[]]
+        Projection: #0 AS #2
           Values: (Binary("1")), (Binary("1"))
 
     logical_plan after decorrelate_lateral_projection:
@@ -187,41 +187,41 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Projection: CAST(CAST(__sail_attribute_2 || LargeBinary("") AS BinaryView) AS Binary) AS __sail_attribute_2
-      Aggregate: groupBy=[[CAST(__sail_attribute_2 AS LargeBinary) AS __sail_attribute_2]], aggr=[[]]
-        Projection: __sail_attribute_0 AS __sail_attribute_2
+    Projection: CAST(CAST(#2 || LargeBinary("") AS BinaryView) AS Binary) AS #2
+      Aggregate: groupBy=[[CAST(#2 AS LargeBinary) AS #2]], aggr=[[]]
+        Projection: #0 AS #2
           Values: (Binary("1")), (Binary("1"))
 
     initial_physical_plan:
-    ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2]
-      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[]
-        AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[]
-          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
+    ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
+      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+        AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[]
+          ProjectionExec: expr=[#0@0 as #2]
             DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     initial_physical_plan_with_stats:
-    ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
-      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
-        AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
-          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2], statistics=[Rows=Exact(2), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
+    ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+        AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+          ProjectionExec: expr=[#0@0 as #2], statistics=[Rows=Exact(2), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
 
 
     initial_physical_plan_with_schema:
-    ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2], schema=[__sail_attribute_2:Binary]
-      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[], schema=[__sail_attribute_2:LargeBinary]
-        AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[], schema=[__sail_attribute_2:LargeBinary]
-          ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2], schema=[__sail_attribute_2:Binary]
-            DataSourceExec: partitions=1, partition_sizes=[1], schema=[__sail_attribute_0:Binary]
+    ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2], schema=[#2:Binary]
+      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[], schema=[#2:LargeBinary]
+        AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[], schema=[#2:LargeBinary]
+          ProjectionExec: expr=[#0@0 as #2], schema=[#2:Binary]
+            DataSourceExec: partitions=1, partition_sizes=[1], schema=[#0:Binary]
 
 
     physical_plan after OutputRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
-      ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[]
-          AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[]
-            ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
+      ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+          AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[]
+            ProjectionExec: expr=[#0@0 as #2]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -254,11 +254,11 @@ data:
 
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
-      ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[]
-          RepartitionExec: partitioning=Hash([__sail_attribute_2@0], 4), input_partitions=1
-            AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[]
-              ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
+      ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+            AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[]
+              ProjectionExec: expr=[#0@0 as #2]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -275,11 +275,11 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after OutputRequirements:
-    ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2]
-      AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[]
-        RepartitionExec: partitioning=Hash([__sail_attribute_2@0], 4), input_partitions=1
-          AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[]
-            ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
+    ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
+      AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+        RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+          AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[]
+            ProjectionExec: expr=[#0@0 as #2]
               DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -326,22 +326,22 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan:
-    ProjectionExec: expr=[__sail_attribute_2@0 as k]
-      ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[]
-          RepartitionExec: partitioning=Hash([__sail_attribute_2@0], 4), input_partitions=1
-            AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[]
-              ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
+    ProjectionExec: expr=[#2@0 as k]
+      ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+            AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[]
+              ProjectionExec: expr=[#0@0 as #2]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
 
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_2@0 as k]
-      ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[]
-          RepartitionExec: partitioning=Hash([__sail_attribute_2@0], 4), input_partitions=1
-            AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[]
-              ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
+    ProjectionExec: expr=[#2@0 as k]
+      ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+          RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+            AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[]
+              ProjectionExec: expr=[#0@0 as #2]
                 DataSourceExec: partitions=1, partition_sizes=[1]
 
 
@@ -350,10 +350,10 @@ data:
     inputs=[]
     mode=Pipelined
     partitions=1
-    distribution=Hash(keys=[__sail_attribute_2@0], channels=4)
+    distribution=Hash(keys=[#2@0], channels=4)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[CAST(__sail_attribute_2@0 AS LargeBinary) as __sail_attribute_2], aggr=[]
-      ProjectionExec: expr=[__sail_attribute_0@0 as __sail_attribute_2]
+    AggregateExec: mode=Partial, gby=[CAST(#2@0 AS LargeBinary) as #2], aggr=[]
+      ProjectionExec: expr=[#0@0 as #2]
         DataSourceExec: partitions=1, partition_sizes=[1]
 
     === stage 1 ===
@@ -362,7 +362,7 @@ data:
     partitions=4
     distribution=RoundRobinBatch(channels=1)
     placement=Worker
-    ProjectionExec: expr=[__sail_attribute_2@0 as k]
-      ProjectionExec: expr=[CAST(CAST(__sail_attribute_2@0 ||  AS BinaryView) AS Binary) as __sail_attribute_2]
-        AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_2@0 as __sail_attribute_2], aggr=[]
-          StageInputExec: input=0, partitioning=Hash([__sail_attribute_2@0], 4)
+    ProjectionExec: expr=[#2@0 as k]
+      ProjectionExec: expr=[CAST(CAST(#2@0 ||  AS BinaryView) AS Binary) as #2]
+        AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[]
+          StageInputExec: input=0, partitioning=Hash([#2@0], 4)

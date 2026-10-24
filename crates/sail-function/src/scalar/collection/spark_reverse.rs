@@ -35,7 +35,7 @@ impl ScalarUDFImpl for SparkReverse {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::collection_spark_reverse::return_type(arg_types)
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

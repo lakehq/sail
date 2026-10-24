@@ -39,9 +39,11 @@ nullability without changing which input attribute it originates from.
 The native resolver uses ordered input and outer scopes keyed by attribute
 IDs. Name lookup happens when binding an unresolved attribute. Later expression
 rewrites keep ID references, and do not rename columns. Lowering assigns backend
-column names once and returns user-facing output names separately. Catalog
-temporary views store native plans, so referencing a view allocates fresh IDs
-without importing or renaming a backend plan. CTE definitions are analyzed once;
+column names (`#` followed by the attribute ID) once and returns user-facing
+output names separately. These names are constructed directly as backend columns,
+so they do not need SQL identifier syntax. Catalog temporary views store native
+plans, so referencing a view allocates fresh IDs without importing or renaming a
+backend plan. CTE definitions are analyzed once;
 each reference receives fresh output slots, with origin and Connect binding rules
 kept separate from occurrence allocation.
 
@@ -69,12 +71,11 @@ must cross a typing boundary before using the session's execution APIs.
 
 ## Function typing
 
-`sail-type-system` is below both `sail-plan` and `sail-function` in the dependency
-graph. It owns shared typing policies and does not depend on execution kernels
-or resolver state. Function implementations retain the DataFusion-required
-typing methods as adapters to those policies. Moving the policies into
-`sail-plan` would create a dependency cycle and leave physical planning and
-distributed deserialization without a usable typing contract.
+`sail-function` owns function-specific return-field inference and argument
+coercion in its DataFusion UDF implementations. Native analysis calls these hooks
+through the generic scalar, aggregate, window, and higher-order call resolvers in
+`sail-type-system`. The type-system crate owns common expression and relational
+type rules and does not depend on function implementations or resolver state.
 
 The target function-analysis operation accepts the function identity and its
 configuration, argument fields, and available literal arguments. It returns
@@ -85,14 +86,14 @@ evaluation still controls their errors. Comparison coercion is separate from
 output-type unification for set operations and conditional expressions. Literal-dependent results (for
 example decimal scale or a schema literal), nested field metadata, timezone
 configuration, and ANSI cast behavior must be part of this contract. Scalar,
-aggregate, window, and higher-order functions share the policy layer but retain
+aggregate, window, and higher-order functions use their UDF typing hooks and retain
 their distinct inputs, including lambda parameter/body fields and aggregate
 filter/order expressions.
 
-Execution kernels consume already typed arguments. DataFusion may query an
-adapter's result field while planning or optimizing, but the adapter must not
+Execution kernels consume already typed arguments. DataFusion may query a
+function's result field while planning or optimizing, but that hook must not
 rewrite the query or select new coercions. Existing codec identities and kernel
-configuration stay unchanged when their typing policies move.
+configuration stay unchanged through analysis and lowering.
 
 ## Execution boundaries
 
@@ -117,11 +118,11 @@ through transparent operators and stops at relation boundaries. Explicit input s
 in the IR so backend optimization preserves them. Temporary views, CTE references,
 subqueries, lambda scopes, and command inputs share the same identity rules.
 
-`sail-type-system` owns scalar, aggregate, window, and higher-order call typing,
-cast metadata, binary/common-type inference, store-assignment compatibility, and
-configured or literal-dependent function policies. Spec type and literal conversion
-are independent of resolver state. Kernel hooks delegate to the shared policies
-when physical planning or distributed deserialization asks for a result field.
+`sail-type-system` owns generic call resolution, cast metadata, binary/common-type
+inference, and store-assignment compatibility. Spec type and literal conversion
+are independent of resolver state. Configured and literal-dependent function
+inference stays in `sail-function`, where the same UDF hooks serve analysis,
+physical planning, and distributed deserialization.
 
 The session analyzer omits DataFusion type coercion. Lambda binding and iterator
 extraction happen in native analysis. Lowering rejects unresolved fields, stale
@@ -132,10 +133,10 @@ It does not repair them by inserting casts or invoking another resolver.
 
 Add a native handler when introducing a Sail request, and add its operator to
 `sail-query` only if existing nodes cannot express the behavior. Update exhaustive
-traversal, relation instantiation, and checked lowering together. New function
-policies belong in `sail-type-system`; execution kernels and the analyzer call the
-same policy. Add an `AnalysisLayer` through `QueryAnalyzer::with_layer` for a
-subsequent pass. Such passes preserve IDs for existing occurrences, allocate IDs
+traversal, relation instantiation, and checked lowering together. Function-specific
+typing belongs in the UDF implementation in `sail-function`; the analyzer calls the
+same typing hooks as DataFusion. Add an `AnalysisLayer` through
+`QueryAnalyzer::with_layer` for a subsequent pass. Such passes preserve IDs for existing occurrences, allocate IDs
 for inserted nodes, and update affected result fields and output schemas.
 
 Boundary tests check unresolved and stale metadata without executing queries.

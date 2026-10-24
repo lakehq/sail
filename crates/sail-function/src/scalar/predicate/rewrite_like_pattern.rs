@@ -59,7 +59,11 @@ impl ScalarUDFImpl for RewriteLikePatternFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::predicate_rewrite_like_pattern::return_type(arg_types)
+        match &arg_types[0] {
+            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+            DataType::Utf8 | DataType::Utf8View => Ok(DataType::Utf8),
+            other => exec_err!("Unsupported data type {other:?} for function rewrite_like_pattern"),
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

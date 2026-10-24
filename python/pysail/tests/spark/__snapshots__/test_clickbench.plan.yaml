@@ -4,19 +4,19 @@ name: "test_clickbench_query_plan[00]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_211@0 as count(1)]
-      ProjectionExec: expr=[10000 as __sail_attribute_211]
+    ProjectionExec: expr=[#211@0 as count(1)]
+      ProjectionExec: expr=[10000 as #211]
         PlaceholderRowExec
 ---
 name: "test_clickbench_query_plan[01]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_211@0 as count(1)]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_211]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_210]
+    ProjectionExec: expr=[#211@0 as count(1)]
+      ProjectionExec: expr=[#210@0 as #211]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #210]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_210]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #210]
               FilterExec: AdvEngineID@0 != 0, projection=[]
                 DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[AdvEngineID], file_type=parquet, predicate=AdvEngineID@40 != 0, pruning_predicate=AdvEngineID_null_count@2 != row_count@3 AND (AdvEngineID_min@0 != 0 OR 0 != AdvEngineID_max@1), required_guarantees=[AdvEngineID not in (0)]
 ---
@@ -24,67 +24,67 @@ name: "test_clickbench_query_plan[02]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as SUM(AdvEngineID), __sail_attribute_214@1 as count(1), __sail_attribute_215@2 as AVG(ResolutionWidth)]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_213, __sail_attribute_211@1 as __sail_attribute_214, __sail_attribute_212@2 as __sail_attribute_215]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(__sail_attribute_79) as __sail_attribute_210, count(1) as __sail_attribute_211, avg(__sail_attribute_39) as __sail_attribute_212]
+    ProjectionExec: expr=[#213@0 as SUM(AdvEngineID), #214@1 as count(1), #215@2 as AVG(ResolutionWidth)]
+      ProjectionExec: expr=[#210@0 as #213, #211@1 as #214, #212@2 as #215]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(#79) as #210, count(1) as #211, avg(#39) as #212]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(__sail_attribute_79) as __sail_attribute_210, count(1) as __sail_attribute_211, avg(__sail_attribute_39) as __sail_attribute_212]
-              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[ResolutionWidth@20 as __sail_attribute_39, AdvEngineID@40 as __sail_attribute_79], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(#79) as #210, count(1) as #211, avg(#39) as #212]
+              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[ResolutionWidth@20 as #39, AdvEngineID@40 as #79], file_type=parquet
 ---
 name: "test_clickbench_query_plan[03]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_211@0 as AVG(UserID)]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_211]
-        AggregateExec: mode=Final, gby=[], aggr=[avg(__sail_attribute_17) as __sail_attribute_210]
+    ProjectionExec: expr=[#211@0 as AVG(UserID)]
+      ProjectionExec: expr=[#210@0 as #211]
+        AggregateExec: mode=Final, gby=[], aggr=[avg(#17) as #210]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[avg(__sail_attribute_17) as __sail_attribute_210]
-              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as __sail_attribute_17], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[avg(#17) as #210]
+              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as #17], file_type=parquet
 ---
 name: "test_clickbench_query_plan[04]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_211@0 as count(DISTINCT UserID)]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_211]
-        AggregateExec: mode=Final, gby=[], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_210]
+    ProjectionExec: expr=[#211@0 as count(DISTINCT UserID)]
+      ProjectionExec: expr=[#210@0 as #211]
+        AggregateExec: mode=Final, gby=[], aggr=[count(DISTINCT #17) as #210]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_210]
-              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as __sail_attribute_17], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(DISTINCT #17) as #210]
+              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as #17], file_type=parquet
 ---
 name: "test_clickbench_query_plan[05]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_211@0 as count(DISTINCT SearchPhrase)]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_211]
-        AggregateExec: mode=Final, gby=[], aggr=[count(DISTINCT __sail_attribute_77) as __sail_attribute_210]
+    ProjectionExec: expr=[#211@0 as count(DISTINCT SearchPhrase)]
+      ProjectionExec: expr=[#210@0 as #211]
+        AggregateExec: mode=Final, gby=[], aggr=[count(DISTINCT #77) as #210]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(DISTINCT __sail_attribute_77) as __sail_attribute_210]
-              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[SearchPhrase@39 as __sail_attribute_77], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[count(DISTINCT #77) as #210]
+              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[SearchPhrase@39 as #77], file_type=parquet
 ---
 name: "test_clickbench_query_plan[06]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as MIN(EventDate), __sail_attribute_213@1 as MAX(EventDate)]
-      ProjectionExec: expr=[2013-07-02 as __sail_attribute_212, 2013-07-31 as __sail_attribute_213]
+    ProjectionExec: expr=[#212@0 as MIN(EventDate), #213@1 as MAX(EventDate)]
+      ProjectionExec: expr=[2013-07-02 as #212, 2013-07-31 as #213]
         PlaceholderRowExec
 ---
 name: "test_clickbench_query_plan[07]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as AdvEngineID, __sail_attribute_213@1 as count(1)]
-      ProjectionExec: expr=[__sail_attribute_212@0 as __sail_attribute_212, __sail_attribute_213@1 as __sail_attribute_213]
-        SortPreservingMergeExec: [__sail_attribute_214@2 DESC NULLS LAST]
-          ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __common_expr_1@1 as __sail_attribute_213, __common_expr_1@1 as __sail_attribute_214]
+    ProjectionExec: expr=[#212@0 as AdvEngineID, #213@1 as count(1)]
+      ProjectionExec: expr=[#212@0 as #212, #213@1 as #213]
+        SortPreservingMergeExec: [#214@2 DESC NULLS LAST]
+          ProjectionExec: expr=[#210@0 as #212, __common_expr_1@1 as #213, __common_expr_1@1 as #214]
             SortExec: expr=[__common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __common_expr_1]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_79@0 as __sail_attribute_210], aggr=[count(1) as __common_expr_1]
-                    ProjectionExec: expr=[AdvEngineID@0 as __sail_attribute_79]
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as __common_expr_1]
+                RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#79@0 as #210], aggr=[count(1) as __common_expr_1]
+                    ProjectionExec: expr=[AdvEngineID@0 as #79]
                       FilterExec: AdvEngineID@0 != 0
                         DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[AdvEngineID], file_type=parquet, predicate=AdvEngineID@40 != 0, pruning_predicate=AdvEngineID_null_count@2 != row_count@3 AND (AdvEngineID_min@0 != 0 OR 0 != AdvEngineID_max@1), required_guarantees=[AdvEngineID not in (0)]
 ---
@@ -92,40 +92,40 @@ name: "test_clickbench_query_plan[08]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as RegionID, __sail_attribute_213@1 as u]
-      SortPreservingMergeExec: [__sail_attribute_213@1 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_211@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_211]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_15@0 as __sail_attribute_210], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_211]
-                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[RegionID@8 as __sail_attribute_15, UserID@9 as __sail_attribute_17], file_type=parquet
+    ProjectionExec: expr=[#212@0 as RegionID, #213@1 as u]
+      SortPreservingMergeExec: [#213@1 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #212, #211@1 as #213]
+          SortExec: TopK(fetch=10), expr=[#211@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(DISTINCT #17) as #211]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#15@0 as #210], aggr=[count(DISTINCT #17) as #211]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[RegionID@8 as #15, UserID@9 as #17], file_type=parquet
 ---
 name: "test_clickbench_query_plan[09]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_215@0 as RegionID, __sail_attribute_216@1 as SUM(AdvEngineID), __sail_attribute_217@2 as c, __sail_attribute_218@3 as AVG(ResolutionWidth), __sail_attribute_219@4 as count(DISTINCT UserID)]
-      SortPreservingMergeExec: [__sail_attribute_217@2 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_215, __sail_attribute_211@1 as __sail_attribute_216, __sail_attribute_212@2 as __sail_attribute_217, __sail_attribute_213@3 as __sail_attribute_218, __sail_attribute_214@4 as __sail_attribute_219]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[sum(__sail_attribute_79) as __sail_attribute_211, count(1) as __sail_attribute_212, avg(__sail_attribute_39) as __sail_attribute_213, count(DISTINCT __sail_attribute_17) as __sail_attribute_214]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_15@0 as __sail_attribute_210], aggr=[sum(__sail_attribute_79) as __sail_attribute_211, count(1) as __sail_attribute_212, avg(__sail_attribute_39) as __sail_attribute_213, count(DISTINCT __sail_attribute_17) as __sail_attribute_214]
-                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[RegionID@8 as __sail_attribute_15, UserID@9 as __sail_attribute_17, ResolutionWidth@20 as __sail_attribute_39, AdvEngineID@40 as __sail_attribute_79], file_type=parquet
+    ProjectionExec: expr=[#215@0 as RegionID, #216@1 as SUM(AdvEngineID), #217@2 as c, #218@3 as AVG(ResolutionWidth), #219@4 as count(DISTINCT UserID)]
+      SortPreservingMergeExec: [#217@2 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #215, #211@1 as #216, #212@2 as #217, #213@3 as #218, #214@4 as #219]
+          SortExec: TopK(fetch=10), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[sum(#79) as #211, count(1) as #212, avg(#39) as #213, count(DISTINCT #17) as #214]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#15@0 as #210], aggr=[sum(#79) as #211, count(1) as #212, avg(#39) as #213, count(DISTINCT #17) as #214]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[RegionID@8 as #15, UserID@9 as #17, ResolutionWidth@20 as #39, AdvEngineID@40 as #79], file_type=parquet
 ---
 name: "test_clickbench_query_plan[10]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as MobilePhoneModel, __sail_attribute_213@1 as u]
-      SortPreservingMergeExec: [__sail_attribute_213@1 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_211@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_211]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_67@1 as __sail_attribute_210], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_211]
-                  ProjectionExec: expr=[UserID@0 as __sail_attribute_17, MobilePhoneModel@1 as __sail_attribute_67]
+    ProjectionExec: expr=[#212@0 as MobilePhoneModel, #213@1 as u]
+      SortPreservingMergeExec: [#213@1 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #212, #211@1 as #213]
+          SortExec: TopK(fetch=10), expr=[#211@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(DISTINCT #17) as #211]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#67@1 as #210], aggr=[count(DISTINCT #17) as #211]
+                  ProjectionExec: expr=[UserID@0 as #17, MobilePhoneModel@1 as #67]
                     FilterExec: MobilePhoneModel@1 != <eol>
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
 ---
@@ -133,14 +133,14 @@ name: "test_clickbench_query_plan[11]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as MobilePhone, __sail_attribute_214@1 as MobilePhoneModel, __sail_attribute_215@2 as u]
-      SortPreservingMergeExec: [__sail_attribute_215@2 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_213, __sail_attribute_211@1 as __sail_attribute_214, __sail_attribute_212@2 as __sail_attribute_215]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_212]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_65@1 as __sail_attribute_210, __sail_attribute_67@2 as __sail_attribute_211], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_212]
-                  ProjectionExec: expr=[UserID@0 as __sail_attribute_17, MobilePhone@1 as __sail_attribute_65, MobilePhoneModel@2 as __sail_attribute_67]
+    ProjectionExec: expr=[#213@0 as MobilePhone, #214@1 as MobilePhoneModel, #215@2 as u]
+      SortPreservingMergeExec: [#215@2 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #213, #211@1 as #214, #212@2 as #215]
+          SortExec: TopK(fetch=10), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(DISTINCT #17) as #212]
+              RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#65@1 as #210, #67@2 as #211], aggr=[count(DISTINCT #17) as #212]
+                  ProjectionExec: expr=[UserID@0 as #17, MobilePhone@1 as #65, MobilePhoneModel@2 as #67]
                     FilterExec: MobilePhoneModel@2 != <eol>
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID, MobilePhone, MobilePhoneModel], file_type=parquet, predicate=MobilePhoneModel@34 != , pruning_predicate=MobilePhoneModel_null_count@2 != row_count@3 AND (MobilePhoneModel_min@0 !=  OR  != MobilePhoneModel_max@1), required_guarantees=[MobilePhoneModel not in ()]
 ---
@@ -148,14 +148,14 @@ name: "test_clickbench_query_plan[12]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as SearchPhrase, __sail_attribute_213@1 as c]
-      SortPreservingMergeExec: [__sail_attribute_213@1 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_211@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_77@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-                  ProjectionExec: expr=[SearchPhrase@0 as __sail_attribute_77]
+    ProjectionExec: expr=[#212@0 as SearchPhrase, #213@1 as c]
+      SortPreservingMergeExec: [#213@1 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #212, #211@1 as #213]
+          SortExec: TopK(fetch=10), expr=[#211@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as #211]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#77@0 as #210], aggr=[count(1) as #211]
+                  ProjectionExec: expr=[SearchPhrase@0 as #77]
                     FilterExec: SearchPhrase@0 != <eol>
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
@@ -163,14 +163,14 @@ name: "test_clickbench_query_plan[13]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as SearchPhrase, __sail_attribute_213@1 as u]
-      SortPreservingMergeExec: [__sail_attribute_213@1 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_211@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_211]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_77@1 as __sail_attribute_210], aggr=[count(DISTINCT __sail_attribute_17) as __sail_attribute_211]
-                  ProjectionExec: expr=[UserID@0 as __sail_attribute_17, SearchPhrase@1 as __sail_attribute_77]
+    ProjectionExec: expr=[#212@0 as SearchPhrase, #213@1 as u]
+      SortPreservingMergeExec: [#213@1 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #212, #211@1 as #213]
+          SortExec: TopK(fetch=10), expr=[#211@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(DISTINCT #17) as #211]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#77@1 as #210], aggr=[count(DISTINCT #17) as #211]
+                  ProjectionExec: expr=[UserID@0 as #17, SearchPhrase@1 as #77]
                     FilterExec: SearchPhrase@1 != <eol>
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
@@ -178,14 +178,14 @@ name: "test_clickbench_query_plan[14]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as SearchEngineID, __sail_attribute_214@1 as SearchPhrase, __sail_attribute_215@2 as c]
-      SortPreservingMergeExec: [__sail_attribute_215@2 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_213, __sail_attribute_211@1 as __sail_attribute_214, __sail_attribute_212@2 as __sail_attribute_215]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_75@0 as __sail_attribute_210, __sail_attribute_77@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-                  ProjectionExec: expr=[SearchEngineID@0 as __sail_attribute_75, SearchPhrase@1 as __sail_attribute_77]
+    ProjectionExec: expr=[#213@0 as SearchEngineID, #214@1 as SearchPhrase, #215@2 as c]
+      SortPreservingMergeExec: [#215@2 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #213, #211@1 as #214, #212@2 as #215]
+          SortExec: TopK(fetch=10), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(1) as #212]
+              RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#75@0 as #210, #77@1 as #211], aggr=[count(1) as #212]
+                  ProjectionExec: expr=[SearchEngineID@0 as #75, SearchPhrase@1 as #77]
                     FilterExec: SearchPhrase@1 != <eol>
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
@@ -193,63 +193,63 @@ name: "test_clickbench_query_plan[15]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as UserID, __sail_attribute_213@1 as count(1)]
-      ProjectionExec: expr=[__sail_attribute_212@0 as __sail_attribute_212, __sail_attribute_213@1 as __sail_attribute_213]
-        SortPreservingMergeExec: [__sail_attribute_214@2 DESC NULLS LAST], fetch=10
-          ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __common_expr_1@1 as __sail_attribute_213, __common_expr_1@1 as __sail_attribute_214]
+    ProjectionExec: expr=[#212@0 as UserID, #213@1 as count(1)]
+      ProjectionExec: expr=[#212@0 as #212, #213@1 as #213]
+        SortPreservingMergeExec: [#214@2 DESC NULLS LAST], fetch=10
+          ProjectionExec: expr=[#210@0 as #212, __common_expr_1@1 as #213, __common_expr_1@1 as #214]
             SortExec: TopK(fetch=10), expr=[__common_expr_1@1 DESC NULLS LAST], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __common_expr_1]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_17@0 as __sail_attribute_210], aggr=[count(1) as __common_expr_1]
-                    DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as __sail_attribute_17], file_type=parquet
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as __common_expr_1]
+                RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#17@0 as #210], aggr=[count(1) as __common_expr_1]
+                    DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as #17], file_type=parquet
 ---
 name: "test_clickbench_query_plan[16]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as UserID, __sail_attribute_214@1 as SearchPhrase, __sail_attribute_215@2 as count(1)]
-      ProjectionExec: expr=[__sail_attribute_213@0 as __sail_attribute_213, __sail_attribute_214@1 as __sail_attribute_214, __sail_attribute_215@2 as __sail_attribute_215]
-        SortPreservingMergeExec: [__sail_attribute_216@3 DESC NULLS LAST], fetch=10
-          ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_213, __sail_attribute_211@1 as __sail_attribute_214, __common_expr_1@2 as __sail_attribute_215, __common_expr_1@2 as __sail_attribute_216]
+    ProjectionExec: expr=[#213@0 as UserID, #214@1 as SearchPhrase, #215@2 as count(1)]
+      ProjectionExec: expr=[#213@0 as #213, #214@1 as #214, #215@2 as #215]
+        SortPreservingMergeExec: [#216@3 DESC NULLS LAST], fetch=10
+          ProjectionExec: expr=[#210@0 as #213, #211@1 as #214, __common_expr_1@2 as #215, __common_expr_1@2 as #216]
             SortExec: TopK(fetch=10), expr=[__common_expr_1@2 DESC NULLS LAST], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(1) as __common_expr_1]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_17@0 as __sail_attribute_210, __sail_attribute_77@1 as __sail_attribute_211], aggr=[count(1) as __common_expr_1]
-                    DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as __sail_attribute_17, SearchPhrase@39 as __sail_attribute_77], file_type=parquet
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(1) as __common_expr_1]
+                RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#17@0 as #210, #77@1 as #211], aggr=[count(1) as __common_expr_1]
+                    DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as #17, SearchPhrase@39 as #77], file_type=parquet
 ---
 name: "test_clickbench_query_plan[17]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as UserID, __sail_attribute_214@1 as SearchPhrase, __sail_attribute_215@2 as count(1)]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_213, __sail_attribute_211@1 as __sail_attribute_214, __sail_attribute_212@2 as __sail_attribute_215]
+    ProjectionExec: expr=[#213@0 as UserID, #214@1 as SearchPhrase, #215@2 as count(1)]
+      ProjectionExec: expr=[#210@0 as #213, #211@1 as #214, #212@2 as #215]
         CoalescePartitionsExec: fetch=10
           LocalLimitExec: fetch=10
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_17@0 as __sail_attribute_210, __sail_attribute_77@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as __sail_attribute_17, SearchPhrase@39 as __sail_attribute_77], file_type=parquet
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(1) as #212]
+              RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#17@0 as #210, #77@1 as #211], aggr=[count(1) as #212]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID@9 as #17, SearchPhrase@39 as #77], file_type=parquet
 ---
 name: "test_clickbench_query_plan[18]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_214@0 as UserID, __sail_attribute_215@1 as m, __sail_attribute_216@2 as SearchPhrase, __sail_attribute_217@3 as count(1)]
-      ProjectionExec: expr=[__sail_attribute_214@0 as __sail_attribute_214, __sail_attribute_215@1 as __sail_attribute_215, __sail_attribute_216@2 as __sail_attribute_216, __sail_attribute_217@3 as __sail_attribute_217]
-        SortPreservingMergeExec: [__sail_attribute_218@4 DESC NULLS LAST], fetch=10
-          ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_214, __sail_attribute_211@1 as __sail_attribute_215, __sail_attribute_212@2 as __sail_attribute_216, __common_expr_1@3 as __sail_attribute_217, __common_expr_1@3 as __sail_attribute_218]
+    ProjectionExec: expr=[#214@0 as UserID, #215@1 as m, #216@2 as SearchPhrase, #217@3 as count(1)]
+      ProjectionExec: expr=[#214@0 as #214, #215@1 as #215, #216@2 as #216, #217@3 as #217]
+        SortPreservingMergeExec: [#218@4 DESC NULLS LAST], fetch=10
+          ProjectionExec: expr=[#210@0 as #214, #211@1 as #215, #212@2 as #216, __common_expr_1@3 as #217, __common_expr_1@3 as #218]
             SortExec: TopK(fetch=10), expr=[__common_expr_1@3 DESC NULLS LAST], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211, __sail_attribute_212@2 as __sail_attribute_212], aggr=[count(1) as __common_expr_1]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1, __sail_attribute_212@2], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_17@1 as __sail_attribute_210, date_part(minute, CAST(__sail_attribute_8@0 * 1000000 AS Timestamp(µs, "UTC"))) as __sail_attribute_211, __sail_attribute_77@2 as __sail_attribute_212], aggr=[count(1) as __common_expr_1]
-                    DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventTime@4 as __sail_attribute_8, UserID@9 as __sail_attribute_17, SearchPhrase@39 as __sail_attribute_77], file_type=parquet
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211, #212@2 as #212], aggr=[count(1) as __common_expr_1]
+                RepartitionExec: partitioning=Hash([#210@0, #211@1, #212@2], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#17@1 as #210, date_part(minute, CAST(#8@0 * 1000000 AS Timestamp(µs, "UTC"))) as #211, #77@2 as #212], aggr=[count(1) as __common_expr_1]
+                    DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventTime@4 as #8, UserID@9 as #17, SearchPhrase@39 as #77], file_type=parquet
 ---
 name: "test_clickbench_query_plan[19]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_210@0 as UserID]
-      ProjectionExec: expr=[UserID@0 as __sail_attribute_210]
+    ProjectionExec: expr=[#210@0 as UserID]
+      ProjectionExec: expr=[UserID@0 as #210]
         FilterExec: UserID@0 = 435090932899640449
           DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[UserID], file_type=parquet, predicate=UserID@9 = 435090932899640449, pruning_predicate=UserID_null_count@2 != row_count@3 AND UserID_min@0 <= 435090932899640449 AND 435090932899640449 <= UserID_max@1, required_guarantees=[UserID in (435090932899640449)]
 ---
@@ -257,11 +257,11 @@ name: "test_clickbench_query_plan[20]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_211@0 as count(1)]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_211]
-        AggregateExec: mode=Final, gby=[], aggr=[count(1) as __sail_attribute_210]
+    ProjectionExec: expr=[#211@0 as count(1)]
+      ProjectionExec: expr=[#210@0 as #211]
+        AggregateExec: mode=Final, gby=[], aggr=[count(1) as #210]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as __sail_attribute_210]
+            AggregateExec: mode=Partial, gby=[], aggr=[count(1) as #210]
               FilterExec: URL@0 LIKE %google%, projection=[]
                 DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[URL], file_type=parquet, predicate=URL@13 LIKE %google%
 ---
@@ -269,14 +269,14 @@ name: "test_clickbench_query_plan[21]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as SearchPhrase, __sail_attribute_214@1 as MIN(URL), __sail_attribute_215@2 as c]
-      SortPreservingMergeExec: [__sail_attribute_215@2 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_213, __sail_attribute_211@1 as __sail_attribute_214, __sail_attribute_212@2 as __sail_attribute_215]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[min(__sail_attribute_25) as __sail_attribute_211, count(1) as __sail_attribute_212]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_77@1 as __sail_attribute_210], aggr=[min(__sail_attribute_25) as __sail_attribute_211, count(1) as __sail_attribute_212]
-                  ProjectionExec: expr=[URL@0 as __sail_attribute_25, SearchPhrase@1 as __sail_attribute_77]
+    ProjectionExec: expr=[#213@0 as SearchPhrase, #214@1 as MIN(URL), #215@2 as c]
+      SortPreservingMergeExec: [#215@2 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #213, #211@1 as #214, #212@2 as #215]
+          SortExec: TopK(fetch=10), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[min(#25) as #211, count(1) as #212]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#77@1 as #210], aggr=[min(#25) as #211, count(1) as #212]
+                  ProjectionExec: expr=[URL@0 as #25, SearchPhrase@1 as #77]
                     FilterExec: SearchPhrase@1 !=  AND URL@0 LIKE %google%
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[URL, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND URL@13 LIKE %google%, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
@@ -284,14 +284,14 @@ name: "test_clickbench_query_plan[22]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_215@0 as SearchPhrase, __sail_attribute_216@1 as MIN(URL), __sail_attribute_217@2 as MIN(Title), __sail_attribute_218@3 as c, __sail_attribute_219@4 as count(DISTINCT UserID)]
-      SortPreservingMergeExec: [__sail_attribute_218@3 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_215, __sail_attribute_211@1 as __sail_attribute_216, __sail_attribute_212@2 as __sail_attribute_217, __sail_attribute_213@3 as __sail_attribute_218, __sail_attribute_214@4 as __sail_attribute_219]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_213@3 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[min(__sail_attribute_25) as __sail_attribute_211, min(__sail_attribute_4) as __sail_attribute_212, count(1) as __sail_attribute_213, count(DISTINCT __sail_attribute_17) as __sail_attribute_214]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_77@3 as __sail_attribute_210], aggr=[min(__sail_attribute_25) as __sail_attribute_211, min(__sail_attribute_4) as __sail_attribute_212, count(1) as __sail_attribute_213, count(DISTINCT __sail_attribute_17) as __sail_attribute_214]
-                  ProjectionExec: expr=[Title@0 as __sail_attribute_4, UserID@1 as __sail_attribute_17, URL@2 as __sail_attribute_25, SearchPhrase@3 as __sail_attribute_77]
+    ProjectionExec: expr=[#215@0 as SearchPhrase, #216@1 as MIN(URL), #217@2 as MIN(Title), #218@3 as c, #219@4 as count(DISTINCT UserID)]
+      SortPreservingMergeExec: [#218@3 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #215, #211@1 as #216, #212@2 as #217, #213@3 as #218, #214@4 as #219]
+          SortExec: TopK(fetch=10), expr=[#213@3 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[min(#25) as #211, min(#4) as #212, count(1) as #213, count(DISTINCT #17) as #214]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#77@3 as #210], aggr=[min(#25) as #211, min(#4) as #212, count(1) as #213, count(DISTINCT #17) as #214]
+                  ProjectionExec: expr=[Title@0 as #4, UserID@1 as #17, URL@2 as #25, SearchPhrase@3 as #77]
                     FilterExec: SearchPhrase@3 !=  AND Title@0 LIKE %Google% AND URL@2 NOT LIKE %.google.%
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[Title, UserID, URL, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND Title@2 LIKE %Google% AND URL@13 NOT LIKE %.google.%, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
@@ -299,10 +299,10 @@ name: "test_clickbench_query_plan[23]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_210@0 as WatchID, __sail_attribute_211@1 as JavaEnable, __sail_attribute_212@2 as Title, __sail_attribute_213@3 as GoodEvent, __sail_attribute_214@4 as EventTime, __sail_attribute_215@5 as EventDate, __sail_attribute_216@6 as CounterID, __sail_attribute_217@7 as ClientIP, __sail_attribute_218@8 as RegionID, __sail_attribute_219@9 as UserID, __sail_attribute_220@10 as CounterClass, __sail_attribute_221@11 as OS, __sail_attribute_222@12 as UserAgent, __sail_attribute_223@13 as URL, __sail_attribute_224@14 as Referer, __sail_attribute_225@15 as IsRefresh, __sail_attribute_226@16 as RefererCategoryID, __sail_attribute_227@17 as RefererRegionID, __sail_attribute_228@18 as URLCategoryID, __sail_attribute_229@19 as URLRegionID, __sail_attribute_230@20 as ResolutionWidth, __sail_attribute_231@21 as ResolutionHeight, __sail_attribute_232@22 as ResolutionDepth, __sail_attribute_233@23 as FlashMajor, __sail_attribute_234@24 as FlashMinor, __sail_attribute_235@25 as FlashMinor2, __sail_attribute_236@26 as NetMajor, __sail_attribute_237@27 as NetMinor, __sail_attribute_238@28 as UserAgentMajor, __sail_attribute_239@29 as UserAgentMinor, __sail_attribute_240@30 as CookieEnable, __sail_attribute_241@31 as JavascriptEnable, __sail_attribute_242@32 as IsMobile, __sail_attribute_243@33 as MobilePhone, __sail_attribute_244@34 as MobilePhoneModel, __sail_attribute_245@35 as Params, __sail_attribute_246@36 as IPNetworkID, __sail_attribute_247@37 as TraficSourceID, __sail_attribute_248@38 as SearchEngineID, __sail_attribute_249@39 as SearchPhrase, __sail_attribute_250@40 as AdvEngineID, __sail_attribute_251@41 as IsArtifical, __sail_attribute_252@42 as WindowClientWidth, __sail_attribute_253@43 as WindowClientHeight, __sail_attribute_254@44 as ClientTimeZone, __sail_attribute_255@45 as ClientEventTime, __sail_attribute_256@46 as SilverlightVersion1, __sail_attribute_257@47 as SilverlightVersion2, __sail_attribute_258@48 as SilverlightVersion3, __sail_attribute_259@49 as SilverlightVersion4, __sail_attribute_260@50 as PageCharset, __sail_attribute_261@51 as CodeVersion, __sail_attribute_262@52 as IsLink, __sail_attribute_263@53 as IsDownload, __sail_attribute_264@54 as IsNotBounce, __sail_attribute_265@55 as FUniqID, __sail_attribute_266@56 as OriginalURL, __sail_attribute_267@57 as HID, __sail_attribute_268@58 as IsOldCounter, __sail_attribute_269@59 as IsEvent, __sail_attribute_270@60 as IsParameter, __sail_attribute_271@61 as DontCountHits, __sail_attribute_272@62 as WithHash, __sail_attribute_273@63 as HitColor, __sail_attribute_274@64 as LocalEventTime, __sail_attribute_275@65 as Age, __sail_attribute_276@66 as Sex, __sail_attribute_277@67 as Income, __sail_attribute_278@68 as Interests, __sail_attribute_279@69 as Robotness, __sail_attribute_280@70 as RemoteIP, __sail_attribute_281@71 as WindowName, __sail_attribute_282@72 as OpenerName, __sail_attribute_283@73 as HistoryLength, __sail_attribute_284@74 as BrowserLanguage, __sail_attribute_285@75 as BrowserCountry, __sail_attribute_286@76 as SocialNetwork, __sail_attribute_287@77 as SocialAction, __sail_attribute_288@78 as HTTPError, __sail_attribute_289@79 as SendTiming, __sail_attribute_290@80 as DNSTiming, __sail_attribute_291@81 as ConnectTiming, __sail_attribute_292@82 as ResponseStartTiming, __sail_attribute_293@83 as ResponseEndTiming, __sail_attribute_294@84 as FetchTiming, __sail_attribute_295@85 as SocialSourceNetworkID, __sail_attribute_296@86 as SocialSourcePage, __sail_attribute_297@87 as ParamPrice, __sail_attribute_298@88 as ParamOrderID, __sail_attribute_299@89 as ParamCurrency, __sail_attribute_300@90 as ParamCurrencyID, __sail_attribute_301@91 as OpenstatServiceName, __sail_attribute_302@92 as OpenstatCampaignID, __sail_attribute_303@93 as OpenstatAdID, __sail_attribute_304@94 as OpenstatSourceID, __sail_attribute_305@95 as UTMSource, __sail_attribute_306@96 as UTMMedium, __sail_attribute_307@97 as UTMCampaign, __sail_attribute_308@98 as UTMContent, __sail_attribute_309@99 as UTMTerm, __sail_attribute_310@100 as FromTag, __sail_attribute_311@101 as HasGCLID, __sail_attribute_312@102 as RefererHash, __sail_attribute_313@103 as URLHash, __sail_attribute_314@104 as CLID]
-      SortPreservingMergeExec: [__sail_attribute_214@4 ASC], fetch=10
-        SortExec: TopK(fetch=10), expr=[__sail_attribute_214@4 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[WatchID@0 as __sail_attribute_210, JavaEnable@1 as __sail_attribute_211, Title@2 as __sail_attribute_212, GoodEvent@3 as __sail_attribute_213, EventTime@4 as __sail_attribute_214, CAST(CAST(EventDate@5 AS Int32) AS Date32) as __sail_attribute_215, CounterID@6 as __sail_attribute_216, ClientIP@7 as __sail_attribute_217, RegionID@8 as __sail_attribute_218, UserID@9 as __sail_attribute_219, CounterClass@10 as __sail_attribute_220, OS@11 as __sail_attribute_221, UserAgent@12 as __sail_attribute_222, URL@13 as __sail_attribute_223, Referer@14 as __sail_attribute_224, IsRefresh@15 as __sail_attribute_225, RefererCategoryID@16 as __sail_attribute_226, RefererRegionID@17 as __sail_attribute_227, URLCategoryID@18 as __sail_attribute_228, URLRegionID@19 as __sail_attribute_229, ResolutionWidth@20 as __sail_attribute_230, ResolutionHeight@21 as __sail_attribute_231, ResolutionDepth@22 as __sail_attribute_232, FlashMajor@23 as __sail_attribute_233, FlashMinor@24 as __sail_attribute_234, FlashMinor2@25 as __sail_attribute_235, NetMajor@26 as __sail_attribute_236, NetMinor@27 as __sail_attribute_237, UserAgentMajor@28 as __sail_attribute_238, UserAgentMinor@29 as __sail_attribute_239, CookieEnable@30 as __sail_attribute_240, JavascriptEnable@31 as __sail_attribute_241, IsMobile@32 as __sail_attribute_242, MobilePhone@33 as __sail_attribute_243, MobilePhoneModel@34 as __sail_attribute_244, Params@35 as __sail_attribute_245, IPNetworkID@36 as __sail_attribute_246, TraficSourceID@37 as __sail_attribute_247, SearchEngineID@38 as __sail_attribute_248, SearchPhrase@39 as __sail_attribute_249, AdvEngineID@40 as __sail_attribute_250, IsArtifical@41 as __sail_attribute_251, WindowClientWidth@42 as __sail_attribute_252, WindowClientHeight@43 as __sail_attribute_253, ClientTimeZone@44 as __sail_attribute_254, ClientEventTime@45 as __sail_attribute_255, SilverlightVersion1@46 as __sail_attribute_256, SilverlightVersion2@47 as __sail_attribute_257, SilverlightVersion3@48 as __sail_attribute_258, SilverlightVersion4@49 as __sail_attribute_259, PageCharset@50 as __sail_attribute_260, CodeVersion@51 as __sail_attribute_261, IsLink@52 as __sail_attribute_262, IsDownload@53 as __sail_attribute_263, IsNotBounce@54 as __sail_attribute_264, FUniqID@55 as __sail_attribute_265, OriginalURL@56 as __sail_attribute_266, HID@57 as __sail_attribute_267, IsOldCounter@58 as __sail_attribute_268, IsEvent@59 as __sail_attribute_269, IsParameter@60 as __sail_attribute_270, DontCountHits@61 as __sail_attribute_271, WithHash@62 as __sail_attribute_272, HitColor@63 as __sail_attribute_273, LocalEventTime@64 as __sail_attribute_274, Age@65 as __sail_attribute_275, Sex@66 as __sail_attribute_276, Income@67 as __sail_attribute_277, Interests@68 as __sail_attribute_278, Robotness@69 as __sail_attribute_279, RemoteIP@70 as __sail_attribute_280, WindowName@71 as __sail_attribute_281, OpenerName@72 as __sail_attribute_282, HistoryLength@73 as __sail_attribute_283, BrowserLanguage@74 as __sail_attribute_284, BrowserCountry@75 as __sail_attribute_285, SocialNetwork@76 as __sail_attribute_286, SocialAction@77 as __sail_attribute_287, HTTPError@78 as __sail_attribute_288, SendTiming@79 as __sail_attribute_289, DNSTiming@80 as __sail_attribute_290, ConnectTiming@81 as __sail_attribute_291, ResponseStartTiming@82 as __sail_attribute_292, ResponseEndTiming@83 as __sail_attribute_293, FetchTiming@84 as __sail_attribute_294, SocialSourceNetworkID@85 as __sail_attribute_295, SocialSourcePage@86 as __sail_attribute_296, ParamPrice@87 as __sail_attribute_297, ParamOrderID@88 as __sail_attribute_298, ParamCurrency@89 as __sail_attribute_299, ParamCurrencyID@90 as __sail_attribute_300, OpenstatServiceName@91 as __sail_attribute_301, OpenstatCampaignID@92 as __sail_attribute_302, OpenstatAdID@93 as __sail_attribute_303, OpenstatSourceID@94 as __sail_attribute_304, UTMSource@95 as __sail_attribute_305, UTMMedium@96 as __sail_attribute_306, UTMCampaign@97 as __sail_attribute_307, UTMContent@98 as __sail_attribute_308, UTMTerm@99 as __sail_attribute_309, FromTag@100 as __sail_attribute_310, HasGCLID@101 as __sail_attribute_311, RefererHash@102 as __sail_attribute_312, URLHash@103 as __sail_attribute_313, CLID@104 as __sail_attribute_314]
+    ProjectionExec: expr=[#210@0 as WatchID, #211@1 as JavaEnable, #212@2 as Title, #213@3 as GoodEvent, #214@4 as EventTime, #215@5 as EventDate, #216@6 as CounterID, #217@7 as ClientIP, #218@8 as RegionID, #219@9 as UserID, #220@10 as CounterClass, #221@11 as OS, #222@12 as UserAgent, #223@13 as URL, #224@14 as Referer, #225@15 as IsRefresh, #226@16 as RefererCategoryID, #227@17 as RefererRegionID, #228@18 as URLCategoryID, #229@19 as URLRegionID, #230@20 as ResolutionWidth, #231@21 as ResolutionHeight, #232@22 as ResolutionDepth, #233@23 as FlashMajor, #234@24 as FlashMinor, #235@25 as FlashMinor2, #236@26 as NetMajor, #237@27 as NetMinor, #238@28 as UserAgentMajor, #239@29 as UserAgentMinor, #240@30 as CookieEnable, #241@31 as JavascriptEnable, #242@32 as IsMobile, #243@33 as MobilePhone, #244@34 as MobilePhoneModel, #245@35 as Params, #246@36 as IPNetworkID, #247@37 as TraficSourceID, #248@38 as SearchEngineID, #249@39 as SearchPhrase, #250@40 as AdvEngineID, #251@41 as IsArtifical, #252@42 as WindowClientWidth, #253@43 as WindowClientHeight, #254@44 as ClientTimeZone, #255@45 as ClientEventTime, #256@46 as SilverlightVersion1, #257@47 as SilverlightVersion2, #258@48 as SilverlightVersion3, #259@49 as SilverlightVersion4, #260@50 as PageCharset, #261@51 as CodeVersion, #262@52 as IsLink, #263@53 as IsDownload, #264@54 as IsNotBounce, #265@55 as FUniqID, #266@56 as OriginalURL, #267@57 as HID, #268@58 as IsOldCounter, #269@59 as IsEvent, #270@60 as IsParameter, #271@61 as DontCountHits, #272@62 as WithHash, #273@63 as HitColor, #274@64 as LocalEventTime, #275@65 as Age, #276@66 as Sex, #277@67 as Income, #278@68 as Interests, #279@69 as Robotness, #280@70 as RemoteIP, #281@71 as WindowName, #282@72 as OpenerName, #283@73 as HistoryLength, #284@74 as BrowserLanguage, #285@75 as BrowserCountry, #286@76 as SocialNetwork, #287@77 as SocialAction, #288@78 as HTTPError, #289@79 as SendTiming, #290@80 as DNSTiming, #291@81 as ConnectTiming, #292@82 as ResponseStartTiming, #293@83 as ResponseEndTiming, #294@84 as FetchTiming, #295@85 as SocialSourceNetworkID, #296@86 as SocialSourcePage, #297@87 as ParamPrice, #298@88 as ParamOrderID, #299@89 as ParamCurrency, #300@90 as ParamCurrencyID, #301@91 as OpenstatServiceName, #302@92 as OpenstatCampaignID, #303@93 as OpenstatAdID, #304@94 as OpenstatSourceID, #305@95 as UTMSource, #306@96 as UTMMedium, #307@97 as UTMCampaign, #308@98 as UTMContent, #309@99 as UTMTerm, #310@100 as FromTag, #311@101 as HasGCLID, #312@102 as RefererHash, #313@103 as URLHash, #314@104 as CLID]
+      SortPreservingMergeExec: [#214@4 ASC], fetch=10
+        SortExec: TopK(fetch=10), expr=[#214@4 ASC], preserve_partitioning=[true]
+          ProjectionExec: expr=[WatchID@0 as #210, JavaEnable@1 as #211, Title@2 as #212, GoodEvent@3 as #213, EventTime@4 as #214, CAST(CAST(EventDate@5 AS Int32) AS Date32) as #215, CounterID@6 as #216, ClientIP@7 as #217, RegionID@8 as #218, UserID@9 as #219, CounterClass@10 as #220, OS@11 as #221, UserAgent@12 as #222, URL@13 as #223, Referer@14 as #224, IsRefresh@15 as #225, RefererCategoryID@16 as #226, RefererRegionID@17 as #227, URLCategoryID@18 as #228, URLRegionID@19 as #229, ResolutionWidth@20 as #230, ResolutionHeight@21 as #231, ResolutionDepth@22 as #232, FlashMajor@23 as #233, FlashMinor@24 as #234, FlashMinor2@25 as #235, NetMajor@26 as #236, NetMinor@27 as #237, UserAgentMajor@28 as #238, UserAgentMinor@29 as #239, CookieEnable@30 as #240, JavascriptEnable@31 as #241, IsMobile@32 as #242, MobilePhone@33 as #243, MobilePhoneModel@34 as #244, Params@35 as #245, IPNetworkID@36 as #246, TraficSourceID@37 as #247, SearchEngineID@38 as #248, SearchPhrase@39 as #249, AdvEngineID@40 as #250, IsArtifical@41 as #251, WindowClientWidth@42 as #252, WindowClientHeight@43 as #253, ClientTimeZone@44 as #254, ClientEventTime@45 as #255, SilverlightVersion1@46 as #256, SilverlightVersion2@47 as #257, SilverlightVersion3@48 as #258, SilverlightVersion4@49 as #259, PageCharset@50 as #260, CodeVersion@51 as #261, IsLink@52 as #262, IsDownload@53 as #263, IsNotBounce@54 as #264, FUniqID@55 as #265, OriginalURL@56 as #266, HID@57 as #267, IsOldCounter@58 as #268, IsEvent@59 as #269, IsParameter@60 as #270, DontCountHits@61 as #271, WithHash@62 as #272, HitColor@63 as #273, LocalEventTime@64 as #274, Age@65 as #275, Sex@66 as #276, Income@67 as #277, Interests@68 as #278, Robotness@69 as #279, RemoteIP@70 as #280, WindowName@71 as #281, OpenerName@72 as #282, HistoryLength@73 as #283, BrowserLanguage@74 as #284, BrowserCountry@75 as #285, SocialNetwork@76 as #286, SocialAction@77 as #287, HTTPError@78 as #288, SendTiming@79 as #289, DNSTiming@80 as #290, ConnectTiming@81 as #291, ResponseStartTiming@82 as #292, ResponseEndTiming@83 as #293, FetchTiming@84 as #294, SocialSourceNetworkID@85 as #295, SocialSourcePage@86 as #296, ParamPrice@87 as #297, ParamOrderID@88 as #298, ParamCurrency@89 as #299, ParamCurrencyID@90 as #300, OpenstatServiceName@91 as #301, OpenstatCampaignID@92 as #302, OpenstatAdID@93 as #303, OpenstatSourceID@94 as #304, UTMSource@95 as #305, UTMMedium@96 as #306, UTMCampaign@97 as #307, UTMContent@98 as #308, UTMTerm@99 as #309, FromTag@100 as #310, HasGCLID@101 as #311, RefererHash@102 as #312, URLHash@103 as #313, CLID@104 as #314]
             FilterExec: URL@13 LIKE %google%
               DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[WatchID, JavaEnable, Title, GoodEvent, EventTime, EventDate, CounterID, ClientIP, RegionID, UserID, CounterClass, OS, UserAgent, URL, Referer, IsRefresh, RefererCategoryID, RefererRegionID, URLCategoryID, URLRegionID, ResolutionWidth, ResolutionHeight, ResolutionDepth, FlashMajor, FlashMinor, FlashMinor2, NetMajor, NetMinor, UserAgentMajor, UserAgentMinor, CookieEnable, JavascriptEnable, IsMobile, MobilePhone, MobilePhoneModel, Params, IPNetworkID, TraficSourceID, SearchEngineID, SearchPhrase, AdvEngineID, IsArtifical, WindowClientWidth, WindowClientHeight, ClientTimeZone, ClientEventTime, SilverlightVersion1, SilverlightVersion2, SilverlightVersion3, SilverlightVersion4, PageCharset, CodeVersion, IsLink, IsDownload, IsNotBounce, FUniqID, OriginalURL, HID, IsOldCounter, IsEvent, IsParameter, DontCountHits, WithHash, HitColor, LocalEventTime, Age, Sex, Income, Interests, Robotness, RemoteIP, WindowName, OpenerName, HistoryLength, BrowserLanguage, BrowserCountry, SocialNetwork, SocialAction, HTTPError, SendTiming, DNSTiming, ConnectTiming, ResponseStartTiming, ResponseEndTiming, FetchTiming, SocialSourceNetworkID, SocialSourcePage, ParamPrice, ParamOrderID, ParamCurrency, ParamCurrencyID, OpenstatServiceName, OpenstatCampaignID, OpenstatAdID, OpenstatSourceID, UTMSource, UTMMedium, UTMCampaign, UTMContent, UTMTerm, FromTag, HasGCLID, RefererHash, URLHash, CLID], file_type=parquet, predicate=URL@13 LIKE %google% AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
@@ -310,10 +310,10 @@ name: "test_clickbench_query_plan[24]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_210@0 as SearchPhrase]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_210]
-        SortPreservingMergeExec: [__sail_attribute_8@1 ASC], fetch=10
-          ProjectionExec: expr=[SearchPhrase@1 as __sail_attribute_210, EventTime@0 as __sail_attribute_8]
+    ProjectionExec: expr=[#210@0 as SearchPhrase]
+      ProjectionExec: expr=[#210@0 as #210]
+        SortPreservingMergeExec: [#8@1 ASC], fetch=10
+          ProjectionExec: expr=[SearchPhrase@1 as #210, EventTime@0 as #8]
             SortExec: TopK(fetch=10), expr=[EventTime@0 ASC], preserve_partitioning=[true]
               FilterExec: SearchPhrase@1 != <eol>
                 DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
@@ -322,9 +322,9 @@ name: "test_clickbench_query_plan[25]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_210@0 as SearchPhrase]
-      SortPreservingMergeExec: [__sail_attribute_210@0 ASC], fetch=10
-        ProjectionExec: expr=[SearchPhrase@0 as __sail_attribute_210]
+    ProjectionExec: expr=[#210@0 as SearchPhrase]
+      SortPreservingMergeExec: [#210@0 ASC], fetch=10
+        ProjectionExec: expr=[SearchPhrase@0 as #210]
           SortExec: TopK(fetch=10), expr=[SearchPhrase@0 ASC], preserve_partitioning=[true]
             FilterExec: SearchPhrase@0 != <eol>
               DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
@@ -333,10 +333,10 @@ name: "test_clickbench_query_plan[26]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_210@0 as SearchPhrase]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_210]
-        SortPreservingMergeExec: [__sail_attribute_8@1 ASC, __sail_attribute_210@0 ASC], fetch=10
-          ProjectionExec: expr=[SearchPhrase@1 as __sail_attribute_210, EventTime@0 as __sail_attribute_8]
+    ProjectionExec: expr=[#210@0 as SearchPhrase]
+      ProjectionExec: expr=[#210@0 as #210]
+        SortPreservingMergeExec: [#8@1 ASC, #210@0 ASC], fetch=10
+          ProjectionExec: expr=[SearchPhrase@1 as #210, EventTime@0 as #8]
             SortExec: TopK(fetch=10), expr=[EventTime@0 ASC, SearchPhrase@1 ASC], preserve_partitioning=[true]
               FilterExec: SearchPhrase@1 != <eol>
                 DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventTime, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 !=  AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible, pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
@@ -345,15 +345,15 @@ name: "test_clickbench_query_plan[27]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_214@0 as CounterID, __sail_attribute_215@1 as l, __sail_attribute_216@2 as c]
-      SortPreservingMergeExec: [__sail_attribute_215@1 DESC NULLS LAST], fetch=25
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_214, __sail_attribute_211@2 as __sail_attribute_215, __common_expr_1@1 as __sail_attribute_216]
-          SortExec: TopK(fetch=25), expr=[__sail_attribute_211@2 DESC NULLS LAST], preserve_partitioning=[true]
+    ProjectionExec: expr=[#214@0 as CounterID, #215@1 as l, #216@2 as c]
+      SortPreservingMergeExec: [#215@1 DESC NULLS LAST], fetch=25
+        ProjectionExec: expr=[#210@0 as #214, #211@2 as #215, __common_expr_1@1 as #216]
+          SortExec: TopK(fetch=25), expr=[#211@2 DESC NULLS LAST], preserve_partitioning=[true]
             FilterExec: __common_expr_1@1 > 100000
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __common_expr_1, avg(length(__sail_attribute_25)) as __sail_attribute_211]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_11@0 as __sail_attribute_210], aggr=[count(1) as __common_expr_1, avg(length(__sail_attribute_25)) as __sail_attribute_211]
-                    ProjectionExec: expr=[CounterID@0 as __sail_attribute_11, URL@1 as __sail_attribute_25]
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as __common_expr_1, avg(length(#25)) as #211]
+                RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#11@0 as #210], aggr=[count(1) as __common_expr_1, avg(length(#25)) as #211]
+                    ProjectionExec: expr=[CounterID@0 as #11, URL@1 as #25]
                       FilterExec: URL@1 != <eol>
                         DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[CounterID, URL], file_type=parquet, predicate=URL@13 != , pruning_predicate=URL_null_count@2 != row_count@3 AND (URL_min@0 !=  OR  != URL_max@1), required_guarantees=[URL not in ()]
 ---
@@ -361,15 +361,15 @@ name: "test_clickbench_query_plan[28]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_215@0 as k, __sail_attribute_216@1 as l, __sail_attribute_217@2 as c, __sail_attribute_218@3 as MIN(Referer)]
-      SortPreservingMergeExec: [__sail_attribute_216@1 DESC NULLS LAST], fetch=25
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_215, __sail_attribute_211@2 as __sail_attribute_216, __common_expr_1@1 as __sail_attribute_217, __sail_attribute_213@3 as __sail_attribute_218]
-          SortExec: TopK(fetch=25), expr=[__sail_attribute_211@2 DESC NULLS LAST], preserve_partitioning=[true]
+    ProjectionExec: expr=[#215@0 as k, #216@1 as l, #217@2 as c, #218@3 as MIN(Referer)]
+      SortPreservingMergeExec: [#216@1 DESC NULLS LAST], fetch=25
+        ProjectionExec: expr=[#210@0 as #215, #211@2 as #216, __common_expr_1@1 as #217, #213@3 as #218]
+          SortExec: TopK(fetch=25), expr=[#211@2 DESC NULLS LAST], preserve_partitioning=[true]
             FilterExec: __common_expr_1@1 > 100000
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __common_expr_1, avg(length(__sail_attribute_27)) as __sail_attribute_211, min(__sail_attribute_27) as __sail_attribute_213]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[regexp_replace(__sail_attribute_27@0, ^https?:/(?:www.)?([^/]+)/.*$, ${1}) as __sail_attribute_210], aggr=[count(1) as __common_expr_1, avg(length(__sail_attribute_27)) as __sail_attribute_211, min(__sail_attribute_27) as __sail_attribute_213]
-                    ProjectionExec: expr=[Referer@0 as __sail_attribute_27]
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as __common_expr_1, avg(length(#27)) as #211, min(#27) as #213]
+                RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[regexp_replace(#27@0, ^https?:/(?:www.)?([^/]+)/.*$, ${1}) as #210], aggr=[count(1) as __common_expr_1, avg(length(#27)) as #211, min(#27) as #213]
+                    ProjectionExec: expr=[Referer@0 as #27]
                       FilterExec: Referer@0 != <eol>
                         DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[Referer], file_type=parquet, predicate=Referer@14 != , pruning_predicate=Referer_null_count@2 != row_count@3 AND (Referer_min@0 !=  OR  != Referer_max@1), required_guarantees=[Referer not in ()]
 ---
@@ -377,25 +377,25 @@ name: "test_clickbench_query_plan[29]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_300@0 as SUM(ResolutionWidth), __sail_attribute_301@1 as SUM((ResolutionWidth + 1)), __sail_attribute_302@2 as SUM((ResolutionWidth + 2)), __sail_attribute_303@3 as SUM((ResolutionWidth + 3)), __sail_attribute_304@4 as SUM((ResolutionWidth + 4)), __sail_attribute_305@5 as SUM((ResolutionWidth + 5)), __sail_attribute_306@6 as SUM((ResolutionWidth + 6)), __sail_attribute_307@7 as SUM((ResolutionWidth + 7)), __sail_attribute_308@8 as SUM((ResolutionWidth + 8)), __sail_attribute_309@9 as SUM((ResolutionWidth + 9)), __sail_attribute_310@10 as SUM((ResolutionWidth + 10)), __sail_attribute_311@11 as SUM((ResolutionWidth + 11)), __sail_attribute_312@12 as SUM((ResolutionWidth + 12)), __sail_attribute_313@13 as SUM((ResolutionWidth + 13)), __sail_attribute_314@14 as SUM((ResolutionWidth + 14)), __sail_attribute_315@15 as SUM((ResolutionWidth + 15)), __sail_attribute_316@16 as SUM((ResolutionWidth + 16)), __sail_attribute_317@17 as SUM((ResolutionWidth + 17)), __sail_attribute_318@18 as SUM((ResolutionWidth + 18)), __sail_attribute_319@19 as SUM((ResolutionWidth + 19)), __sail_attribute_320@20 as SUM((ResolutionWidth + 20)), __sail_attribute_321@21 as SUM((ResolutionWidth + 21)), __sail_attribute_322@22 as SUM((ResolutionWidth + 22)), __sail_attribute_323@23 as SUM((ResolutionWidth + 23)), __sail_attribute_324@24 as SUM((ResolutionWidth + 24)), __sail_attribute_325@25 as SUM((ResolutionWidth + 25)), __sail_attribute_326@26 as SUM((ResolutionWidth + 26)), __sail_attribute_327@27 as SUM((ResolutionWidth + 27)), __sail_attribute_328@28 as SUM((ResolutionWidth + 28)), __sail_attribute_329@29 as SUM((ResolutionWidth + 29)), __sail_attribute_330@30 as SUM((ResolutionWidth + 30)), __sail_attribute_331@31 as SUM((ResolutionWidth + 31)), __sail_attribute_332@32 as SUM((ResolutionWidth + 32)), __sail_attribute_333@33 as SUM((ResolutionWidth + 33)), __sail_attribute_334@34 as SUM((ResolutionWidth + 34)), __sail_attribute_335@35 as SUM((ResolutionWidth + 35)), __sail_attribute_336@36 as SUM((ResolutionWidth + 36)), __sail_attribute_337@37 as SUM((ResolutionWidth + 37)), __sail_attribute_338@38 as SUM((ResolutionWidth + 38)), __sail_attribute_339@39 as SUM((ResolutionWidth + 39)), __sail_attribute_340@40 as SUM((ResolutionWidth + 40)), __sail_attribute_341@41 as SUM((ResolutionWidth + 41)), __sail_attribute_342@42 as SUM((ResolutionWidth + 42)), __sail_attribute_343@43 as SUM((ResolutionWidth + 43)), __sail_attribute_344@44 as SUM((ResolutionWidth + 44)), __sail_attribute_345@45 as SUM((ResolutionWidth + 45)), __sail_attribute_346@46 as SUM((ResolutionWidth + 46)), __sail_attribute_347@47 as SUM((ResolutionWidth + 47)), __sail_attribute_348@48 as SUM((ResolutionWidth + 48)), __sail_attribute_349@49 as SUM((ResolutionWidth + 49)), __sail_attribute_350@50 as SUM((ResolutionWidth + 50)), __sail_attribute_351@51 as SUM((ResolutionWidth + 51)), __sail_attribute_352@52 as SUM((ResolutionWidth + 52)), __sail_attribute_353@53 as SUM((ResolutionWidth + 53)), __sail_attribute_354@54 as SUM((ResolutionWidth + 54)), __sail_attribute_355@55 as SUM((ResolutionWidth + 55)), __sail_attribute_356@56 as SUM((ResolutionWidth + 56)), __sail_attribute_357@57 as SUM((ResolutionWidth + 57)), __sail_attribute_358@58 as SUM((ResolutionWidth + 58)), __sail_attribute_359@59 as SUM((ResolutionWidth + 59)), __sail_attribute_360@60 as SUM((ResolutionWidth + 60)), __sail_attribute_361@61 as SUM((ResolutionWidth + 61)), __sail_attribute_362@62 as SUM((ResolutionWidth + 62)), __sail_attribute_363@63 as SUM((ResolutionWidth + 63)), __sail_attribute_364@64 as SUM((ResolutionWidth + 64)), __sail_attribute_365@65 as SUM((ResolutionWidth + 65)), __sail_attribute_366@66 as SUM((ResolutionWidth + 66)), __sail_attribute_367@67 as SUM((ResolutionWidth + 67)), __sail_attribute_368@68 as SUM((ResolutionWidth + 68)), __sail_attribute_369@69 as SUM((ResolutionWidth + 69)), __sail_attribute_370@70 as SUM((ResolutionWidth + 70)), __sail_attribute_371@71 as SUM((ResolutionWidth + 71)), __sail_attribute_372@72 as SUM((ResolutionWidth + 72)), __sail_attribute_373@73 as SUM((ResolutionWidth + 73)), __sail_attribute_374@74 as SUM((ResolutionWidth + 74)), __sail_attribute_375@75 as SUM((ResolutionWidth + 75)), __sail_attribute_376@76 as SUM((ResolutionWidth + 76)), __sail_attribute_377@77 as SUM((ResolutionWidth + 77)), __sail_attribute_378@78 as SUM((ResolutionWidth + 78)), __sail_attribute_379@79 as SUM((ResolutionWidth + 79)), __sail_attribute_380@80 as SUM((ResolutionWidth + 80)), __sail_attribute_381@81 as SUM((ResolutionWidth + 81)), __sail_attribute_382@82 as SUM((ResolutionWidth + 82)), __sail_attribute_383@83 as SUM((ResolutionWidth + 83)), __sail_attribute_384@84 as SUM((ResolutionWidth + 84)), __sail_attribute_385@85 as SUM((ResolutionWidth + 85)), __sail_attribute_386@86 as SUM((ResolutionWidth + 86)), __sail_attribute_387@87 as SUM((ResolutionWidth + 87)), __sail_attribute_388@88 as SUM((ResolutionWidth + 88)), __sail_attribute_389@89 as SUM((ResolutionWidth + 89))]
-      ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_300, __sail_attribute_211@1 as __sail_attribute_301, __sail_attribute_212@2 as __sail_attribute_302, __sail_attribute_213@3 as __sail_attribute_303, __sail_attribute_214@4 as __sail_attribute_304, __sail_attribute_215@5 as __sail_attribute_305, __sail_attribute_216@6 as __sail_attribute_306, __sail_attribute_217@7 as __sail_attribute_307, __sail_attribute_218@8 as __sail_attribute_308, __sail_attribute_219@9 as __sail_attribute_309, __sail_attribute_220@10 as __sail_attribute_310, __sail_attribute_221@11 as __sail_attribute_311, __sail_attribute_222@12 as __sail_attribute_312, __sail_attribute_223@13 as __sail_attribute_313, __sail_attribute_224@14 as __sail_attribute_314, __sail_attribute_225@15 as __sail_attribute_315, __sail_attribute_226@16 as __sail_attribute_316, __sail_attribute_227@17 as __sail_attribute_317, __sail_attribute_228@18 as __sail_attribute_318, __sail_attribute_229@19 as __sail_attribute_319, __sail_attribute_230@20 as __sail_attribute_320, __sail_attribute_231@21 as __sail_attribute_321, __sail_attribute_232@22 as __sail_attribute_322, __sail_attribute_233@23 as __sail_attribute_323, __sail_attribute_234@24 as __sail_attribute_324, __sail_attribute_235@25 as __sail_attribute_325, __sail_attribute_236@26 as __sail_attribute_326, __sail_attribute_237@27 as __sail_attribute_327, __sail_attribute_238@28 as __sail_attribute_328, __sail_attribute_239@29 as __sail_attribute_329, __sail_attribute_240@30 as __sail_attribute_330, __sail_attribute_241@31 as __sail_attribute_331, __sail_attribute_242@32 as __sail_attribute_332, __sail_attribute_243@33 as __sail_attribute_333, __sail_attribute_244@34 as __sail_attribute_334, __sail_attribute_245@35 as __sail_attribute_335, __sail_attribute_246@36 as __sail_attribute_336, __sail_attribute_247@37 as __sail_attribute_337, __sail_attribute_248@38 as __sail_attribute_338, __sail_attribute_249@39 as __sail_attribute_339, __sail_attribute_250@40 as __sail_attribute_340, __sail_attribute_251@41 as __sail_attribute_341, __sail_attribute_252@42 as __sail_attribute_342, __sail_attribute_253@43 as __sail_attribute_343, __sail_attribute_254@44 as __sail_attribute_344, __sail_attribute_255@45 as __sail_attribute_345, __sail_attribute_256@46 as __sail_attribute_346, __sail_attribute_257@47 as __sail_attribute_347, __sail_attribute_258@48 as __sail_attribute_348, __sail_attribute_259@49 as __sail_attribute_349, __sail_attribute_260@50 as __sail_attribute_350, __sail_attribute_261@51 as __sail_attribute_351, __sail_attribute_262@52 as __sail_attribute_352, __sail_attribute_263@53 as __sail_attribute_353, __sail_attribute_264@54 as __sail_attribute_354, __sail_attribute_265@55 as __sail_attribute_355, __sail_attribute_266@56 as __sail_attribute_356, __sail_attribute_267@57 as __sail_attribute_357, __sail_attribute_268@58 as __sail_attribute_358, __sail_attribute_269@59 as __sail_attribute_359, __sail_attribute_270@60 as __sail_attribute_360, __sail_attribute_271@61 as __sail_attribute_361, __sail_attribute_272@62 as __sail_attribute_362, __sail_attribute_273@63 as __sail_attribute_363, __sail_attribute_274@64 as __sail_attribute_364, __sail_attribute_275@65 as __sail_attribute_365, __sail_attribute_276@66 as __sail_attribute_366, __sail_attribute_277@67 as __sail_attribute_367, __sail_attribute_278@68 as __sail_attribute_368, __sail_attribute_279@69 as __sail_attribute_369, __sail_attribute_280@70 as __sail_attribute_370, __sail_attribute_281@71 as __sail_attribute_371, __sail_attribute_282@72 as __sail_attribute_372, __sail_attribute_283@73 as __sail_attribute_373, __sail_attribute_284@74 as __sail_attribute_374, __sail_attribute_285@75 as __sail_attribute_375, __sail_attribute_286@76 as __sail_attribute_376, __sail_attribute_287@77 as __sail_attribute_377, __sail_attribute_288@78 as __sail_attribute_378, __sail_attribute_289@79 as __sail_attribute_379, __sail_attribute_290@80 as __sail_attribute_380, __sail_attribute_291@81 as __sail_attribute_381, __sail_attribute_292@82 as __sail_attribute_382, __sail_attribute_293@83 as __sail_attribute_383, __sail_attribute_294@84 as __sail_attribute_384, __sail_attribute_295@85 as __sail_attribute_385, __sail_attribute_296@86 as __sail_attribute_386, __sail_attribute_297@87 as __sail_attribute_387, __sail_attribute_298@88 as __sail_attribute_388, __sail_attribute_299@89 as __sail_attribute_389]
-        AggregateExec: mode=Final, gby=[], aggr=[sum(__sail_attribute_39) as __sail_attribute_210, sum(__common_expr_1 + 1) as __sail_attribute_211, sum(__common_expr_1 + 2) as __sail_attribute_212, sum(__common_expr_1 + 3) as __sail_attribute_213, sum(__common_expr_1 + 4) as __sail_attribute_214, sum(__common_expr_1 + 5) as __sail_attribute_215, sum(__common_expr_1 + 6) as __sail_attribute_216, sum(__common_expr_1 + 7) as __sail_attribute_217, sum(__common_expr_1 + 8) as __sail_attribute_218, sum(__common_expr_1 + 9) as __sail_attribute_219, sum(__common_expr_1 + 10) as __sail_attribute_220, sum(__common_expr_1 + 11) as __sail_attribute_221, sum(__common_expr_1 + 12) as __sail_attribute_222, sum(__common_expr_1 + 13) as __sail_attribute_223, sum(__common_expr_1 + 14) as __sail_attribute_224, sum(__common_expr_1 + 15) as __sail_attribute_225, sum(__common_expr_1 + 16) as __sail_attribute_226, sum(__common_expr_1 + 17) as __sail_attribute_227, sum(__common_expr_1 + 18) as __sail_attribute_228, sum(__common_expr_1 + 19) as __sail_attribute_229, sum(__common_expr_1 + 20) as __sail_attribute_230, sum(__common_expr_1 + 21) as __sail_attribute_231, sum(__common_expr_1 + 22) as __sail_attribute_232, sum(__common_expr_1 + 23) as __sail_attribute_233, sum(__common_expr_1 + 24) as __sail_attribute_234, sum(__common_expr_1 + 25) as __sail_attribute_235, sum(__common_expr_1 + 26) as __sail_attribute_236, sum(__common_expr_1 + 27) as __sail_attribute_237, sum(__common_expr_1 + 28) as __sail_attribute_238, sum(__common_expr_1 + 29) as __sail_attribute_239, sum(__common_expr_1 + 30) as __sail_attribute_240, sum(__common_expr_1 + 31) as __sail_attribute_241, sum(__common_expr_1 + 32) as __sail_attribute_242, sum(__common_expr_1 + 33) as __sail_attribute_243, sum(__common_expr_1 + 34) as __sail_attribute_244, sum(__common_expr_1 + 35) as __sail_attribute_245, sum(__common_expr_1 + 36) as __sail_attribute_246, sum(__common_expr_1 + 37) as __sail_attribute_247, sum(__common_expr_1 + 38) as __sail_attribute_248, sum(__common_expr_1 + 39) as __sail_attribute_249, sum(__common_expr_1 + 40) as __sail_attribute_250, sum(__common_expr_1 + 41) as __sail_attribute_251, sum(__common_expr_1 + 42) as __sail_attribute_252, sum(__common_expr_1 + 43) as __sail_attribute_253, sum(__common_expr_1 + 44) as __sail_attribute_254, sum(__common_expr_1 + 45) as __sail_attribute_255, sum(__common_expr_1 + 46) as __sail_attribute_256, sum(__common_expr_1 + 47) as __sail_attribute_257, sum(__common_expr_1 + 48) as __sail_attribute_258, sum(__common_expr_1 + 49) as __sail_attribute_259, sum(__common_expr_1 + 50) as __sail_attribute_260, sum(__common_expr_1 + 51) as __sail_attribute_261, sum(__common_expr_1 + 52) as __sail_attribute_262, sum(__common_expr_1 + 53) as __sail_attribute_263, sum(__common_expr_1 + 54) as __sail_attribute_264, sum(__common_expr_1 + 55) as __sail_attribute_265, sum(__common_expr_1 + 56) as __sail_attribute_266, sum(__common_expr_1 + 57) as __sail_attribute_267, sum(__common_expr_1 + 58) as __sail_attribute_268, sum(__common_expr_1 + 59) as __sail_attribute_269, sum(__common_expr_1 + 60) as __sail_attribute_270, sum(__common_expr_1 + 61) as __sail_attribute_271, sum(__common_expr_1 + 62) as __sail_attribute_272, sum(__common_expr_1 + 63) as __sail_attribute_273, sum(__common_expr_1 + 64) as __sail_attribute_274, sum(__common_expr_1 + 65) as __sail_attribute_275, sum(__common_expr_1 + 66) as __sail_attribute_276, sum(__common_expr_1 + 67) as __sail_attribute_277, sum(__common_expr_1 + 68) as __sail_attribute_278, sum(__common_expr_1 + 69) as __sail_attribute_279, sum(__common_expr_1 + 70) as __sail_attribute_280, sum(__common_expr_1 + 71) as __sail_attribute_281, sum(__common_expr_1 + 72) as __sail_attribute_282, sum(__common_expr_1 + 73) as __sail_attribute_283, sum(__common_expr_1 + 74) as __sail_attribute_284, sum(__common_expr_1 + 75) as __sail_attribute_285, sum(__common_expr_1 + 76) as __sail_attribute_286, sum(__common_expr_1 + 77) as __sail_attribute_287, sum(__common_expr_1 + 78) as __sail_attribute_288, sum(__common_expr_1 + 79) as __sail_attribute_289, sum(__common_expr_1 + 80) as __sail_attribute_290, sum(__common_expr_1 + 81) as __sail_attribute_291, sum(__common_expr_1 + 82) as __sail_attribute_292, sum(__common_expr_1 + 83) as __sail_attribute_293, sum(__common_expr_1 + 84) as __sail_attribute_294, sum(__common_expr_1 + 85) as __sail_attribute_295, sum(__common_expr_1 + 86) as __sail_attribute_296, sum(__common_expr_1 + 87) as __sail_attribute_297, sum(__common_expr_1 + 88) as __sail_attribute_298, sum(__common_expr_1 + 89) as __sail_attribute_299]
+    ProjectionExec: expr=[#300@0 as SUM(ResolutionWidth), #301@1 as SUM((ResolutionWidth + 1)), #302@2 as SUM((ResolutionWidth + 2)), #303@3 as SUM((ResolutionWidth + 3)), #304@4 as SUM((ResolutionWidth + 4)), #305@5 as SUM((ResolutionWidth + 5)), #306@6 as SUM((ResolutionWidth + 6)), #307@7 as SUM((ResolutionWidth + 7)), #308@8 as SUM((ResolutionWidth + 8)), #309@9 as SUM((ResolutionWidth + 9)), #310@10 as SUM((ResolutionWidth + 10)), #311@11 as SUM((ResolutionWidth + 11)), #312@12 as SUM((ResolutionWidth + 12)), #313@13 as SUM((ResolutionWidth + 13)), #314@14 as SUM((ResolutionWidth + 14)), #315@15 as SUM((ResolutionWidth + 15)), #316@16 as SUM((ResolutionWidth + 16)), #317@17 as SUM((ResolutionWidth + 17)), #318@18 as SUM((ResolutionWidth + 18)), #319@19 as SUM((ResolutionWidth + 19)), #320@20 as SUM((ResolutionWidth + 20)), #321@21 as SUM((ResolutionWidth + 21)), #322@22 as SUM((ResolutionWidth + 22)), #323@23 as SUM((ResolutionWidth + 23)), #324@24 as SUM((ResolutionWidth + 24)), #325@25 as SUM((ResolutionWidth + 25)), #326@26 as SUM((ResolutionWidth + 26)), #327@27 as SUM((ResolutionWidth + 27)), #328@28 as SUM((ResolutionWidth + 28)), #329@29 as SUM((ResolutionWidth + 29)), #330@30 as SUM((ResolutionWidth + 30)), #331@31 as SUM((ResolutionWidth + 31)), #332@32 as SUM((ResolutionWidth + 32)), #333@33 as SUM((ResolutionWidth + 33)), #334@34 as SUM((ResolutionWidth + 34)), #335@35 as SUM((ResolutionWidth + 35)), #336@36 as SUM((ResolutionWidth + 36)), #337@37 as SUM((ResolutionWidth + 37)), #338@38 as SUM((ResolutionWidth + 38)), #339@39 as SUM((ResolutionWidth + 39)), #340@40 as SUM((ResolutionWidth + 40)), #341@41 as SUM((ResolutionWidth + 41)), #342@42 as SUM((ResolutionWidth + 42)), #343@43 as SUM((ResolutionWidth + 43)), #344@44 as SUM((ResolutionWidth + 44)), #345@45 as SUM((ResolutionWidth + 45)), #346@46 as SUM((ResolutionWidth + 46)), #347@47 as SUM((ResolutionWidth + 47)), #348@48 as SUM((ResolutionWidth + 48)), #349@49 as SUM((ResolutionWidth + 49)), #350@50 as SUM((ResolutionWidth + 50)), #351@51 as SUM((ResolutionWidth + 51)), #352@52 as SUM((ResolutionWidth + 52)), #353@53 as SUM((ResolutionWidth + 53)), #354@54 as SUM((ResolutionWidth + 54)), #355@55 as SUM((ResolutionWidth + 55)), #356@56 as SUM((ResolutionWidth + 56)), #357@57 as SUM((ResolutionWidth + 57)), #358@58 as SUM((ResolutionWidth + 58)), #359@59 as SUM((ResolutionWidth + 59)), #360@60 as SUM((ResolutionWidth + 60)), #361@61 as SUM((ResolutionWidth + 61)), #362@62 as SUM((ResolutionWidth + 62)), #363@63 as SUM((ResolutionWidth + 63)), #364@64 as SUM((ResolutionWidth + 64)), #365@65 as SUM((ResolutionWidth + 65)), #366@66 as SUM((ResolutionWidth + 66)), #367@67 as SUM((ResolutionWidth + 67)), #368@68 as SUM((ResolutionWidth + 68)), #369@69 as SUM((ResolutionWidth + 69)), #370@70 as SUM((ResolutionWidth + 70)), #371@71 as SUM((ResolutionWidth + 71)), #372@72 as SUM((ResolutionWidth + 72)), #373@73 as SUM((ResolutionWidth + 73)), #374@74 as SUM((ResolutionWidth + 74)), #375@75 as SUM((ResolutionWidth + 75)), #376@76 as SUM((ResolutionWidth + 76)), #377@77 as SUM((ResolutionWidth + 77)), #378@78 as SUM((ResolutionWidth + 78)), #379@79 as SUM((ResolutionWidth + 79)), #380@80 as SUM((ResolutionWidth + 80)), #381@81 as SUM((ResolutionWidth + 81)), #382@82 as SUM((ResolutionWidth + 82)), #383@83 as SUM((ResolutionWidth + 83)), #384@84 as SUM((ResolutionWidth + 84)), #385@85 as SUM((ResolutionWidth + 85)), #386@86 as SUM((ResolutionWidth + 86)), #387@87 as SUM((ResolutionWidth + 87)), #388@88 as SUM((ResolutionWidth + 88)), #389@89 as SUM((ResolutionWidth + 89))]
+      ProjectionExec: expr=[#210@0 as #300, #211@1 as #301, #212@2 as #302, #213@3 as #303, #214@4 as #304, #215@5 as #305, #216@6 as #306, #217@7 as #307, #218@8 as #308, #219@9 as #309, #220@10 as #310, #221@11 as #311, #222@12 as #312, #223@13 as #313, #224@14 as #314, #225@15 as #315, #226@16 as #316, #227@17 as #317, #228@18 as #318, #229@19 as #319, #230@20 as #320, #231@21 as #321, #232@22 as #322, #233@23 as #323, #234@24 as #324, #235@25 as #325, #236@26 as #326, #237@27 as #327, #238@28 as #328, #239@29 as #329, #240@30 as #330, #241@31 as #331, #242@32 as #332, #243@33 as #333, #244@34 as #334, #245@35 as #335, #246@36 as #336, #247@37 as #337, #248@38 as #338, #249@39 as #339, #250@40 as #340, #251@41 as #341, #252@42 as #342, #253@43 as #343, #254@44 as #344, #255@45 as #345, #256@46 as #346, #257@47 as #347, #258@48 as #348, #259@49 as #349, #260@50 as #350, #261@51 as #351, #262@52 as #352, #263@53 as #353, #264@54 as #354, #265@55 as #355, #266@56 as #356, #267@57 as #357, #268@58 as #358, #269@59 as #359, #270@60 as #360, #271@61 as #361, #272@62 as #362, #273@63 as #363, #274@64 as #364, #275@65 as #365, #276@66 as #366, #277@67 as #367, #278@68 as #368, #279@69 as #369, #280@70 as #370, #281@71 as #371, #282@72 as #372, #283@73 as #373, #284@74 as #374, #285@75 as #375, #286@76 as #376, #287@77 as #377, #288@78 as #378, #289@79 as #379, #290@80 as #380, #291@81 as #381, #292@82 as #382, #293@83 as #383, #294@84 as #384, #295@85 as #385, #296@86 as #386, #297@87 as #387, #298@88 as #388, #299@89 as #389]
+        AggregateExec: mode=Final, gby=[], aggr=[sum(#39) as #210, sum(__common_expr_1 + 1) as #211, sum(__common_expr_1 + 2) as #212, sum(__common_expr_1 + 3) as #213, sum(__common_expr_1 + 4) as #214, sum(__common_expr_1 + 5) as #215, sum(__common_expr_1 + 6) as #216, sum(__common_expr_1 + 7) as #217, sum(__common_expr_1 + 8) as #218, sum(__common_expr_1 + 9) as #219, sum(__common_expr_1 + 10) as #220, sum(__common_expr_1 + 11) as #221, sum(__common_expr_1 + 12) as #222, sum(__common_expr_1 + 13) as #223, sum(__common_expr_1 + 14) as #224, sum(__common_expr_1 + 15) as #225, sum(__common_expr_1 + 16) as #226, sum(__common_expr_1 + 17) as #227, sum(__common_expr_1 + 18) as #228, sum(__common_expr_1 + 19) as #229, sum(__common_expr_1 + 20) as #230, sum(__common_expr_1 + 21) as #231, sum(__common_expr_1 + 22) as #232, sum(__common_expr_1 + 23) as #233, sum(__common_expr_1 + 24) as #234, sum(__common_expr_1 + 25) as #235, sum(__common_expr_1 + 26) as #236, sum(__common_expr_1 + 27) as #237, sum(__common_expr_1 + 28) as #238, sum(__common_expr_1 + 29) as #239, sum(__common_expr_1 + 30) as #240, sum(__common_expr_1 + 31) as #241, sum(__common_expr_1 + 32) as #242, sum(__common_expr_1 + 33) as #243, sum(__common_expr_1 + 34) as #244, sum(__common_expr_1 + 35) as #245, sum(__common_expr_1 + 36) as #246, sum(__common_expr_1 + 37) as #247, sum(__common_expr_1 + 38) as #248, sum(__common_expr_1 + 39) as #249, sum(__common_expr_1 + 40) as #250, sum(__common_expr_1 + 41) as #251, sum(__common_expr_1 + 42) as #252, sum(__common_expr_1 + 43) as #253, sum(__common_expr_1 + 44) as #254, sum(__common_expr_1 + 45) as #255, sum(__common_expr_1 + 46) as #256, sum(__common_expr_1 + 47) as #257, sum(__common_expr_1 + 48) as #258, sum(__common_expr_1 + 49) as #259, sum(__common_expr_1 + 50) as #260, sum(__common_expr_1 + 51) as #261, sum(__common_expr_1 + 52) as #262, sum(__common_expr_1 + 53) as #263, sum(__common_expr_1 + 54) as #264, sum(__common_expr_1 + 55) as #265, sum(__common_expr_1 + 56) as #266, sum(__common_expr_1 + 57) as #267, sum(__common_expr_1 + 58) as #268, sum(__common_expr_1 + 59) as #269, sum(__common_expr_1 + 60) as #270, sum(__common_expr_1 + 61) as #271, sum(__common_expr_1 + 62) as #272, sum(__common_expr_1 + 63) as #273, sum(__common_expr_1 + 64) as #274, sum(__common_expr_1 + 65) as #275, sum(__common_expr_1 + 66) as #276, sum(__common_expr_1 + 67) as #277, sum(__common_expr_1 + 68) as #278, sum(__common_expr_1 + 69) as #279, sum(__common_expr_1 + 70) as #280, sum(__common_expr_1 + 71) as #281, sum(__common_expr_1 + 72) as #282, sum(__common_expr_1 + 73) as #283, sum(__common_expr_1 + 74) as #284, sum(__common_expr_1 + 75) as #285, sum(__common_expr_1 + 76) as #286, sum(__common_expr_1 + 77) as #287, sum(__common_expr_1 + 78) as #288, sum(__common_expr_1 + 79) as #289, sum(__common_expr_1 + 80) as #290, sum(__common_expr_1 + 81) as #291, sum(__common_expr_1 + 82) as #292, sum(__common_expr_1 + 83) as #293, sum(__common_expr_1 + 84) as #294, sum(__common_expr_1 + 85) as #295, sum(__common_expr_1 + 86) as #296, sum(__common_expr_1 + 87) as #297, sum(__common_expr_1 + 88) as #298, sum(__common_expr_1 + 89) as #299]
           CoalescePartitionsExec
-            AggregateExec: mode=Partial, gby=[], aggr=[sum(__sail_attribute_39) as __sail_attribute_210, sum(__common_expr_1 + 1) as __sail_attribute_211, sum(__common_expr_1 + 2) as __sail_attribute_212, sum(__common_expr_1 + 3) as __sail_attribute_213, sum(__common_expr_1 + 4) as __sail_attribute_214, sum(__common_expr_1 + 5) as __sail_attribute_215, sum(__common_expr_1 + 6) as __sail_attribute_216, sum(__common_expr_1 + 7) as __sail_attribute_217, sum(__common_expr_1 + 8) as __sail_attribute_218, sum(__common_expr_1 + 9) as __sail_attribute_219, sum(__common_expr_1 + 10) as __sail_attribute_220, sum(__common_expr_1 + 11) as __sail_attribute_221, sum(__common_expr_1 + 12) as __sail_attribute_222, sum(__common_expr_1 + 13) as __sail_attribute_223, sum(__common_expr_1 + 14) as __sail_attribute_224, sum(__common_expr_1 + 15) as __sail_attribute_225, sum(__common_expr_1 + 16) as __sail_attribute_226, sum(__common_expr_1 + 17) as __sail_attribute_227, sum(__common_expr_1 + 18) as __sail_attribute_228, sum(__common_expr_1 + 19) as __sail_attribute_229, sum(__common_expr_1 + 20) as __sail_attribute_230, sum(__common_expr_1 + 21) as __sail_attribute_231, sum(__common_expr_1 + 22) as __sail_attribute_232, sum(__common_expr_1 + 23) as __sail_attribute_233, sum(__common_expr_1 + 24) as __sail_attribute_234, sum(__common_expr_1 + 25) as __sail_attribute_235, sum(__common_expr_1 + 26) as __sail_attribute_236, sum(__common_expr_1 + 27) as __sail_attribute_237, sum(__common_expr_1 + 28) as __sail_attribute_238, sum(__common_expr_1 + 29) as __sail_attribute_239, sum(__common_expr_1 + 30) as __sail_attribute_240, sum(__common_expr_1 + 31) as __sail_attribute_241, sum(__common_expr_1 + 32) as __sail_attribute_242, sum(__common_expr_1 + 33) as __sail_attribute_243, sum(__common_expr_1 + 34) as __sail_attribute_244, sum(__common_expr_1 + 35) as __sail_attribute_245, sum(__common_expr_1 + 36) as __sail_attribute_246, sum(__common_expr_1 + 37) as __sail_attribute_247, sum(__common_expr_1 + 38) as __sail_attribute_248, sum(__common_expr_1 + 39) as __sail_attribute_249, sum(__common_expr_1 + 40) as __sail_attribute_250, sum(__common_expr_1 + 41) as __sail_attribute_251, sum(__common_expr_1 + 42) as __sail_attribute_252, sum(__common_expr_1 + 43) as __sail_attribute_253, sum(__common_expr_1 + 44) as __sail_attribute_254, sum(__common_expr_1 + 45) as __sail_attribute_255, sum(__common_expr_1 + 46) as __sail_attribute_256, sum(__common_expr_1 + 47) as __sail_attribute_257, sum(__common_expr_1 + 48) as __sail_attribute_258, sum(__common_expr_1 + 49) as __sail_attribute_259, sum(__common_expr_1 + 50) as __sail_attribute_260, sum(__common_expr_1 + 51) as __sail_attribute_261, sum(__common_expr_1 + 52) as __sail_attribute_262, sum(__common_expr_1 + 53) as __sail_attribute_263, sum(__common_expr_1 + 54) as __sail_attribute_264, sum(__common_expr_1 + 55) as __sail_attribute_265, sum(__common_expr_1 + 56) as __sail_attribute_266, sum(__common_expr_1 + 57) as __sail_attribute_267, sum(__common_expr_1 + 58) as __sail_attribute_268, sum(__common_expr_1 + 59) as __sail_attribute_269, sum(__common_expr_1 + 60) as __sail_attribute_270, sum(__common_expr_1 + 61) as __sail_attribute_271, sum(__common_expr_1 + 62) as __sail_attribute_272, sum(__common_expr_1 + 63) as __sail_attribute_273, sum(__common_expr_1 + 64) as __sail_attribute_274, sum(__common_expr_1 + 65) as __sail_attribute_275, sum(__common_expr_1 + 66) as __sail_attribute_276, sum(__common_expr_1 + 67) as __sail_attribute_277, sum(__common_expr_1 + 68) as __sail_attribute_278, sum(__common_expr_1 + 69) as __sail_attribute_279, sum(__common_expr_1 + 70) as __sail_attribute_280, sum(__common_expr_1 + 71) as __sail_attribute_281, sum(__common_expr_1 + 72) as __sail_attribute_282, sum(__common_expr_1 + 73) as __sail_attribute_283, sum(__common_expr_1 + 74) as __sail_attribute_284, sum(__common_expr_1 + 75) as __sail_attribute_285, sum(__common_expr_1 + 76) as __sail_attribute_286, sum(__common_expr_1 + 77) as __sail_attribute_287, sum(__common_expr_1 + 78) as __sail_attribute_288, sum(__common_expr_1 + 79) as __sail_attribute_289, sum(__common_expr_1 + 80) as __sail_attribute_290, sum(__common_expr_1 + 81) as __sail_attribute_291, sum(__common_expr_1 + 82) as __sail_attribute_292, sum(__common_expr_1 + 83) as __sail_attribute_293, sum(__common_expr_1 + 84) as __sail_attribute_294, sum(__common_expr_1 + 85) as __sail_attribute_295, sum(__common_expr_1 + 86) as __sail_attribute_296, sum(__common_expr_1 + 87) as __sail_attribute_297, sum(__common_expr_1 + 88) as __sail_attribute_298, sum(__common_expr_1 + 89) as __sail_attribute_299]
-              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[CAST(ResolutionWidth@20 AS Int32) as __common_expr_1, ResolutionWidth@20 as __sail_attribute_39], file_type=parquet
+            AggregateExec: mode=Partial, gby=[], aggr=[sum(#39) as #210, sum(__common_expr_1 + 1) as #211, sum(__common_expr_1 + 2) as #212, sum(__common_expr_1 + 3) as #213, sum(__common_expr_1 + 4) as #214, sum(__common_expr_1 + 5) as #215, sum(__common_expr_1 + 6) as #216, sum(__common_expr_1 + 7) as #217, sum(__common_expr_1 + 8) as #218, sum(__common_expr_1 + 9) as #219, sum(__common_expr_1 + 10) as #220, sum(__common_expr_1 + 11) as #221, sum(__common_expr_1 + 12) as #222, sum(__common_expr_1 + 13) as #223, sum(__common_expr_1 + 14) as #224, sum(__common_expr_1 + 15) as #225, sum(__common_expr_1 + 16) as #226, sum(__common_expr_1 + 17) as #227, sum(__common_expr_1 + 18) as #228, sum(__common_expr_1 + 19) as #229, sum(__common_expr_1 + 20) as #230, sum(__common_expr_1 + 21) as #231, sum(__common_expr_1 + 22) as #232, sum(__common_expr_1 + 23) as #233, sum(__common_expr_1 + 24) as #234, sum(__common_expr_1 + 25) as #235, sum(__common_expr_1 + 26) as #236, sum(__common_expr_1 + 27) as #237, sum(__common_expr_1 + 28) as #238, sum(__common_expr_1 + 29) as #239, sum(__common_expr_1 + 30) as #240, sum(__common_expr_1 + 31) as #241, sum(__common_expr_1 + 32) as #242, sum(__common_expr_1 + 33) as #243, sum(__common_expr_1 + 34) as #244, sum(__common_expr_1 + 35) as #245, sum(__common_expr_1 + 36) as #246, sum(__common_expr_1 + 37) as #247, sum(__common_expr_1 + 38) as #248, sum(__common_expr_1 + 39) as #249, sum(__common_expr_1 + 40) as #250, sum(__common_expr_1 + 41) as #251, sum(__common_expr_1 + 42) as #252, sum(__common_expr_1 + 43) as #253, sum(__common_expr_1 + 44) as #254, sum(__common_expr_1 + 45) as #255, sum(__common_expr_1 + 46) as #256, sum(__common_expr_1 + 47) as #257, sum(__common_expr_1 + 48) as #258, sum(__common_expr_1 + 49) as #259, sum(__common_expr_1 + 50) as #260, sum(__common_expr_1 + 51) as #261, sum(__common_expr_1 + 52) as #262, sum(__common_expr_1 + 53) as #263, sum(__common_expr_1 + 54) as #264, sum(__common_expr_1 + 55) as #265, sum(__common_expr_1 + 56) as #266, sum(__common_expr_1 + 57) as #267, sum(__common_expr_1 + 58) as #268, sum(__common_expr_1 + 59) as #269, sum(__common_expr_1 + 60) as #270, sum(__common_expr_1 + 61) as #271, sum(__common_expr_1 + 62) as #272, sum(__common_expr_1 + 63) as #273, sum(__common_expr_1 + 64) as #274, sum(__common_expr_1 + 65) as #275, sum(__common_expr_1 + 66) as #276, sum(__common_expr_1 + 67) as #277, sum(__common_expr_1 + 68) as #278, sum(__common_expr_1 + 69) as #279, sum(__common_expr_1 + 70) as #280, sum(__common_expr_1 + 71) as #281, sum(__common_expr_1 + 72) as #282, sum(__common_expr_1 + 73) as #283, sum(__common_expr_1 + 74) as #284, sum(__common_expr_1 + 75) as #285, sum(__common_expr_1 + 76) as #286, sum(__common_expr_1 + 77) as #287, sum(__common_expr_1 + 78) as #288, sum(__common_expr_1 + 79) as #289, sum(__common_expr_1 + 80) as #290, sum(__common_expr_1 + 81) as #291, sum(__common_expr_1 + 82) as #292, sum(__common_expr_1 + 83) as #293, sum(__common_expr_1 + 84) as #294, sum(__common_expr_1 + 85) as #295, sum(__common_expr_1 + 86) as #296, sum(__common_expr_1 + 87) as #297, sum(__common_expr_1 + 88) as #298, sum(__common_expr_1 + 89) as #299]
+              DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[CAST(ResolutionWidth@20 AS Int32) as __common_expr_1, ResolutionWidth@20 as #39], file_type=parquet
 ---
 name: "test_clickbench_query_plan[30]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_215@0 as SearchEngineID, __sail_attribute_216@1 as ClientIP, __sail_attribute_217@2 as c, __sail_attribute_218@3 as SUM(IsRefresh), __sail_attribute_219@4 as AVG(ResolutionWidth)]
-      SortPreservingMergeExec: [__sail_attribute_217@2 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_215, __sail_attribute_211@1 as __sail_attribute_216, __sail_attribute_212@2 as __sail_attribute_217, __sail_attribute_213@3 as __sail_attribute_218, __sail_attribute_214@4 as __sail_attribute_219]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212, sum(__sail_attribute_29) as __sail_attribute_213, avg(__sail_attribute_39) as __sail_attribute_214]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_75@3 as __sail_attribute_210, __sail_attribute_13@0 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212, sum(__sail_attribute_29) as __sail_attribute_213, avg(__sail_attribute_39) as __sail_attribute_214]
-                  ProjectionExec: expr=[ClientIP@0 as __sail_attribute_13, IsRefresh@1 as __sail_attribute_29, ResolutionWidth@2 as __sail_attribute_39, SearchEngineID@3 as __sail_attribute_75]
+    ProjectionExec: expr=[#215@0 as SearchEngineID, #216@1 as ClientIP, #217@2 as c, #218@3 as SUM(IsRefresh), #219@4 as AVG(ResolutionWidth)]
+      SortPreservingMergeExec: [#217@2 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #215, #211@1 as #216, #212@2 as #217, #213@3 as #218, #214@4 as #219]
+          SortExec: TopK(fetch=10), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(1) as #212, sum(#29) as #213, avg(#39) as #214]
+              RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#75@3 as #210, #13@0 as #211], aggr=[count(1) as #212, sum(#29) as #213, avg(#39) as #214]
+                  ProjectionExec: expr=[ClientIP@0 as #13, IsRefresh@1 as #29, ResolutionWidth@2 as #39, SearchEngineID@3 as #75]
                     FilterExec: SearchPhrase@4 != , projection=[ClientIP@0, IsRefresh@1, ResolutionWidth@2, SearchEngineID@3]
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
@@ -403,14 +403,14 @@ name: "test_clickbench_query_plan[31]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_215@0 as WatchID, __sail_attribute_216@1 as ClientIP, __sail_attribute_217@2 as c, __sail_attribute_218@3 as SUM(IsRefresh), __sail_attribute_219@4 as AVG(ResolutionWidth)]
-      SortPreservingMergeExec: [__sail_attribute_217@2 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_215, __sail_attribute_211@1 as __sail_attribute_216, __sail_attribute_212@2 as __sail_attribute_217, __sail_attribute_213@3 as __sail_attribute_218, __sail_attribute_214@4 as __sail_attribute_219]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212, sum(__sail_attribute_29) as __sail_attribute_213, avg(__sail_attribute_39) as __sail_attribute_214]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_0@0 as __sail_attribute_210, __sail_attribute_13@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212, sum(__sail_attribute_29) as __sail_attribute_213, avg(__sail_attribute_39) as __sail_attribute_214]
-                  ProjectionExec: expr=[WatchID@0 as __sail_attribute_0, ClientIP@1 as __sail_attribute_13, IsRefresh@2 as __sail_attribute_29, ResolutionWidth@3 as __sail_attribute_39]
+    ProjectionExec: expr=[#215@0 as WatchID, #216@1 as ClientIP, #217@2 as c, #218@3 as SUM(IsRefresh), #219@4 as AVG(ResolutionWidth)]
+      SortPreservingMergeExec: [#217@2 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #215, #211@1 as #216, #212@2 as #217, #213@3 as #218, #214@4 as #219]
+          SortExec: TopK(fetch=10), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(1) as #212, sum(#29) as #213, avg(#39) as #214]
+              RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#0@0 as #210, #13@1 as #211], aggr=[count(1) as #212, sum(#29) as #213, avg(#39) as #214]
+                  ProjectionExec: expr=[WatchID@0 as #0, ClientIP@1 as #13, IsRefresh@2 as #29, ResolutionWidth@3 as #39]
                     FilterExec: SearchPhrase@4 != , projection=[WatchID@0, ClientIP@1, IsRefresh@2, ResolutionWidth@3]
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
@@ -418,66 +418,66 @@ name: "test_clickbench_query_plan[32]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_215@0 as WatchID, __sail_attribute_216@1 as ClientIP, __sail_attribute_217@2 as c, __sail_attribute_218@3 as SUM(IsRefresh), __sail_attribute_219@4 as AVG(ResolutionWidth)]
-      SortPreservingMergeExec: [__sail_attribute_217@2 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_215, __sail_attribute_211@1 as __sail_attribute_216, __sail_attribute_212@2 as __sail_attribute_217, __sail_attribute_213@3 as __sail_attribute_218, __sail_attribute_214@4 as __sail_attribute_219]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212, sum(__sail_attribute_29) as __sail_attribute_213, avg(__sail_attribute_39) as __sail_attribute_214]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_0@0 as __sail_attribute_210, __sail_attribute_13@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212, sum(__sail_attribute_29) as __sail_attribute_213, avg(__sail_attribute_39) as __sail_attribute_214]
-                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[WatchID@0 as __sail_attribute_0, ClientIP@7 as __sail_attribute_13, IsRefresh@15 as __sail_attribute_29, ResolutionWidth@20 as __sail_attribute_39], file_type=parquet
+    ProjectionExec: expr=[#215@0 as WatchID, #216@1 as ClientIP, #217@2 as c, #218@3 as SUM(IsRefresh), #219@4 as AVG(ResolutionWidth)]
+      SortPreservingMergeExec: [#217@2 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #215, #211@1 as #216, #212@2 as #217, #213@3 as #218, #214@4 as #219]
+          SortExec: TopK(fetch=10), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(1) as #212, sum(#29) as #213, avg(#39) as #214]
+              RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#0@0 as #210, #13@1 as #211], aggr=[count(1) as #212, sum(#29) as #213, avg(#39) as #214]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[WatchID@0 as #0, ClientIP@7 as #13, IsRefresh@15 as #29, ResolutionWidth@20 as #39], file_type=parquet
 ---
 name: "test_clickbench_query_plan[33]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as URL, __sail_attribute_213@1 as c]
-      SortPreservingMergeExec: [__sail_attribute_213@1 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_211@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_25@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[URL@13 as __sail_attribute_25], file_type=parquet
+    ProjectionExec: expr=[#212@0 as URL, #213@1 as c]
+      SortPreservingMergeExec: [#213@1 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #212, #211@1 as #213]
+          SortExec: TopK(fetch=10), expr=[#211@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as #211]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#25@0 as #210], aggr=[count(1) as #211]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[URL@13 as #25], file_type=parquet
 ---
 name: "test_clickbench_query_plan[34]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as 1, __sail_attribute_214@1 as URL, __sail_attribute_215@2 as c]
-      SortPreservingMergeExec: [__sail_attribute_215@2 DESC NULLS LAST], fetch=10
-        SortExec: TopK(fetch=10), expr=[__sail_attribute_215@2 DESC NULLS LAST], preserve_partitioning=[true]
-          ProjectionExec: expr=[1 as __sail_attribute_213, __sail_attribute_211@0 as __sail_attribute_214, __sail_attribute_212@1 as __sail_attribute_215]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_211@0 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-              RepartitionExec: partitioning=Hash([__sail_attribute_211@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_25@0 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[URL@13 as __sail_attribute_25], file_type=parquet
+    ProjectionExec: expr=[#213@0 as 1, #214@1 as URL, #215@2 as c]
+      SortPreservingMergeExec: [#215@2 DESC NULLS LAST], fetch=10
+        SortExec: TopK(fetch=10), expr=[#215@2 DESC NULLS LAST], preserve_partitioning=[true]
+          ProjectionExec: expr=[1 as #213, #211@0 as #214, #212@1 as #215]
+            AggregateExec: mode=FinalPartitioned, gby=[#211@0 as #211], aggr=[count(1) as #212]
+              RepartitionExec: partitioning=Hash([#211@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#25@0 as #211], aggr=[count(1) as #212]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[URL@13 as #25], file_type=parquet
 ---
 name: "test_clickbench_query_plan[35]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_215@0 as ClientIP, __sail_attribute_216@1 as (ClientIP - 1), __sail_attribute_217@2 as (ClientIP - 2), __sail_attribute_218@3 as (ClientIP - 3), __sail_attribute_219@4 as c]
-      SortPreservingMergeExec: [__sail_attribute_219@4 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_215, __sail_attribute_211@1 as __sail_attribute_216, __sail_attribute_212@2 as __sail_attribute_217, __sail_attribute_213@3 as __sail_attribute_218, __sail_attribute_214@4 as __sail_attribute_219]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_214@4 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211, __sail_attribute_212@2 as __sail_attribute_212, __sail_attribute_213@3 as __sail_attribute_213], aggr=[count(1) as __sail_attribute_214]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1, __sail_attribute_212@2, __sail_attribute_213@3], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_13@0 as __sail_attribute_210, __sail_attribute_13@0 - 1 as __sail_attribute_211, __sail_attribute_13@0 - 2 as __sail_attribute_212, __sail_attribute_13@0 - 3 as __sail_attribute_213], aggr=[count(1) as __sail_attribute_214]
-                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[ClientIP@7 as __sail_attribute_13], file_type=parquet
+    ProjectionExec: expr=[#215@0 as ClientIP, #216@1 as (ClientIP - 1), #217@2 as (ClientIP - 2), #218@3 as (ClientIP - 3), #219@4 as c]
+      SortPreservingMergeExec: [#219@4 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #215, #211@1 as #216, #212@2 as #217, #213@3 as #218, #214@4 as #219]
+          SortExec: TopK(fetch=10), expr=[#214@4 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211, #212@2 as #212, #213@3 as #213], aggr=[count(1) as #214]
+              RepartitionExec: partitioning=Hash([#210@0, #211@1, #212@2, #213@3], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#13@0 as #210, #13@0 - 1 as #211, #13@0 - 2 as #212, #13@0 - 3 as #213], aggr=[count(1) as #214]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[ClientIP@7 as #13], file_type=parquet
 ---
 name: "test_clickbench_query_plan[36]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as URL, __sail_attribute_213@1 as PageViews]
-      SortPreservingMergeExec: [__sail_attribute_213@1 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_211@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_25@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-                  ProjectionExec: expr=[URL@0 as __sail_attribute_25]
+    ProjectionExec: expr=[#212@0 as URL, #213@1 as PageViews]
+      SortPreservingMergeExec: [#213@1 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #212, #211@1 as #213]
+          SortExec: TopK(fetch=10), expr=[#211@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as #211]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#25@0 as #210], aggr=[count(1) as #211]
+                  ProjectionExec: expr=[URL@0 as #25]
                     FilterExec: CounterID@1 = 62 AND EventDate@0 >= 15887 AND EventDate@0 <= 15917 AND DontCountHits@4 = 0 AND IsRefresh@3 = 0 AND URL@2 != , projection=[URL@2]
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventDate, CounterID, URL, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND EventDate@5 >= 15887 AND EventDate@5 <= 15917 AND DontCountHits@61 = 0 AND IsRefresh@15 = 0 AND URL@13 != , pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND EventDate_max@4 >= 15887 AND EventDate_null_count@5 != row_count@3 AND EventDate_min@6 <= 15917 AND DontCountHits_null_count@9 != row_count@3 AND DontCountHits_min@7 <= 0 AND 0 <= DontCountHits_max@8 AND IsRefresh_null_count@12 != row_count@3 AND IsRefresh_min@10 <= 0 AND 0 <= IsRefresh_max@11 AND URL_null_count@15 != row_count@3 AND (URL_min@13 !=  OR  != URL_max@14), required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), URL not in ()]
 ---
@@ -485,14 +485,14 @@ name: "test_clickbench_query_plan[37]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as Title, __sail_attribute_213@1 as PageViews]
-      SortPreservingMergeExec: [__sail_attribute_213@1 DESC NULLS LAST], fetch=10
-        ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213]
-          SortExec: TopK(fetch=10), expr=[__sail_attribute_211@1 DESC NULLS LAST], preserve_partitioning=[true]
-            AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-              RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                AggregateExec: mode=Partial, gby=[__sail_attribute_4@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-                  ProjectionExec: expr=[Title@0 as __sail_attribute_4]
+    ProjectionExec: expr=[#212@0 as Title, #213@1 as PageViews]
+      SortPreservingMergeExec: [#213@1 DESC NULLS LAST], fetch=10
+        ProjectionExec: expr=[#210@0 as #212, #211@1 as #213]
+          SortExec: TopK(fetch=10), expr=[#211@1 DESC NULLS LAST], preserve_partitioning=[true]
+            AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as #211]
+              RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                AggregateExec: mode=Partial, gby=[#4@0 as #210], aggr=[count(1) as #211]
+                  ProjectionExec: expr=[Title@0 as #4]
                     FilterExec: CounterID@2 = 62 AND EventDate@1 >= 15887 AND EventDate@1 <= 15917 AND DontCountHits@4 = 0 AND IsRefresh@3 = 0 AND Title@0 != , projection=[Title@0]
                       DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[Title, EventDate, CounterID, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND EventDate@5 >= 15887 AND EventDate@5 <= 15917 AND DontCountHits@61 = 0 AND IsRefresh@15 = 0 AND Title@2 != , pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND EventDate_max@4 >= 15887 AND EventDate_null_count@5 != row_count@3 AND EventDate_min@6 <= 15917 AND DontCountHits_null_count@9 != row_count@3 AND DontCountHits_min@7 <= 0 AND 0 <= DontCountHits_max@8 AND IsRefresh_null_count@12 != row_count@3 AND IsRefresh_min@10 <= 0 AND 0 <= IsRefresh_max@11 AND Title_null_count@15 != row_count@3 AND (Title_min@13 !=  OR  != Title_max@14), required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), Title not in ()]
 ---
@@ -500,15 +500,15 @@ name: "test_clickbench_query_plan[38]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as URL, __sail_attribute_213@1 as PageViews]
+    ProjectionExec: expr=[#212@0 as URL, #213@1 as PageViews]
       GlobalLimitExec: skip=1000, fetch=10
-        SortPreservingMergeExec: [__sail_attribute_213@1 DESC NULLS LAST], fetch=1010
-          ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213]
-            SortExec: TopK(fetch=1010), expr=[__sail_attribute_211@1 DESC NULLS LAST], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_25@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-                    ProjectionExec: expr=[URL@0 as __sail_attribute_25]
+        SortPreservingMergeExec: [#213@1 DESC NULLS LAST], fetch=1010
+          ProjectionExec: expr=[#210@0 as #212, #211@1 as #213]
+            SortExec: TopK(fetch=1010), expr=[#211@1 DESC NULLS LAST], preserve_partitioning=[true]
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as #211]
+                RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#25@0 as #210], aggr=[count(1) as #211]
+                    ProjectionExec: expr=[URL@0 as #25]
                       FilterExec: CounterID@1 = 62 AND EventDate@0 >= 15887 AND EventDate@0 <= 15917 AND IsRefresh@3 = 0 AND IsLink@4 != 0 AND IsDownload@5 = 0, projection=[URL@2]
                         DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventDate, CounterID, URL, IsRefresh, IsLink, IsDownload], file_type=parquet, predicate=CounterID@6 = 62 AND EventDate@5 >= 15887 AND EventDate@5 <= 15917 AND IsRefresh@15 = 0 AND IsLink@52 != 0 AND IsDownload@53 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND EventDate_max@4 >= 15887 AND EventDate_null_count@5 != row_count@3 AND EventDate_min@6 <= 15917 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND IsLink_null_count@12 != row_count@3 AND (IsLink_min@10 != 0 OR 0 != IsLink_max@11) AND IsDownload_null_count@15 != row_count@3 AND IsDownload_min@13 <= 0 AND 0 <= IsDownload_max@14, required_guarantees=[CounterID in (62), IsDownload in (0), IsLink not in (0), IsRefresh in (0)]
 ---
@@ -516,15 +516,15 @@ name: "test_clickbench_query_plan[39]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_216@0 as TraficSourceID, __sail_attribute_217@1 as SearchEngineID, __sail_attribute_218@2 as AdvEngineID, __sail_attribute_219@3 as Src, __sail_attribute_220@4 as Dst, __sail_attribute_221@5 as PageViews]
+    ProjectionExec: expr=[#216@0 as TraficSourceID, #217@1 as SearchEngineID, #218@2 as AdvEngineID, #219@3 as Src, #220@4 as Dst, #221@5 as PageViews]
       GlobalLimitExec: skip=1000, fetch=10
-        SortPreservingMergeExec: [__sail_attribute_221@5 DESC NULLS LAST], fetch=1010
-          ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_216, __sail_attribute_211@1 as __sail_attribute_217, __sail_attribute_212@2 as __sail_attribute_218, __sail_attribute_213@3 as __sail_attribute_219, __sail_attribute_214@4 as __sail_attribute_220, __sail_attribute_215@5 as __sail_attribute_221]
-            SortExec: TopK(fetch=1010), expr=[__sail_attribute_215@5 DESC NULLS LAST], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211, __sail_attribute_212@2 as __sail_attribute_212, __sail_attribute_213@3 as __sail_attribute_213, __sail_attribute_214@4 as __sail_attribute_214], aggr=[count(1) as __sail_attribute_215]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1, __sail_attribute_212@2, __sail_attribute_213@3, __sail_attribute_214@4], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_73@2 as __sail_attribute_210, __sail_attribute_75@3 as __sail_attribute_211, __sail_attribute_79@4 as __sail_attribute_212, CASE WHEN __sail_attribute_75@3 = 0 AND __sail_attribute_79@4 = 0 THEN __sail_attribute_27@1 ELSE  END as __sail_attribute_213, __sail_attribute_25@0 as __sail_attribute_214], aggr=[count(1) as __sail_attribute_215]
-                    ProjectionExec: expr=[URL@0 as __sail_attribute_25, Referer@1 as __sail_attribute_27, TraficSourceID@2 as __sail_attribute_73, SearchEngineID@3 as __sail_attribute_75, AdvEngineID@4 as __sail_attribute_79]
+        SortPreservingMergeExec: [#221@5 DESC NULLS LAST], fetch=1010
+          ProjectionExec: expr=[#210@0 as #216, #211@1 as #217, #212@2 as #218, #213@3 as #219, #214@4 as #220, #215@5 as #221]
+            SortExec: TopK(fetch=1010), expr=[#215@5 DESC NULLS LAST], preserve_partitioning=[true]
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211, #212@2 as #212, #213@3 as #213, #214@4 as #214], aggr=[count(1) as #215]
+                RepartitionExec: partitioning=Hash([#210@0, #211@1, #212@2, #213@3, #214@4], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#73@2 as #210, #75@3 as #211, #79@4 as #212, CASE WHEN #75@3 = 0 AND #79@4 = 0 THEN #27@1 ELSE  END as #213, #25@0 as #214], aggr=[count(1) as #215]
+                    ProjectionExec: expr=[URL@0 as #25, Referer@1 as #27, TraficSourceID@2 as #73, SearchEngineID@3 as #75, AdvEngineID@4 as #79]
                       FilterExec: CounterID@1 = 62 AND EventDate@0 >= 15887 AND EventDate@0 <= 15917 AND IsRefresh@4 = 0, projection=[URL@2, Referer@3, TraficSourceID@5, SearchEngineID@6, AdvEngineID@7]
                         DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventDate, CounterID, URL, Referer, IsRefresh, TraficSourceID, SearchEngineID, AdvEngineID], file_type=parquet, predicate=CounterID@6 = 62 AND EventDate@5 >= 15887 AND EventDate@5 <= 15917 AND IsRefresh@15 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND EventDate_max@4 >= 15887 AND EventDate_null_count@5 != row_count@3 AND EventDate_min@6 <= 15917 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8, required_guarantees=[CounterID in (62), IsRefresh in (0)]
 ---
@@ -532,15 +532,15 @@ name: "test_clickbench_query_plan[40]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as URLHash, __sail_attribute_214@1 as EventDate, __sail_attribute_215@2 as PageViews]
+    ProjectionExec: expr=[#213@0 as URLHash, #214@1 as EventDate, #215@2 as PageViews]
       GlobalLimitExec: skip=100, fetch=10
-        SortPreservingMergeExec: [__sail_attribute_215@2 DESC NULLS LAST], fetch=110
-          ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_213, __sail_attribute_211@1 as __sail_attribute_214, __sail_attribute_212@2 as __sail_attribute_215]
-            SortExec: TopK(fetch=110), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_205@1 as __sail_attribute_210, __sail_attribute_10@0 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-                    ProjectionExec: expr=[CAST(CAST(EventDate@0 AS Int32) AS Date32) as __sail_attribute_10, URLHash@1 as __sail_attribute_205]
+        SortPreservingMergeExec: [#215@2 DESC NULLS LAST], fetch=110
+          ProjectionExec: expr=[#210@0 as #213, #211@1 as #214, #212@2 as #215]
+            SortExec: TopK(fetch=110), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(1) as #212]
+                RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#205@1 as #210, #10@0 as #211], aggr=[count(1) as #212]
+                    ProjectionExec: expr=[CAST(CAST(EventDate@0 AS Int32) AS Date32) as #10, URLHash@1 as #205]
                       FilterExec: CounterID@1 = 62 AND EventDate@0 >= 15887 AND EventDate@0 <= 15917 AND IsRefresh@2 = 0 AND (TraficSourceID@3 = -1 OR TraficSourceID@3 = 6) AND RefererHash@4 = 3594120000172545465, projection=[EventDate@0, URLHash@5]
                         DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventDate, CounterID, IsRefresh, TraficSourceID, RefererHash, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND EventDate@5 >= 15887 AND EventDate@5 <= 15917 AND IsRefresh@15 = 0 AND (TraficSourceID@37 = -1 OR TraficSourceID@37 = 6) AND RefererHash@102 = 3594120000172545465, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND EventDate_max@4 >= 15887 AND EventDate_null_count@5 != row_count@3 AND EventDate_min@6 <= 15917 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND (TraficSourceID_null_count@12 != row_count@3 AND TraficSourceID_min@10 <= -1 AND -1 <= TraficSourceID_max@11 OR TraficSourceID_null_count@12 != row_count@3 AND TraficSourceID_min@10 <= 6 AND 6 <= TraficSourceID_max@11) AND RefererHash_null_count@15 != row_count@3 AND RefererHash_min@13 <= 3594120000172545465 AND 3594120000172545465 <= RefererHash_max@14, required_guarantees=[CounterID in (62), IsRefresh in (0), RefererHash in (3594120000172545465), TraficSourceID in (-1, 6)]
 ---
@@ -548,15 +548,15 @@ name: "test_clickbench_query_plan[41]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_213@0 as WindowClientWidth, __sail_attribute_214@1 as WindowClientHeight, __sail_attribute_215@2 as PageViews]
+    ProjectionExec: expr=[#213@0 as WindowClientWidth, #214@1 as WindowClientHeight, #215@2 as PageViews]
       GlobalLimitExec: skip=10000, fetch=10
-        SortPreservingMergeExec: [__sail_attribute_215@2 DESC NULLS LAST], fetch=10010
-          ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_213, __sail_attribute_211@1 as __sail_attribute_214, __sail_attribute_212@2 as __sail_attribute_215]
-            SortExec: TopK(fetch=10010), expr=[__sail_attribute_212@2 DESC NULLS LAST], preserve_partitioning=[true]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210, __sail_attribute_211@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-                RepartitionExec: partitioning=Hash([__sail_attribute_210@0, __sail_attribute_211@1], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[__sail_attribute_83@0 as __sail_attribute_210, __sail_attribute_85@1 as __sail_attribute_211], aggr=[count(1) as __sail_attribute_212]
-                    ProjectionExec: expr=[WindowClientWidth@0 as __sail_attribute_83, WindowClientHeight@1 as __sail_attribute_85]
+        SortPreservingMergeExec: [#215@2 DESC NULLS LAST], fetch=10010
+          ProjectionExec: expr=[#210@0 as #213, #211@1 as #214, #212@2 as #215]
+            SortExec: TopK(fetch=10010), expr=[#212@2 DESC NULLS LAST], preserve_partitioning=[true]
+              AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210, #211@1 as #211], aggr=[count(1) as #212]
+                RepartitionExec: partitioning=Hash([#210@0, #211@1], 4), input_partitions=1
+                  AggregateExec: mode=Partial, gby=[#83@0 as #210, #85@1 as #211], aggr=[count(1) as #212]
+                    ProjectionExec: expr=[WindowClientWidth@0 as #83, WindowClientHeight@1 as #85]
                       FilterExec: CounterID@1 = 62 AND EventDate@0 >= 15887 AND EventDate@0 <= 15917 AND IsRefresh@2 = 0 AND DontCountHits@5 = 0 AND URLHash@6 = 2868770270353813622, projection=[WindowClientWidth@3, WindowClientHeight@4]
                         DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventDate, CounterID, IsRefresh, WindowClientWidth, WindowClientHeight, DontCountHits, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND EventDate@5 >= 15887 AND EventDate@5 <= 15917 AND IsRefresh@15 = 0 AND DontCountHits@61 = 0 AND URLHash@103 = 2868770270353813622, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND EventDate_max@4 >= 15887 AND EventDate_null_count@5 != row_count@3 AND EventDate_min@6 <= 15917 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND DontCountHits_null_count@12 != row_count@3 AND DontCountHits_min@10 <= 0 AND 0 <= DontCountHits_max@11 AND URLHash_null_count@15 != row_count@3 AND URLHash_min@13 <= 2868770270353813622 AND 2868770270353813622 <= URLHash_max@14, required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), URLHash in (2868770270353813622)]
 ---
@@ -564,15 +564,15 @@ name: "test_clickbench_query_plan[42]"
 data:
   |-
     == Physical Plan ==
-    ProjectionExec: expr=[__sail_attribute_212@0 as M, __sail_attribute_213@1 as PageViews]
-      ProjectionExec: expr=[__sail_attribute_212@0 as __sail_attribute_212, __sail_attribute_213@1 as __sail_attribute_213]
+    ProjectionExec: expr=[#212@0 as M, #213@1 as PageViews]
+      ProjectionExec: expr=[#212@0 as #212, #213@1 as #213]
         GlobalLimitExec: skip=1000, fetch=10
-          SortPreservingMergeExec: [__sail_attribute_210@2 ASC], fetch=1010
-            ProjectionExec: expr=[__sail_attribute_210@0 as __sail_attribute_212, __sail_attribute_211@1 as __sail_attribute_213, __sail_attribute_210@0 as __sail_attribute_210]
-              SortExec: TopK(fetch=1010), expr=[__sail_attribute_210@0 ASC], preserve_partitioning=[true]
-                AggregateExec: mode=FinalPartitioned, gby=[__sail_attribute_210@0 as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-                  RepartitionExec: partitioning=Hash([__sail_attribute_210@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[date_trunc(minute, CAST(__sail_attribute_8@0 * 1000000 AS Timestamp(µs, "UTC"))) as __sail_attribute_210], aggr=[count(1) as __sail_attribute_211]
-                      ProjectionExec: expr=[EventTime@0 as __sail_attribute_8]
+          SortPreservingMergeExec: [#210@2 ASC], fetch=1010
+            ProjectionExec: expr=[#210@0 as #212, #211@1 as #213, #210@0 as #210]
+              SortExec: TopK(fetch=1010), expr=[#210@0 ASC], preserve_partitioning=[true]
+                AggregateExec: mode=FinalPartitioned, gby=[#210@0 as #210], aggr=[count(1) as #211]
+                  RepartitionExec: partitioning=Hash([#210@0], 4), input_partitions=1
+                    AggregateExec: mode=Partial, gby=[date_trunc(minute, CAST(#8@0 * 1000000 AS Timestamp(µs, "UTC"))) as #210], aggr=[count(1) as #211]
+                      ProjectionExec: expr=[EventTime@0 as #8]
                         FilterExec: CounterID@2 = 62 AND EventDate@1 >= 15900 AND EventDate@1 <= 15901 AND IsRefresh@3 = 0 AND DontCountHits@4 = 0, projection=[EventTime@0]
                           DataSourceExec: file_groups={1 group: [[<tmp>/hits-00.parquet:<range>, <tmp>/hits-01.parquet:<range>, <tmp>/hits-02.parquet:<range>, <tmp>/hits-03.parquet:<range>]]}, projection=[EventTime, EventDate, CounterID, IsRefresh, DontCountHits], file_type=parquet, predicate=CounterID@6 = 62 AND EventDate@5 >= 15900 AND EventDate@5 <= 15901 AND IsRefresh@15 = 0 AND DontCountHits@61 = 0, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND EventDate_null_count@5 != row_count@3 AND EventDate_max@4 >= 15900 AND EventDate_null_count@5 != row_count@3 AND EventDate_min@6 <= 15901 AND IsRefresh_null_count@9 != row_count@3 AND IsRefresh_min@7 <= 0 AND 0 <= IsRefresh_max@8 AND DontCountHits_null_count@12 != row_count@3 AND DontCountHits_min@10 <= 0 AND 0 <= DontCountHits_max@11, required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0)]

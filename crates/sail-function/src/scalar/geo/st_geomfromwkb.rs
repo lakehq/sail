@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -6,6 +7,7 @@ use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common::geoarrow::extension::GeoArrowWkbType;
 
 use super::wkb_reader::validate_geometry;
 
@@ -42,11 +44,22 @@ impl ScalarUDFImpl for StGeomFromWKB {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        sail_type_system::policies::scalar_geo_st_geomfromwkb::return_type(_arg_types)
+        Ok(DataType::Binary)
     }
 
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Arc<Field>> {
-        sail_type_system::policies::scalar_geo_st_geomfromwkb::return_field_from_args(_args)
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+            GeoArrowWkbType::NAME.to_string(),
+        );
+        metadata.insert(
+            arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY.to_string(),
+            r#"{"crs":"SRID:0"}"#.to_string(),
+        );
+        Ok(Arc::new(
+            Field::new(self.name(), DataType::Binary, true).with_metadata(metadata),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
