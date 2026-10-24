@@ -349,3 +349,63 @@ def test_injective_cast_correlation_groups_by_raw_key(spark):
         "SELECT o.id, (SELECT count(*) FROM VALUES ('1'), ('01') AS i(k) WHERE CAST(i.k AS BIGINT) = o.id) AS n"
         " FROM VALUES (1L) AS o(id)"
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "target", "low", "high", "ansi"),
+    [
+        pytest.param(
+            *case,
+            ansi,
+            # TODO: Remove these marks when correlated TRY_CAST keys are supported.
+            marks=pytest.mark.xfail(
+                not is_jvm_spark() and not ansi and case[0] == "BIGINT",
+                reason="Existing DataFusion alias error for ANSI-off BIGINT-to-decimal TRY_CAST correlation",
+                strict=True,
+            ),
+        )
+        for case in [
+            ("BOOLEAN", "TINYINT", "false", "true"),
+            ("BOOLEAN", "BIGINT", "false", "true"),
+            ("BOOLEAN", "STRING", "false", "true"),
+            ("TINYINT", "FLOAT", "-128", "127"),
+            ("SMALLINT", "FLOAT", "-32768", "32767"),
+            ("INT", "DOUBLE", "-2147483648", "2147483647"),
+            ("BIGINT", "DECIMAL(19,0)", "-9223372036854775808", "9223372036854775807"),
+            ("BIGINT", "DECIMAL(21,2)", "-9223372036854775808", "9223372036854775807"),
+            ("DECIMAL(9,2)", "DECIMAL(12,4)", "-9999999.99", "9999999.99"),
+            ("DECIMAL(9,2)", "STRING", "-9999999.99", "9999999.99"),
+            ("DECIMAL(2,0)", "TINYINT", "-99", "99"),
+            ("DECIMAL(4,0)", "SMALLINT", "-9999", "9999"),
+            ("DECIMAL(9,0)", "INT", "-999999999", "999999999"),
+            ("DECIMAL(18,0)", "BIGINT", "-999999999999999999", "999999999999999999"),
+        ]
+        for ansi in [True, False]
+    ],
+)
+def test_exact_cast_keys_keep_duplicates_nulls_and_boundary_values(spark, ansi, source, target, low, high):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        # These casts preserve grouping across the entire source type, including
+        # its limits. The repeated outer row must survive and a NULL key cannot match.
+        source_rows = f"""VALUES
+            (CAST('{low}' AS {source}), 10),
+            (CAST('{low}' AS {source}), 100),
+            (CAST('{high}' AS {source}), 7),
+            (CAST(NULL AS {source}), 999)
+        """
+        query = f"""
+            SELECT o.ix,
+              (SELECT count(*) FROM {source_rows} AS i(k, v) WHERE CAST(i.k AS {target}) = o.id) AS n,
+              (SELECT sum(v) FROM {source_rows} AS i(k, v) WHERE CAST(i.k AS {target}) = o.id) AS total
+            FROM VALUES
+              (0, CAST(CAST('{low}' AS {source}) AS {target})),
+              (1, CAST(CAST('{high}' AS {source}) AS {target})),
+              (2, CAST(NULL AS {target})),
+              (3, CAST(CAST('{low}' AS {source}) AS {target})) AS o(ix, id)
+            ORDER BY o.ix
+        """  # noqa: S608
+        assert [tuple(row) for row in spark.sql(query).collect()] == [(0, 2, 110), (1, 1, 7), (2, 0, None), (3, 2, 110)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)

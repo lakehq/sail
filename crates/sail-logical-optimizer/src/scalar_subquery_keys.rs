@@ -104,24 +104,56 @@ fn strip_identity_cast(expression: &Expr) -> &Expr {
     }
 }
 
-/// Whether a cast never fails and maps distinct values to distinct values, so that
-/// grouping by its input groups exactly as grouping by its result would.
+/// Whether grouping the input is equivalent to grouping the cast result.
+/// Spark's up-casts include lossy integer-to-float conversions, so they are not
+/// sufficient here: distinct inputs must not collide, nor equal inputs split.
 fn injective_cast(from: &DataType, to: &DataType) -> bool {
-    // The decimal precision Spark gives each integer type, which also orders their widths.
+    // Decimal digits needed by every value of each signed integer type.
     let digits = |data_type: &DataType| match data_type {
         DataType::Int8 => Some(3),
         DataType::Int16 => Some(5),
         DataType::Int32 => Some(10),
-        DataType::Int64 => Some(20),
+        DataType::Int64 => Some(19),
         _ => None,
     };
-    digits(from).is_some_and(|needed| match to {
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => true,
-        DataType::Decimal128(precision, scale) => {
-            *scale >= 0 && i16::from(*precision) - i16::from(*scale) >= needed
+    let width = |precision: &u8, scale: &i8| i16::from(*precision) - i16::from(*scale);
+    match (from, to) {
+        _ if from == to => true,
+        (DataType::Null, _) => true,
+        (_, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+            digits(from).is_some()
+                || matches!(
+                    from,
+                    DataType::Decimal128(..)
+                        | DataType::Boolean
+                        | DataType::Utf8
+                        | DataType::LargeUtf8
+                        | DataType::Utf8View
+                )
         }
-        _ => digits(to).is_some_and(|wider| wider > needed),
-    })
+        (DataType::Boolean, _) => digits(to).is_some(),
+        (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+            width(p2, s2) >= width(p1, s1) && s2 >= s1
+        }
+        (DataType::Decimal128(precision, scale), _) => {
+            *scale == 0
+                && match to {
+                    DataType::Int8 => *precision <= 2,
+                    DataType::Int16 => *precision <= 4,
+                    DataType::Int32 => *precision <= 9,
+                    DataType::Int64 => *precision <= 18,
+                    _ => false,
+                }
+        }
+        (_, DataType::Decimal128(precision, scale)) => {
+            digits(from).is_some_and(|needed| *scale >= 0 && width(precision, scale) >= needed)
+        }
+        (DataType::Int8 | DataType::Int16, DataType::Float32)
+        | (DataType::Int8 | DataType::Int16 | DataType::Int32, DataType::Float64) => true,
+        _ => digits(from)
+            .zip(digits(to))
+            .is_some_and(|(needed, wider)| wider > needed),
+    }
 }
 
 fn normalize_keys(
