@@ -5,7 +5,7 @@ import json
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 import pytest
 from jinja2 import Template
@@ -74,9 +74,18 @@ def variable_for_table_location(name: str, table: str, spark, variables: dict) -
     """
     rows = spark.sql(f"DESCRIBE EXTENDED {table}").collect()
     location = next(r.data_type for r in rows if r.col_name == "Location")
-    if location.startswith("file:"):
-        location = unquote(location.removeprefix("file://").removeprefix("file:"))
+    if location[:5].lower() == "file:":
+        location = unquote(urlparse(location).path)
     variables[name] = PathWrapper(Path(location))
+    return variables
+
+
+@given(parsers.parse("variable {name} for subdirectory {subdir} of {location_var}"), target_fixture="variables")
+def variable_for_subdirectory(name: str, subdir: str, location_var: str, variables: dict) -> dict:
+    """Defines a variable pointing to a subdirectory of a location."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    variables[name] = PathWrapper(Path(location.path) / subdir)
     return variables
 
 

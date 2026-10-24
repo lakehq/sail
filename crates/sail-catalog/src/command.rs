@@ -1243,22 +1243,25 @@ impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatu
 }
 
 /// Resolves a table location to the local directory that Sail's own table I/O reads and writes:
-/// a `file:` URI is percent-decoded, a bare path is taken literally, and a relative path is
-/// resolved against the current directory. A location with any other scheme is not local.
+/// a `file:` URI is converted to a path (percent-decoded, `localhost` authority accepted), a bare
+/// path is taken literally, and a relative path is resolved against the current directory.
+/// A location with any other scheme is not local.
 fn local_table_dir(location: &str) -> CatalogResult<Option<std::path::PathBuf>> {
-    let path = if let Some(uri_path) = location
-        .strip_prefix("file://")
-        .or_else(|| location.strip_prefix("file:"))
+    if location
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
     {
-        percent_encoding::percent_decode_str(uri_path)
-            .decode_utf8()
-            .map_err(|e| {
-                CatalogError::External(format!(
-                    "TRUNCATE TABLE cannot decode table location {location}: {e}"
-                ))
-            })?
-            .into_owned()
-    } else if location.split_once(':').is_some_and(|(scheme, _)| {
+        let path = url::Url::parse(location)
+            .ok()
+            .and_then(|url| url.to_file_path().ok());
+        return match path {
+            Some(path) => Ok(Some(path)),
+            None => Err(CatalogError::External(format!(
+                "TRUNCATE TABLE cannot resolve the table location {location} to a local path"
+            ))),
+        };
+    }
+    if location.split_once(':').is_some_and(|(scheme, _)| {
         scheme.len() > 1
             && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
             && scheme
@@ -1266,15 +1269,13 @@ fn local_table_dir(location: &str) -> CatalogResult<Option<std::path::PathBuf>> 
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
     }) {
         return Ok(None);
-    } else {
-        location.to_string()
-    };
-    if path.is_empty() {
+    }
+    if location.is_empty() {
         return Err(CatalogError::External(
             "TRUNCATE TABLE requires a non-empty table location".to_string(),
         ));
     }
-    let path = std::path::PathBuf::from(path);
+    let path = std::path::PathBuf::from(location);
     if path.is_absolute() {
         return Ok(Some(path));
     }
@@ -1286,30 +1287,26 @@ fn local_table_dir(location: &str) -> CatalogResult<Option<std::path::PathBuf>> 
 
 /// Empties the partition directories of a Hive-partitioned table (`col=value/...`, one level per
 /// partition column) and leaves everything else under `dir` in place, as Spark's
-/// `TruncateTableCommand` does with the partition locations it gets from the catalog.
+/// `TruncateTableCommand` does with the partition locations it gets from the catalog. Each
+/// partition directory is replaced by an empty one, so a symlinked partition becomes a plain
+/// directory and its target is left alone.
 fn clear_partition_dirs(dir: &std::path::Path, columns: &[String]) -> std::io::Result<()> {
     let Some((column, rest)) = columns.split_first() else {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                std::fs::remove_dir_all(entry.path())?;
-            } else {
-                std::fs::remove_file(entry.path())?;
-            }
-        }
-        return Ok(());
+        return replace_with_empty_dir(dir);
     };
     let prefix = format!("{column}=");
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        let name = entry.file_name();
-        let is_partition = entry.file_type()?.is_dir()
-            && name
+        let path = entry.path();
+        // `Path::is_dir` follows symlinks, as the table reads do.
+        let is_partition = path.is_dir()
+            && entry
+                .file_name()
                 .to_str()
                 .and_then(|n| n.get(..prefix.len()))
                 .is_some_and(|head| head.eq_ignore_ascii_case(&prefix));
         if is_partition {
-            clear_partition_dirs(&entry.path(), rest)?;
+            clear_partition_dirs(&path, rest)?;
         }
     }
     Ok(())
@@ -1828,11 +1825,14 @@ mod tests {
         );
     }
     #[test]
-    fn test_local_table_dir_decodes_file_uris_only() {
+    fn test_local_table_dir_converts_file_uris_only() {
         let dir = |location: &str| local_table_dir(location).ok().flatten();
         let spaced = Some(std::path::PathBuf::from("/tmp/a b"));
         assert_eq!(dir("file:///tmp/a%20b"), spaced);
+        assert_eq!(dir("FILE:///tmp/a%20b"), spaced);
         assert_eq!(dir("file:/tmp/a%20b"), spaced);
+        // `localhost` is an empty authority, as in the table I/O
+        assert_eq!(dir("file://localhost/tmp/a%20b"), spaced);
         // a bare path is taken literally, so a real `%` is preserved
         assert_eq!(
             dir("/tmp/a%20b"),
@@ -1856,7 +1856,7 @@ mod tests {
         for location in ["s3://bucket/key", "memory:///t", "hdfs://nn/path"] {
             assert!(matches!(local_table_dir(location), Ok(None)), "{location}");
         }
-        for location in ["", "file://", "file:///tmp/%FF"] {
+        for location in ["", "file://otherhost/tmp/t"] {
             assert!(local_table_dir(location).is_err(), "{location}");
         }
     }

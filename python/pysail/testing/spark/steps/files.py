@@ -377,3 +377,29 @@ def location_mode_is(location_var: str, mode: str, variables: dict) -> None:
     assert location is not None, f"Variable {location_var!r} not found"
     actual = stat.S_IMODE(Path(location.path).stat().st_mode)
     assert actual == int(mode, 8), f"Expected mode {mode} on {location.path}, got {oct(actual)}"
+
+
+@given(parsers.parse("directory {subdir} of {location_var} is moved to {target_var} and replaced by a symlink"))
+def subdirectory_is_moved_and_symlinked(subdir: str, location_var: str, target_var: str, variables: dict) -> None:
+    """Moves a subdirectory of the location to the target path and leaves a symlink in its place."""
+    location = variables.get(location_var)
+    target = variables.get(target_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    assert target is not None, f"Variable {target_var!r} not found"
+    source = Path(location.path) / subdir
+    assert source.is_dir(), f"Directory {source} does not exist"
+    Path(target.path).parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), str(target.path))
+    source.symlink_to(Path(target.path), target_is_directory=True)
+
+
+@then(parsers.parse("{location_var} is a symlink"))
+def location_is_symlink(location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    assert Path(location.path).is_symlink(), f"{location.path} is not a symlink"
+
+
+@then(parsers.parse("the working directory has no entry named {name}"))
+def working_directory_has_no_entry(name: str) -> None:
+    assert not (Path.cwd() / name).exists(), f"{name} was created in the working directory"

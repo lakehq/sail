@@ -71,6 +71,204 @@ Feature: TRUNCATE TABLE
       | 0   |
 
   @sail-only
+  Scenario: TRUNCATE TABLE resolves a file URI with a localhost authority like the table I/O
+    Given variable warehouse for temporary directory truncate_localhost_warehouse
+    Given config spark.sql.warehouse.dir = file://localhost{{ warehouse.string }}
+    Given final statement
+      """
+      DROP TABLE IF EXISTS truncate_localhost_t
+      """
+    Given statement
+      """
+      CREATE TABLE truncate_localhost_t (id INT) USING PARQUET
+      """
+    Given statement
+      """
+      INSERT INTO truncate_localhost_t VALUES (1), (2)
+      """
+    Given variable table_dir for location of table truncate_localhost_t
+    Then data files in table_dir count is at least 1
+    Given statement
+      """
+      TRUNCATE TABLE truncate_localhost_t
+      """
+    Then data files in table_dir count is 0
+    When query
+      """
+      SELECT COUNT(*) AS cnt FROM truncate_localhost_t
+      """
+    Then query result
+      | cnt |
+      | 0   |
+    And the working directory has no entry named localhost
+
+  @sail-only
+  Scenario: TRUNCATE TABLE replaces a symlinked partition directory and leaves its target untouched
+    Given variable warehouse for temporary directory truncate_symlink_part_warehouse
+    Given config spark.sql.warehouse.dir = {{ warehouse.string }}
+    Given variable elsewhere for temporary directory truncate_symlink_part_elsewhere
+    Given final statement
+      """
+      DROP TABLE IF EXISTS truncate_symlink_part_t
+      """
+    Given statement
+      """
+      CREATE TABLE truncate_symlink_part_t (id INT, p INT) USING PARQUET PARTITIONED BY (p)
+      """
+    Given statement
+      """
+      INSERT INTO truncate_symlink_part_t VALUES (1, 1), (2, 2)
+      """
+    Given variable table_dir for location of table truncate_symlink_part_t
+    Given directory p=2 of table_dir is moved to elsewhere and replaced by a symlink
+    Given variable part_dir for subdirectory p=2 of table_dir
+    Given statement
+      """
+      TRUNCATE TABLE truncate_symlink_part_t
+      """
+    When query
+      """
+      SELECT COUNT(*) AS cnt FROM truncate_symlink_part_t
+      """
+    Then query result
+      | cnt |
+      | 0   |
+    And part_dir is a directory and not a symlink
+    And data files in elsewhere count is at least 1
+
+  @sail-only
+  Scenario: TRUNCATE TABLE accepts an upper-case file scheme in the table location
+    Given variable warehouse for temporary directory truncate_upper_scheme_warehouse
+    Given config spark.sql.warehouse.dir = FILE://{{ warehouse.string }}
+    Given final statement
+      """
+      DROP TABLE IF EXISTS truncate_upper_scheme_t
+      """
+    Given statement
+      """
+      CREATE TABLE truncate_upper_scheme_t (id INT) USING PARQUET
+      """
+    Given statement
+      """
+      INSERT INTO truncate_upper_scheme_t VALUES (1), (2)
+      """
+    Given variable table_dir for location of table truncate_upper_scheme_t
+    Then data files in table_dir count is at least 1
+    Given statement
+      """
+      TRUNCATE TABLE truncate_upper_scheme_t
+      """
+    Then data files in table_dir count is 0
+    When query
+      """
+      SELECT COUNT(*) AS cnt FROM truncate_upper_scheme_t
+      """
+    Then query result
+      | cnt |
+      | 0   |
+
+  @sail-only
+  Scenario: TRUNCATE TABLE follows a symlinked parent partition and replaces a symlinked leaf partition
+    Given variable warehouse for temporary directory truncate_nested_symlink_warehouse
+    Given config spark.sql.warehouse.dir = {{ warehouse.string }}
+    Given variable leaf_target for temporary directory truncate_nested_leaf_target
+    Given variable mid_target for temporary directory truncate_nested_mid_target
+    Given final statement
+      """
+      DROP TABLE IF EXISTS truncate_nested_symlink_t
+      """
+    Given statement
+      """
+      CREATE TABLE truncate_nested_symlink_t (id INT, p INT, q INT) USING PARQUET PARTITIONED BY (p, q)
+      """
+    Given statement
+      """
+      INSERT INTO truncate_nested_symlink_t VALUES (1, 1, 1), (2, 2, 3), (3, 5, 6)
+      """
+    Given variable table_dir for location of table truncate_nested_symlink_t
+    Given directory p=2/q=3 of table_dir is moved to leaf_target and replaced by a symlink
+    Given directory p=5 of table_dir is moved to mid_target and replaced by a symlink
+    Given variable leaf_dir for subdirectory p=2/q=3 of table_dir
+    Given variable mid_dir for subdirectory p=5 of table_dir
+    Given statement
+      """
+      TRUNCATE TABLE truncate_nested_symlink_t
+      """
+    When query
+      """
+      SELECT COUNT(*) AS cnt FROM truncate_nested_symlink_t
+      """
+    Then query result
+      | cnt |
+      | 0   |
+    And leaf_dir is a directory and not a symlink
+    And data files in leaf_target count is at least 1
+    And mid_dir is a symlink
+    And data files in mid_target count is 0
+
+  @sail-only
+  Scenario: TRUNCATE TABLE leaves a dangling symlinked partition as it is
+    Given variable warehouse for temporary directory truncate_dangling_warehouse
+    Given config spark.sql.warehouse.dir = {{ warehouse.string }}
+    Given variable elsewhere for temporary directory truncate_dangling_elsewhere
+    Given final statement
+      """
+      DROP TABLE IF EXISTS truncate_dangling_t
+      """
+    Given statement
+      """
+      CREATE TABLE truncate_dangling_t (id INT, p INT) USING PARQUET PARTITIONED BY (p)
+      """
+    Given statement
+      """
+      INSERT INTO truncate_dangling_t VALUES (1, 1), (2, 2)
+      """
+    Given variable table_dir for location of table truncate_dangling_t
+    Given directory p=2 of table_dir is moved to elsewhere and replaced by a symlink
+    Given elsewhere is removed
+    Given variable part_dir for subdirectory p=2 of table_dir
+    Given statement
+      """
+      TRUNCATE TABLE truncate_dangling_t
+      """
+    When query
+      """
+      SELECT COUNT(*) AS cnt FROM truncate_dangling_t
+      """
+    Then query result
+      | cnt |
+      | 0   |
+    And part_dir is a symlink
+
+  @sail-only
+  Scenario: TRUNCATE TABLE empties partitions whose names need escaping and the null partition
+    Given variable warehouse for temporary directory truncate_escaped_warehouse
+    Given config spark.sql.warehouse.dir = {{ warehouse.string }}
+    Given final statement
+      """
+      DROP TABLE IF EXISTS truncate_escaped_t
+      """
+    Given statement
+      """
+      CREATE TABLE truncate_escaped_t (id INT, `My Col` STRING) USING PARQUET PARTITIONED BY (`My Col`)
+      """
+    Given statement
+      """
+      INSERT INTO truncate_escaped_t VALUES (1, 'a/b'), (2, 'x y'), (3, NULL), (4, '100%'), (5, 'a=b')
+      """
+    Given statement
+      """
+      TRUNCATE TABLE truncate_escaped_t
+      """
+    When query
+      """
+      SELECT COUNT(*) AS cnt FROM truncate_escaped_t
+      """
+    Then query result
+      | cnt |
+      | 0   |
+
+  @sail-only
   Scenario: TRUNCATE TABLE twice leaves a table that can be written again
     Given variable warehouse for temporary directory truncate_twice_warehouse
     Given config spark.sql.warehouse.dir = {{ warehouse.string }}
