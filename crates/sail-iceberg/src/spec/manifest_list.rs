@@ -46,6 +46,24 @@ fn optional_avro_long(value: &AvroValue) -> Result<Option<i64>, String> {
     }
 }
 
+fn optional_avro_bool(value: &AvroValue) -> Result<Option<bool>, String> {
+    match value {
+        AvroValue::Boolean(value) => Ok(Some(*value)),
+        AvroValue::Union(_, value) => optional_avro_bool(value.as_ref()),
+        AvroValue::Null => Ok(None),
+        _ => Err("boolean or null".to_string()),
+    }
+}
+
+fn optional_avro_bytes(value: &AvroValue) -> Result<Option<Vec<u8>>, String> {
+    match value {
+        AvroValue::Bytes(value) => Ok(Some(value.clone())),
+        AvroValue::Union(_, value) => optional_avro_bytes(value.as_ref()),
+        AvroValue::Null => Ok(None),
+        _ => Err("butes or null".to_string()),
+    }
+}
+
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
 ///
@@ -424,18 +442,18 @@ impl ManifestList {
                                     let getf =
                                         |n: &str| fs.iter().find(|(k, _)| k == n).map(|(_, v)| v);
                                     let contains_null = matches!(getf("contains_null"), Some(AvroValue::Boolean(b)) if *b);
-                                    let contains_nan = match getf("contains_nan") {
-                                        Some(AvroValue::Boolean(b)) => Some(*b),
-                                        _ => None,
-                                    };
-                                    let lower_bound_bytes = match getf("lower_bound") {
-                                        Some(AvroValue::Bytes(b)) => Some(b.clone()),
-                                        _ => None,
-                                    };
-                                    let upper_bound_bytes = match getf("upper_bound") {
-                                        Some(AvroValue::Bytes(b)) => Some(b.clone()),
-                                        _ => None,
-                                    };
+                                    let contains_nan = getf("contains_nan")
+                                        .map(optional_avro_bool)
+                                        .transpose()?
+                                        .flatten();
+                                    let lower_bound_bytes = getf("lower_bound")
+                                        .map(optional_avro_bytes)
+                                        .transpose()?
+                                        .flatten();
+                                    let upper_bound_bytes = getf("upper_bound")
+                                        .map(optional_avro_bytes)
+                                        .transpose()?
+                                        .flatten();
                                     let mut fs = FieldSummary::new(contains_null);
                                     if let Some(b) = contains_nan {
                                         fs = fs.with_contains_nan(b);
@@ -1118,5 +1136,67 @@ mod tests {
         let parsed = ManifestList::parse_with_version(&bytes, FormatVersion::V1)
             .expect("legacy Sail v1 manifest list");
         assert_eq!(parsed.entries, vec![manifest_file()]);
+    }
+
+    #[test]
+    fn v2_fallback_preserves_partition_summary_bounds() {
+        let AvroValue::Record(mut fields) = v1_manifest_list_record_with_unknown_counts() else {
+            unreachable!("fixture is a record")
+        };
+
+        let summary = AvroValue::Record(vec![
+            ("contains_null".to_string(), AvroValue::Boolean(false)),
+            (
+                "contains_nan".to_string(),
+                AvroValue::Union(1, Box::new(AvroValue::Boolean(false))),
+            ),
+            (
+                "lower_bound".to_string(),
+                AvroValue::Union(1, Box::new(AvroValue::Bytes(vec![1, 0, 0, 0]))),
+            ),
+            (
+                "upper_bound".to_string(),
+                AvroValue::Union(1, Box::new(AvroValue::Bytes(vec![9, 0, 0, 0]))),
+            ),
+        ]);
+        fields.push((
+            "partitions".to_string(),
+            AvroValue::Union(1, Box::new(AvroValue::Array(vec![summary]))),
+        ));
+
+        let manifest = ManifestList::parse_manifest_v2_fallback(&AvroValue::Record(fields))
+            .expect("manifest list entry with partition summaries");
+
+        assert_eq!(
+            manifest.partitions,
+            Some(vec![
+                FieldSummary::new(false)
+                    .with_contains_nan(false)
+                    .with_lower_bound_bytes(vec![1, 0, 0, 0])
+                    .with_upper_bound_bytes(vec![9, 0, 0, 0])
+            ])
+        );
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_partition_summary_bounds() {
+        let manifest: ManifestFile = ManifestFile {
+            partitions: Some(vec![
+                FieldSummary::new(false)
+                    .with_contains_nan(false)
+                    .with_lower_bound_bytes(vec![1, 0, 0, 0])
+                    .with_upper_bound_bytes(vec![9, 0, 0, 0]),
+            ]),
+            ..manifest_file()
+        };
+        let mut writer: ManifestListWriter = ManifestListWriter::new();
+        writer.append(manifest.clone());
+        let bytes: Vec<u8> = writer
+            .to_bytes(FormatVersion::V2)
+            .expect("manifest list byte");
+
+        let parsed: ManifestList =
+            ManifestList::parse_with_version(&bytes, FormatVersion::V2).expect("v2 manifest list");
+        assert_eq!(parsed.entries, vec![manifest]);
     }
 }
