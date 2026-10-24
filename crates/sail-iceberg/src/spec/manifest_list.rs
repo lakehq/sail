@@ -1004,6 +1004,9 @@ impl From<_serde::ManifestFileV1> for ManifestFile {
 #[cfg(test)]
 #[expect(clippy::expect_used)]
 mod tests {
+    use arrow_schema::Field;
+    use datafusion_expr::Expr::IsFalse;
+
     use super::*;
 
     fn manifest_file() -> ManifestFile {
@@ -1118,5 +1121,67 @@ mod tests {
         let parsed = ManifestList::parse_with_version(&bytes, FormatVersion::V1)
             .expect("legacy Sail v1 manifest list");
         assert_eq!(parsed.entries, vec![manifest_file()]);
+    }
+
+    #[test]
+    fn v2_fallback_preserves_partition_summary_bounds() {
+        let AvroValue::Record(mut fields) = v1_manifest_list_record_with_unknown_counts() else {
+            unreachable!("fixture is a record")
+        };
+
+        let summary = AvroValue::Record(vec![
+            ("contains_null".to_string(), AvroValue::Boolean(false)),
+            (
+                "contains_nan".to_string(),
+                AvroValue::Union(1, Box::new(AvroValue::Boolean(false))),
+            ),
+            (
+                "lower_bound".to_string(),
+                AvroValue::Union(1, Box::new(AvroValue::Bytes(vec![1, 0, 0, 0]))),
+            ),
+            (
+                "upper_bound".to_string(),
+                AvroValue::Union(1, Box::new(AvroValue::Bytes(vec![9, 0, 0, 0]))),
+            ),
+        ]);
+        fields.push((
+            "partitions".to_string(),
+            AvroValue::Union(1, Box::new(AvroValue::Array(vec![summary]))),
+        ));
+
+        let manifest = ManifestList::parse_manifest_v2_fallback(&AvroValue::Record(fields))
+            .expect("manifest list entry with partition summaries");
+
+        assert_eq!(
+            manifest.partitions,
+            Some(vec![
+                FieldSummary::new(false)
+                    .with_contains_nan(false)
+                    .with_lower_bound_bytes(vec![1, 0, 0, 0])
+                    .with_upper_bound_bytes(vec![9, 0, 0, 0])
+            ])
+        );
+    }
+
+    #[test]
+    fn v2_round_trip_preserves_partition_summary_bounds() {
+        let manifest: ManifestFile = ManifestFile {
+            partitions: Some(vec![
+                FieldSummary::new(false)
+                    .with_contains_nan(false)
+                    .with_lower_bound_bytes(vec![1, 0, 0, 0])
+                    .with_upper_bound_bytes(vec![9, 0, 0, 0]),
+            ]),
+            ..manifest_file()
+        };
+        let mut writer: ManifestListWriter = ManifestListWriter::new();
+        writer.append(manifest.clone());
+        let bytes: Vec<u8> = writer
+            .to_bytes(FormatVersion::V2)
+            .expect("manifest list byte");
+
+        let parsed: ManifestList =
+            ManifestList::parse_with_version(&bytes, FormatVersion::V2).expect("v2 manifest list");
+        assert_eq!(parsed.entries, vec![manifest]);
     }
 }
