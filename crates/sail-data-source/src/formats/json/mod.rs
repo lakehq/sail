@@ -11,6 +11,8 @@ use crate::options::r#gen::{JsonReadOptions, JsonWriteOptions};
 
 mod options;
 mod read;
+mod records;
+mod source;
 mod write;
 
 pub use read::JsonReadFormat;

@@ -151,7 +151,8 @@ impl TemporaryViewManager {
         Ok(())
     }
 
-    pub fn drop_view(&self, name: &str, if_exists: bool) -> CatalogResult<()> {
+    /// Drops the view and returns whether it existed.
+    pub fn drop_view(&self, name: &str, if_exists: bool) -> CatalogResult<bool> {
         let mut views = self.write()?;
         if !views.contains_key(name) && !if_exists {
             return Err(CatalogError::NotFound(
@@ -159,8 +160,7 @@ impl TemporaryViewManager {
                 name.to_string(),
             ));
         }
-        views.remove(name);
-        Ok(())
+        Ok(views.remove(name).is_some())
     }
 
     pub fn get_view(&self, name: &str) -> CatalogResult<Arc<TemporaryView>> {

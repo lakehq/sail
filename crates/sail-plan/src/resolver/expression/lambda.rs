@@ -34,6 +34,9 @@ fn take_spec_lambda_argument(
     }
 }
 
+/// The name of a lambda variable in the name of an expression, as in Spark.
+const NAMED_LAMBDA_VARIABLE: &str = "namedlambdavariable()";
+
 impl PlanResolver<'_> {
     /// Resolves the arguments of a built-in higher-order function.
     ///
@@ -164,10 +167,11 @@ impl PlanResolver<'_> {
             self.resolve_named_expression(function, schema, scope.state())
                 .await?
         };
+        // Spark shows every lambda variable as `namedlambdavariable()` in the name.
         let name = format!(
             "lambdafunction({}, {})",
             body.name.clone().one()?,
-            params.join(", ")
+            vec![NAMED_LAMBDA_VARIABLE; params.len()].join(", ")
         );
         Ok(NamedExpr::new(
             vec![name],
@@ -197,7 +201,7 @@ impl PlanResolver<'_> {
                 }
             })?;
         Ok(NamedExpr::new(
-            vec![declared.clone()],
+            vec![NAMED_LAMBDA_VARIABLE.to_string()],
             expr::Expr::LambdaVariable(LambdaVariable::new(declared, field)),
         ))
     }

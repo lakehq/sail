@@ -17,10 +17,11 @@ pub trait StreamUDF: DynObject + Debug + Send + Sync {
     /// The schema of the output stream.
     fn output_schema(&self) -> SchemaRef;
 
-    /// Invoke the UDF to map input stream to output stream.
+    /// Invoke the UDF to map the input stream of a partition to the output stream.
     fn invoke(
         &self,
         input: SendableRecordBatchStream,
+        partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
 

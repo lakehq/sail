@@ -1,12 +1,17 @@
-use datafusion_expr::LogicalPlan;
+use std::sync::Arc;
+
+use datafusion_common::DFSchema;
+use datafusion_expr::{EmptyRelation, LogicalPlan};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions,
 };
+use sail_catalog::utils::quote_names_if_needed;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
+    TableKind,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -49,6 +54,13 @@ impl PlanResolver<'_> {
         }
         let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
+        // The `path` option is the location of the table, as in Spark.
+        let location = location.or_else(|| {
+            options
+                .iter()
+                .find(|(k, v)| k.eq_ignore_ascii_case("path") && !v.trim().is_empty())
+                .map(|(_, v)| v.clone())
+        });
         let location = if let Some(location) = location {
             location
         } else {
@@ -587,6 +599,37 @@ impl PlanResolver<'_> {
             if_exists,
             options,
         })
+    }
+
+    /// The partitions are discovered from the files when the table is read,
+    /// so there is nothing to recover, but the table must be partitioned as in Spark.
+    pub(in super::super) async fn resolve_catalog_recover_partitions(
+        &self,
+        table: spec::ObjectName,
+    ) -> PlanResult<LogicalPlan> {
+        let status = self
+            .ctx
+            .extension::<CatalogManager>()?
+            .get_table_or_view(table.parts())
+            .await?;
+        let name = quote_names_if_needed(table.parts());
+        match status.kind {
+            TableKind::Table { partition_by, .. } if !partition_by.is_empty() => {}
+            TableKind::Table { .. } => {
+                return Err(PlanError::AnalysisError(format!(
+                    "[NOT_A_PARTITIONED_TABLE] Operation ALTER TABLE RECOVER PARTITIONS is not allowed for {name} because it is not a partitioned table."
+                )));
+            }
+            _ => {
+                return Err(PlanError::AnalysisError(format!(
+                    "{name} is a view. 'ALTER TABLE ... RECOVER PARTITIONS' expects a table."
+                )));
+            }
+        }
+        Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::empty()),
+        }))
     }
 }
 

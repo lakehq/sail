@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
     correlation, count, covariance, grouping, median, min_max, stddev, sum, variance,
@@ -43,9 +43,9 @@ use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark
 use crate::error::{PlanError, PlanResult};
 use crate::function::aggregate::coerce_string_sum_arguments;
 use crate::function::common::{
-    WinFunction, WinFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
-    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg,
+    WinFunction, WinFunctionBuilder, WinFunctionInput, count_min_sketch_args,
+    get_arguments_and_null_treatment, get_null_treatment, hll_args_with_default_lg,
+    hll_union_args_with_default_allow_different_lg, theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -103,15 +103,30 @@ fn avg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
-    if args
+    let arg_type = args
         .first()
         .map(|arg| arg.get_type(input.function_context.schema))
-        .transpose()?
-        == Some(DataType::Null)
-    {
+        .transpose()?;
+    if arg_type == Some(DataType::Null) {
         return Ok(lit(ScalarValue::Null));
     }
-    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+    // The decimal average is rounded half up as in Spark, as for the aggregate `avg`.
+    let rounding = match arg_type {
+        Some(DataType::Decimal128(precision, scale))
+            if precision <= DECIMAL128_MAX_PRECISION - 5 && scale <= DECIMAL128_MAX_SCALE - 5 =>
+        {
+            Some((precision, scale))
+        }
+        _ => None,
+    };
+    let args = match rounding {
+        Some((precision, scale)) => args
+            .into_iter()
+            .map(|arg| cast(arg, DataType::Decimal128(precision + 1, scale + 1)))
+            .collect(),
+        None => args,
+    };
+    let avg = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(average::avg_udaf()),
         params: WindowFunctionParams {
             args,
@@ -122,7 +137,11 @@ fn avg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
             distinct,
         },
-    })))
+    }));
+    Ok(match rounding {
+        Some((precision, scale)) => cast(avg, DataType::Decimal128(precision + 4, scale + 4)),
+        None => avg,
+    })
 }
 
 fn spark_sum(input: WinFunctionInput) -> PlanResult<expr::Expr> {
@@ -606,6 +625,25 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         .end()?)
 }
 
+/// `lag` and `lead`, where a literal default that cannot be cast to the type of the input
+/// is `NULL` outside ANSI mode, as with a Spark cast (for example, `NaN` for a decimal input).
+fn offset_window_function(
+    function: fn() -> Arc<datafusion_expr::WindowUDF>,
+) -> impl Fn(WinFunctionInput) -> PlanResult<expr::Expr> + Send + Sync + 'static {
+    move |mut input| {
+        if !input.function_context.plan_config.ansi_mode
+            && let [value, _, default] = input.arguments.as_mut_slice()
+            && let expr::Expr::Literal(scalar, _) = default
+        {
+            let data_type = value.get_type(input.function_context.schema)?;
+            if scalar.data_type() != data_type && scalar.cast_to(&data_type).is_err() {
+                *default = lit(ScalarValue::try_from(&data_type)?);
+            }
+        }
+        (WinFunctionBuilder::window(function))(input)
+    }
+}
+
 fn median(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let WinFunctionInput {
         arguments,
@@ -694,10 +732,10 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("dense_rank", F::window(dense_rank_udwf)),
         ("first", F::window(first_value_udwf)),
         ("first_value", F::window(first_value_udwf)),
-        ("lag", F::window(lag_udwf)),
+        ("lag", F::custom(offset_window_function(lag_udwf))),
         ("last", F::window(last_value_udwf)),
         ("last_value", F::window(last_value_udwf)),
-        ("lead", F::window(lead_udwf)),
+        ("lead", F::custom(offset_window_function(lead_udwf))),
         ("nth_value", F::custom(nth_value)),
         ("ntile", F::window(spark_ntile_udwf)),
         ("rank", F::window(rank_udwf)),

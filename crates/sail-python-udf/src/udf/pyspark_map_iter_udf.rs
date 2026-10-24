@@ -80,6 +80,7 @@ impl StreamUDF for PySparkMapIterUDF {
     fn invoke(
         &self,
         input: SendableRecordBatchStream,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let function = Python::attach(|py| -> PyUdfResult<_> {
@@ -93,6 +94,7 @@ impl StreamUDF for PySparkMapIterUDF {
         Ok(Box::pin(PyMapStream::new(
             rename_record_batch_stream(input, &self.input_names)?,
             function,
+            partition,
             self.output_schema.clone(),
             self.config.arrow_use_large_var_types,
         )))

@@ -723,3 +723,38 @@ def test_csv_read_field_count_mismatch(spark, tmp_path):
     _write_csv(path, "data", b"a,b,c\n1\n1,2\n")
     df = spark.read.option("header", True).option("allowTruncatedRows", True).csv(str(path))
     assert df.select("c", "a").collect() == [Row(c=None, a="1"), Row(c=None, a="1")]
+
+
+@pytest.mark.parametrize(
+    ("line_sep", "read_options"),
+    [("|", {"lineSep": "|"}), ("\r\n", {})],
+    ids=["pipe", "crlf"],
+)
+def test_csv_write_line_sep(spark, tmp_path, line_sep, read_options):
+    path = tmp_path / "csv_line_sep"
+    df = spark.createDataFrame([(1, "a"), (2, "b")], "id int, v string")
+    df.coalesce(1).write.csv(str(path), lineSep=line_sep)
+    [file] = glob.glob(str(path / "*.csv"))
+    with open(file, newline="") as f:
+        assert f.read() == f"1,a{line_sep}2,b{line_sep}"
+    actual = spark.read.schema("id int, v string").options(**read_options).csv(str(path))
+    assert sorted(actual.collect()) == [Row(id=1, v="a"), Row(id=2, v="b")]
+
+
+def test_csv_enforce_schema_false_checks_the_header(spark, tmp_path):
+    path = tmp_path / "csv_header"
+    _write_csv(path, "data", b"f1,f2\n1,1000\n2000,2\n")
+
+    def read(schema, **options):
+        return spark.read.option("header", True).schema(schema).csv(str(path), **options)
+
+    with pytest.raises(Exception, match="CSV header does not conform to the schema"):
+        read("f2 int, f1 int", enforceSchema=False).collect()
+    with pytest.raises(Exception, match="Number of column in CSV header is not equal to number of fields"):
+        read("f1 int", enforceSchema=False).collect()
+    assert sorted(read("f1 int, f2 int", enforceSchema=False).collect()) == [
+        Row(f1=1, f2=1000),
+        Row(f1=2000, f2=2),
+    ]
+    # The header is ignored by default, and the schema is applied to the columns by position.
+    assert sorted(read("f2 int, f1 int").collect()) == [Row(f2=1, f1=1000), Row(f2=2000, f1=2)]

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion::functions::expr_fn::{btrim, coalesce, nvl};
+use datafusion::functions::expr_fn::{btrim, nvl};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
@@ -10,7 +10,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
-use datafusion_spark::function::array::expr_fn as array_fn;
+use datafusion_spark::function::array::shuffle::SparkShuffle;
 use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
@@ -156,11 +156,35 @@ fn array_element(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     expr_fn::array_element(array, element + lit(1_i64))
 }
 
-fn array_contains(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
-    Ok(coalesce(vec![
-        expr_fn::array_has(array.clone(), element),
-        when(array.is_not_null(), lit(false)).end()?,
-    ]))
+/// Returns null when the element is not found and the array has a null element,
+/// since the null element may or may not be equal to the value.
+fn array_contains(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+
+    let (array, element) = arguments.two()?;
+
+    let nullable_array_type =
+        with_list_value_nullability(&array.get_type(function_context.schema.as_ref())?, true);
+    let same_type_null_only_array = cast(
+        make_array(vec![lit(ScalarValue::Null)]),
+        nullable_array_type.clone(),
+    );
+    let array_has_null = expr_fn::array_has_any(
+        cast(array.clone(), nullable_array_type),
+        same_type_null_only_array,
+    );
+
+    Ok(when(
+        or(is_null(array.clone()), is_null(element.clone())),
+        lit(ScalarValue::Null),
+    )
+    .when(expr_fn::array_has(array, element), lit(true))
+    .when(array_has_null, lit(ScalarValue::Null))
+    .when(lit(true), lit(false))
+    .end()?)
 }
 
 fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
@@ -276,6 +300,56 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )
     .when(lit(true), expr_fn::array_has_any(left, right))
     .end()?)
+}
+
+/// Returns whether the element of a list type is nullable.
+fn list_value_nullability(data_type: &DataType) -> Option<bool> {
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) | DataType::FixedSizeList(field, _) => {
+            Some(field.is_nullable())
+        }
+        _ => None,
+    }
+}
+
+/// Spark set operations on arrays accept arrays whose elements differ only in nullability.
+/// Both arrays are cast to nullable elements in that case, since DataFusion requires
+/// the same element field. The result keeps the element nullability of Spark.
+fn array_set_operation(
+    input: ScalarFunctionInput,
+    func: fn(expr::Expr, expr::Expr) -> expr::Expr,
+    keep_left_nullability: bool,
+) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let schema = &function_context.schema;
+    let (left, right) = arguments.two()?;
+    let left_nullability = list_value_nullability(&left.get_type(schema.as_ref())?);
+    let right_nullability = list_value_nullability(&right.get_type(schema.as_ref())?);
+    match (left_nullability, right_nullability) {
+        (Some(l), Some(r)) if l != r => {
+            let left = cast_list_value_nullability(left, schema, true)?;
+            let right = cast_list_value_nullability(right, schema, true)?;
+            let result = func(left, right);
+            if keep_left_nullability && !l {
+                // The elements of the result come from the left array.
+                cast_list_value_nullability(result, schema, false)
+            } else {
+                Ok(result)
+            }
+        }
+        _ => Ok(func(left, right)),
+    }
+}
+
+fn array_except(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    array_set_operation(input, expr_fn::array_except, true)
+}
+
+fn array_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    array_set_operation(input, expr_fn::array_union, false)
 }
 
 fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -506,10 +580,10 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array", F::udf(SparkArray::new())),
         ("array_append", F::custom(array_append)),
         ("array_compact", F::unary(array_compact)),
-        ("array_contains", F::binary(array_contains)),
+        ("array_contains", F::custom(array_contains)),
         ("array_contains_all", F::binary(array_contains_all)),
         ("array_distinct", F::unary(expr_fn::array_distinct)),
-        ("array_except", F::binary(expr_fn::array_except)),
+        ("array_except", F::custom(array_except)),
         ("array_insert", F::custom(array_insert)),
         ("array_intersect", F::udf(ArrayIntersect::new())),
         ("array_join", F::udf(ArrayToString::new())),
@@ -523,13 +597,13 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
             "array_size",
             F::unary(|array| cast(expr_fn::array_length(array), DataType::Int32)),
         ),
-        ("array_union", F::binary(expr_fn::array_union)),
+        ("array_union", F::custom(array_union)),
         ("arrays_overlap", F::custom(arrays_overlap)),
         ("arrays_zip", F::custom(arrays_zip)),
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::custom(sequence)),
-        ("shuffle", F::unary(array_fn::shuffle)),
+        ("shuffle", F::udf(SparkShuffle::new())),
         ("slice", F::custom(slice)),
         ("sort_array", F::custom(sort_array)),
     ]

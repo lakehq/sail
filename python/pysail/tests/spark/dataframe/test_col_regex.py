@@ -117,3 +117,36 @@ def test_no_columns_match_preserves_row_count(spark):
 
     assert len(result.columns) == 0
     assert result.count() == len(data)
+
+
+def test_possessive_quantifier(spark):
+    """A possessive quantifier does not give back what it matched, as in Java."""
+    df = spark.createDataFrame([("a", 1), ("b", 2), ("c", 3)], ["Col1", "Col2"])
+    result = df.select(df.colRegex("`(Col1)?+.+`"))
+
+    assert result.columns == ["Col2"]
+    assert result.collect() == [(1,), (2,), (3,)]
+
+
+def test_alternatives_match_the_entire_column_name(spark):
+    df = spark.createDataFrame([(1, 2, 3, 4)], ["a", "abc", "bc", "xbc"])
+    result = df.select(df.colRegex("`a|bc`"))
+
+    assert result.columns == ["a", "bc"]
+
+
+def test_matching_is_case_insensitive_by_default(spark):
+    df = spark.createDataFrame([(1, 2)], ["Col1", "other"])
+    result = df.select(df.colRegex("`col1`"))
+
+    assert result.columns == ["Col1"]
+
+
+def test_matching_is_case_sensitive_when_configured(spark):
+    df = spark.createDataFrame([(1, 2)], ["Col1", "other"])
+    spark.conf.set("spark.sql.caseSensitive", "true")
+    try:
+        assert df.select(df.colRegex("`col1`")).columns == []
+        assert df.select(df.colRegex("`Col1`")).columns == ["Col1"]
+    finally:
+        spark.conf.unset("spark.sql.caseSensitive")

@@ -1,11 +1,12 @@
 use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion_common::arrow::array::ArrayData;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::{Bound, BoundObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python};
 use sail_common_datafusion::schema::{
-    normalize_array, normalize_data_type, normalize_record_batch, normalize_schema,
+    normalize_array, normalize_data_type, normalize_field_with_options, normalize_record_batch,
+    normalize_schema,
 };
 
 /// A trait that defines the custom behavior of converting Rust data to a Python object.
@@ -49,6 +50,25 @@ impl<'py> TryToPy<'py> for &[DataType] {
     ) -> Result<Self::Output, Self::Error> {
         self.iter()
             .map(|x| normalize_data_type(x, large_var_types, !large_var_types).to_pyarrow(py))
+            .collect::<PyResult<Vec<_>>>()
+            .map(|x| x.into_pyobject(py))?
+    }
+}
+
+impl<'py> TryToPy<'py> for &[FieldRef] {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn try_to_py(
+        &self,
+        py: Python<'py>,
+        large_var_types: bool,
+    ) -> Result<Self::Output, Self::Error> {
+        self.iter()
+            .map(|x| {
+                normalize_field_with_options(x, large_var_types, !large_var_types).to_pyarrow(py)
+            })
             .collect::<PyResult<Vec<_>>>()
             .map(|x| x.into_pyobject(py))?
     }

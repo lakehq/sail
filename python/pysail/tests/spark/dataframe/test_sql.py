@@ -1,4 +1,5 @@
 import pytest
+from pyspark.sql import Row
 
 
 @pytest.mark.parametrize("alias", ["", " AS t"], ids=["anonymous", "named"])
@@ -101,3 +102,11 @@ def test_predicate_negation(spark):
     assert spark.sql("SELECT NOT (1 NOT IN (1, 2))").collect() == [(True,)]
     with pytest.raises(Exception, match="NOT"):
         assert spark.sql("SELECT 1 NOT NOT IN (1, 2)").collect() == [(True,)]
+
+
+# Ported from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_connect_function.py,
+# SparkConnectFunctionTests.test_lambda_functions; a NULL in the first row does not decide the type.
+def test_values_map_column_with_null_in_first_row(spark):
+    df = spark.sql("SELECT * FROM VALUES (NULL), (MAP(2, 0)), (MAP(-1, 2, -3, -4)) AS t(m)")
+    assert df.schema.simpleString() == "struct<m:map<int,int>>"
+    assert df.collect() == [Row(m=None), Row(m={2: 0}), Row(m={-1: 2, -3: -4})]

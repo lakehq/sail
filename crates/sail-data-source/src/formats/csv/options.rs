@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use datafusion::arrow::csv::writer::Terminator;
 use datafusion::catalog::Session;
 use datafusion_common::config::CsvOptions;
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -29,6 +30,7 @@ impl BuildPartialOptions<CsvReadPartialOptions> for CsvOptions {
             compression: Some(self.compression.to_string()),
             allow_truncated_rows: self.truncated_rows,
             path_glob_filter: None,
+            enforce_schema: None,
         })
     }
 }
@@ -43,6 +45,7 @@ impl BuildPartialOptions<CsvWritePartialOptions> for CsvOptions {
             null_value: self.null_value,
             escape_quotes: self.double_quote,
             compression: Some(self.compression.to_string()),
+            line_sep: self.terminator.map(|b| (b as char).to_string()),
         })
     }
 }
@@ -64,6 +67,7 @@ impl CsvReadOptions {
             compression,
             allow_truncated_rows,
             path_glob_filter: _,
+            enforce_schema: _,
         } = self;
         let null_regex = match (null_value.as_str(), null_regex.as_str()) {
             (nv, nr) if !nv.is_empty() && !nr.is_empty() => {
@@ -150,6 +154,27 @@ impl CsvReadOptions {
 }
 
 impl CsvWriteOptions {
+    /// The line terminator for writing, which Spark allows to be a single character.
+    pub fn line_terminator(&self) -> DataSourceResult<Terminator> {
+        let invalid = |cause: String| DataSourceError::InvalidOption {
+            key: "line_sep".to_string(),
+            value: self.line_sep.clone(),
+            cause: Some(cause),
+        };
+        if self.line_sep == "\r\n" {
+            return Ok(Terminator::CRLF);
+        }
+        let mut chars = self.line_sep.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => char_to_u8(c, "line_sep")
+                .map(Terminator::Any)
+                .map_err(|e| invalid(e.to_string())),
+            _ => Err(invalid(
+                "'lineSep' can contain only 1 character".to_string(),
+            )),
+        }
+    }
+
     pub fn into_table_options(self) -> DataSourceResult<CsvOptions> {
         let CsvWriteOptions {
             delimiter,
@@ -159,6 +184,7 @@ impl CsvWriteOptions {
             null_value,
             escape_quotes,
             compression,
+            line_sep: _,
         } = self;
         let delimiter =
             char_to_u8(delimiter, "delimiter").map_err(|e| DataSourceError::InvalidOption {
@@ -234,6 +260,7 @@ impl ResolveOptions for CsvWriteOptions {
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::csv::writer::Terminator;
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
@@ -313,6 +340,22 @@ mod tests {
         assert_eq!(options.null_value, None);
         assert_eq!(options.null_regex, Some("MEOW".to_string()));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_csv_write_line_terminator() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        let terminator = |line_sep: &str| {
+            CsvWriteOptions::resolve(&state, vec![option_list(&[("lineSep", line_sep)])])
+                .and_then(|o| o.line_terminator())
+        };
+        assert!(matches!(terminator("|")?, Terminator::Any(b'|')));
+        assert!(matches!(terminator("\r\n")?, Terminator::CRLF));
+        assert!(terminator("||").is_err());
+        let default = CsvWriteOptions::resolve(&state, vec![])?.line_terminator()?;
+        assert!(matches!(default, Terminator::Any(b'\n')));
         Ok(())
     }
 

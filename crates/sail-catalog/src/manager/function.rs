@@ -105,11 +105,30 @@ impl CatalogManager {
         &self,
         function: &[T],
         if_exists: bool,
-        _is_temporary: bool,
+        is_temporary: bool,
     ) -> CatalogResult<()> {
         let [name] = function else {
-            return Err(CatalogError::NotSupported(
-                "qualified function name".to_string(),
+            if is_temporary {
+                return Err(CatalogError::NotSupported(
+                    "qualified function name".to_string(),
+                ));
+            }
+            // Persistent functions are not supported, so a qualified name never refers
+            // to an existing function. The database must still exist, as in Spark.
+            let (_, database) = function
+                .split_last()
+                .ok_or_else(|| CatalogError::InvalidArgument("empty function name".to_string()))?;
+            let _ = self.get_database_by_qualifier(database).await?;
+            if if_exists {
+                return Ok(());
+            }
+            return Err(CatalogError::NotFound(
+                CatalogObject::Function,
+                function
+                    .iter()
+                    .map(|part| part.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("."),
             ));
         };
         let mut state = self.state()?;

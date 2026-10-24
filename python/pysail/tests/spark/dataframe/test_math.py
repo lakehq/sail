@@ -123,6 +123,14 @@ def test_div(spark):
     assert spark.sql("SELECT INTERVAL '100' HOUR div INTERVAL '1' DAY AS result").collect() == [Row(result=4)]
 
 
+# Ported from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_connect_function.py,
+# SparkConnectFunctionTests.test_math_functions; the argument is implicitly cast to `int`.
+def test_factorial_casts_argument_to_int(spark):
+    assert spark.sql("SELECT factorial(5) AS v").collect() == [Row(v=120)]
+    assert spark.sql("SELECT factorial(CAST(2.5 AS DECIMAL(2, 1))) AS v").collect() == [Row(v=2)]
+    assert spark.sql("SELECT factorial(3.9D) AS v").collect() == [Row(v=6)]
+
+
 @pytest.mark.parametrize("data_type", ["float", "double"])
 @pytest.mark.parametrize("zero", [0.0, -0.0])
 def test_signed_zero_divisors(spark, data_type, zero):

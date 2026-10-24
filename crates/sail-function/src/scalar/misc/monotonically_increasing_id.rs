@@ -45,3 +45,43 @@ impl ScalarUDFImpl for SparkMonotonicallyIncreasingId {
         exec_err!("monotonically_increasing_id() was not rewritten into a partition-aware operator")
     }
 }
+
+/// A marker for Spark's `DistributedSequenceID`, which the Spark Connect client sends as the
+/// `distributed_sequence_id` function. It is replaced by consecutive row numbers starting from
+/// zero, in the order of the partitions, like Spark's `AttachDistributedSequence`.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkDistributedSequenceId {
+    signature: Signature,
+}
+
+impl Default for SparkDistributedSequenceId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkDistributedSequenceId {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::nullary(Volatility::Volatile),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkDistributedSequenceId {
+    fn name(&self) -> &str {
+        "distributed_sequence_id"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        exec_err!("distributed_sequence_id() was not rewritten into a sequence operator")
+    }
+}

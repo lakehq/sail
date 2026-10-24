@@ -457,7 +457,7 @@ pub async fn explain_string(
 ) -> PlanResult<ExplainString> {
     let collected = collect_plan_with(ctx, async {
         let resolver = PlanResolver::new(ctx, Arc::clone(&config));
-        let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+        let NamedPlan { plan, fields, .. } = resolver.resolve_named_plan(plan).await?;
         Ok((plan, fields))
     })
     .await?;

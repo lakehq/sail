@@ -134,7 +134,7 @@
   default:
     value: "false"
     parser: crate::options::parsers::parse_bool
-  supported: false
+  supported: true
   rust_type: bool
   scopes:
     - read
@@ -316,7 +316,7 @@
   default:
     value: "PERMISSIVE"
     parser: crate::options::parsers::parse_string
-  supported: false
+  supported: true
   rust_type: String
   scopes:
     - read
@@ -337,7 +337,7 @@
   default:
     value: ""
     parser: crate::options::parsers::parse_string
-  supported: false
+  supported: true
   rust_type: String
   scopes:
     - read
@@ -453,7 +453,7 @@
   default:
     value: "false"
     parser: crate::options::parsers::parse_bool
-  supported: false
+  supported: true
   rust_type: bool
   scopes:
     - read
@@ -475,10 +475,35 @@
     For example UTF-16BE, UTF-32LE. The default value is detected automatically when `multi_line` is set to true.
     JSON built-in functions ignore this option.
     For writing, specifies encoding (charset) of saved JSON files. JSON built-in functions ignore this option.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - encoding
+      parser: crate::options::parsers::parse_optional_string
+    - type: table_property
+      keys:
+        - option.encoding
+      parser: crate::options::parsers::parse_optional_string
+
+- key: encoding
+  description: |
+    For reading, allows to forcibly set one of standard basic or extended encoding for the JSON files.
+    For example UTF-16BE, UTF-32LE. The default value is detected automatically when `multi_line` is set to true.
+    JSON built-in functions ignore this option.
+    For writing, specifies encoding (charset) of saved JSON files. JSON built-in functions ignore this option.
+  default:
+    value: "UTF-8"
+    parser: crate::options::parsers::parse_string
   supported: false
   rust_type: String
   scopes:
-    - read
     - write
   origins:
     - type: option
@@ -495,10 +520,38 @@
     Sets the single character line separator that should be used for parsing.
     JSON built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
     For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
-  supported: false
-  rust_type: String
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
   scopes:
     - read
+  origins:
+    - type: option
+      keys:
+        - line_sep
+        - lineSep
+        - terminator
+      parser: crate::options::parsers::parse_optional_string
+    - type: table_property
+      keys:
+        - option.line_sep
+        - option.lineSep
+        - option.terminator
+      parser: crate::options::parsers::parse_optional_string
+
+- key: line_sep
+  description: |
+    Sets the single character line separator that should be used for parsing.
+    JSON built-in functions ignore this option. Supports \\r, \\r\\n and \\n.
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
+  default:
+    value: "\n"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
     - write
   origins:
     - type: option

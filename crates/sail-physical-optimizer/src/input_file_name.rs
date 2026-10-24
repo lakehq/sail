@@ -10,7 +10,9 @@ use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_expr::expressions::{Column, LambdaVariable};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::unnest::UnnestExec;
@@ -334,6 +336,26 @@ fn push_metadata_through_file_context(
             projection.schema().as_ref(),
         )?))
     };
+    // Limits keep the rows of their input unchanged, so the projection can move below them.
+    // `first()` and `take()` put the projection above a limit.
+    if let Some(limit) = projection.input().downcast_ref::<GlobalLimitExec>() {
+        return Ok(Transformed::yes(Arc::new(GlobalLimitExec::new(
+            project(limit.input())?,
+            limit.skip(),
+            limit.fetch(),
+        ))));
+    }
+    if let Some(limit) = projection.input().downcast_ref::<LocalLimitExec>() {
+        return Ok(Transformed::yes(Arc::new(LocalLimitExec::new(
+            project(limit.input())?,
+            limit.fetch(),
+        ))));
+    }
+    if let Some(coalesce) = projection.input().downcast_ref::<CoalescePartitionsExec>() {
+        return Ok(Transformed::yes(Arc::new(
+            CoalescePartitionsExec::new(project(coalesce.input())?).with_fetch(coalesce.fetch()),
+        )));
+    }
     if let Some(union) = projection.input().downcast_ref::<UnionExec>() {
         let inputs = union
             .inputs()

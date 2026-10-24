@@ -18,6 +18,12 @@ impl BuildPartialOptions<JsonReadPartialOptions> for JsonOptions {
             compression: Some(self.compression.to_string()),
             drop_field_if_all_null: None,
             path_glob_filter: None,
+            primitives_as_string: None,
+            mode: None,
+            column_name_of_corrupt_record: None,
+            multi_line: None,
+            encoding: None,
+            line_sep: None,
         })
     }
 }
@@ -26,6 +32,7 @@ impl BuildPartialOptions<JsonWritePartialOptions> for JsonOptions {
     fn build_partial_options(self) -> DataSourceResult<JsonWritePartialOptions> {
         Ok(JsonWritePartialOptions {
             compression: Some(self.compression.to_string()),
+            line_sep: None,
         })
     }
 }
@@ -37,6 +44,12 @@ impl JsonReadOptions {
             compression,
             drop_field_if_all_null: _,
             path_glob_filter: _,
+            primitives_as_string: _,
+            mode: _,
+            column_name_of_corrupt_record: _,
+            multi_line: _,
+            encoding: _,
+            line_sep: _,
         } = self;
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
@@ -55,7 +68,10 @@ impl JsonReadOptions {
 
 impl JsonWriteOptions {
     pub fn into_table_options(self) -> DataSourceResult<JsonOptions> {
-        let JsonWriteOptions { compression } = self;
+        let JsonWriteOptions {
+            compression,
+            line_sep: _,
+        } = self;
         let compression = FileCompressionType::from_str(&compression)
             .map_err(|e| DataSourceError::InvalidOption {
                 key: "compression".to_string(),

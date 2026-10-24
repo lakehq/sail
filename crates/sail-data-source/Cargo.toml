@@ -34,6 +34,8 @@ memchr = { workspace = true }
 percent-encoding = { workspace = true }
 log = { workspace = true }
 bytes = { workspace = true }
+encoding_rs = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }

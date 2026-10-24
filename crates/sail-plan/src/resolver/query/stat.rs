@@ -11,14 +11,19 @@ use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
-use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
+use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, col, expr, lit, or,
-    try_cast,
+    AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, and, cast, col,
+    expr, lit, not, or, try_cast,
 };
+use datafusion_functions::expr_fn::{coalesce, isnan};
+use datafusion_functions_nested::expr_fn as nested_fn;
+use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::math::random::Random;
+use sail_function::aggregate::collect_frequent_items::CollectFrequentItems;
+use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
+use sail_logical_plan::partition_random::PartitionRandomNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -543,6 +548,118 @@ impl PlanResolver<'_> {
             .build()?)
     }
 
+    pub(super) async fn resolve_query_stat_approx_quantile(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        probabilities: Vec<f64>,
+        relative_error: f64,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if relative_error.is_nan() || relative_error < 0.0 {
+            return Err(PlanError::invalid(format!(
+                "Relative Error must be non-negative but got {relative_error}"
+            )));
+        }
+        if let Some(p) = probabilities.iter().find(|p| !(0.0..=1.0).contains(*p)) {
+            return Err(PlanError::invalid(format!(
+                "percentile should be in the range [0.0, 1.0], but got {p}"
+            )));
+        }
+        let input = self.resolve_query_plan(input, state).await?;
+        let probabilities = lit(ScalarValue::List(ScalarValue::new_list_nullable(
+            &probabilities
+                .iter()
+                .map(|p| ScalarValue::Float64(Some(*p)))
+                .collect::<Vec<_>>(),
+            &DataType::Float64,
+        )));
+        let mut aggregates = vec![];
+        for column in &columns {
+            let column = self.resolve_one_column(input.schema(), column.as_ref(), state)?;
+            let data_type = input.schema().field_from_column(&column)?.data_type();
+            if !data_type.is_numeric() {
+                return Err(PlanError::invalid(format!(
+                    "Quantile calculation for column {} with data type {data_type} is not supported",
+                    column.name()
+                )));
+            }
+            // Spark ignores null and NaN values. The exact quantile is used for any
+            // relative error, since it is always within the error bound.
+            let value = cast(Expr::Column(column.clone()), DataType::Float64);
+            let quantile = Expr::AggregateFunction(expr::AggregateFunction {
+                func: percentile_disc_udaf(self.config.ansi_mode),
+                params: AggregateFunctionParams {
+                    args: vec![value.clone(), probabilities.clone()],
+                    distinct: false,
+                    filter: Some(Box::new(not(isnan(value.clone())))),
+                    order_by: vec![value.sort(true, false)],
+                    null_treatment: None,
+                },
+            })
+            .alias(state.register_field_name(format!("approx_quantile_{}", column.name())));
+            aggregates.push(quantile);
+        }
+        let plan = LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), aggregates)?
+            .build()?;
+        // Spark returns an empty array for a column without any values.
+        let empty = lit(ScalarValue::List(ScalarValue::new_list_nullable(
+            &[],
+            &DataType::Float64,
+        )));
+        let quantiles = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(|column| coalesce(vec![Expr::Column(column), empty.clone()]))
+            .collect();
+        Ok(LogicalPlanBuilder::from(plan)
+            .project(vec![
+                nested_fn::make_array(quantiles)
+                    .alias(state.register_field_name("approx_quantile")),
+            ])?
+            .build()?)
+    }
+
+    pub(super) async fn resolve_query_stat_freq_items(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        support: Option<f64>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        // Spark Connect uses a support of 1% when it is not given.
+        let support = support.unwrap_or(0.01);
+        if !(1e-4..=1.0).contains(&support) {
+            return Err(PlanError::invalid(format!(
+                "requirement failed: Support must be in [1e-4, 1], but got {support}."
+            )));
+        }
+        // The number of items to keep counts for, truncated as in Spark.
+        let size = (1.0 / support) as i64;
+        let input = self.resolve_query_plan(input, state).await?;
+        let mut aggregates = vec![];
+        for name in &columns {
+            let column = self.resolve_one_column(input.schema(), name.as_ref(), state)?;
+            let items = Expr::AggregateFunction(expr::AggregateFunction {
+                func: Arc::new(AggregateUDF::from(CollectFrequentItems::new())),
+                params: AggregateFunctionParams {
+                    args: vec![Expr::Column(column), lit(size)],
+                    distinct: false,
+                    filter: None,
+                    order_by: vec![],
+                    null_treatment: None,
+                },
+            })
+            .alias(state.register_field_name(format!("{}_freqItems", name.as_ref())));
+            aggregates.push(items);
+        }
+        Ok(LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), aggregates)?
+            .build()?)
+    }
+
     pub(super) async fn resolve_query_stat_sample_by(
         &self,
         input: spec::QueryPlan,
@@ -595,25 +712,23 @@ impl PlanResolver<'_> {
             .map(Expr::Column)
             .collect();
         // Like Spark's `rand(seed)` in the filter, the random column is not referenceable.
+        // It is drawn per partition, from `XORShiftRandom` seeded with `seed + partition index`.
         let rand_column_name: String = state.next_field_id();
-
-        let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
-            func: Arc::new(ScalarUDF::from(Random::new())),
-            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
-        })
-        .alias(&rand_column_name);
-        let mut all_exprs: Vec<Expr> = init_exprs.clone();
-        all_exprs.push(rand_expr);
-        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
-            .project(all_exprs)?
-            .build()?;
+        let seed = seed.unwrap_or_else(|| rng().random::<i64>());
+        let plan_with_rand = LogicalPlan::Extension(Extension {
+            node: Arc::new(PartitionRandomNode::try_new(
+                Arc::new(input),
+                rand_column_name.clone(),
+                seed,
+            )?),
+        });
 
         let mut acc_exprs: Vec<Expr> = vec![];
         for frac in &fractions {
             let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
             let f = and(
                 Expr::Column(column_expr.clone()).eq(lit(key_val)),
-                col(&rand_column_name).lt_eq(lit(frac.fraction)),
+                col(&rand_column_name).lt(lit(frac.fraction)),
             );
             acc_exprs.push(f);
         }

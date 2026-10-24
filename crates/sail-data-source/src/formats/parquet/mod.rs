@@ -11,6 +11,7 @@ use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
 
 mod options;
 mod read;
+mod udt;
 mod write;
 
 pub use read::ParquetReadFormat;

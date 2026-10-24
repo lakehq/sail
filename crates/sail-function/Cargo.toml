@@ -26,6 +26,7 @@ datafusion-functions-nested = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-spark = { workspace = true }
 futures = { workspace = true }
+indexmap = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 regex = { workspace = true }

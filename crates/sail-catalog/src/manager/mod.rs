@@ -5,10 +5,12 @@ use datafusion_expr::{LogicalPlan, ScalarUDF};
 use sail_common_datafusion::extension::SessionExtension;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
+use crate::manager::cached::CachedObjects;
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
+pub mod cached;
 pub mod catalog;
 pub mod database;
 pub mod function;
@@ -22,6 +24,7 @@ pub struct CatalogManager {
     state: Arc<Mutex<CatalogManagerState>>,
     pub(super) temporary_views: TemporaryViewManager,
     pub(super) tracker: CatalogObjectTracker,
+    cached: Mutex<CachedObjects>,
 }
 
 pub(super) struct CatalogManagerState {
@@ -66,6 +69,7 @@ impl CatalogManager {
             state: Arc::new(Mutex::new(state)),
             temporary_views: Default::default(),
             tracker: Default::default(),
+            cached: Default::default(),
         })
     }
 

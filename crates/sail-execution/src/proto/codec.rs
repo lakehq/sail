@@ -138,6 +138,7 @@ use sail_delta_lake::spec::{
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
+use sail_function::aggregate::collect_frequent_items::CollectFrequentItems;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
 use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
@@ -184,6 +185,7 @@ use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_session_window::SparkSessionWindow;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -211,6 +213,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkDiv;
+use sail_function::scalar::math::spark_isnan::SparkIsNaN;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -297,6 +300,7 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::partition_random::PartitionRandomExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
@@ -1476,6 +1480,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(SparkPartitionIdExec::try_new(
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
                     column_name,
+                    Arc::new(schema),
+                )?))
+            }
+            NodeKind::PartitionRandom(r#gen::PartitionRandomExecNode {
+                input,
+                column_name,
+                seed,
+                schema,
+            }) => {
+                let schema = try_decode_schema(&schema)?;
+                Ok(Arc::new(PartitionRandomExec::try_new(
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+                    column_name,
+                    seed,
                     Arc::new(schema),
                 )?))
             }
@@ -2897,6 +2915,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
             })
+        } else if let Some(partition_random) = node.downcast_ref::<PartitionRandomExec>() {
+            let input = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                partition_random.input().clone(),
+            )?;
+            let schema = try_encode_schema(partition_random.schema().as_ref())?;
+            NodeKind::PartitionRandom(r#gen::PartitionRandomExecNode {
+                input,
+                column_name: partition_random.column_name().to_string(),
+                seed: partition_random.seed(),
+                schema,
+            })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
@@ -3342,6 +3373,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 config,
+                output_metadata,
             }) => {
                 let kind = self.try_decode_pyspark_udf_kind(kind)?;
                 let input_types = input_types
@@ -3361,7 +3393,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_types,
                     output_type,
                     Arc::new(config),
-                );
+                )
+                .with_output_metadata(output_metadata.into_iter().collect());
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::PySparkCoGroupMap(r#gen::PySparkCoGroupMapUdf {
@@ -3706,6 +3739,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
+            "session_window" => Ok(Arc::new(ScalarUDF::from(SparkSessionWindow::new()))),
+            "spark_isnan" => Ok(Arc::new(ScalarUDF::from(SparkIsNaN::new()))),
             "spark_date_part" | "date_part" | "datepart" | "extract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
             }
@@ -3868,6 +3903,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkToVariantObjectUdf>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
             || node_inner.is::<SparkLastDay>()
+            || node_inner.is::<SparkSessionWindow>()
+            || node_inner.is::<SparkIsNaN>()
             || node_inner.is::<SparkYear>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
@@ -3962,6 +3999,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 config: Some(config),
+                output_metadata: func
+                    .output_metadata()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
             })
         } else if let Some(func) = node.inner().downcast_ref::<PySparkCoGroupMapUDF>() {
             let left_types = func
@@ -4152,6 +4194,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     BitmapConstructAggFunction::new(),
                 ))),
                 "bitmap_or_agg" => Ok(Arc::new(AggregateUDF::from(BitmapOrAggFunction::new()))),
+                "collect_frequent_items" => {
+                    Ok(Arc::new(AggregateUDF::from(CollectFrequentItems::new())))
+                }
                 "count_min_sketch" => {
                     Ok(Arc::new(AggregateUDF::from(CountMinSketchFunction::new())))
                 }
@@ -4321,6 +4366,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<BitmapAndAggFunction>()
             || node.inner().is::<BitmapConstructAggFunction>()
             || node.inner().is::<BitmapOrAggFunction>()
+            || node.inner().is::<CollectFrequentItems>()
             || node.inner().is::<CountMinSketchFunction>()
             || node.inner().is::<GroupingIdFunction>()
             || node.inner().is::<HistogramNumericFunction>()
@@ -6030,6 +6076,28 @@ mod tests {
             let decoded = downcast_udf::<PySparkUDF>(&decoded, kind.name())?;
             assert_eq!(decoded.payload(), &[1, 2, 3]);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_python_udf_codec_preserves_output_metadata() -> Result<()> {
+        let metadata = std::collections::BTreeMap::from([(
+            "SAIL::spark::udt".to_string(),
+            r#"{"python_class":"example.PointUDT"}"#.to_string(),
+        )]);
+        let udf = PySparkUDF::new(
+            PySparkUdfKind::Batch,
+            "point".to_string(),
+            vec![1, 2, 3],
+            true,
+            vec![DataType::Float64],
+            DataType::Float64,
+            Arc::new(PySparkUdfConfig::default()),
+        )
+        .with_output_metadata(metadata.clone());
+        let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+        let decoded = downcast_udf::<PySparkUDF>(&decoded, "point")?;
+        assert_eq!(decoded.output_metadata(), &metadata);
         Ok(())
     }
 

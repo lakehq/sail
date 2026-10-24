@@ -144,7 +144,53 @@ impl ReadFormat for CsvReadFormat {
         Ok(config)
     }
 
+    fn requires_explicit_schema_validation(&self) -> bool {
+        // Spark checks the CSV header against the schema when `enforceSchema` is disabled.
+        self.options.header && !self.options.enforce_schema
+    }
+
+    fn validate_explicit_schema(&self, schema: &Schema, physical: &Schema) -> Result<()> {
+        if !self.requires_explicit_schema_validation() {
+            return Ok(());
+        }
+        validate_csv_header(schema, physical)
+    }
+
     fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()
     }
+}
+
+/// Checks the CSV header, which is the field names of the inferred schema, against the
+/// field names of the schema by their positions, as Spark's `CSVHeaderChecker` does.
+fn validate_csv_header(schema: &Schema, physical: &Schema) -> Result<()> {
+    let header = physical
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect::<Vec<_>>();
+    let names = schema
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect::<Vec<_>>();
+    if header.len() != names.len() {
+        return Err(DataFusionError::Plan(format!(
+            "Number of column in CSV header is not equal to number of fields in the schema:\n Header length: {}, schema size: {}",
+            header.len(),
+            names.len()
+        )));
+    }
+    if let Some((expected, found)) = names
+        .iter()
+        .zip(header.iter())
+        .find(|(expected, found)| !expected.eq_ignore_ascii_case(found))
+    {
+        return Err(DataFusionError::Plan(format!(
+            "CSV header does not conform to the schema.\n Header: {}\n Schema: {}\nExpected: {expected} but found: {found}",
+            header.join(", "),
+            names.join(", ")
+        )));
+    }
+    Ok(())
 }
