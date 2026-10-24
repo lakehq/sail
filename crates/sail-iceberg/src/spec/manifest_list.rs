@@ -1004,9 +1004,6 @@ impl From<_serde::ManifestFileV1> for ManifestFile {
 #[cfg(test)]
 #[expect(clippy::expect_used)]
 mod tests {
-    use arrow_schema::Field;
-    use datafusion_expr::Expr::IsFalse;
-
     use super::*;
 
     fn manifest_file() -> ManifestFile {
