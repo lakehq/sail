@@ -14,6 +14,9 @@ use datafusion_expr::utils::{
     split_conjunction,
 };
 use datafusion_expr::{Expr, JoinType, LogicalPlan, Operator, Volatility};
+use projection::project_with_keys;
+
+mod projection;
 
 /// Group native correlated scalar aggregates by the value used in cast equality.
 #[derive(Debug)]
@@ -527,13 +530,7 @@ impl Lift<'_> {
         pending: &mut Vec<Pending>,
         keys: &mut BTreeSet<Column>,
     ) -> Result<Arc<LogicalPlan>> {
-        // Keep every original field; native pull-up carries the hidden key to its aggregate.
-        let mut expressions = input
-            .schema()
-            .columns()
-            .into_iter()
-            .map(Expr::Column)
-            .collect::<Vec<_>>();
+        let mut expressions = Vec::new();
         let mut computed: Vec<(Expr, Column)> = Vec::new();
         let mut predicates = Vec::new();
         for Pending {
@@ -582,7 +579,7 @@ impl Lift<'_> {
         }
         // Native pull-up retains local filters below aggregation. Evaluate casts
         // after those filters so excluded rows cannot introduce cast failures.
-        let input = LogicalPlan::Projection(Projection::try_new(expressions, input)?);
+        let input = LogicalPlan::Projection(project_with_keys(input, expressions)?);
         Ok(Arc::new(match conjunction(predicates) {
             Some(predicate) => LogicalPlan::Filter(Filter::try_new(predicate, Arc::new(input))?),
             None => input,
