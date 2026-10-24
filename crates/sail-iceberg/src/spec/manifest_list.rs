@@ -46,6 +46,24 @@ fn optional_avro_long(value: &AvroValue) -> Result<Option<i64>, String> {
     }
 }
 
+fn optional_avro_bool(value: &AvroValue) -> Result<Option<bool>, String> {
+    match value {
+        AvroValue::Boolean(value) => Ok(Some(*value)),
+        AvroValue::Union(_, value) => optional_avro_bool(value.as_ref()),
+        AvroValue::Null => Ok(None),
+        _ => Err("boolean or null".to_string()),
+    }
+}
+
+fn optional_avro_bytes(value: &AvroValue) -> Result<Option<Vec<u8>>, String> {
+    match value {
+        AvroValue::Bytes(value) => Ok(Some(value.clone())),
+        AvroValue::Union(_, value) => optional_avro_bytes(value.as_ref()),
+        AvroValue::Null => Ok(None),
+        _ => Err("butes or null".to_string()),
+    }
+}
+
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
 ///
@@ -424,18 +442,18 @@ impl ManifestList {
                                     let getf =
                                         |n: &str| fs.iter().find(|(k, _)| k == n).map(|(_, v)| v);
                                     let contains_null = matches!(getf("contains_null"), Some(AvroValue::Boolean(b)) if *b);
-                                    let contains_nan = match getf("contains_nan") {
-                                        Some(AvroValue::Boolean(b)) => Some(*b),
-                                        _ => None,
-                                    };
-                                    let lower_bound_bytes = match getf("lower_bound") {
-                                        Some(AvroValue::Bytes(b)) => Some(b.clone()),
-                                        _ => None,
-                                    };
-                                    let upper_bound_bytes = match getf("upper_bound") {
-                                        Some(AvroValue::Bytes(b)) => Some(b.clone()),
-                                        _ => None,
-                                    };
+                                    let contains_nan = getf("contains_nan")
+                                        .map(optional_avro_bool)
+                                        .transpose()?
+                                        .flatten();
+                                    let lower_bound_bytes = getf("lower_bound")
+                                        .map(optional_avro_bytes)
+                                        .transpose()?
+                                        .flatten();
+                                    let upper_bound_bytes = getf("upper_bound")
+                                        .map(optional_avro_bytes)
+                                        .transpose()?
+                                        .flatten();
                                     let mut fs = FieldSummary::new(contains_null);
                                     if let Some(b) = contains_nan {
                                         fs = fs.with_contains_nan(b);
