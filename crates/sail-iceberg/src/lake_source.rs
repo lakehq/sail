@@ -57,6 +57,7 @@ use crate::metadata_relation::{IcebergMetadataRelationType, metadata_relation_pr
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, bootstrap_empty_table_metadata, replace_empty_table_metadata,
 };
+use crate::operations::metadata_commit::{PreviousMetadataFile, previous_metadata_log_entry};
 use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
@@ -65,8 +66,7 @@ use crate::physical_plan::write_context::{
 };
 use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{
-    MetadataLog, NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder,
-    TableMetadata, Transform,
+    NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder, TableMetadata, Transform,
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -862,6 +862,12 @@ impl IcebergLakeSource {
             let mut table_meta = TableMetadata::from_json(&metadata_bytes)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
 
+            let previous_entry = previous_metadata_log_entry(
+                &table_url,
+                PreviousMetadataFile::ObjectPath(&latest_metadata_file),
+                table_meta.last_updated_ms,
+            )?;
+
             match operation {
                 LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                     crate::properties::apply_table_property_changes(
@@ -899,13 +905,9 @@ impl IcebergLakeSource {
                 continue;
             }
 
-            let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
             let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
             table_meta.last_updated_ms = timestamp_ms;
-            table_meta.metadata_log.push(MetadataLog {
-                timestamp_ms: previous_metadata_timestamp_ms,
-                metadata_file: latest_metadata_file.clone(),
-            });
+            table_meta.metadata_log.push(previous_entry);
 
             let metadata_json = table_meta
                 .to_json()

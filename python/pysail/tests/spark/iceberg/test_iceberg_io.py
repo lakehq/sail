@@ -1,4 +1,8 @@
 import json
+from nturl2path import url2pathname as windows_url2pathname
+from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import pandas as pd
 import pyarrow as pa
@@ -50,6 +54,43 @@ def latest_iceberg_metadata(table_path):
         file_name = hint if hint.endswith(".metadata.json") else f"{hint}.metadata.json"
         metadata_file = metadata_dir / file_name
     return json.loads(metadata_file.read_text(encoding="utf-8"))
+
+
+def metadata_file_path(location, path_converter=url2pathname):
+    uri = urlsplit(location)
+    path = uri.path
+    if uri.netloc and uri.netloc.lower() != "localhost":
+        path = f"//{uri.netloc}{path}"
+    # Convert drive/UNC syntax without decoding Hadoop's literal percent escapes.
+    return path_converter(path.replace("%", "%25"))
+
+
+@pytest.mark.parametrize(
+    ("location", "expected"),
+    [
+        ("file:///C:/warehouse/space%20name/v1.metadata.json", r"C:\warehouse\space%20name\v1.metadata.json"),
+        (
+            "file://localhost/C:/warehouse/percent%25name/v1.metadata.json",
+            r"C:\warehouse\percent%25name\v1.metadata.json",
+        ),
+        (
+            "file://server/share/literal%252Fname/hash%23name/v1.metadata.json",
+            r"\\server\share\literal%252Fname\hash%23name\v1.metadata.json",
+        ),
+    ],
+)
+def test_metadata_file_uri_windows_paths(location, expected):
+    assert metadata_file_path(location, windows_url2pathname) == expected
+
+
+def assert_previous_metadata(metadata, previous_file, previous_location):
+    entry = metadata["metadata-log"][-1]
+    assert entry["metadata-file"] == previous_location
+    previous_bytes = Path(metadata_file_path(entry["metadata-file"])).read_bytes()
+    assert previous_bytes == previous_file.read_bytes()
+    previous = json.loads(previous_bytes)
+    assert entry["timestamp-ms"] == previous["last-updated-ms"]
+    assert metadata["table-uuid"] == previous["table-uuid"]
 
 
 @pytest.mark.parametrize("format_version", [2, 3])
@@ -212,9 +253,12 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
         sql_catalog.drop_table(f"default.{table_name}")
 
 
-def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
-    table_path = tmp_path / "iceberg_empty_table"
-    table_location = table_path.as_uri()
+@pytest.mark.parametrize(
+    "directory", ["iceberg_empty_table", "percent%name", "literal%2Fname", "space name", "hash#name"]
+)
+def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path, directory):
+    table_location = (tmp_path / directory).as_uri()
+    table_path = tmp_path / urlsplit(table_location).path.rsplit("/", 1)[-1]
     table_name = "iceberg_empty_materialized_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -248,20 +292,22 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         assert insert_metadata["current-snapshot-id"] != -1
         assert len(insert_metadata["snapshots"]) == 1
         assert len(insert_metadata["metadata-log"]) == 1
-        assert insert_metadata["metadata-log"][0]["metadata-file"].endswith("/metadata/v1.metadata.json")
-        assert insert_metadata["metadata-log"][0]["timestamp-ms"] == create_metadata["last-updated-ms"]
+        assert_previous_metadata(insert_metadata, metadata_v1, f"{table_location}/metadata/v1.metadata.json")
         rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
         assert [(row.id, row.name) for row in rows] == [(1, "one")]
 
         spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two')")  # noqa: S608
         append_metadata = latest_iceberg_metadata(table_path)
-        assert append_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v2.metadata.json")
-        assert append_metadata["metadata-log"][-1]["timestamp-ms"] == insert_metadata["last-updated-ms"]
+        assert_previous_metadata(append_metadata, metadata_v2, f"{table_location}/metadata/v2.metadata.json")
 
+        # Existing historical keys are not repaired when a new entry is appended.
+        append_metadata["metadata-log"][0]["metadata-file"] = "legacy/metadata/v1.metadata.json"
+        metadata_v3 = metadata_dir / "v3.metadata.json"
+        metadata_v3.write_text(json.dumps(append_metadata), encoding="utf-8")
         spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('custom.key' = 'value')")
         altered_metadata = latest_iceberg_metadata(table_path)
-        assert altered_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v3.metadata.json")
-        assert altered_metadata["metadata-log"][-1]["timestamp-ms"] == append_metadata["last-updated-ms"]
+        assert altered_metadata["metadata-log"][:-1] == append_metadata["metadata-log"]
+        assert_previous_metadata(altered_metadata, metadata_v3, f"{table_location}/metadata/v3.metadata.json")
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -351,8 +397,11 @@ def test_iceberg_io_create_or_replace_existing_table_replaces_metadata_and_clear
         assert replacement_metadata.get("statistics") == insert_metadata.get("statistics")
         assert replacement_metadata.get("partition-statistics") == insert_metadata.get("partition-statistics")
         assert [field["name"] for field in replacement_metadata["schemas"][-1]["fields"]] == ["id", "name"]
-        assert replacement_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v2.metadata.json")
-        assert replacement_metadata["metadata-log"][-1]["timestamp-ms"] == insert_metadata["last-updated-ms"]
+        assert_previous_metadata(
+            replacement_metadata,
+            table_path / "metadata" / "v2.metadata.json",
+            f"{table_location}/metadata/v2.metadata.json",
+        )
         assert replacement_metadata["last-sequence-number"] == previous_sequence_number
 
         spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two')")  # noqa: S608
