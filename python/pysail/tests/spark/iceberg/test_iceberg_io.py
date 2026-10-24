@@ -4,10 +4,23 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 from pandas.testing import assert_frame_equal
+from pyiceberg.avro.file import AvroFile
+from pyiceberg.expressions import EqualTo
+from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
+from pyiceberg.table import StaticTable
+from pyiceberg.transforms import IdentityTransform
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
+from pysail.testing.spark.steps.iceberg import (
+    _current_manifest_list,
+    _current_snapshot,
+    _find_latest_metadata,
+    _pyarrow_input_file,
+)
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
 
 
 @pytest.fixture
@@ -37,6 +50,101 @@ def latest_iceberg_metadata(table_path):
         file_name = hint if hint.endswith(".metadata.json") else f"{hint}.metadata.json"
         metadata_file = metadata_dir / file_name
     return json.loads(metadata_file.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("format_version", [2, 3])
+def test_append_after_upgrade_preserves_manifest_summaries(spark, sql_catalog, format_version):
+    identifier = "default.manifest_summary_upgrade"
+    name = "manifest_summary_upgrade"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "p", LongType(), required=False),
+        ),
+        partition_spec=PartitionSpec(PartitionField(2, 1000, IdentityTransform(), "p")),
+        properties={"format-version": "1"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2, 3], "p": [10, None, 30]}))
+        before = {
+            manifest.manifest_path: manifest.partitions for manifest in table.current_snapshot().manifests(table.io)
+        }
+        location = escape_sql_string_literal(table.location())
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{location}'").collect()
+        spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='{format_version}')").collect()
+        spark.createDataFrame([(4, 40)], "id BIGINT, p BIGINT").writeTo(name).append()
+
+        external = StaticTable.from_metadata(table.location(), properties=pyiceberg_file_io_properties())
+        after = {
+            manifest.manifest_path: manifest.partitions
+            for manifest in external.current_snapshot().manifests(external.io)
+        }
+        assert before.keys() <= after.keys()
+        for path, summaries in before.items():
+            assert after[path] == summaries
+        assert external.scan(row_filter=EqualTo("p", 10)).to_arrow().to_pylist() == [{"id": 1, "p": 10}]
+        assert external.scan().to_arrow().num_rows == 4  # noqa: PLR2004
+        rows = spark.sql(f"SELECT id, p FROM {name} WHERE p=10").collect()  # noqa: S608
+        assert [tuple(row) for row in rows] == [(1, 10)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
+
+
+@pytest.mark.parametrize("format_version", [1, 2, 3])
+def test_manifest_wire_schema_and_snapshot_headers(spark, tmp_path, format_version):
+    name = "manifest_wire_contract"
+    path = tmp_path / name
+    try:
+        spark.sql(
+            f"CREATE TABLE {name} (id INT, ts TIMESTAMP, ntz TIMESTAMP_NTZ) USING iceberg "
+            f"PARTITIONED BY (ts, ntz) LOCATION '{path.as_uri()}' "
+            f"TBLPROPERTIES ('format-version'='{format_version}')"
+        ).collect()
+        for value in [1, 2]:
+            spark.sql(
+                f"INSERT INTO {name} VALUES ({value}, TIMESTAMP '2026-10-01 10:00:00', "  # noqa: S608
+                "TIMESTAMP_NTZ '2026-10-01 10:00:00')"
+            ).collect()
+        metadata = _find_latest_metadata(path)
+        snapshot = _current_snapshot(metadata)
+        io = PyArrowFileIO()
+        with AvroFile(_pyarrow_input_file(io, snapshot["manifest-list"])) as reader:
+            header = reader.header.meta
+            schema = json.loads(header["avro.schema"])
+            assert header["snapshot-id"] == str(snapshot["snapshot-id"])
+            assert header["parent-snapshot-id"] == str(snapshot["parent-snapshot-id"])
+            assert header["format-version"] == str(format_version)
+            if format_version >= 2:  # noqa: PLR2004
+                assert header["sequence-number"] == str(snapshot["sequence-number"])
+            if format_version == 3:  # noqa: PLR2004
+                assert header["first-row-id"] == str(snapshot["first-row-id"])
+            partitions = next(field for field in schema["fields"] if field["name"] == "partitions")
+            array = next(branch for branch in partitions["type"] if isinstance(branch, dict))
+            assert array["items"]["name"] == "r508"
+        for manifest in _current_manifest_list(metadata)["manifests"]:
+            with AvroFile(_pyarrow_input_file(io, manifest["manifest-path"])) as reader:
+                schema = json.loads(reader.header.meta["avro.schema"])
+                list(reader)  # Independently decode the payload, not just its header.
+            data_file = next(field for field in schema["fields"] if field["name"] == "data_file")["type"]
+            fields = {field["name"]: field for field in data_file["fields"]}
+            partition = fields["partition"]["type"]
+            assert partition["type"] == "record"
+            annotations = {
+                field["name"]: next(branch for branch in field["type"] if isinstance(branch, dict))
+                for field in partition["fields"]
+            }
+            assert annotations["ts"]["adjust-to-utc"] is True
+            assert annotations["ntz"]["adjust-to-utc"] is False
+            version_three_fields = {"first_row_id", "content_offset", "content_size_in_bytes"}
+            if format_version < 3:  # noqa: PLR2004
+                assert not version_three_fields.intersection(fields)
+            else:
+                assert version_three_fields <= fields.keys()
+            assert ("referenced_data_file" in fields) == (format_version >= 2)  # noqa: PLR2004
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
 def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
