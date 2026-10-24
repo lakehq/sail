@@ -169,7 +169,7 @@ impl Resolver<'_, '_> {
                 if values.len() == 2 {
                     values.push(self.literal(ScalarValue::Utf8(Some("".into()))));
                 }
-                sail_type_system::coercion::validate_arity(name, values.len(), 3)?;
+                crate::analysis::typing::coercion::validate_arity(name, values.len(), 3)?;
                 self.scalar("replace", values)?
             }
             "overlay" => {

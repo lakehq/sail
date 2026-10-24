@@ -1,5 +1,17 @@
 //! Native expression typing and coercion.
 
+pub(crate) mod aggregate;
+pub(crate) mod cast;
+pub(crate) mod coercion;
+pub(crate) mod collection;
+pub(crate) mod higher_order;
+pub(crate) mod predicate;
+pub(crate) mod relational;
+pub(crate) mod scalar;
+pub(crate) mod store_assignment;
+pub(crate) mod temporal;
+pub(crate) mod window;
+
 use datafusion_common::arrow::compute::can_cast_types;
 
 use crate::error::PlanResult;
@@ -33,7 +45,7 @@ pub fn resolve_scalar_call(
             },
         )
         .collect::<PlanResult<Vec<_>>>()?;
-    let typing = sail_type_system::scalar::resolve(function.as_ref(), &fields, &literals)?;
+    let typing = scalar::resolve(function.as_ref(), &fields, &literals)?;
     let arguments = arguments
         .into_iter()
         .zip(typing.arguments)
@@ -100,7 +112,7 @@ pub fn coerce(
     if &source.data_type == target {
         return Ok(expression);
     }
-    if sail_type_system::cast::same_layout(&source.data_type, target)
+    if cast::same_layout(&source.data_type, target)
         && matches!(
             target,
             arrow_schema::DataType::Struct(_)
@@ -125,10 +137,7 @@ pub fn coerce(
             source.data_type
         )));
     }
-    let target = ExpressionType::from_field(&sail_type_system::coercion::cast_field(
-        &source.to_field(""),
-        target,
-    ));
+    let target = ExpressionType::from_field(&coercion::cast_field(&source.to_field(""), target));
     // Keep typed constants visible to source pruning and literal-sensitive
     // functions before any backend optimizer runs. Failed conversions retain
     // their cast so evaluation preserves the normal runtime error behavior.
@@ -161,7 +170,7 @@ pub fn resolve_binary(
 ) -> PlanResult<super::ir::LogicalExpression> {
     use super::deferred::Deferred;
     use super::ir::{ExpressionNode, ExpressionType, LogicalExpression};
-    let typing = sail_type_system::coercion::binary(
+    let typing = coercion::binary(
         &left.result_type.resolved("left operand type")?.to_field(""),
         operator,
         &right
@@ -194,7 +203,7 @@ pub fn resolve_in_list(
         .map(|value| Ok(value.result_type.resolved("IN argument type")?))
         .collect::<PlanResult<Vec<_>>>()?;
     let nullable = fields.iter().any(|field| field.nullable);
-    let common = sail_type_system::coercion::comparison_type(
+    let common = coercion::comparison_type(
         &fields
             .iter()
             .map(|field| field.data_type.clone())
@@ -270,7 +279,7 @@ pub fn resolve_case(
         };
         nullable |= !guarded;
     }
-    let result_type = sail_type_system::coercion::common_type(
+    let result_type = coercion::common_type(
         &results
             .iter()
             .map(|field| field.data_type.clone())
@@ -287,7 +296,7 @@ pub fn resolve_case(
                     .clone())
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        sail_type_system::coercion::common_type(&types)?
+        coercion::common_type(&types)?
     } else {
         arrow_schema::DataType::Boolean
     };
@@ -336,7 +345,7 @@ pub fn coerce_arguments(
     fields: &[arrow_schema::FieldRef],
     ids: &mut super::ir::IdGenerator,
 ) -> PlanResult<Vec<super::ir::LogicalExpression>> {
-    sail_type_system::coercion::validate_arity("function coercion", fields.len(), arguments.len())?;
+    coercion::validate_arity("function coercion", fields.len(), arguments.len())?;
     arguments
         .into_iter()
         .zip(fields)

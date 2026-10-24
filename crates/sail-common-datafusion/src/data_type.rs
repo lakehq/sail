@@ -12,10 +12,12 @@ use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
-use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 use serde_json::json;
-/// Resolves spec types without a query scope or a backend schema.
-pub struct TypeResolver {
+
+use crate::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
+
+/// Converts spec data types, fields, and schemas to Arrow without query state.
+pub struct DataTypeResolver {
     pub session_timezone: Arc<str>,
     pub default_timestamp_ltz: bool,
     pub use_large_var_types: bool,
@@ -66,7 +68,7 @@ fn validate_geography_srid(srid: i32) -> CommonResult<()> {
     Ok(())
 }
 
-impl TypeResolver {
+impl DataTypeResolver {
     fn arrow_binary_type(&self) -> adt::DataType {
         if self.use_large_var_types {
             adt::DataType::LargeBinary

@@ -106,7 +106,7 @@ impl Resolver<'_, '_> {
                 });
             }
             let fields = typing::argument_fields(&values)?;
-            let common = sail_type_system::coercion::common_type(
+            let common = crate::analysis::typing::coercion::common_type(
                 &fields
                     .iter()
                     .map(|f| f.data_type().clone())
@@ -267,7 +267,7 @@ impl Resolver<'_, '_> {
         let function = WindowFunctionDefinition::WindowUDF(
             datafusion::functions_window::row_number::row_number_udwf(),
         );
-        let field = sail_type_system::aggregate::resolve_window(&function, &[])?.result;
+        let field = crate::analysis::typing::aggregate::resolve_window(&function, &[])?.result;
         let result_type = ExpressionType::from_field(&field);
         let expression = LogicalExpression {
             id: self.context.ids.expression(),

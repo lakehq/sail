@@ -103,8 +103,9 @@ impl Resolver<'_, '_> {
                         value
                     }
                     DataType::Decimal128(precision, scale) => {
-                        let target =
-                            sail_type_system::coercion::zeroifnull_decimal_type(precision, scale);
+                        let target = crate::analysis::typing::coercion::zeroifnull_decimal_type(
+                            precision, scale,
+                        );
                         if ansi {
                             self.cast(value, target)?
                         } else {
@@ -141,7 +142,7 @@ impl Resolver<'_, '_> {
         if !types.iter().any(DataType::is_string) {
             return Ok(values);
         }
-        let Some(target) = sail_type_system::temporal::common_temporal_type(
+        let Some(target) = crate::analysis::typing::temporal::common_temporal_type(
             &types,
             &self.context.config.session_timezone,
         ) else {

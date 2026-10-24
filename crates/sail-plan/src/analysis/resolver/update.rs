@@ -215,7 +215,7 @@ impl Resolver<'_, '_> {
         target: &DataType,
         name: &str,
     ) -> PlanResult<()> {
-        if sail_type_system::store_assignment::compatible(
+        if crate::analysis::typing::store_assignment::compatible(
             source,
             target,
             self.context.config.store_assignment_policy,

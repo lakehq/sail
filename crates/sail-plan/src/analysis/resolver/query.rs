@@ -1113,7 +1113,7 @@ impl Resolver<'_, '_> {
                 .map(|row| Ok(row[index].result_type.resolved("VALUES element type")?))
                 .collect::<PlanResult<Vec<_>>>()?;
             let nullable = types.iter().any(|field| field.nullable);
-            let mut common = sail_type_system::coercion::common_type(
+            let mut common = crate::analysis::typing::coercion::common_type(
                 &types
                     .iter()
                     .map(|field| field.data_type.clone())

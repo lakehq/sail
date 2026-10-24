@@ -153,8 +153,9 @@ impl Resolver<'_, '_> {
                 let entries = values.one()?;
                 let data_type = &entries.result_type.resolved("map entries")?.data_type;
                 let nullable =
-                    sail_type_system::collection::map_entries_value_contains_null(data_type);
-                let target = sail_type_system::collection::map_entries_nullability(data_type, true);
+                    crate::analysis::typing::collection::map_entries_value_contains_null(data_type);
+                let target =
+                    crate::analysis::typing::collection::map_entries_nullability(data_type, true);
                 let entries = self.cast(entries, target)?;
                 let result = self.scalar_udf(
                     Arc::new(ScalarUDF::from(SparkMapFromEntries::new(last_wins))),
@@ -168,7 +169,7 @@ impl Resolver<'_, '_> {
             )?,
             "map_values" => {
                 let value = values.one()?;
-                let nullable = sail_type_system::collection::map_value_contains_null(
+                let nullable = crate::analysis::typing::collection::map_value_contains_null(
                     &value.result_type.resolved("map value")?.data_type,
                 );
                 let value = self.map_nullability(value, true)?;
@@ -238,7 +239,7 @@ impl Resolver<'_, '_> {
         value: LogicalExpression,
         nullable: bool,
     ) -> PlanResult<LogicalExpression> {
-        let target = sail_type_system::collection::list_nullability(
+        let target = crate::analysis::typing::collection::list_nullability(
             &value.result_type.resolved("list input")?.data_type,
             nullable,
         );
@@ -250,7 +251,7 @@ impl Resolver<'_, '_> {
         value: LogicalExpression,
         nullable: bool,
     ) -> PlanResult<LogicalExpression> {
-        let target = sail_type_system::collection::map_nullability(
+        let target = crate::analysis::typing::collection::map_nullability(
             &value.result_type.resolved("map input")?.data_type,
             nullable,
         );
@@ -271,7 +272,7 @@ impl Resolver<'_, '_> {
         let target = types
             .iter()
             .try_fold(DataType::Null, |previous, data_type| {
-                sail_type_system::collection::ansi_map_common_type(&previous, data_type)
+                crate::analysis::typing::collection::ansi_map_common_type(&previous, data_type)
             })
             .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))?;
         arguments

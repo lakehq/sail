@@ -799,7 +799,7 @@ pub(crate) fn list_built_in_function_statuses() -> Vec<FunctionStatus> {
         .filter_map(|name| metadata::built_in_public_function_status(name))
         .collect()
 }
-pub use sail_type_system::temporal::is_spark_compatible_arrow_fixed_offset;
+pub use crate::analysis::typing::temporal::is_spark_compatible_arrow_fixed_offset;
 #[cfg(test)]
 mod tests {
     use super::is_spark_compatible_arrow_fixed_offset;

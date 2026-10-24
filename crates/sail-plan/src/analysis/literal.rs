@@ -19,11 +19,11 @@ use sail_common::spec::{
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::{parse_date, parse_time, parse_timestamp};
 
-use super::data_type::TypeResolver;
+use super::data_type::DataTypeResolver;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 
-impl TypeResolver<'_> {
+impl DataTypeResolver<'_> {
     pub fn resolve_literal(&self, literal: Literal) -> PlanResult<ScalarValue> {
         match literal {
             Literal::Null => Ok(ScalarValue::Null),
@@ -355,7 +355,7 @@ impl TypeResolver<'_> {
     }
 }
 
-impl TypeResolver<'_> {
+impl DataTypeResolver<'_> {
     pub(super) fn date_literal(&self, value: &str) -> PlanResult<spec::Literal> {
         let date = parse_date(value)?;
         let literal = spec::Literal::Date32 {

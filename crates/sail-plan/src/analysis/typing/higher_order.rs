@@ -19,14 +19,14 @@ fn normalize<L>(
     sources: &[ValueOrLambda<FieldRef, L>],
     targets: Vec<ValueOrLambda<FieldRef, L>>,
 ) -> Result<Vec<ValueOrLambda<FieldRef, L>>> {
-    crate::coercion::validate_arity("higher-order coercion", targets.len(), sources.len())?;
+    super::coercion::validate_arity("higher-order coercion", targets.len(), sources.len())?;
     targets
         .into_iter()
         .zip(sources)
         .map(|(target, source)| {
             Ok(match (target, source) {
                 (ValueOrLambda::Value(target), ValueOrLambda::Value(source)) => {
-                    ValueOrLambda::Value(crate::coercion::cast_field(source, target.data_type()))
+                    ValueOrLambda::Value(super::coercion::cast_field(source, target.data_type()))
                 }
                 (ValueOrLambda::Lambda(target), ValueOrLambda::Lambda(_)) => {
                     ValueOrLambda::Lambda(target)
@@ -47,7 +47,7 @@ pub fn resolve(
     fields: &[ValueOrLambda<FieldRef, FieldRef>],
     literals: &[Option<&ScalarValue>],
 ) -> Result<HigherOrderTyping> {
-    crate::coercion::validate_arity(function.name(), literals.len(), fields.len())?;
+    super::coercion::validate_arity(function.name(), literals.len(), fields.len())?;
     let arguments = normalize(
         fields,
         value_fields_with_higher_order_udf_and_lambdas(fields, function)?,

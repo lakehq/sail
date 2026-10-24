@@ -416,7 +416,7 @@ impl Resolver<'_, '_> {
                     command,
                     python_version,
                 } = function.function;
-                let types = crate::analysis::data_type::TypeResolver {
+                let types = crate::analysis::data_type::DataTypeResolver {
                     config: &self.context.config,
                     allow_large_var_types: true,
                 };

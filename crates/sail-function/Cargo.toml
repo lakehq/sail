@@ -8,7 +8,6 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-type-system = { path = "../sail-type-system" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }

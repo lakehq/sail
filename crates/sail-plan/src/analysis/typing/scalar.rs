@@ -21,7 +21,7 @@ pub fn resolve(
         return plan_err!("argument fields and literal information have different lengths");
     }
     let mut targets = if function.name() == "coalesce" {
-        let common = crate::coercion::common_type(
+        let common = super::coercion::common_type(
             &arguments
                 .iter()
                 .map(|f| f.data_type().clone())
@@ -29,18 +29,18 @@ pub fn resolve(
         )?;
         arguments
             .iter()
-            .map(|field| crate::coercion::cast_field(field, &common))
+            .map(|field| super::coercion::cast_field(field, &common))
             .collect()
     } else {
         fields_with_udf(arguments, function)?
     };
     if function.name() == "levenshtein" && targets.len() >= 2 {
-        let target = crate::coercion::common_type(&[
+        let target = super::coercion::common_type(&[
             targets[0].data_type().clone(),
             targets[1].data_type().clone(),
         ])?;
-        targets[0] = crate::coercion::cast_field(&targets[0], &target);
-        targets[1] = crate::coercion::cast_field(&targets[1], &target);
+        targets[0] = super::coercion::cast_field(&targets[0], &target);
+        targets[1] = super::coercion::cast_field(&targets[1], &target);
     }
     if targets.len() != arguments.len() {
         return plan_err!("{} returned an invalid coercion arity", function.name());
@@ -50,7 +50,7 @@ pub fn resolve(
     let targets = targets
         .into_iter()
         .zip(arguments)
-        .map(|(target, source)| crate::coercion::cast_field(source, target.data_type()))
+        .map(|(target, source)| super::coercion::cast_field(source, target.data_type()))
         .collect::<Vec<_>>();
     // Analysis materializes successful literal casts. Retain failed casts as
     // nonliteral expressions so lazy evaluation still controls their errors.

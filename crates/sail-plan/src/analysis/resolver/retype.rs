@@ -74,7 +74,8 @@ impl Resolver<'_, '_> {
                 safe,
             } => {
                 let source = child.result_type.resolved("cast child")?.to_field("");
-                let field = sail_type_system::coercion::cast_field(&source, &target.data_type);
+                let field =
+                    crate::analysis::typing::coercion::cast_field(&source, &target.data_type);
                 target.nullable = safe || field.is_nullable();
                 result = target.clone();
                 ExpressionNode::Cast {
@@ -135,7 +136,7 @@ impl Resolver<'_, '_> {
                 else {
                     unreachable!()
                 };
-                let resolved = sail_type_system::aggregate::resolve(
+                let resolved = crate::analysis::typing::aggregate::resolve(
                     function,
                     &typing::argument_fields(arguments)?,
                 )?;
@@ -156,7 +157,7 @@ impl Resolver<'_, '_> {
                 else {
                     unreachable!()
                 };
-                let resolved = sail_type_system::aggregate::resolve_window(
+                let resolved = crate::analysis::typing::aggregate::resolve_window(
                     function,
                     &typing::argument_fields(arguments)?,
                 )?;
@@ -204,7 +205,7 @@ impl Resolver<'_, '_> {
                     })
                     .collect::<Vec<_>>();
                 let resolved =
-                    sail_type_system::higher_order::resolve(function, &fields, &literals)?;
+                    crate::analysis::typing::higher_order::resolve(function, &fields, &literals)?;
                 for (argument, target) in arguments.iter_mut().zip(&resolved.arguments) {
                     if let (FunctionArgument::Value(value), ValueOrLambda::Value(field)) =
                         (argument, target)

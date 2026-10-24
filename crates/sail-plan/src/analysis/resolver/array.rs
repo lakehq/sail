@@ -82,7 +82,7 @@ impl Resolver<'_, '_> {
                 let element_copy = self.copy_expression(&element)?;
                 let count_copy = self.copy_expression(&count)?;
                 let prototype = self.scalar("array_repeat", vec![element_copy, count_copy])?;
-                let target = sail_type_system::collection::nullable_array_type(
+                let target = crate::analysis::typing::collection::nullable_array_type(
                     &prototype
                         .result_type
                         .resolved("array_repeat result")?
@@ -174,7 +174,7 @@ impl Resolver<'_, '_> {
             }
             "flatten" => {
                 let array = values.one()?;
-                let target = sail_type_system::collection::nullable_array_type(
+                let target = crate::analysis::typing::collection::nullable_array_type(
                     &array.result_type.resolved("flatten input")?.data_type,
                 );
                 let array = self.cast(array, target.clone())?;
@@ -189,7 +189,7 @@ impl Resolver<'_, '_> {
             }
             "arrays_overlap" => {
                 let (left, right) = values.two()?;
-                let target = sail_type_system::collection::list_nullability(
+                let target = crate::analysis::typing::collection::list_nullability(
                     &left.result_type.resolved("array overlap left")?.data_type,
                     true,
                 );
@@ -246,7 +246,7 @@ impl Resolver<'_, '_> {
         count: LogicalExpression,
         target: DataType,
     ) -> PlanResult<LogicalExpression> {
-        let element_type = sail_type_system::collection::nullable_array_type(
+        let element_type = crate::analysis::typing::collection::nullable_array_type(
             &element
                 .result_type
                 .resolved("array repeat element")?
@@ -272,7 +272,7 @@ impl Resolver<'_, '_> {
         let copy = self.copy_expression(&array_input)?;
         let value_copy = self.copy_expression(&value)?;
         let prototype = self.scalar("array_append", vec![copy, value_copy])?;
-        let target = sail_type_system::collection::list_nullability(
+        let target = crate::analysis::typing::collection::list_nullability(
             &prototype
                 .result_type
                 .resolved("array insert result")?

@@ -251,13 +251,15 @@ impl Resolver<'_, '_> {
                 .iter()
                 .find(|a| self.name_key(&a.name) == self.name_key(&attribute.name))
                 .map(|a| {
-                    Ok::<_, PlanError>(sail_type_system::store_assignment::evolve_row_level_field(
-                        &field,
-                        &a.result_type
-                            .resolved("MERGE evolution source")?
-                            .to_field(&a.name),
-                        self.context.config.case_sensitive,
-                    ))
+                    Ok::<_, PlanError>(
+                        crate::analysis::typing::store_assignment::evolve_row_level_field(
+                            &field,
+                            &a.result_type
+                                .resolved("MERGE evolution source")?
+                                .to_field(&a.name),
+                            self.context.config.case_sensitive,
+                        ),
+                    )
                 })
                 .transpose()?
                 .unwrap_or_else(|| field.as_ref().clone());
@@ -490,7 +492,7 @@ impl Resolver<'_, '_> {
                 .resolved("MERGE star source")?
                 .to_field(&source.name);
             let target = if evolution {
-                sail_type_system::store_assignment::evolve_row_level_field(
+                crate::analysis::typing::store_assignment::evolve_row_level_field(
                     &field,
                     &source,
                     self.context.config.case_sensitive,

@@ -167,7 +167,7 @@ impl Resolver<'_, '_> {
                 } else {
                     1
                 };
-                sail_type_system::coercion::validate_arity(name, values.len(), expected)?;
+                crate::analysis::typing::coercion::validate_arity(name, values.len(), expected)?;
                 let mut values = values
                     .into_iter()
                     .map(|value| self.cast(value, DataType::Float64))

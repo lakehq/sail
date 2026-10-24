@@ -153,7 +153,8 @@ impl Resolver<'_, '_> {
                             })
                         })
                         .collect::<PlanResult<Vec<_>>>()?;
-                    let targets = sail_type_system::higher_order::value_fields(function, &fields)?;
+                    let targets =
+                        crate::analysis::typing::higher_order::value_fields(function, &fields)?;
                     fields = targets.clone();
                     for (argument, target) in arguments.iter_mut().zip(targets) {
                         if let (FunctionArgument::Value(value), ValueOrLambda::Value(target)) =
@@ -290,7 +291,7 @@ impl Resolver<'_, '_> {
                 arguments,
                 ..
             } => {
-                let result = sail_type_system::aggregate::resolve(
+                let result = crate::analysis::typing::aggregate::resolve(
                     function,
                     &typing::argument_fields(arguments)?,
                 )?;
@@ -308,7 +309,7 @@ impl Resolver<'_, '_> {
                 frame,
                 ..
             } => {
-                let result = sail_type_system::aggregate::resolve_window(
+                let result = crate::analysis::typing::aggregate::resolve_window(
                     function,
                     &typing::argument_fields(arguments)?,
                 )?;
@@ -327,7 +328,7 @@ impl Resolver<'_, '_> {
                             .clone())
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
-                *frame = sail_type_system::window::resolve_frame(frame.clone(), &types)?;
+                *frame = crate::analysis::typing::window::resolve_frame(frame.clone(), &types)?;
                 ExpressionType::from_field(&result.result)
             }
             ExpressionNode::HigherOrderFunction {
@@ -357,7 +358,8 @@ impl Resolver<'_, '_> {
                         _ => None,
                     })
                     .collect::<Vec<_>>();
-                let result = sail_type_system::higher_order::resolve(function, &fields, &literals)?;
+                let result =
+                    crate::analysis::typing::higher_order::resolve(function, &fields, &literals)?;
                 for (argument, target) in arguments.iter_mut().zip(result.arguments) {
                     if let (FunctionArgument::Value(v), ValueOrLambda::Value(target)) =
                         (argument, target)
@@ -399,7 +401,7 @@ impl Resolver<'_, '_> {
                 high,
                 ..
             } => {
-                let target = sail_type_system::coercion::comparison_type(&[
+                let target = crate::analysis::typing::coercion::comparison_type(&[
                     expression
                         .result_type
                         .resolved("BETWEEN value")?
@@ -468,7 +470,7 @@ impl Resolver<'_, '_> {
                 let right = values
                     .next()
                     .ok_or_else(|| PlanError::internal("missing IN right"))?;
-                let target = sail_type_system::coercion::comparison_type(&[
+                let target = crate::analysis::typing::coercion::comparison_type(&[
                     left.result_type.resolved("IN left")?.data_type.clone(),
                     right.result_type.resolved("IN right")?.data_type.clone(),
                 ])?;
@@ -672,7 +674,7 @@ impl Resolver<'_, '_> {
                         .iter()
                         .map(|row| row[index].result_type.resolved("VALUES field"))
                         .collect::<Result<Vec<_>, _>>()?;
-                    let target = sail_type_system::coercion::common_type(
+                    let target = crate::analysis::typing::coercion::common_type(
                         &fields
                             .iter()
                             .map(|f| f.data_type.clone())

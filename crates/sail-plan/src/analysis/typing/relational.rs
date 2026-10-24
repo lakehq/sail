@@ -19,5 +19,5 @@ pub fn unpivot_common_type(types: &[DataType]) -> Result<DataType> {
             "[UNPIVOT_VALUE_DATA_TYPE_MISMATCH] Unpivot value columns must share a least common type: {types:?}"
         );
     }
-    crate::coercion::common_type(types)
+    super::coercion::common_type(types)
 }

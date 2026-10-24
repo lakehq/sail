@@ -79,7 +79,7 @@ impl Resolver<'_, '_> {
                     ) => {
                         let ntz =
                             self.cast(argument, DataType::Timestamp(TimeUnit::Microsecond, None))?;
-                        if sail_type_system::temporal::is_spark_compatible_arrow_fixed_offset(
+                        if crate::analysis::typing::temporal::is_spark_compatible_arrow_fixed_offset(
                             timezone.as_ref(),
                         ) {
                             return self.cast(ntz, target);
@@ -168,7 +168,7 @@ impl Resolver<'_, '_> {
             .iter()
             .filter(|a| matches!(a, ValueOrLambda::Lambda(_)))
             .count();
-        sail_type_system::coercion::validate_arity(
+        crate::analysis::typing::coercion::validate_arity(
             function.name(),
             parameters.len(),
             lambda_count,
@@ -183,7 +183,7 @@ impl Resolver<'_, '_> {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let typing = sail_type_system::higher_order::resolve(&function, &fields, &literals)?;
+        let typing = crate::analysis::typing::higher_order::resolve(&function, &fields, &literals)?;
         let mut parameters = parameters.into_iter();
         let arguments = arguments
             .into_iter()

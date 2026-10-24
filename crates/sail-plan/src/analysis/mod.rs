@@ -145,7 +145,7 @@ impl<'a> QueryAnalyzer<'a> {
         &self,
         data_type: &sail_common::spec::DataType,
     ) -> PlanResult<arrow_schema::DataType> {
-        data_type::TypeResolver {
+        data_type::DataTypeResolver {
             config: &self.config,
             allow_large_var_types: false,
         }

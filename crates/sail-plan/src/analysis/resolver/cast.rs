@@ -20,13 +20,13 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
-use sail_type_system::cast::{
-    build_rename_target_type, decimal_cast_can_overflow, needs_struct_field_rename,
-};
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
 use crate::analysis::ir::*;
+use crate::analysis::typing::cast::{
+    build_rename_target_type, decimal_cast_can_overflow, needs_struct_field_rename,
+};
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -134,8 +134,9 @@ impl Resolver<'_, '_> {
                     DataType::Timestamp(_, None),
                     DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
                 ) => {
-                    if sail_type_system::temporal::is_spark_compatible_arrow_fixed_offset(&timezone)
-                    {
+                    if crate::analysis::typing::temporal::is_spark_compatible_arrow_fixed_offset(
+                        &timezone,
+                    ) {
                         self.cast_mode(expression, target_type, is_try)?
                     } else {
                         let ntz = self
@@ -188,7 +189,7 @@ impl Resolver<'_, '_> {
                 {
                     let multiplier = match (interval_field, &target_type) {
                         (Some(field), DataType::Duration(_)) => {
-                            sail_type_system::cast::day_time_field_to_microseconds(field)
+                            crate::analysis::typing::cast::day_time_field_to_microseconds(field)
                         }
                         _ => time_unit_to_multiplier(&unit),
                     };

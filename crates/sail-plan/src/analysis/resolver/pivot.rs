@@ -80,7 +80,7 @@ impl Resolver<'_, '_> {
             let expression = self.expression(request.clone(), schema).await?.expression;
             check_pivot_aggregate(&expression, schema)?;
             collect_attributes(&expression, &mut excluded)?;
-            fast &= sail_type_system::relational::pivot_first_supported(
+            fast &= crate::analysis::typing::relational::pivot_first_supported(
                 &expression
                     .result_type
                     .resolved("pivot aggregate")?
@@ -338,7 +338,9 @@ impl Resolver<'_, '_> {
                         .clone())
                 })
                 .collect::<PlanResult<Vec<_>>>()?;
-            types.push(sail_type_system::relational::unpivot_common_type(&fields)?);
+            types.push(crate::analysis::typing::relational::unpivot_common_type(
+                &fields,
+            )?);
         }
         let variable: String = unpivot.variable_column_name.into();
         let names = std::iter::once(variable.clone())

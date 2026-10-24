@@ -179,8 +179,9 @@ impl Resolver<'_, '_> {
                 field.data_type()
             )));
         }
-        let mut target =
-            ExpressionType::from_field(&sail_type_system::coercion::cast_field(&field, &data_type));
+        let mut target = ExpressionType::from_field(
+            &crate::analysis::typing::coercion::cast_field(&field, &data_type),
+        );
         target.nullable = true;
         Ok(LogicalExpression {
             id: self.context.ids.expression(),
@@ -240,7 +241,7 @@ impl Resolver<'_, '_> {
                         .resolved("UNION field")?)
                 })
                 .collect::<PlanResult<Vec<_>>>()?;
-            let data_type = sail_type_system::coercion::common_type(
+            let data_type = crate::analysis::typing::coercion::common_type(
                 &fields
                     .iter()
                     .map(|f| f.data_type.clone())

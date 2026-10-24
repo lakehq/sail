@@ -11,7 +11,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use sail_query::udf::StreamUDF;
 
 use super::{NamedExpression, Resolver};
-use crate::analysis::data_type::TypeResolver;
+use crate::analysis::data_type::DataTypeResolver;
 use crate::analysis::deferred::Deferred;
 use crate::analysis::ir::*;
 use crate::error::{PlanError, PlanResult};
@@ -65,7 +65,7 @@ impl Resolver<'_, '_> {
             command,
             python_version,
         } = function;
-        let types = TypeResolver {
+        let types = DataTypeResolver {
             config: &self.context.config,
             allow_large_var_types: true,
         };

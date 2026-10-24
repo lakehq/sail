@@ -104,7 +104,7 @@ impl Resolver<'_, '_> {
             let function = WindowFunctionDefinition::WindowUDF(
                 datafusion::functions_window::row_number::row_number_udwf(),
             );
-            let resolved = sail_type_system::aggregate::resolve_window(&function, &[])?;
+            let resolved = crate::analysis::typing::aggregate::resolve_window(&function, &[])?;
             let expression = LogicalExpression {
                 id: self.context.ids.expression(),
                 result_type: Deferred::Resolved(ExpressionType::from_field(&resolved.result)),

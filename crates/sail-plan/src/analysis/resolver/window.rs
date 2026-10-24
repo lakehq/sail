@@ -197,7 +197,7 @@ impl Resolver<'_, '_> {
                     .clone())
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let frame = sail_type_system::window::resolve_frame(frame, &order_types)?;
+        let frame = crate::analysis::typing::window::resolve_frame(frame, &order_types)?;
         let filter = if let Some(filter) = call.filter {
             let filter = self.expression(*filter, schema).await?.expression;
             Some(Box::new(typing::coerce(

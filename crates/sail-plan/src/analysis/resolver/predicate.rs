@@ -7,11 +7,11 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
-use sail_type_system::predicate::*;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
 use crate::analysis::ir::*;
+use crate::analysis::typing::predicate::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -303,7 +303,7 @@ impl Resolver<'_, '_> {
                             .to_field(""),
                     ),
                 ];
-                let result = sail_type_system::higher_order::resolve(
+                let result = crate::analysis::typing::higher_order::resolve(
                     function.as_ref(),
                     &fields,
                     &[None, None],

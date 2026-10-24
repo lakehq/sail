@@ -130,7 +130,7 @@ impl Resolver<'_, '_> {
         options: AggregateOptions,
     ) -> PlanResult<LogicalExpression> {
         let fields = typing::argument_fields(&arguments)?;
-        let resolved = sail_type_system::aggregate::resolve(&function, &fields)?;
+        let resolved = crate::analysis::typing::aggregate::resolve(&function, &fields)?;
         let arguments =
             typing::coerce_arguments(arguments, &resolved.arguments, &mut self.context.ids)?;
         let filter = options
@@ -194,7 +194,7 @@ impl Resolver<'_, '_> {
                     }
                 });
             }
-            sail_type_system::coercion::validate_arity(name, args.len(), 1)?;
+            crate::analysis::typing::coercion::validate_arity(name, args.len(), 1)?;
             if name == "avg"
                 && args[0].result_type.resolved("average argument")?.data_type == DataType::Null
             {
@@ -260,7 +260,9 @@ impl Resolver<'_, '_> {
                 )?;
                 args = vec![value, config];
             }
-            "count_min_sketch" => sail_type_system::coercion::validate_arity(name, args.len(), 4)?,
+            "count_min_sketch" => {
+                crate::analysis::typing::coercion::validate_arity(name, args.len(), 4)?
+            }
             "count_if" => {
                 let predicate = args.one()?;
                 let zero = self.literal(ScalarValue::Int32(Some(0)));

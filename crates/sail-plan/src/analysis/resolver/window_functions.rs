@@ -83,7 +83,7 @@ impl Resolver<'_, '_> {
                     });
                 arguments = vec![value];
             }
-            sail_type_system::coercion::validate_arity(name, arguments.len(), 1)?;
+            crate::analysis::typing::coercion::validate_arity(name, arguments.len(), 1)?;
             if options.aggregate.ignore_nulls == Some(true) {
                 function =
                     WindowFunctionDefinition::WindowUDF(if matches!(name, "last" | "last_value") {
@@ -106,7 +106,7 @@ impl Resolver<'_, '_> {
                     }
                 };
         }
-        let resolved = sail_type_system::aggregate::resolve_window(
+        let resolved = crate::analysis::typing::aggregate::resolve_window(
             &function,
             &typing::argument_fields(&arguments)?,
         )?;

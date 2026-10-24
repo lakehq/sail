@@ -7480,7 +7480,6 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-sql-analyzer",
- "sail-type-system",
  "serde",
  "serde_json",
  "thiserror",
@@ -7695,7 +7694,6 @@ dependencies = [
  "sail-python-udf",
  "sail-query",
  "sail-sql-analyzer",
- "sail-type-system",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -7977,20 +7975,6 @@ dependencies = [
  "thiserror",
  "thrift",
  "tokio",
-]
-
-[[package]]
-name = "sail-type-system"
-version = "0.7.2"
-dependencies = [
- "arrow-schema",
- "chrono",
- "datafusion-common",
- "datafusion-expr",
- "parquet-variant-compute",
- "sail-common",
- "sail-common-datafusion",
- "serde_json",
 ]
 
 [[package]]

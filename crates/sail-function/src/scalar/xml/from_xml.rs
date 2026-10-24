@@ -312,7 +312,7 @@ fn parse_xml_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
 }
 
 fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
-    let resolver = sail_type_system::data_type::TypeResolver {
+    let resolver = sail_common_datafusion::data_type::DataTypeResolver {
         session_timezone: Arc::from(session_timezone),
         default_timestamp_ltz: true,
         use_large_var_types: false,

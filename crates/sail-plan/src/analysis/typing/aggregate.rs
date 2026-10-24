@@ -6,8 +6,8 @@ use datafusion_expr::function::WindowUDFFieldArgs;
 use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{AggregateUDF, WindowFunctionDefinition};
 
-use crate::coercion::cast_field;
-use crate::scalar::ScalarTyping;
+use super::coercion::cast_field;
+use super::scalar::ScalarTyping;
 
 pub fn resolve(function: &AggregateUDF, arguments: &[FieldRef]) -> Result<ScalarTyping> {
     // GROUPING_ID() binds to all grouping keys in the native resolver. Its
@@ -17,7 +17,7 @@ pub fn resolve(function: &AggregateUDF, arguments: &[FieldRef]) -> Result<Scalar
     } else {
         fields_with_udf(arguments, function)?
     };
-    crate::coercion::validate_arity(function.name(), targets.len(), arguments.len())?;
+    super::coercion::validate_arity(function.name(), targets.len(), arguments.len())?;
     let arguments = targets
         .iter()
         .zip(arguments)
@@ -35,7 +35,7 @@ pub fn resolve_window(
         WindowFunctionDefinition::AggregateUDF(function) => resolve(function, arguments),
         WindowFunctionDefinition::WindowUDF(function) => {
             let targets = fields_with_udf(arguments, function.as_ref())?;
-            crate::coercion::validate_arity(function.name(), targets.len(), arguments.len())?;
+            super::coercion::validate_arity(function.name(), targets.len(), arguments.len())?;
             let arguments = targets
                 .iter()
                 .zip(arguments)

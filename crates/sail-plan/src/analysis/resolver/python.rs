@@ -18,7 +18,7 @@ use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use super::{NamedExpression, Resolver};
-use crate::analysis::data_type::TypeResolver;
+use crate::analysis::data_type::DataTypeResolver;
 use crate::analysis::deferred::Deferred;
 use crate::analysis::ir::*;
 use crate::analysis::typing;
@@ -44,7 +44,7 @@ impl Resolver<'_, '_> {
                 python_version,
                 ..
             } => {
-                let output_type = TypeResolver {
+                let output_type = DataTypeResolver {
                     config: &self.context.config,
                     allow_large_var_types: true,
                 }

@@ -73,9 +73,10 @@ must cross a typing boundary before using the session's execution APIs.
 
 `sail-function` owns function-specific return-field inference and argument
 coercion in its DataFusion UDF implementations. Native analysis calls these hooks
-through the generic scalar, aggregate, window, and higher-order call resolvers in
-`sail-type-system`. The type-system crate owns common expression and relational
-type rules and does not depend on function implementations or resolver state.
+through the scalar, aggregate, window, and higher-order call resolvers in
+`sail-plan::analysis::typing`. This module also owns common expression and
+relational type rules. Shared spec-to-Arrow conversion lives in
+`sail-common-datafusion::data_type`, which both the analyzer and functions use.
 
 The target function-analysis operation accepts the function identity and its
 configuration, argument fields, and available literal arguments. It returns
@@ -118,11 +119,12 @@ through transparent operators and stops at relation boundaries. Explicit input s
 in the IR so backend optimization preserves them. Temporary views, CTE references,
 subqueries, lambda scopes, and command inputs share the same identity rules.
 
-`sail-type-system` owns generic call resolution, cast metadata, binary/common-type
-inference, and store-assignment compatibility. Spec type and literal conversion
-are independent of resolver state. Configured and literal-dependent function
-inference stays in `sail-function`, where the same UDF hooks serve analysis,
-physical planning, and distributed deserialization.
+`sail-plan::analysis::typing` owns call resolution, cast metadata,
+binary/common-type inference, and store-assignment compatibility. Spec type,
+field, and schema conversion in `sail-common-datafusion::data_type` is independent
+of resolver state. Literal conversion stays in native analysis. Configured and
+literal-dependent function inference stays in `sail-function`, where the same UDF
+hooks serve analysis, physical planning, and distributed deserialization.
 
 The session analyzer omits DataFusion type coercion. Lambda binding and iterator
 extraction happen in native analysis. Lowering rejects unresolved fields, stale

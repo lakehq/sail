@@ -123,7 +123,7 @@ impl Resolver<'_, '_> {
                 }
             }
             "date_format" => {
-                sail_type_system::coercion::validate_arity(name, values.len(), 2)?;
+                crate::analysis::typing::coercion::validate_arity(name, values.len(), 2)?;
                 self.scalar_udf(
                     Arc::new(ScalarUDF::from(SparkDateFormat::new(timezone))),
                     values,

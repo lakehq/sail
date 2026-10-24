@@ -221,7 +221,8 @@ impl Resolver<'_, '_> {
             .iter()
             .map(Slot::field)
             .collect::<PlanResult<Vec<_>>>()?;
-        let targets = sail_type_system::higher_order::value_fields(function.as_ref(), &fields)?;
+        let targets =
+            crate::analysis::typing::higher_order::value_fields(function.as_ref(), &fields)?;
         for (slot, target) in slots.iter_mut().zip(targets) {
             if let (Slot::Value(value), ValueOrLambda::Value(target)) = (slot, target) {
                 value.expression = typing::coerce(
@@ -246,7 +247,7 @@ impl Resolver<'_, '_> {
                 .iter()
                 .filter(|slot| matches!(slot, Slot::Lambda { .. }))
                 .count();
-            sail_type_system::coercion::validate_arity(
+            crate::analysis::typing::coercion::validate_arity(
                 "lambda parameter inference",
                 parameters.len(),
                 lambda_count,
@@ -375,8 +376,11 @@ impl Resolver<'_, '_> {
                     _ => Ok(None),
                 })
                 .collect::<PlanResult<Vec<_>>>()?;
-            let result =
-                sail_type_system::higher_order::resolve(function.as_ref(), &fields, &literals)?;
+            let result = crate::analysis::typing::higher_order::resolve(
+                function.as_ref(),
+                &fields,
+                &literals,
+            )?;
             let changed = fields.iter().zip(&result.arguments).any(|(source, target)| matches!((source, target), (ValueOrLambda::Value(a), ValueOrLambda::Value(b)) if a.data_type() != b.data_type()));
             if changed {
                 for (slot, target) in slots.iter_mut().zip(result.arguments) {

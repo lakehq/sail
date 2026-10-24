@@ -75,7 +75,7 @@ impl Resolver<'_, '_> {
                 self.binary(timestamp, Operator::Plus, interval)?
             }
             "make_date" => {
-                sail_type_system::coercion::validate_arity(name, values.len(), 3)?;
+                crate::analysis::typing::coercion::validate_arity(name, values.len(), 3)?;
                 if values.iter().any(|v| {
                     matches!(
                         v.node,

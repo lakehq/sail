@@ -10,15 +10,15 @@ use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use super::{NamedExpression, Resolver};
-use crate::analysis::data_type::TypeResolver;
+use crate::analysis::data_type::DataTypeResolver;
 use crate::analysis::deferred::Deferred;
 use crate::analysis::ir::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
-    pub(super) fn types(&self) -> TypeResolver<'_> {
-        TypeResolver {
+    pub(super) fn types(&self) -> DataTypeResolver<'_> {
+        DataTypeResolver {
             config: &self.context.config,
             allow_large_var_types: false,
         }
@@ -323,7 +323,7 @@ impl Resolver<'_, '_> {
                     low.expression.clone(),
                     high.expression.clone(),
                 ])?;
-                let common = sail_type_system::coercion::comparison_type(
+                let common = crate::analysis::typing::coercion::comparison_type(
                     &fields
                         .iter()
                         .map(|f| f.data_type().clone())
@@ -442,7 +442,7 @@ impl Resolver<'_, '_> {
                 let left_field = left.result_type.resolved("IN left")?;
                 let right_field = right.result_type.resolved("IN right")?;
                 let nullable = left_field.nullable || right_field.nullable;
-                let common = sail_type_system::coercion::comparison_type(&[
+                let common = crate::analysis::typing::coercion::comparison_type(&[
                     left_field.data_type.clone(),
                     right_field.data_type.clone(),
                 ])?;
