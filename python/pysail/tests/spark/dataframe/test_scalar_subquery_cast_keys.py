@@ -1,5 +1,6 @@
 import re
 
+import pyarrow as pa
 import pytest
 from pyspark.sql import Window
 from pyspark.sql import functions as F  # noqa: N812
@@ -407,5 +408,307 @@ def test_exact_cast_keys_keep_duplicates_nulls_and_boundary_values(spark, ansi, 
             ORDER BY o.ix
         """  # noqa: S608
         assert [tuple(row) for row in spark.sql(query).collect()] == [(0, 2, 110), (1, 1, 7), (2, 0, None), (3, 2, 110)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("data_type", ["FLOAT", "DOUBLE"])
+@pytest.mark.parametrize("key", ["k", "array(k)", "array(array(k))", "named_struct('x', k)"])
+@pytest.mark.parametrize("role", ["partition", "order"])
+@pytest.mark.parametrize("correlated", [False, True])
+def test_signed_zero_window_keys_share_partitions_and_ordering_peers(spark, data_type, key, role, correlated):
+    source_rows = f"""VALUES
+        (CAST('-0.0' AS {data_type}), 1, 10),
+        (CAST('0.0' AS {data_type}), 1, 20),
+        (CAST('0.0' AS {data_type}), 2, 30)
+    """
+    if role == "partition":
+        window = f"row_number() OVER (PARTITION BY {key} ORDER BY v)"
+        aggregate = "max"
+    else:
+        window = f"dense_rank() OVER (ORDER BY {key} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
+        aggregate = "sum"
+    if correlated:
+        query = f"""
+            SELECT o.id,
+              (SELECT {aggregate}(w) FROM (
+                SELECT {window} AS w FROM {source_rows} AS i(k, g, v)
+                WHERE CAST(i.g AS STRING) = o.id
+              )) AS n
+            FROM VALUES ('1'), ('2'), ('3') AS o(id)
+            ORDER BY o.id
+        """  # noqa: S608
+        expected = [("1", 2), ("2", 1), ("3", None)]
+    else:
+        query = f"""
+            SELECT {aggregate}(w) AS n FROM (
+              SELECT {window} AS w FROM {source_rows} AS i(k, g, v) WHERE g = 1
+            )
+        """  # noqa: S608
+        expected = [(2,)]
+    assert [tuple(row) for row in spark.sql(query).collect()] == expected
+
+
+@pytest.mark.parametrize("data_type", ["FLOAT", "DOUBLE"])
+def test_signed_zero_window_normalization_preserves_selected_values(spark, data_type):
+    query = f"""
+        SELECT v, CAST(k AS STRING) AS raw,
+          row_number() OVER (PARTITION BY array(k) ORDER BY v) AS n
+        FROM VALUES (CAST('-0.0' AS {data_type}), 1),
+                    (CAST('0.0' AS {data_type}), 2) AS i(k, v)
+        ORDER BY v
+    """  # noqa: S608
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(1, "-0.0", 1), (2, "0.0", 2)]
+
+
+@pytest.mark.parametrize("data_type", ["FLOAT", "DOUBLE"])
+@pytest.mark.parametrize("correlation_type", ["INT", "FLOAT", "DOUBLE"])
+def test_signed_zero_user_partition_preserves_uncast_correlation_domain(spark, data_type, correlation_type):
+    query = f"""
+        SELECT o.x,
+          (SELECT max(c) FROM (
+            SELECT count(*) OVER (PARTITION BY k) AS c
+            FROM VALUES (CAST('0.0' AS {data_type}), CAST(1 AS {correlation_type}), 10),
+                        (CAST('-0.0' AS {data_type}), CAST(1 AS {correlation_type}), 20),
+                        (CAST('-0.0' AS {data_type}), CAST(2 AS {correlation_type}), 30),
+                        (CAST('1.5' AS {data_type}), CAST(2 AS {correlation_type}), 40),
+                        (CAST('1.5' AS {data_type}), CAST(2 AS {correlation_type}), 50),
+                        (CAST(NULL AS {data_type}), CAST(1 AS {correlation_type}), 60) AS i(k, g, v)
+            WHERE i.g = o.x
+          )) AS n
+        FROM VALUES (CAST(1 AS {correlation_type})), (CAST(2 AS {correlation_type})) AS o(x)
+        ORDER BY o.x
+    """  # noqa: S608
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(1, 2), (2, 2)]
+
+
+@pytest.mark.parametrize("data_type", ["FLOAT", "DOUBLE"])
+@pytest.mark.parametrize("shape", ["flat", "array", "struct"])
+def test_mixed_nan_and_cast_correlation_uses_one_window_domain(spark, data_type, shape):
+    def wrap(value):
+        if shape == "array":
+            return f"array({value})"
+        if shape == "struct":
+            return f"named_struct('x', {value})"
+        return value
+
+    positive = wrap(f"CAST('NaN' AS {data_type})")
+    negative = wrap(f"-CAST('NaN' AS {data_type})")
+    rows = spark.sql(f"""
+        SELECT o.ix,
+          (SELECT min(w) FROM (
+             SELECT row_number() OVER (PARTITION BY g ORDER BY v) AS w
+             FROM VALUES ({positive}, '1', 1, 10), ({negative}, '01', 1, 20) i(k,t,g,v)
+             WHERE i.k=o.k AND CAST(i.t AS BIGINT)=o.t
+           )) AS smallest,
+          (SELECT max(w) FROM (
+             SELECT row_number() OVER (PARTITION BY g ORDER BY v) AS w
+             FROM VALUES ({positive}, '1', 1, 10), ({negative}, '01', 1, 20) i(k,t,g,v)
+             WHERE i.k=o.k AND CAST(i.t AS BIGINT)=o.t
+           )) AS largest
+        FROM VALUES ({positive}, 1L, 0), ({negative}, 1L, 1) o(k,t,ix)
+        ORDER BY o.ix
+    """)
+    assert [tuple(row) for row in rows.collect()] == [(0, 1, 2), (1, 1, 2)]
+
+
+@pytest.mark.parametrize("data_type", ["FLOAT", "DOUBLE"])
+def test_nan_correlation_keeps_window_partitions_and_order_peers_consistent(spark, data_type):
+    rows = spark.sql(f"""
+        SELECT o.ix,
+          (SELECT sum(r) FROM (
+             SELECT dense_rank() OVER (ORDER BY d) AS r
+             FROM VALUES (CAST('NaN' AS {data_type})), (-CAST('NaN' AS {data_type})) i(d)
+             WHERE d=o.id
+           )) AS ranks,
+          (SELECT count(*) FROM (
+             SELECT row_number() OVER (PARTITION BY d ORDER BY v) AS rn
+             FROM VALUES (CAST('NaN' AS {data_type}), 10), (-CAST('NaN' AS {data_type}), 20) i(d,v)
+             WHERE d=o.id
+           ) WHERE rn=1) AS partitions
+        FROM VALUES (CAST('NaN' AS {data_type}), 0), (-CAST('NaN' AS {data_type}), 1) o(id,ix)
+        ORDER BY o.ix
+    """)
+    assert [tuple(row) for row in rows.collect()] == [(0, 2, 1), (1, 2, 1)]
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
+@pytest.mark.parametrize(
+    ("data_type", "bits"),
+    [
+        (pa.float32(), [0x7FC00001, 0x7F800001]),
+        (pa.float64(), [0x7FF8000000000001, 0x7FF0000000000001]),
+    ],
+)
+@pytest.mark.parametrize("computed_partition", [False, True])
+def test_correlated_window_normalizes_keys_without_changing_nan_values(spark, data_type, bits, computed_partition):
+    # Spark puts every NaN in one window partition. Only the private key may be
+    # normalized: the selected user column must retain its original payload bits.
+    width = data_type.bit_width // 8
+    raw = b"".join(value.to_bytes(width, "little") for value in bits)
+    values = pa.Array.from_buffers(data_type, len(bits), [None, pa.py_buffer(raw)])
+    table = pa.Table.from_arrays(
+        [pa.array(["1", "1"]), values, pa.array([0, 1], type=pa.int32())],
+        names=["tag", "k", "seq"],
+    )
+    source = spark.createDataFrame(table)
+    source.createOrReplaceTempView("scalar_window_payload_values")
+    partition = "CASE WHEN seq < 0 THEN NULL ELSE k END" if computed_partition else "k"
+    try:
+        result = spark.sql(
+            "SELECT (SELECT array_sort(collect_list(named_struct('seq', seq, 'k', k, 'w', w))) "
+            "FROM (SELECT seq, k, row_number() OVER (PARTITION BY "
+            f"{partition} ORDER BY seq) AS w FROM scalar_window_payload_values "
+            "WHERE CAST(tag AS BIGINT) = o.id)) AS events FROM VALUES (1L) AS o(id)"
+        )
+        arrow = result._to_table()[0] if hasattr(result, "_to_table") else result.toArrow()
+        events = arrow.column("events").combine_chunks()
+        assert events.to_pylist()[0] is not None
+        assert events.values.field("w").to_pylist() == [1, 2]
+        actual = events.values.field("k")
+        assert actual.type == data_type
+        payload = actual.buffers()[1].to_pybytes()
+        payload = payload[actual.offset * width : (actual.offset + len(actual)) * width]
+        assert payload == raw
+    finally:
+        spark.catalog.dropTempView("scalar_window_payload_values")
+
+
+@pytest.mark.parametrize("correlated", [False, True])
+@pytest.mark.parametrize("sorted_input", [False, True])
+def test_floating_window_keys_share_completed_volatile_values(spark, correlated, sorted_input):
+    import math
+
+    source = spark.range(64, numPartitions=3).select(
+        F.lit("1").alias("tag"),
+        F.col("id").alias("seq"),
+        F.when((F.col("id") % 7) == 0, F.lit(None).cast("double"))
+        .when(F.expr("pmod(xxhash64(uuid()), 1000)") < 500, F.lit(float("nan")))
+        .otherwise(F.lit(-0.0))
+        .alias("p"),
+        F.expr("CAST(pmod(xxhash64(uuid()), 1000) AS DOUBLE) / 1000.0").alias("r"),
+    )
+    if sorted_input:
+        source = source.repartition(3, F.col("p")).sortWithinPartitions(F.col("p"), F.col("r").desc(), F.col("seq"))
+    source.createOrReplaceTempView("scalar_window_volatile_keys")
+    partition = "CASE WHEN seq < 0 THEN NULL ELSE p END"
+    ordering = "CASE WHEN seq < 0 THEN NULL ELSE r END"
+    window = f"PARTITION BY {partition} ORDER BY {ordering} ASC NULLS FIRST, seq"
+    try:
+        if correlated:
+            inner = (
+                f"SELECT row_number() OVER ({window}) AS w, "
+                f"count(*) OVER (PARTITION BY {partition}) AS n, "
+                f"lag(r) OVER ({window}) AS previous, r "
+                "FROM scalar_window_volatile_keys WHERE CAST(tag AS BIGINT) = o.id"
+            )
+            result = spark.sql(
+                f"SELECT o.id, (SELECT sum(2 * w - n - 1) FROM ({inner})) AS rank_check, "
+                f"(SELECT sum(CASE WHEN previous > r THEN 1 ELSE 0 END) FROM ({inner})) AS order_check "
+                "FROM VALUES (1L) AS o(id)"
+            )
+            assert [tuple(row) for row in result.collect()] == [(1, 0, 0)]
+        else:
+            rows = spark.sql(
+                f"SELECT seq, p, r, row_number() OVER ({window}) AS w FROM scalar_window_volatile_keys"
+            ).collect()
+            assert len(rows) == 64
+            assert len({row.seq for row in rows}) == 64
+            groups = {}
+            for row in rows:
+                key = None if row.p is None else ("NaN" if math.isnan(row.p) else row.p)
+                groups.setdefault(key, []).append(row)
+            for group in groups.values():
+                ordered = sorted(group, key=lambda row: (row.r, row.seq))
+                assert [row.w for row in ordered] == list(range(1, len(ordered) + 1))
+    finally:
+        spark.catalog.dropTempView("scalar_window_volatile_keys")
+
+
+@pytest.mark.parametrize("shape", ["volatile-order", "volatile-filter", "scalar-order"])
+def test_window_correlation_domains_survive_unrelated_expressions(spark, shape):
+    order = {"volatile-order": "uuid()", "scalar-order": "(SELECT max(id) FROM range(2))"}.get(shape)
+    window = "PARTITION BY k"
+    if order:
+        window += f" ORDER BY {order} ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
+    predicate = "i.g = o.x" + (" AND rand() < 2.0" if shape == "volatile-filter" else "")
+    query = f"""
+        SELECT o.x, (SELECT max(c) FROM (
+          SELECT count(*) OVER ({window}) AS c
+          FROM VALUES (CAST('0.0' AS DOUBLE), 1, 10),
+                      (CAST('-0.0' AS DOUBLE), 1, 20),
+                      (CAST('-0.0' AS DOUBLE), 2, 30),
+                      (CAST('1.5' AS DOUBLE), 2, 40),
+                      (CAST('1.5' AS DOUBLE), 2, 50),
+                      (CAST(NULL AS DOUBLE), 1, 60) AS i(k, g, v)
+          WHERE {predicate}
+        )) AS n
+        FROM VALUES (1), (2) AS o(x)
+        ORDER BY o.x
+    """  # noqa: S608
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(1, 2), (2, 2)]
+
+
+@pytest.mark.parametrize(
+    "outer_key",
+    [
+        "o.x + CAST(rand() * 0 AS INT)",
+        "o.x + CAST(rand() < 2.0 AS INT) - 1",
+        "o.x + (SELECT max(id) FROM range(1))",
+        "CASE WHEN (SELECT max(id) FROM range(1)) = 0 THEN o.x ELSE 99 END",
+    ],
+)
+def test_window_domains_preserve_outer_only_key_expressions(spark, outer_key):
+    query = f"""
+        SELECT o.x, (SELECT max(c) FROM (
+          SELECT count(*) OVER (PARTITION BY k) AS c
+          FROM VALUES (CAST('0.0' AS DOUBLE), 1, 10),
+                      (CAST('-0.0' AS DOUBLE), 1, 20),
+                      (CAST('-0.0' AS DOUBLE), 2, 30),
+                      (CAST('1.5' AS DOUBLE), 2, 40),
+                      (CAST('1.5' AS DOUBLE), 2, 50),
+                      (CAST(NULL AS DOUBLE), 1, 60) AS i(k, g, v)
+          WHERE i.g = {outer_key}
+        )) AS n
+        FROM VALUES (1), (2) AS o(x)
+        ORDER BY o.x
+    """  # noqa: S608
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(1, 2), (2, 2)]
+
+
+@pytest.mark.parametrize(
+    "outer_key",
+    [
+        "o.x + CAST(rand() < 2.0 AS INT) - 1",
+        pytest.param(
+            "o.x + (SELECT max(id) FROM range(1))",
+            marks=pytest.mark.skipif(
+                is_jvm_spark(),
+                reason="Spark fails an uncorrelated scalar in this correlated join condition; per-outer evaluation returns 2",
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("ansi", [True, False])
+def test_window_cast_domains_keep_collisions_with_outer_expressions(spark, outer_key, ansi):
+    # The outer MAX also detects regressions in a previously correct consumer of
+    # native decorrelation, which could expose duplicate scalar rows.
+    query = f"""
+        SELECT x, max(n) AS n FROM (
+          SELECT o.x, (SELECT max(c) FROM (
+            SELECT count(*) OVER (PARTITION BY k) AS c
+            FROM VALUES (CAST('0.0' AS DOUBLE), '1'),
+                        (CAST('-0.0' AS DOUBLE), '01'),
+                        (CAST('0.0' AS DOUBLE), '2'),
+                        (CAST('-0.0' AS DOUBLE), '02') AS i(k, g)
+            WHERE CAST(g AS BIGINT) = {outer_key}
+          )) AS n
+          FROM VALUES (1L), (2L) AS o(x)
+        ) q GROUP BY x ORDER BY x
+    """  # noqa: S608
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        assert [tuple(row) for row in spark.sql(query).collect()] == [(1, 2), (2, 2)]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)

@@ -13,8 +13,9 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, enumerate_grouping_sets, grouping_set_to_exprlist,
     split_conjunction,
 };
-use datafusion_expr::{Expr, JoinType, LogicalPlan, Operator, Volatility};
+use datafusion_expr::{Expr, JoinType, LogicalPlan, Operator, ScalarUDF, Volatility};
 use projection::project_with_keys;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
 mod projection;
 
@@ -164,6 +165,7 @@ fn normalize_keys(
     let mut eligible = true;
     let mut has_aggregate = false;
     let mut has_cast = false;
+    let mut has_window = false;
     let mut reads_grouping_id = false;
     // An inner column compared to an outer value already selects one group per
     // outer row, so casts of that column need no separate key.
@@ -171,6 +173,7 @@ fn normalize_keys(
     plan.apply(|node| {
         reserved.extend(node.schema().field_names());
         has_aggregate |= matches!(node, LogicalPlan::Aggregate(_));
+        has_window |= matches!(node, LogicalPlan::Window(_));
         reads_grouping_id |= node.expressions().iter().any(|expression| {
             expression
                 .column_refs()
@@ -209,22 +212,9 @@ fn normalize_keys(
         for expression in node.expressions() {
             eligible &= !expression.exists(|part| {
                 Ok(match part {
-                    Expr::ScalarSubquery(_)
-                    | Expr::Exists(_)
-                    | Expr::InSubquery(_)
-                    | Expr::SetComparison(_) => true,
-                    Expr::ScalarFunction(function) => {
-                        function.func.signature().volatility == Volatility::Volatile
-                    }
-                    Expr::HigherOrderFunction(function) => {
-                        function.func.signature().volatility == Volatility::Volatile
-                    }
-                    Expr::AggregateFunction(function) => {
-                        function.func.signature().volatility == Volatility::Volatile
-                    }
-                    Expr::WindowFunction(function) => {
-                        function.fun.signature().volatility == Volatility::Volatile
-                    }
+                    // An uncorrelated scalar producer is opaque and stays in place.
+                    Expr::ScalarSubquery(query) => !query.outer_ref_columns.is_empty(),
+                    Expr::Exists(_) | Expr::InSubquery(_) | Expr::SetComparison(_) => true,
                     _ => false,
                 })
             })?;
@@ -236,13 +226,16 @@ fn normalize_keys(
             {
                 match native_equality(expression) {
                     Some((Expr::Column(column), _)) => {
-                        // Floating-point equality merges -0.0 and 0.0, whose casts differ.
+                        // Floating equality merges values whose casts differ, including
+                        // floating leaves of arrays and structs.
                         let floating = filter
                             .input
                             .schema()
                             .qualified_field_from_column(column)
-                            .is_ok_and(|(_, field)| field.data_type().is_floating());
-                        if !floating {
+                            .is_ok_and(|(_, field)| {
+                                NormalizeFloatKeys::has_float(field.data_type())
+                            });
+                        if !floating && stable_comparison(expression) {
                             pinned.insert(column.name.clone());
                         }
                     }
@@ -253,7 +246,7 @@ fn normalize_keys(
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    if !eligible || !has_aggregate || !has_cast {
+    if !eligible || !has_aggregate || !(has_cast || has_window) {
         return Ok(Transformed::no(plan.clone()));
     }
 
@@ -262,13 +255,21 @@ fn normalize_keys(
     // Like DataFusion's `check_aggregation_in_scalar_subquery`, this checks only
     // the outermost aggregate; aggregates below it may group by anything.
     let (mut correlations, mut keyed) = (Vec::new(), Vec::new());
+    let mut domains = BTreeSet::new();
+    // Discover the complete set before validating retained predicates: a deeper
+    // window may require lifting the same column from an earlier filter too.
+    let windowed_correlation = collect_window_domains(plan, false, false, &mut domains);
     if !lifted_scope(
         plan,
         &mut Vec::new(),
         &pinned,
         &mut correlations,
         &mut keyed,
+        &domains,
     ) {
+        return Ok(Transformed::no(plan.clone()));
+    }
+    if !has_cast && !windowed_correlation {
         return Ok(Transformed::no(plan.clone()));
     }
     for aggregate in keyed {
@@ -287,6 +288,7 @@ fn normalize_keys(
         aliases,
         reserved,
         pinned: &pinned,
+        domains: &domains,
         hidden: HashSet::new(),
         reads_grouping_id,
         grouping_ids_fit: true,
@@ -296,7 +298,10 @@ fn normalize_keys(
     let (carried, pending, _) = lift.carry(plan.clone(), false)?;
     // Every lifted equality has an aggregate above it, which consumes its key.
     debug_assert!(pending.is_empty());
-    if carried == *plan || !lift.grouping_ids_fit {
+    if !lift.grouping_ids_fit {
+        return Ok(Transformed::no(plan.clone()));
+    }
+    if carried == *plan {
         return Ok(Transformed::no(plan.clone()));
     }
     let schema = Arc::clone(plan.schema());
@@ -309,18 +314,59 @@ fn normalize_keys(
     }))
 }
 
-/// The cast, its column, and the outer expression of `CAST(column) = outer`.
-type CastEquality<'a> = (&'a Cast, &'a Column, &'a Expr);
+/// Carrying an existing key is safe even when its outer value varies; using that
+/// comparison to prove that a group is pinned requires stability.
+fn stable_comparison(expression: &Expr) -> bool {
+    let mut stable = true;
+    let _ = expression.apply(|part| {
+        stable = match part {
+            Expr::ScalarSubquery(_)
+            | Expr::Exists(_)
+            | Expr::InSubquery(_)
+            | Expr::SetComparison(_) => false,
+            Expr::ScalarFunction(function) => {
+                function.func.signature().volatility != Volatility::Volatile
+            }
+            Expr::HigherOrderFunction(function) => {
+                function.func.signature().volatility != Volatility::Volatile
+            }
+            Expr::AggregateFunction(function) => {
+                function.func.signature().volatility != Volatility::Volatile
+            }
+            Expr::WindowFunction(function) => {
+                function.fun.signature().volatility != Volatility::Volatile
+            }
+            _ => true,
+        };
+        Ok(if stable {
+            TreeNodeRecursion::Continue
+        } else {
+            TreeNodeRecursion::Stop
+        })
+    });
+    stable
+}
+
+/// The optional cast, inner column and outer comparison value.
+type KeyEquality<'a> = (Option<&'a Cast>, &'a Column, &'a Expr);
 
 /// Return the cast equality that a filter below an aggregate hands to that aggregate.
-fn lifted_cast<'a>(expression: &'a Expr, pinned: &HashSet<String>) -> Option<CastEquality<'a>> {
-    let (Expr::Cast(cast), outer) = native_equality(expression)? else {
-        return None;
-    };
-    let Expr::Column(column) = cast.expr.as_ref() else {
-        return None;
-    };
-    (!pinned.contains(&column.name)).then_some((cast, column, outer))
+fn lifted_key<'a>(
+    expression: &'a Expr,
+    pinned: &HashSet<String>,
+    domains: &BTreeSet<Column>,
+) -> Option<KeyEquality<'a>> {
+    let (inner, outer) = native_equality(expression)?;
+    match inner {
+        Expr::Column(column) if domains.contains(column) => Some((None, column, outer)),
+        Expr::Cast(cast) => {
+            let Expr::Column(column) = cast.expr.as_ref() else {
+                return None;
+            };
+            (!pinned.contains(&column.name)).then_some((Some(cast), column, outer))
+        }
+        _ => None,
+    }
 }
 
 /// Split a filter's conjuncts into the cast equalities lifted to an aggregate above
@@ -329,10 +375,11 @@ fn split_lifted<'a>(
     predicate: &'a Expr,
     aggregated: bool,
     pinned: &HashSet<String>,
-) -> (Vec<CastEquality<'a>>, Vec<&'a Expr>, Vec<Expr>) {
+    domains: &BTreeSet<Column>,
+) -> (Vec<KeyEquality<'a>>, Vec<&'a Expr>, Vec<Expr>) {
     let (mut lifted, mut retained) = (Vec::new(), Vec::new());
     for expression in split_conjunction(predicate) {
-        match lifted_cast(expression, pinned).filter(|_| aggregated) {
+        match lifted_key(expression, pinned, domains).filter(|_| aggregated) {
             Some(equality) => lifted.push(equality),
             None => retained.push(expression),
         }
@@ -345,6 +392,39 @@ fn split_lifted<'a>(
     (lifted, retained, correlations)
 }
 
+/// Find the floating domains whose filters reach a window before an aggregate.
+fn collect_window_domains(
+    plan: &LogicalPlan,
+    aggregated: bool,
+    windowed: bool,
+    domains: &mut BTreeSet<Column>,
+) -> bool {
+    let (aggregated, windowed) = match plan {
+        LogicalPlan::Aggregate(_) => (true, false),
+        LogicalPlan::Window(_) => (aggregated, aggregated || windowed),
+        _ => (aggregated, windowed),
+    };
+    let mut found = false;
+    if windowed && let LogicalPlan::Filter(filter) = plan {
+        found = filter.predicate.contains_outer();
+        for expression in split_conjunction(&filter.predicate) {
+            if let Some((Expr::Column(column), _)) = native_equality(expression)
+                && filter
+                    .input
+                    .schema()
+                    .qualified_field_from_column(column)
+                    .is_ok_and(|(_, field)| NormalizeFloatKeys::has_float(field.data_type()))
+            {
+                domains.insert(column.clone());
+            }
+        }
+    }
+    for input in plan.inputs() {
+        found |= collect_window_domains(input, aggregated, windowed, domains);
+    }
+    found
+}
+
 /// Collect the correlations that stay in their filters after cast equalities are
 /// lifted, and the outermost aggregate above each lifted equality. Return false
 /// if native pull-up could not carry a lifted key to the subquery's output.
@@ -354,13 +434,15 @@ fn lifted_scope<'a>(
     pinned: &HashSet<String>,
     correlations: &mut Vec<Expr>,
     keyed: &mut Vec<&'a Aggregate>,
+    domains: &BTreeSet<Column>,
 ) -> bool {
     let mut supported = true;
     if let LogicalPlan::Filter(filter) = plan {
         let nearest = ancestors
             .iter()
             .rposition(|node| matches!(node, LogicalPlan::Aggregate(_)));
-        let (lifted, _, retained) = split_lifted(&filter.predicate, nearest.is_some(), pinned);
+        let (lifted, _, retained) =
+            split_lifted(&filter.predicate, nearest.is_some(), pinned, domains);
         correlations.extend(retained);
         if let Some(nearest) = nearest.filter(|_| !lifted.is_empty()) {
             // Native pull-up adds the key to the nearest aggregate, but above
@@ -381,7 +463,7 @@ fn lifted_scope<'a>(
     }
     ancestors.push(plan);
     for input in plan.inputs() {
-        supported &= lifted_scope(input, ancestors, pinned, correlations, keyed);
+        supported &= lifted_scope(input, ancestors, pinned, correlations, keyed, domains);
     }
     ancestors.pop();
     supported
@@ -389,7 +471,7 @@ fn lifted_scope<'a>(
 
 /// A cast equality lifted from its filter to the first window or aggregate above it.
 struct Pending {
-    cast: Cast,
+    cast: Option<Cast>,
     column: Column,
     outer: Expr,
 }
@@ -399,6 +481,7 @@ struct Lift<'a> {
     aliases: &'a AliasGenerator,
     reserved: &'a mut BTreeSet<String>,
     pinned: &'a HashSet<String>,
+    domains: &'a BTreeSet<Column>,
     /// Names of the keys computed for lifted cast equalities.
     hidden: HashSet<String>,
     /// Whether GROUPING or GROUPING_ID reads a grouping ID in the subquery.
@@ -435,13 +518,13 @@ impl Lift<'_> {
                 // Only an aggregate above can consume a lifted equality; filters
                 // above every aggregate keep their predicates for native pull-up.
                 let (lifted, retained, correlations) =
-                    split_lifted(&filter.predicate, aggregated, self.pinned);
+                    split_lifted(&filter.predicate, aggregated, self.pinned, self.domains);
                 keys.extend(collect_subquery_cols(&correlations, filter.input.schema())?);
                 if lifted.is_empty() {
                     LogicalPlan::Filter(filter)
                 } else {
                     pending.extend(lifted.into_iter().map(|(cast, column, outer)| Pending {
-                        cast: cast.clone(),
+                        cast: cast.cloned(),
                         column: column.clone(),
                         outer: outer.clone(),
                     }));
@@ -469,7 +552,7 @@ impl Lift<'_> {
             }
             LogicalPlan::Window(mut window) => {
                 if !pending.is_empty() {
-                    window.input = self.materialize(window.input, &mut pending, &mut keys)?;
+                    window.input = self.materialize(window.input, &mut pending, &mut keys, true)?;
                 }
                 changed |= !keys.is_empty();
                 // Removing the filter makes the window see all correlation groups.
@@ -510,7 +593,8 @@ impl Lift<'_> {
             }
             LogicalPlan::Aggregate(mut aggregate) => {
                 if !pending.is_empty() {
-                    aggregate.input = self.materialize(aggregate.input, &mut pending, &mut keys)?;
+                    aggregate.input =
+                        self.materialize(aggregate.input, &mut pending, &mut keys, false)?;
                     changed = true;
                 }
                 if has_grouping_set(&aggregate.group_expr) {
@@ -561,6 +645,7 @@ impl Lift<'_> {
         input: Arc<LogicalPlan>,
         pending: &mut Vec<Pending>,
         keys: &mut BTreeSet<Column>,
+        windowed: bool,
     ) -> Result<Arc<LogicalPlan>> {
         let mut expressions = Vec::new();
         let mut computed: Vec<(Expr, Column)> = Vec::new();
@@ -571,20 +656,46 @@ impl Lift<'_> {
             outer,
         } in pending.drain(..)
         {
-            let data_type = cast.field.data_type().clone();
+            let data_type = match &cast {
+                Some(cast) => cast.field.data_type().clone(),
+                None => input
+                    .schema()
+                    .qualified_field_from_column(&column)?
+                    .1
+                    .data_type()
+                    .clone(),
+            };
+            // Window partitions, aggregate groups and the outer join must use the
+            // same floating equality classes; keep raw payloads in their own fields.
+            let canonical =
+                cast.is_none() || (windowed && NormalizeFloatKeys::has_float(&data_type));
+            let outer = if canonical {
+                ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![outer])
+            } else {
+                outer
+            };
             // Like Spark, group by the input of an injective cast rather than
             // casting every row; the comparison below applies the cast instead.
-            let key = if input
-                .schema()
-                .qualified_field_from_column(&column)
-                .is_ok_and(|(_, field)| injective_cast(field.data_type(), &data_type))
+            let key = if !canonical
+                && input
+                    .schema()
+                    .qualified_field_from_column(&column)
+                    .is_ok_and(|(_, field)| injective_cast(field.data_type(), &data_type))
             {
                 Expr::Column(column)
             } else {
-                Expr::Cast(Cast {
-                    expr: Box::new(Expr::Column(column)),
-                    ..cast
-                })
+                let value = match cast {
+                    Some(cast) => Expr::Cast(Cast {
+                        expr: Box::new(Expr::Column(column)),
+                        ..cast
+                    }),
+                    None => Expr::Column(column),
+                };
+                if canonical {
+                    ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![value])
+                } else {
+                    value
+                }
             };
             let column = if let Some((_, column)) = computed.iter().find(|(expr, _)| expr == &key) {
                 column.clone()

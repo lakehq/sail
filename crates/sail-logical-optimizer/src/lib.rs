@@ -4,12 +4,14 @@ use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
+mod normalize_window_keys;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
 mod scalar_subquery_keys;
 
 use lateral_join::DecorrelateLateralProjection;
+use normalize_window_keys::NormalizeWindowKeys;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
@@ -27,6 +29,7 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     rules.extend(built_in_rules);
     // Iterator UDFs need partition streams and must be extracted before scalar folding.
     rules.push(Arc::new(ExtractScalarIteratorUDF));
+    rules.push(Arc::new(NormalizeWindowKeys));
     rules
 }
 
