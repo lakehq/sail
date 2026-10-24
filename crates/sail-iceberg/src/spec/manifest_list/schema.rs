@@ -36,7 +36,7 @@ fn partitions_field() -> AvroRecordField {
 
     let element_record = AvroSchema::Record(RecordSchema {
         #[expect(clippy::unwrap_used)]
-        name: Name::new("field_summary").unwrap_or_else(|_| Name::new("field_summary").unwrap()),
+        name: Name::new("r508").unwrap_or_else(|_| Name::new("r508").unwrap()),
         aliases: None,
         doc: None,
         fields,
