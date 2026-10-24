@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from pyspark.sql import Window
 from pyspark.sql import functions as F  # noqa: N812
@@ -308,3 +310,42 @@ def test_cast_correlation_combines_lossy_keys_at_grouping_id_width_boundaries(sp
         (16777216.0, 2 * copies),
         (33554432.0, copies),
     ]
+
+
+@pytest.mark.skipif(
+    is_jvm_spark(),
+    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected flags",
+)
+def test_injective_cast_correlation_keeps_grouping_flags(spark):
+    # The raw input of an injective cast is prefixed to every grouping set like any
+    # other correlation key, so GROUPING still reads the bit of its own column.
+    query = """
+        SELECT o.id,
+          (SELECT sum(c * 10 + flag) FROM (
+            SELECT count(*) AS c, CAST(grouping(g) AS BIGINT) AS flag
+            FROM VALUES (1, 1), (1, 2), (2, 1) AS i(k, g)
+            WHERE CAST(i.k AS STRING) = o.id
+            GROUP BY GROUPING SETS ((g), ())
+          )) AS n
+        FROM VALUES ('1'), ('2'), ('3'), (CAST(NULL AS STRING)) AS o(id)
+        ORDER BY o.id NULLS FIRST
+    """
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(None, None), ("1", 41), ("2", 21), ("3", None)]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific plan shape")
+def test_injective_cast_correlation_groups_by_raw_key(spark):
+    def cast_key(query):
+        plan = spark.sql(f"EXPLAIN {query}").first()[0]
+        return re.search(r"CAST\([^)]*\) as __sail_correlation_key", plan) is not None
+
+    # Grouping by an injective cast's input finds the same groups without casting
+    # every row; the cast is compared once per group instead.
+    assert not cast_key(
+        "SELECT o.id, (SELECT count(*) FROM VALUES (1), (2) AS i(k) WHERE CAST(i.k AS STRING) = o.id) AS n"
+        " FROM VALUES ('1') AS o(id)"
+    )
+    assert cast_key(
+        "SELECT o.id, (SELECT count(*) FROM VALUES ('1'), ('01') AS i(k) WHERE CAST(i.k AS BIGINT) = o.id) AS n"
+        " FROM VALUES (1L) AS o(id)"
+    )

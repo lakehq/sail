@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::DataType;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
@@ -98,6 +99,26 @@ fn strip_identity_cast(expression: &Expr) -> &Expr {
         },
         _ => expression,
     }
+}
+
+/// Whether a cast never fails and maps distinct values to distinct values, so that
+/// grouping by its input groups exactly as grouping by its result would.
+fn injective_cast(from: &DataType, to: &DataType) -> bool {
+    // The decimal precision Spark gives each integer type, which also orders their widths.
+    let digits = |data_type: &DataType| match data_type {
+        DataType::Int8 => Some(3),
+        DataType::Int16 => Some(5),
+        DataType::Int32 => Some(10),
+        DataType::Int64 => Some(20),
+        _ => None,
+    };
+    digits(from).is_some_and(|needed| match to {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => true,
+        DataType::Decimal128(precision, scale) => {
+            *scale >= 0 && i16::from(*precision) - i16::from(*scale) >= needed
+        }
+        _ => digits(to).is_some_and(|wider| wider > needed),
+    })
 }
 
 fn normalize_keys(
@@ -359,10 +380,15 @@ impl Lift<'_> {
     ) -> Result<(LogicalPlan, Vec<Pending>, BTreeSet<Column>)> {
         let mut pending = Vec::new();
         let mut keys = BTreeSet::new();
+        // Rebuilding a schema looks up every expression's field, so only rebuild
+        // the nodes whose inputs or expressions change.
+        let mut changed = false;
         let below = aggregated || matches!(plan, LogicalPlan::Aggregate(_));
         let plan = plan
             .map_children(|input| {
+                let schema = Arc::clone(input.schema());
                 let (input, input_pending, input_keys) = self.carry(input, below)?;
+                changed |= &schema != input.schema();
                 pending.extend(input_pending);
                 keys.extend(input_keys);
                 Ok(Transformed::yes(input))
@@ -401,6 +427,7 @@ impl Lift<'_> {
                 for key in carried {
                     if !projection.schema.has_column(&key) {
                         projection.expr.push(Expr::Column(key));
+                        changed = true;
                     }
                 }
                 LogicalPlan::Projection(projection)
@@ -409,6 +436,7 @@ impl Lift<'_> {
                 if !pending.is_empty() {
                     window.input = self.materialize(window.input, &mut pending, &mut keys)?;
                 }
+                changed |= !keys.is_empty();
                 // Removing the filter makes the window see all correlation groups.
                 // Add their compared keys without replacing the user's partitions.
                 window.window_expr = window
@@ -448,6 +476,7 @@ impl Lift<'_> {
             LogicalPlan::Aggregate(mut aggregate) => {
                 if !pending.is_empty() {
                     aggregate.input = self.materialize(aggregate.input, &mut pending, &mut keys)?;
+                    changed = true;
                 }
                 if has_grouping_set(&aggregate.group_expr) {
                     // A grouping set has no empty-input COUNT to compensate. Native
@@ -468,6 +497,7 @@ impl Lift<'_> {
                             && grouping_id_fits(&aggregate, &keys, self.reads_grouping_id);
                         group_expr.append(&mut aggregate.group_expr);
                         aggregate.group_expr = group_expr;
+                        changed = true;
                     }
                 }
                 // Leave the original grouping intact: native pull-up must still see
@@ -479,7 +509,12 @@ impl Lift<'_> {
         };
         // Window, Unnest, joins and aliases cache their output schema. Native
         // pull-up otherwise retains the old schema after adding a hidden key below.
-        Ok((plan.recompute_schema()?, pending, keys))
+        let plan = if changed {
+            plan.recompute_schema()?
+        } else {
+            plan
+        };
+        Ok((plan, pending, keys))
     }
 
     /// Compute lifted cast keys just below the first window or aggregate above their
@@ -508,10 +543,20 @@ impl Lift<'_> {
         } in pending.drain(..)
         {
             let data_type = cast.field.data_type().clone();
-            let key = Expr::Cast(Cast {
-                expr: Box::new(Expr::Column(column)),
-                ..cast
-            });
+            // Like Spark, group by the input of an injective cast rather than
+            // casting every row; the comparison below applies the cast instead.
+            let key = if input
+                .schema()
+                .qualified_field_from_column(&column)
+                .is_ok_and(|(_, field)| injective_cast(field.data_type(), &data_type))
+            {
+                Expr::Column(column)
+            } else {
+                Expr::Cast(Cast {
+                    expr: Box::new(Expr::Column(column)),
+                    ..cast
+                })
+            };
             let column = if let Some((_, column)) = computed.iter().find(|(expr, _)| expr == &key) {
                 column.clone()
             } else {
@@ -527,7 +572,8 @@ impl Lift<'_> {
                 self.hidden.insert(column.name.clone());
                 column
             };
-            // Compare through a same-type cast, as native compares `CAST(column)`.
+            // Compare through a same-type cast, as native compares `CAST(column)`,
+            // or through the cast itself for an injective key's raw input.
             // A column pair would let filter pushdown infer outer predicates onto
             // the key and evaluate the cast on rows that local predicates exclude.
             let compared = Expr::Cast(Cast::new(Box::new(Expr::Column(column.clone())), data_type));

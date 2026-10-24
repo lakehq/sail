@@ -1297,6 +1297,64 @@ Feature: Scalar subqueries in distributed execution
         | 1  | 2 |
         | 2  | 0 |
 
+    Scenario: Injective cast correlations group by the raw inner key
+      When query
+        """
+        SELECT o.s,
+          (SELECT count(*) FROM VALUES (1, 10), (1, 20), (2, 30), (CAST(NULL AS INT), 40) AS i(k, v)
+           WHERE CAST(i.k AS STRING) = o.s) AS by_string,
+          (SELECT sum(v) FROM VALUES (1, 10), (1, 20), (2, 30), (CAST(NULL AS INT), 40) AS i(k, v)
+           WHERE i.k = o.l) AS by_bigint,
+          (SELECT max(v) FROM VALUES (1, 10), (1, 20), (2, 30), (CAST(NULL AS INT), 40) AS i(k, v)
+           WHERE CAST(i.k AS DECIMAL(12, 2)) = o.d) AS by_decimal
+        FROM VALUES ('1', 1L, CAST(1 AS DECIMAL(12, 2))),
+                    ('2', 2L, CAST(2 AS DECIMAL(12, 2))),
+                    ('3', 3L, CAST(3 AS DECIMAL(12, 2))),
+                    (CAST(NULL AS STRING), CAST(NULL AS BIGINT), CAST(NULL AS DECIMAL(12, 2))) AS o(s, l, d)
+        ORDER BY o.s NULLS FIRST
+        """
+      Then query result collected ordered
+        | s    | by_string | by_bigint | by_decimal |
+        | NULL | 0         | NULL      | NULL       |
+        | 1    | 2         | 30        | 20         |
+        | 2    | 1         | 30        | 30         |
+        | 3    | 0         | NULL      | NULL       |
+
+    Scenario: Injective cast correlation partitions windows by the raw inner key
+      When query
+        """
+        SELECT o.id,
+          (SELECT max(w) FROM (
+             SELECT k, row_number() OVER (ORDER BY v) AS w
+             FROM VALUES (0, 2), (0, 3), (1, 4), (CAST(NULL AS INT), 5) AS i(k, v)
+             WHERE CAST(i.k AS STRING) = o.id
+           )) AS n
+        FROM VALUES ('0'), ('1'), ('2'), (CAST(NULL AS STRING)) AS o(id)
+        ORDER BY o.id NULLS FIRST
+        """
+      Then query result collected ordered
+        | id   | n    |
+        | NULL | NULL |
+        | 0    | 2    |
+        | 1    | 1    |
+        | 2    | NULL |
+
+    Scenario: Injective and lossy cast correlations each contribute a key
+      When query
+        """
+        SELECT o.a, o.b,
+          (SELECT count(*) FROM VALUES (1, '0'), (1, '00'), (1, '1'), (2, '0') AS i(k, s)
+           WHERE CAST(i.k AS STRING) = o.a AND CAST(i.s AS BIGINT) = o.b) AS n
+        FROM VALUES ('1', 0L), ('1', 1L), ('2', 0L), ('2', 1L) AS o(a, b)
+        ORDER BY o.a, o.b
+        """
+      Then query result collected ordered
+        | a | b | n |
+        | 1 | 0 | 2 |
+        | 1 | 1 | 1 |
+        | 2 | 0 | 1 |
+        | 2 | 1 | 0 |
+
     Scenario: Cast correlation below a window preserves matching rows
       When query
         """
