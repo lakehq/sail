@@ -345,31 +345,46 @@ fn timestamp_string_coercion_requires_rewrite(
     }
 }
 
-/// Applies Spark timestamp/string coercion to one predicate before DataFusion's generic
-/// coercion, preserving session-zone parsing and Spark TimestampType's microsecond precision.
-pub(super) fn coerce_timestamp_string_predicate(
+/// Apply Spark's numeric precision and timestamp parsing rules before native coercion.
+pub(super) fn coerce_comparison_predicate(
     expression: expr::Expr,
     schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> PlanResult<expr::Expr> {
     Ok(match expression {
         expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(op) => {
-            let (left, right) = coerce_timestamp_pair(*left, *right, op, schema, config)?;
+            let (left, right) = coerce_comparison_pair(*left, *right, op, schema, config)?;
             expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
         }
         expr::Expr::InList(InList {
-            expr,
-            list,
+            mut expr,
+            mut list,
             negated,
         }) => {
-            let expr_type = expr.get_type(schema.as_ref())?;
-            let list_types = list
+            let mut expr_type = expr.get_type(schema.as_ref())?;
+            let mut list_types = list
                 .iter()
                 .map(|value| value.get_type(schema.as_ref()))
                 .collect::<DataFusionResult<Vec<_>>>()?;
             let mut data_types = Vec::with_capacity(list_types.len() + 1);
             data_types.push(expr_type.clone());
             data_types.extend(list_types.iter().cloned());
+
+            if config.ansi_mode
+                && let Some(targets) =
+                    ansi_float_comparison_types(&data_types, config.case_sensitive)
+            {
+                expr = Box::new(cast_comparison_operand(*expr, &expr_type, &targets[0]));
+                list = list
+                    .into_iter()
+                    .zip(&list_types)
+                    .zip(&targets[1..])
+                    .map(|((value, from), to)| cast_comparison_operand(value, from, to))
+                    .collect();
+                expr_type = targets[0].clone();
+                list_types = targets[1..].to_vec();
+                data_types = targets;
+            }
 
             let Some(coercion) = find_timestamp_string_in_coercion(
                 &data_types,
@@ -460,7 +475,122 @@ fn recursive_list_in_as_comparisons(
     }
 }
 
-fn coerce_timestamp_pair(
+/// Spark ANSI compares FLOAT with integral values as DOUBLE, including nested leaves.
+/// Keep each operand's other fields intact for the existing coercion rules.
+pub(in crate::resolver) fn ansi_float_comparison_types(
+    data_types: &[DataType],
+    case_sensitive: bool,
+) -> Option<Vec<DataType>> {
+    use DataType::*;
+    if data_types.iter().any(|t| matches!(t, Float32))
+        && data_types
+            .iter()
+            .any(|t| matches!(t, Int8 | Int16 | Int32 | Int64))
+        && data_types.iter().all(|t| {
+            matches!(t, Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
+                || t.is_string()
+                || t.is_decimal()
+        })
+    {
+        return Some(vec![Float64; data_types.len()]);
+    }
+    let first = data_types.iter().find(|t| !t.is_null())?;
+    match first {
+        List(_) | LargeList(_) | FixedSizeList(_, _) => {
+            let elements = data_types
+                .iter()
+                .map(|t| match t {
+                    List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                        Some(field.data_type().clone())
+                    }
+                    Null => Some(Null),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let targets = ansi_float_comparison_types(&elements, case_sensitive)?;
+            Some(
+                data_types
+                    .iter()
+                    .zip(targets)
+                    .map(|(t, target)| match t {
+                        List(field) => {
+                            List(Arc::new(field.as_ref().clone().with_data_type(target)))
+                        }
+                        LargeList(field) => {
+                            LargeList(Arc::new(field.as_ref().clone().with_data_type(target)))
+                        }
+                        FixedSizeList(field, size) => FixedSizeList(
+                            Arc::new(field.as_ref().clone().with_data_type(target)),
+                            *size,
+                        ),
+                        _ => t.clone(),
+                    })
+                    .collect(),
+            )
+        }
+        Struct(first_fields) => {
+            if !data_types.iter().all(|t| match t {
+                Struct(fields) => {
+                    fields.len() == first_fields.len()
+                        && fields.iter().zip(first_fields).all(|(field, first)| {
+                            struct_field_names_equal(field.name(), first.name(), case_sensitive)
+                        })
+                }
+                Null => true,
+                _ => false,
+            }) {
+                return None;
+            }
+            let mut result = data_types
+                .iter()
+                .map(|t| match t {
+                    Struct(fields) => Some(fields.to_vec()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let mut changed = false;
+            for index in 0..first_fields.len() {
+                let fields = data_types
+                    .iter()
+                    .map(|t| match t {
+                        Struct(fields) => fields[index].data_type().clone(),
+                        _ => Null,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(targets) = ansi_float_comparison_types(&fields, case_sensitive) {
+                    changed = true;
+                    for (fields, target) in result.iter_mut().zip(targets) {
+                        if let Some(fields) = fields {
+                            fields[index] =
+                                Arc::new(fields[index].as_ref().clone().with_data_type(target));
+                        }
+                    }
+                }
+            }
+            changed.then(|| {
+                result
+                    .into_iter()
+                    .zip(data_types)
+                    .map(|(fields, original)| {
+                        fields.map_or_else(|| original.clone(), |fields| Struct(fields.into()))
+                    })
+                    .collect()
+            })
+        }
+        _ => None,
+    }
+}
+
+fn cast_comparison_operand(expression: expr::Expr, from: &DataType, to: &DataType) -> expr::Expr {
+    if from == to {
+        expression
+    } else {
+        // Cast the complete operand once, including volatile arrays and structs.
+        cast(expression, to.clone())
+    }
+}
+
+fn coerce_comparison_pair(
     left: expr::Expr,
     right: expr::Expr,
     operator: Operator,
@@ -469,6 +599,18 @@ fn coerce_timestamp_pair(
 ) -> DataFusionResult<(expr::Expr, expr::Expr)> {
     let left_type = left.get_type(schema.as_ref())?;
     let right_type = right.get_type(schema.as_ref())?;
+
+    if config.ansi_mode
+        && let Some(targets) = ansi_float_comparison_types(
+            &[left_type.clone(), right_type.clone()],
+            config.case_sensitive,
+        )
+    {
+        return Ok((
+            cast_comparison_operand(left, &left_type, &targets[0]),
+            cast_comparison_operand(right, &right_type, &targets[1]),
+        ));
+    }
 
     if !config.ansi_mode
         && config.legacy_type_coercion_datetime_to_string
@@ -597,7 +739,7 @@ fn is_string_type(data_type: &DataType) -> bool {
 }
 
 /// Coerces an IN-subquery pair whose right-hand expression belongs to a separate logical plan.
-pub(super) fn coerce_timestamp_in_subquery_pair(
+pub(super) fn coerce_in_subquery_pair(
     left: expr::Expr,
     left_type: &DataType,
     left_schema: &DFSchemaRef,
@@ -606,20 +748,51 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
     right_schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> DataFusionResult<(expr::Expr, expr::Expr, bool, bool)> {
+    let targets = config
+        .ansi_mode
+        .then(|| {
+            ansi_float_comparison_types(
+                &[left_type.clone(), right_type.clone()],
+                config.case_sensitive,
+            )
+        })
+        .flatten();
+    let (left, right, left_type, right_type, left_numeric, right_numeric) =
+        if let Some(targets) = targets {
+            (
+                cast_comparison_operand(left, left_type, &targets[0]),
+                cast_comparison_operand(right, right_type, &targets[1]),
+                targets[0].clone(),
+                targets[1].clone(),
+                left_type != &targets[0],
+                right_type != &targets[1],
+            )
+        } else {
+            (
+                left,
+                right,
+                left_type.clone(),
+                right_type.clone(),
+                false,
+                false,
+            )
+        };
     let Some(coercion) = find_timestamp_string_in_coercion(
         &[left_type.clone(), right_type.clone()],
         &config.session_timezone,
         config.ansi_mode,
         config.case_sensitive,
     ) else {
-        return Ok((left, right, false, false));
+        return Ok((left, right, left_numeric, right_numeric));
     };
 
-    let left_changed = timestamp_string_coercion_requires_rewrite(left_type, &coercion);
-    let right_changed = timestamp_string_coercion_requires_rewrite(right_type, &coercion);
+    let left_changed =
+        left_numeric || timestamp_string_coercion_requires_rewrite(&left_type, &coercion);
+    let right_changed =
+        right_numeric || timestamp_string_coercion_requires_rewrite(&right_type, &coercion);
     let left = apply_timestamp_string_in_coercion(
         left,
-        left_type,
+        &left_type,
         &coercion,
         left_schema,
         &config.session_timezone,
@@ -628,7 +801,7 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
     )?;
     let right = apply_timestamp_string_in_coercion(
         right,
-        right_type,
+        &right_type,
         &coercion,
         right_schema,
         &config.session_timezone,
@@ -698,7 +871,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let expr = Box::new(self.resolve_expression(expr, schema, state).await?);
         let list = self.resolve_expressions(list, schema, state).await?;
-        let expression = coerce_timestamp_string_predicate(
+        let expression = coerce_comparison_predicate(
             expr::Expr::InList(expr::InList::new(expr, list, negated)),
             schema,
             &self.config,
@@ -824,7 +997,7 @@ impl PlanResolver<'_> {
         let high = self.resolve_expression(high, schema, state).await?;
 
         // DataFusion's BETWEEN operator has a bug, so we construct the expression manually.
-        let greater_eq = coerce_timestamp_string_predicate(
+        let greater_eq = coerce_comparison_predicate(
             expr::Expr::BinaryExpr(BinaryExpr::new(
                 Box::new(expr.clone()),
                 Operator::GtEq,
@@ -833,7 +1006,7 @@ impl PlanResolver<'_> {
             schema,
             &self.config,
         )?;
-        let less_eq = coerce_timestamp_string_predicate(
+        let less_eq = coerce_comparison_predicate(
             expr::Expr::BinaryExpr(BinaryExpr::new(
                 Box::new(expr),
                 Operator::LtEq,
@@ -864,7 +1037,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let left = self.resolve_expression(left, schema, state).await?;
         let right = self.resolve_expression(right, schema, state).await?;
-        let expression = coerce_timestamp_string_predicate(
+        let expression = coerce_comparison_predicate(
             expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::IsDistinctFrom,
@@ -889,7 +1062,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let left = self.resolve_expression(left, schema, state).await?;
         let right = self.resolve_expression(right, schema, state).await?;
-        let expression = coerce_timestamp_string_predicate(
+        let expression = coerce_comparison_predicate(
             expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::IsNotDistinctFrom,

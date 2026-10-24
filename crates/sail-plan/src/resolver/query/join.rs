@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use datafusion_common::{Column, JoinType, NullEquality};
 use datafusion_expr::utils::split_conjunction;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, build_join_schema};
+use datafusion_expr::{
+    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, build_join_schema, cast,
+};
 use sail_common::spec;
 use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
@@ -10,6 +12,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunctionInput};
 use crate::function::get_built_in_function;
 use crate::resolver::PlanResolver;
+use crate::resolver::expression::ansi_float_comparison_types;
 use crate::resolver::state::PlanResolverState;
 
 /// Returns `true` if the expression is itself a top-level Python scalar UDF call.
@@ -202,6 +205,29 @@ impl PlanResolver<'_> {
             None,
             NullEquality::NullEqualsNothing,
         )?;
+        let mut plan = builder.build()?;
+        if self.config.ansi_mode
+            && let LogicalPlan::Join(join) = &mut plan
+        {
+            // USING/NATURAL keys bypass expression resolution, but need the same precision as ON.
+            for (left, right) in &mut join.on {
+                let types = [
+                    left.get_type(join.left.schema())?,
+                    right.get_type(join.right.schema())?,
+                ];
+                if let Some(targets) =
+                    ansi_float_comparison_types(&types, self.config.case_sensitive)
+                {
+                    if types[0] != targets[0] {
+                        *left = cast(left.clone(), targets[0].clone());
+                    }
+                    if types[1] != targets[1] {
+                        *right = cast(right.clone(), targets[1].clone());
+                    }
+                }
+            }
+        }
+        let builder = LogicalPlanBuilder::from(plan);
         // Re-register join key columns as hidden fields so that subsequent
         // attribute resolution (by plan_id) can still find them.
         // TODO: Spark keeps the left key (the right key for right joins) as the visible
@@ -244,8 +270,30 @@ impl PlanResolver<'_> {
                 let projections = join_columns
                     .into_iter()
                     .map(|(name, (left, right))| {
+                        let mut arguments = vec![Expr::Column(left), Expr::Column(right)];
+                        if self.config.ansi_mode {
+                            let types = arguments
+                                .iter()
+                                .map(|arg| arg.get_type(&join_schema))
+                                .collect::<datafusion_common::Result<Vec<_>>>()?;
+                            if let Some(targets) =
+                                ansi_float_comparison_types(&types, self.config.case_sensitive)
+                            {
+                                // The visible FULL-join key must retain the comparison's precision.
+                                arguments = arguments
+                                    .into_iter()
+                                    .zip(types)
+                                    .zip(targets)
+                                    .map(
+                                        |((arg, from), to)| {
+                                            if from == to { arg } else { cast(arg, to) }
+                                        },
+                                    )
+                                    .collect();
+                            }
+                        }
                         let expression = coalesce_function(ScalarFunctionInput {
-                            arguments: vec![Expr::Column(left), Expr::Column(right)],
+                            arguments,
                             function_context: FunctionContextInput {
                                 argument_display_names: &[],
                                 plan_config: &self.config,

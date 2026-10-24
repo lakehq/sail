@@ -712,3 +712,172 @@ def test_window_cast_domains_keep_collisions_with_outer_expressions(spark, outer
         assert [tuple(row) for row in spark.sql(query).collect()] == [(1, 2), (2, 2)]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize(
+    "ansi",
+    [
+        True,
+        pytest.param(
+            False,
+            marks=pytest.mark.skipif(
+                is_jvm_spark(),
+                reason="Spark's lossy correlated INT/FLOAT grouping duplicates rows; per-outer queries confirm count 2",
+            ),
+        ),
+    ],
+)
+def test_implicit_integral_float_correlation_preserves_ansi_precision(spark, ansi):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        # ANSI mode compares these values as DOUBLE, while an explicit FLOAT cast
+        # intentionally combines the two integer values. Preserve both contracts.
+        implicit = spark.sql("""
+            SELECT o.id,
+              (SELECT count(*) FROM VALUES (16777216), (16777217) AS i(k)
+               WHERE i.k = o.id) AS n
+            FROM VALUES (CAST(NULL AS FLOAT)), (CAST(0 AS FLOAT)),
+                        (CAST(16777216 AS FLOAT)) AS o(id)
+            ORDER BY id NULLS FIRST
+        """)
+        assert [tuple(row) for row in implicit.collect()] == [(None, 0), (0.0, 0), (16777216.0, 1 if ansi else 2)]
+        # Keep the comparison's precision in a filter that consumes the scalar count.
+        filtered = spark.sql("""
+            SELECT o.id FROM VALUES (CAST(16777216 AS FLOAT)) AS o(id)
+            WHERE 1.5 <= (SELECT count(*) FROM VALUES (16777216), (16777217) AS i(k)
+                          WHERE o.id = i.k)
+        """)
+        assert [tuple(row) for row in filtered.collect()] == ([] if ansi else [(16777216.0,)])
+        comparisons = spark.sql("""
+            SELECT i.k = o.id AS equal, o.id = i.k AS reversed,
+                   i.k <=> o.id AS null_safe, i.k > o.id AS greater,
+                   i.k BETWEEN o.id AND o.id AS between_bounds,
+                   CAST(i.k AS FLOAT) = o.id AS explicit_cast
+            FROM VALUES (16777217), (CAST(NULL AS INT)) AS i(k)
+            CROSS JOIN VALUES (CAST(16777216 AS FLOAT)) AS o(id)
+            ORDER BY i.k NULLS FIRST
+        """)
+        assert [tuple(row) for row in comparisons.collect()] == [
+            (None, None, False, None, None, None),
+            (not ansi, not ansi, not ansi, ansi, not ansi, True),
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("ansi", [True, False])
+@pytest.mark.parametrize(
+    "wrapper", ["{}", "array({})", "named_struct('v', {}, 'other', 7)", "array(named_struct('v', {}))"]
+)
+def test_integral_float_comparison_consumers_agree(spark, ansi, wrapper):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        left, right = wrapper.format("i"), wrapper.format("f")
+        rows = spark.sql(f"""
+            SELECT {left} = {right}, {left} > {right}, {left} <=> {right},
+                   {left} IN ({right}), {left} IN ({right}, NULL),
+                   {left} NOT IN ({right}),
+                   (i = f) = ({left} = {right}),
+                   ({left} = {right}) = ({left} IN ({right}))
+            FROM VALUES (16777217, CAST(16777216 AS FLOAT)) t(i, f)
+        """)  # noqa: S608
+        assert [tuple(row) for row in rows.collect()] == [
+            (not ansi, ansi, not ansi, not ansi, None if ansi else True, ansi, True, True)
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("ansi", [True, False])
+@pytest.mark.parametrize("tuple_key", [False, True])
+def test_integral_float_in_subquery_uses_the_comparison_type(spark, ansi, tuple_key):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        key, values = ("(k, 'x')", "f, 'x'") if tuple_key else ("k", "f")
+        rows = spark.sql(f"""
+            SELECT k FROM VALUES (16777216), (16777217), (CAST(NULL AS INT)) i(k)
+            WHERE {key} IN (SELECT {values} FROM VALUES (CAST(16777216 AS FLOAT)) o(f))
+            ORDER BY k
+        """)  # noqa: S608
+        assert [tuple(row) for row in rows.collect()] == ([(16777216,)] if ansi else [(16777216,), (16777217,)])
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("wrapper", ["{}", "array({})"])
+def test_numeric_struct_comparison_preserves_one_volatile_value(spark, wrapper):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        value = wrapper.format(
+            "CASE WHEN rand(1) < 0.5 THEN named_struct('v', 1, 'n', 10) ELSE named_struct('v', 2, 'n', 20) END"
+        )
+        first = wrapper.format("named_struct('v', CAST(1 AS FLOAT), 'n', 10)")
+        second = wrapper.format("named_struct('v', CAST(2 AS FLOAT), 'n', 20)")
+        rows = spark.sql(f"""
+            SELECT count(*) AS wrong FROM range(10000)
+            WHERE NOT ({value} IN ({first}, {second}))
+        """)  # noqa: S608
+        assert rows.collect()[0].wrong == 0
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("companion", ["'0'", "0BD", "CAST(NULL AS STRING)"])
+def test_ansi_integral_float_in_list_preserves_precision_with_other_numeric_inputs(spark, companion):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        rows = spark.sql(f"""
+            SELECT i IN (f, {companion}), array(i) IN (array(f), array({companion}))
+            FROM VALUES (16777217, CAST(16777216 AS FLOAT)) t(i, f)
+        """)  # noqa: S608
+        expected = None if companion == "CAST(NULL AS STRING)" else False
+        assert [tuple(row) for row in rows.collect()] == [(expected, False if expected is None else expected)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("ansi", [True, False])
+@pytest.mark.parametrize("natural", [False, True])
+def test_integral_float_using_join_matches_on_and_preserves_full_join_keys(spark, ansi, natural):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        left = "VALUES (16777216, 1), (16777217, 2) AS l(k, a)"
+        right = "VALUES (CAST(16777216 AS FLOAT), 3) AS r(k, b)"
+        using = f"{left} NATURAL JOIN {right}" if natural else f"{left} JOIN {right} USING (k)"
+        actual = spark.sql(f"SELECT count(*) FROM {using}").collect()[0][0]  # noqa: S608
+        on = spark.sql(f"SELECT count(*) FROM {left} JOIN {right} ON l.k = r.k").collect()[0][0]  # noqa: S608
+        assert actual == on == (1 if ansi else 2)
+        full = f"{left} NATURAL FULL JOIN {right}" if natural else f"{left} FULL JOIN {right} USING (k)"
+        rows = spark.sql(f"SELECT k, a, b, typeof(k) AS t FROM {full} ORDER BY a")  # noqa: S608
+        expected = (
+            [(16777216.0, 1, 3, "double"), (16777217.0, 2, None, "double")]
+            if ansi
+            else [(16777216.0, 1, 3, "float"), (16777216.0, 2, 3, "float")]
+        )
+        assert [tuple(row) for row in rows.collect()] == expected
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+def test_numeric_array_comparison_keeps_nullable_children(spark):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        rows = spark.sql("""
+            SELECT id,
+              array(i) = array(f) AS equal,
+              array(named_struct('v', i)) IN (array(named_struct('v', f))) AS matched
+            FROM (SELECT id, CASE WHEN id = 0 THEN CAST(NULL AS INT) ELSE 16777217 END AS i,
+                         CASE WHEN id = 0 THEN CAST(NULL AS FLOAT) ELSE CAST(16777216 AS FLOAT) END AS f
+                  FROM range(2))
+            ORDER BY id
+        """)
+        assert [tuple(row) for row in rows.collect()] == [(0, True, True), (1, False, False)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
