@@ -316,6 +316,11 @@ impl PlanResolver<'_> {
             {
                 try_cast(expr, cast_to_type)
             }
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Decimal128(..) | DataType::Decimal256(..),
+                _,
+            ) if !self.config.ansi_mode => try_cast(expr, cast_to_type),
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
