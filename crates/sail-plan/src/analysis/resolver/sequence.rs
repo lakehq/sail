@@ -11,14 +11,11 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
-    pub(super) fn sequence(
-        &mut self,
-        arguments: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+    pub(super) fn sequence(&mut self, arguments: Vec<ExprNode>) -> PlanResult<ExprNode> {
         if !matches!(arguments.len(), 2 | 3) {
             return Err(PlanError::invalid(format!(
                 "sequence requires 2 or 3 arguments, got {}",
@@ -100,7 +97,7 @@ impl Resolver<'_, '_> {
         let mut has_python = false;
         for argument in &arguments {
             has_python |= argument.any(&|node| match node {
-                ExpressionNode::ScalarFunction { function, .. } => {
+                ExprKind::ScalarFunction { function, .. } => {
                     function
                         .inner()
                         .is::<sail_python_udf::udf::pyspark_udf::PySparkUDF>()
@@ -120,8 +117,8 @@ impl Resolver<'_, '_> {
     pub(super) fn lazy_arguments(
         &mut self,
         function: Arc<HigherOrderUDF>,
-        arguments: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+        arguments: Vec<ExprNode>,
+    ) -> PlanResult<ExprNode> {
         self.mixed_lazy_arguments(
             function,
             arguments
@@ -134,8 +131,8 @@ impl Resolver<'_, '_> {
     pub(super) fn mixed_lazy_arguments(
         &mut self,
         function: Arc<HigherOrderUDF>,
-        arguments: Vec<datafusion_expr::ValueOrLambda<LogicalExpression, LogicalExpression>>,
-    ) -> PlanResult<LogicalExpression> {
+        arguments: Vec<datafusion_expr::ValueOrLambda<ExprNode, ExprNode>>,
+    ) -> PlanResult<ExprNode> {
         use datafusion_expr::{LambdaParametersProgress, ValueOrLambda};
         let fields = arguments
             .iter()
@@ -176,8 +173,8 @@ impl Resolver<'_, '_> {
         let literals = arguments
             .iter()
             .map(|a| match a {
-                ValueOrLambda::Value(value) => match &value.node {
-                    Deferred::Resolved(ExpressionNode::Literal(value)) => Some(value),
+                ValueOrLambda::Value(value) => match &value.kind {
+                    Deferred::Resolved(ExprKind::Literal(value)) => Some(value),
                     _ => None,
                 },
                 _ => None,
@@ -191,27 +188,22 @@ impl Resolver<'_, '_> {
             .map(|(argument, target)| {
                 Ok(match (argument, target) {
                     (ValueOrLambda::Value(value), ValueOrLambda::Value(target)) => {
-                        FunctionArgument::Value(Box::new(
-                            self.cast(value, target.data_type().clone())?,
-                        ))
+                        FunctionArg::Value(Box::new(self.cast(value, target.data_type().clone())?))
                     }
                     (ValueOrLambda::Lambda(body), ValueOrLambda::Lambda(_)) => {
                         let fields = parameters
                             .next()
                             .ok_or_else(|| PlanError::internal("missing lazy parameters"))?;
-                        let parameters = PlanSchema {
+                        let parameters = QuerySchema {
                             attributes: fields
                                 .iter()
                                 .enumerate()
                                 .map(|(i, f)| {
-                                    self.attribute(
-                                        format!("lazy_{i}"),
-                                        ExpressionType::from_field(f),
-                                    )
+                                    self.attribute(format!("lazy_{i}"), ExprType::from_field(f))
                                 })
                                 .collect(),
                         };
-                        FunctionArgument::Lambda {
+                        FunctionArg::Lambda {
                             id: self.context.ids.expression(),
                             parameters,
                             body: Box::new(body),
@@ -221,10 +213,10 @@ impl Resolver<'_, '_> {
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        Ok(LogicalExpression {
+        Ok(ExprNode {
             id: self.context.ids.expression(),
-            result_type: Deferred::Resolved(ExpressionType::from_field(&typing.result)),
-            node: Deferred::Resolved(ExpressionNode::HigherOrderFunction {
+            result_type: Deferred::Resolved(ExprType::from_field(&typing.result)),
+            kind: Deferred::Resolved(ExprKind::HigherOrderFunction {
                 function,
                 arguments,
             }),

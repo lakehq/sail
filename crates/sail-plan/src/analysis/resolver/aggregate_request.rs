@@ -2,7 +2,7 @@ use sail_common::spec;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -10,7 +10,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn aggregate_request(
         &mut self,
         aggregate: spec::Aggregate,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let aliases = std::mem::take(&mut self.expression_aliases);
         let replacements = std::mem::take(&mut self.expression_replacements);
         let result = self.aggregate_request_scoped(aggregate).await;
@@ -23,7 +23,7 @@ impl Resolver<'_, '_> {
     async fn aggregate_request_scoped(
         &mut self,
         aggregate: spec::Aggregate,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let mut input = self.query(*aggregate.input).await?;
         let mut generators = vec![];
         for request in &aggregate.grouping {
@@ -136,9 +136,8 @@ impl Resolver<'_, '_> {
                 .expression
                 .clone()
                 .transform_up::<PlanError>(&mut |value| {
-                    if let Deferred::Resolved(ExpressionNode::AggregateFunction {
-                        function, ..
-                    }) = &value.node
+                    if let Deferred::Resolved(ExprKind::AggregateFunction { function, .. }) =
+                        &value.kind
                     {
                         if function
                             .inner()

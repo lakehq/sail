@@ -2,24 +2,24 @@ use sail_common_datafusion::input_file::is_input_file_metadata_function;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn grouping_metadata(
         &mut self,
-        input: &mut LogicalPlan,
+        input: &mut QueryNode,
         grouping: &mut [NamedExpression],
         output: &mut [NamedExpression],
-        having: &mut Option<LogicalExpression>,
+        having: &mut Option<ExprNode>,
     ) -> PlanResult<()> {
         let mut materialized: Vec<Projection> = vec![];
         for key in grouping.iter() {
             key.expression
                 .clone()
                 .transform_up::<PlanError>(&mut |expression| {
-                    if let ExpressionNode::ScalarFunction { function, .. } =
-                        expression.node.resolved("grouping metadata")?
+                    if let ExprKind::ScalarFunction { function, .. } =
+                        expression.kind.resolved("grouping metadata")?
                         && is_input_file_metadata_function(function)
                         && !materialized
                             .iter()
@@ -44,7 +44,7 @@ impl Resolver<'_, '_> {
         if materialized.is_empty() {
             return Ok(());
         }
-        let mut rewrite = |value: LogicalExpression| {
+        let mut rewrite = |value: ExprNode| {
             value.transform_up::<PlanError>(&mut |expression| {
                 for projection in &materialized {
                     if projection.expression.equivalent(&expression)? {
@@ -71,11 +71,11 @@ impl Resolver<'_, '_> {
             })
             .collect::<PlanResult<Vec<_>>>()?;
         expressions.extend(materialized);
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: expressions.iter().map(|p| p.attribute.clone()).collect(),
         };
-        *input = LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Project {
+        *input = QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input.clone()),
                 expressions,
             }),

@@ -23,7 +23,7 @@ impl<T: Resolvable> Deferred<T> {
         match self {
             Self::Resolved(value) => Ok(value),
             Self::Unresolved(_) => Err(plan_datafusion_err!(
-                "unresolved {context} at the query analysis boundary"
+                "unresolved {context} at the plan analysis boundary"
             )),
         }
     }
@@ -32,7 +32,7 @@ impl<T: Resolvable> Deferred<T> {
         match self {
             Self::Resolved(value) => Ok(value),
             Self::Unresolved(_) => Err(plan_datafusion_err!(
-                "unresolved {context} at the query analysis boundary"
+                "unresolved {context} at the plan analysis boundary"
             )),
         }
     }

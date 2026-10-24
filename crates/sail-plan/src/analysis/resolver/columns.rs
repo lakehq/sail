@@ -5,7 +5,7 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use super::{NamedExpression, Resolver};
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::scope::ResolutionScope;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
@@ -15,7 +15,7 @@ impl Resolver<'_, '_> {
         &mut self,
         pattern: &str,
         plan_id: Option<i64>,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<Vec<NamedExpression>> {
         let schema = self.recovery_local_schema(schema).clone();
         let quoted = pattern
@@ -44,7 +44,7 @@ impl Resolver<'_, '_> {
             .collect()
     }
 
-    pub(super) fn visible_output(&mut self, input: LogicalPlan) -> PlanResult<LogicalPlan> {
+    pub(super) fn visible_output(&mut self, input: QueryNode) -> PlanResult<QueryNode> {
         let schema = input.schema.resolved("visible output")?;
         if schema.attributes.iter().all(|a| !a.hidden) {
             return Ok(input);
@@ -69,7 +69,7 @@ impl Resolver<'_, '_> {
         target: Option<spec::ObjectName>,
         plan_id: Option<i64>,
         options: spec::WildcardOptions,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<Vec<NamedExpression>> {
         let local = self.recovery_local_schema(schema).clone();
         let schema = &local;
@@ -102,7 +102,7 @@ impl Resolver<'_, '_> {
             else {
                 return Err(PlanError::analysis("wildcard target must be a struct"));
             };
-            let mut expanded = PlanSchema::default();
+            let mut expanded = QuerySchema::default();
             let mut values = std::collections::HashMap::new();
             for field in fields.iter() {
                 let source = self.copy_expression(&root.expression)?;
@@ -125,8 +125,8 @@ impl Resolver<'_, '_> {
                         .clone()
                         .transform_up::<PlanError>(&mut |expression| {
                             if let crate::analysis::deferred::Deferred::Resolved(
-                                ExpressionNode::Attribute(id),
-                            ) = expression.node
+                                ExprKind::Attribute(id),
+                            ) = expression.kind
                                 && let Some(value) = values.get(&id)
                             {
                                 return self.copy_expression(value);
@@ -219,9 +219,9 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn with_columns(
         &mut self,
-        mut input: LogicalPlan,
+        mut input: QueryNode,
         aliases: Vec<spec::Expr>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let original = input.schema.resolved("WITH COLUMNS input")?.clone();
         let previous = self.expression_replacements.len();
         let mut generators = vec![];
@@ -285,10 +285,10 @@ impl Resolver<'_, '_> {
 
     pub(super) fn drop_columns(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         columns: Vec<spec::Expr>,
         names: Vec<spec::Identifier>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let schema = input.schema.resolved("DROP input")?;
         let scope = ResolutionScope::new(schema, [])
             .with_case_sensitive(self.context.config.case_sensitive);
@@ -335,9 +335,9 @@ impl Resolver<'_, '_> {
 
     fn project_preserving_hidden(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         values: Vec<NamedExpression>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let hidden = input
             .schema
             .resolved("hidden inputs")?
@@ -347,15 +347,15 @@ impl Resolver<'_, '_> {
             .map(|a| a.origin)
             .collect::<HashSet<_>>();
         let mut output = self.project(input, values)?;
-        if let crate::analysis::deferred::Deferred::Resolved(PlanNode::Project {
+        if let crate::analysis::deferred::Deferred::Resolved(QueryKind::Project {
             expressions,
             ..
-        }) = &mut output.node
+        }) = &mut output.kind
         {
             for projection in expressions.iter_mut() {
                 projection.attribute.hidden = hidden.contains(&projection.attribute.origin);
             }
-            output.schema = crate::analysis::deferred::Deferred::Resolved(PlanSchema {
+            output.schema = crate::analysis::deferred::Deferred::Resolved(QuerySchema {
                 attributes: expressions.iter().map(|p| p.attribute.clone()).collect(),
             });
         }
@@ -364,9 +364,9 @@ impl Resolver<'_, '_> {
 
     pub(super) fn reconcile_schema(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         target: spec::Schema,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let target = self.types().resolve_schema(target)?;
         let schema = input.schema.resolved("TO SCHEMA input")?;
         let mut expressions = vec![];

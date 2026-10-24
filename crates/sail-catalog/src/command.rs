@@ -16,7 +16,7 @@ use crate::lakehouse::{
     LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
 };
 use crate::manager::CatalogManager;
-use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
+use crate::manager::tracker::{CatalogFunctionId, CatalogQueryId};
 use crate::provider::{
     AlterTableOptions, CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions,
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
@@ -148,7 +148,7 @@ pub enum CatalogCommand {
     CreateTemporaryView {
         view: String,
         is_global: bool,
-        options: CreateTemporaryViewOptions<CatalogLogicalPlanId>,
+        options: CreateTemporaryViewOptions<CatalogQueryId>,
     },
     CreateView {
         view: Vec<String>,
@@ -801,7 +801,7 @@ impl CatalogCommand {
                 is_global,
                 options,
             } => {
-                let input = manager.get_tracked_logical_plan(options.input)?;
+                let input = manager.get_tracked_query(options.input)?;
                 let options = CreateTemporaryViewOptions {
                     input,
                     columns: options.columns,

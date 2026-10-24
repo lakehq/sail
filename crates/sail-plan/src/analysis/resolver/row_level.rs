@@ -8,16 +8,15 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use super::Resolver;
-use crate::analysis::command::LogicalCommand;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::row_level::{Condition, RowAction, RowOperation};
 use crate::error::{PlanError, PlanResult};
 impl Resolver<'_, '_> {
     pub(super) async fn resolve_command_delete(
         &mut self,
         request: spec::Delete,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let target = self.resolve_row_level_target(&request.table).await?;
         let mut input = self.resolve_row_level_table_plan(request.table).await?;
         if let Some(alias) = request.table_alias {
@@ -30,7 +29,7 @@ impl Resolver<'_, '_> {
                 input.schema.resolved("DELETE target")?,
             )
             .await?;
-        Ok(LogicalCommand::RowOperation(Box::new(RowOperation {
+        Ok(CommandKind::RowOperation(Box::new(RowOperation {
             input,
             target,
             condition,
@@ -43,20 +42,20 @@ impl Resolver<'_, '_> {
         &mut self,
         command: &str,
         request: Option<spec::ExprWithSource>,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<Option<Condition>> {
         let Some(request) = request else {
             return Ok(None);
         };
         let expression = self.expression(request.expr, schema).await?.expression;
         if expression.any(&|node| match node {
-            ExpressionNode::ScalarFunction { function, .. } => {
+            ExprKind::ScalarFunction { function, .. } => {
                 function.signature().volatility == Volatility::Volatile
             }
-            ExpressionNode::AggregateFunction { function, .. } => {
+            ExprKind::AggregateFunction { function, .. } => {
                 function.signature().volatility == Volatility::Volatile
             }
-            ExpressionNode::HigherOrderFunction { function, .. } => {
+            ExprKind::HigherOrderFunction { function, .. } => {
                 function.signature().volatility == Volatility::Volatile
             }
             _ => false,
@@ -75,7 +74,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn resolve_row_level_table_plan(
         &mut self,
         name: spec::ObjectName,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         self.query(spec::QueryPlan::new(spec::QueryNode::Read {
             read_type: spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
                 name,
@@ -88,7 +87,7 @@ impl Resolver<'_, '_> {
         .await
     }
 
-    pub(super) fn row_level_alias(&self, plan: &mut LogicalPlan, alias: &str) -> PlanResult<()> {
+    pub(super) fn row_level_alias(&self, plan: &mut QueryNode, alias: &str) -> PlanResult<()> {
         let mut schema = plan.schema.resolved("row-level alias")?.clone();
         for (index, attribute) in schema.attributes.iter_mut().enumerate() {
             attribute.qualifier = vec![alias.to_string()];

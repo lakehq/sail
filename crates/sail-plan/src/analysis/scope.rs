@@ -1,7 +1,7 @@
 //! Name lookup ends here. Bound expressions carry attribute IDs, so later
 //! transformations do not propagate names through expression trees.
 
-use super::ir::{Attribute, AttributeId, ExpressionType, PlanSchema};
+use super::model::{Attribute, AttributeId, ExprType, QuerySchema};
 use crate::error::{PlanError, PlanResult};
 
 #[derive(Debug, Clone)]
@@ -9,17 +9,17 @@ pub struct BoundAttribute {
     pub id: AttributeId,
     /// Zero is local; one is the immediately enclosing query scope.
     pub depth: usize,
-    pub result_type: ExpressionType,
+    pub result_type: ExprType,
 }
 
 pub struct ResolutionScope<'a> {
     /// Innermost first. Each entry is a query scope, not an individual relation.
-    schemas: Vec<&'a PlanSchema>,
+    schemas: Vec<&'a QuerySchema>,
     case_sensitive: bool,
 }
 
 impl<'a> ResolutionScope<'a> {
-    pub fn new(local: &'a PlanSchema, outer: impl IntoIterator<Item = &'a PlanSchema>) -> Self {
+    pub fn new(local: &'a QuerySchema, outer: impl IntoIterator<Item = &'a QuerySchema>) -> Self {
         Self {
             schemas: std::iter::once(local).chain(outer).collect(),
             case_sensitive: false,
@@ -104,13 +104,13 @@ mod tests {
             qualified_position: 0,
             plan_ids: vec![id as i64],
             hidden: false,
-            result_type: Deferred::Resolved(ExpressionType::new(DataType::Int32, false)),
+            result_type: Deferred::Resolved(ExprType::new(DataType::Int32, false)),
         }
     }
 
     #[test]
     fn qualified_binding_does_not_use_display_name_as_identity() -> PlanResult<()> {
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: vec![attribute(1, 1, "a"), attribute(2, 2, "b")],
         };
         let scope = ResolutionScope::new(&schema, []);
@@ -128,10 +128,10 @@ mod tests {
 
     #[test]
     fn repeated_origin_resolves_and_outer_scope_tracks_depth() -> PlanResult<()> {
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: vec![attribute(1, 1, "a"), attribute(2, 1, "a")],
         };
-        let empty = PlanSchema::default();
+        let empty = QuerySchema::default();
         let scope = ResolutionScope::new(&empty, [&schema]);
         let binding = scope.resolve(&["value".into()], None)?;
         assert_eq!(binding.id, AttributeId(1));

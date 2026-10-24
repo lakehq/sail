@@ -22,9 +22,8 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use super::Resolver;
-use crate::analysis::command::LogicalCommand;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::writer::{WriteDisposition, WriteOperation};
 use crate::error::{PlanError, PlanResult};
 
@@ -187,9 +186,9 @@ impl Resolver<'_, '_> {
     /// Builds a write logical plan and any catalog preconditions needed before executing it.
     pub(super) async fn resolve_write_with_builder(
         &mut self,
-        mut input: LogicalPlan,
+        mut input: QueryNode,
         builder: WritePlanBuilder,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let WritePlanBuilder {
             mode,
             target,
@@ -270,7 +269,7 @@ impl Resolver<'_, '_> {
 
                 // Return early if the target exists and the mode says to skip
                 if matches!(mode, WriteMode::IgnoreIfExists) && info.is_some() {
-                    return Ok(LogicalCommand::Query(Self::empty(false)));
+                    return Ok(CommandKind::Query(Self::empty(false)));
                 }
 
                 // Error if the mode requires an existing target but it does not exist
@@ -490,7 +489,7 @@ impl Resolver<'_, '_> {
                         table: table.clone().into(),
                         options: create_options,
                     };
-                    preconditions.push(self.resolve_catalog_command(command)?);
+                    preconditions.push(self.resolve_catalog_command(command)?.into());
                 }
 
                 if sink_info.lakehouse_table.is_none() {
@@ -530,7 +529,7 @@ impl Resolver<'_, '_> {
             crate::analysis::scalar_iterator::materialize(input, &mut self.context.ids)?;
         sink_info.format = write_format;
         sink_info.preconditions = preconditions;
-        Ok(LogicalCommand::Write(Box::new(sink_info)))
+        Ok(CommandKind::Write(Box::new(sink_info)))
     }
 
     pub(super) async fn resolve_table_info(
@@ -905,8 +904,8 @@ impl TableInfo {
     pub(super) fn is_empty_or_equivalent_bucketing(
         &self,
         bucket_by: &Option<BucketBy>,
-        sort_by: &[SortExpression],
-        schema: &PlanSchema,
+        sort_by: &[SortKey],
+        schema: &QuerySchema,
     ) -> bool {
         let bucket_by_match = match (bucket_by, &self.bucket_by) {
             (None, _) => true,
@@ -927,8 +926,7 @@ impl TableInfo {
             (s1, s2) => {
                 s1.len() == s2.len()
                     && s1.iter().zip(s2.iter()).all(|(a, b)| {
-                        let Deferred::Resolved(ExpressionNode::Attribute(id)) = &a.expression.node
-                        else {
+                        let Deferred::Resolved(ExprKind::Attribute(id)) = &a.expression.kind else {
                             return false;
                         };
                         schema
@@ -946,7 +944,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn resolve_write_input(
         &mut self,
         input: spec::QueryPlan,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         self.query(input).await
     }
 
@@ -969,9 +967,9 @@ impl Resolver<'_, '_> {
 
     async fn write_sort_orders(
         &mut self,
-        input: &LogicalPlan,
+        input: &QueryNode,
         requests: Vec<spec::SortOrder>,
-    ) -> PlanResult<Vec<SortExpression>> {
+    ) -> PlanResult<Vec<SortKey>> {
         let schema = input.schema.resolved("write sorting input")?;
         let mut result = vec![];
         for request in requests {
@@ -982,9 +980,9 @@ impl Resolver<'_, '_> {
 
     fn catalog_write_sorts(
         &mut self,
-        input: &LogicalPlan,
+        input: &QueryNode,
         requests: &[CatalogTableSort],
-    ) -> PlanResult<Vec<SortExpression>> {
+    ) -> PlanResult<Vec<SortKey>> {
         let schema = input.schema.resolved("catalog write sorting input")?;
         requests
             .iter()
@@ -996,7 +994,7 @@ impl Resolver<'_, '_> {
                     .ok_or_else(|| {
                         PlanError::invalid(format!("sort column not found: {}", sort.column))
                     })?;
-                Ok(SortExpression {
+                Ok(SortKey {
                     expression: self.reference(attribute)?,
                     ascending: sort.ascending,
                     nulls_first: sort.ascending,
@@ -1022,12 +1020,12 @@ impl Resolver<'_, '_> {
                         "conditional overwrite is not allowed without a table schema",
                     )
                 })?;
-                let schema = PlanSchema {
+                let schema = QuerySchema {
                     attributes: schema
                         .fields()
                         .iter()
                         .map(|field| {
-                            self.attribute(field.name().clone(), ExpressionType::from_field(field))
+                            self.attribute(field.name().clone(), ExprType::from_field(field))
                         })
                         .collect(),
                 };

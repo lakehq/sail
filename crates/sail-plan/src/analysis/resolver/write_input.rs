@@ -16,16 +16,16 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use super::write::{TableInfo, WriteColumnMatch};
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) async fn rewrite_write_input(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         matching: WriteColumnMatch,
         info: &TableInfo,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let mut provided = classify(&input, &matching, info)?;
         let input = if Self::plan_has_default_column_value(&input)? {
             let mut defaults = vec![];
@@ -105,10 +105,10 @@ impl Resolver<'_, '_> {
                 datafusion::functions_window::row_number::row_number_udwf(),
             );
             let resolved = crate::analysis::typing::aggregate::resolve_window(&function, &[])?;
-            let expression = LogicalExpression {
+            let expression = ExprNode {
                 id: self.context.ids.expression(),
-                result_type: Deferred::Resolved(ExpressionType::from_field(&resolved.result)),
-                node: Deferred::Resolved(ExpressionNode::WindowFunction {
+                result_type: Deferred::Resolved(ExprType::from_field(&resolved.result)),
+                kind: Deferred::Resolved(ExprKind::WindowFunction {
                     function,
                     arguments: vec![],
                     partition_by: vec![],
@@ -129,8 +129,8 @@ impl Resolver<'_, '_> {
             );
             attribute.hidden = true;
             schema.attributes.push(attribute.clone());
-            input = LogicalPlan {
-                node: Deferred::Resolved(PlanNode::Window {
+            input = QueryNode {
+                kind: Deferred::Resolved(QueryKind::Window {
                     input: Box::new(input),
                     expressions: vec![Projection {
                         expression,
@@ -197,9 +197,9 @@ impl Resolver<'_, '_> {
                 SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY.into(),
                 column.nullable.to_string(),
             );
-            let expression = LogicalExpression {
+            let expression = ExprNode {
                 id: self.context.ids.expression(),
-                node: Deferred::Resolved(ExpressionNode::WithMetadata(Box::new(value))),
+                kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(value))),
                 result_type: Deferred::Resolved(result_type),
             };
             final_values.push(NamedExpression {
@@ -214,7 +214,7 @@ impl Resolver<'_, '_> {
         &mut self,
         column: &TableColumnStatus,
         info: &TableInfo,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         if let Some(value) = info.default_values.get(&column.name) {
             return Ok(self.literal(value.clone()));
         }
@@ -227,7 +227,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn resolve_column_default_expression(
         &mut self,
         source: &str,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let request = parse_expression(source)?;
         let request = if matches!(request, spec::Expr::UnresolvedAttribute { .. }) {
             spec::Expr::Literal(spec::Literal::Utf8 {
@@ -237,12 +237,12 @@ impl Resolver<'_, '_> {
             request
         };
         Ok(self
-            .expression(request, &PlanSchema::default())
+            .expression(request, &QuerySchema::default())
             .await?
             .expression)
     }
 
-    pub(super) fn write_error(&mut self, message: String) -> PlanResult<LogicalExpression> {
+    pub(super) fn write_error(&mut self, message: String) -> PlanResult<ExprNode> {
         let message = self.literal(ScalarValue::Utf8(Some(message)));
         self.scalar_udf(Arc::new(ScalarUDF::from(RaiseError::new())), vec![message])
     }
@@ -252,7 +252,7 @@ impl Resolver<'_, '_> {
         name: &str,
         identity: &CatalogTableColumnIdentity,
         row: &Attribute,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let base = identity.high_water_mark.map(|n| n.checked_add(identity.step)).unwrap_or(Some(identity.start))
             .ok_or_else(|| PlanError::invalid(format!("identity column `{name}` cannot generate a next value without overflowing BIGINT")))?;
         let row = self.reference(row)?;
@@ -286,7 +286,7 @@ pub(super) fn parse_expression(source: &str) -> PlanResult<spec::Expr> {
 }
 
 fn classify(
-    input: &LogicalPlan,
+    input: &QueryNode,
     matching: &WriteColumnMatch,
     info: &TableInfo,
 ) -> PlanResult<Vec<Option<Attribute>>> {

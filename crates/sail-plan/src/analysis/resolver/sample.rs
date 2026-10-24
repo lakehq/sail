@@ -10,7 +10,7 @@ use sail_function::scalar::math::random::Random;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
@@ -55,7 +55,7 @@ fn can_sort_to_indices(data_type: &DataType) -> bool {
 
 impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
-    pub(super) async fn sample(&mut self, sample: spec::Sample) -> PlanResult<LogicalPlan> {
+    pub(super) async fn sample(&mut self, sample: spec::Sample) -> PlanResult<QueryNode> {
         let mut input = self.query(*sample.input).await?;
         if sample.deterministic_order {
             let schema = input.schema.resolved("sample input")?;
@@ -69,7 +69,7 @@ impl Resolver<'_, '_> {
                             .data_type,
                     )
                 {
-                    order.push(SortExpression {
+                    order.push(SortKey {
                         expression: self.reference(attribute)?,
                         ascending: true,
                         nulls_first: true,
@@ -77,9 +77,9 @@ impl Resolver<'_, '_> {
                 }
             }
             if !order.is_empty() {
-                input = LogicalPlan {
+                input = QueryNode {
                     schema: input.schema.clone(),
-                    node: Deferred::Resolved(PlanNode::Sort {
+                    kind: Deferred::Resolved(QueryKind::Sort {
                         input: Box::new(input),
                         order,
                         global: false,
@@ -100,13 +100,13 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn table_sample(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         sample: spec::TableSample,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let fraction = match sample.method {
             spec::TableSampleMethod::Percent { value } => {
                 let value = self
-                    .expression(value, &PlanSchema::default())
+                    .expression(value, &QuerySchema::default())
                     .await?
                     .expression;
                 let value = typing::coerce(value, &DataType::Float64, &mut self.context.ids)?;
@@ -138,12 +138,12 @@ impl Resolver<'_, '_> {
 
     fn apply_sample(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         lower: f64,
         upper: f64,
         replacement: bool,
         seed: i64,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let fraction = upper - lower;
         let valid_fraction = if replacement {
             fraction >= -SAMPLE_ROUNDING_EPSILON

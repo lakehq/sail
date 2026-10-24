@@ -17,12 +17,13 @@ The dependency-neutral `sail-query` crate owns the tree and ID instantiation.
 A stored relation is instantiated with fresh occurrence and attribute IDs through
 subqueries and lambda scopes, without changing display names.
 
-An expression has an `ExpressionId`, a deferred node, and a deferred result
+An `ExprNode` has an `ExprId`, a deferred `ExprKind`, and a deferred result
 field. The result field contains data type, nullability, and Arrow metadata.
 These properties resolve together so that a successful type inference cannot
-accidentally leave nullability from an earlier expression. A plan has a deferred
-node and output schema. Children and subqueries belong to the analysis tree;
-subqueries must not disappear behind the backend's expression-leaf convention.
+accidentally leave nullability from an earlier expression. A `QueryNode` has a
+deferred `QueryKind` and output `QuerySchema`. Children and subqueries belong to
+the analysis tree; subqueries must not disappear behind the backend's
+expression-leaf convention.
 
 An expression ID identifies an occurrence, not structural equivalence. Rewrites
 preserve the occurrence ID at their root and allocate fresh IDs for inserted
@@ -51,8 +52,8 @@ kept separate from occurrence allocation.
 
 `AnalysisPipeline` requires a resolution layer first, followed by explicitly ordered
 `AnalysisLayer` implementations. Each layer consumes and returns the same
-`LogicalQuery` representation. Layers are asynchronous because catalog and
-function lookup can require I/O. They execute once in order; there is no implicit
+`Plan` representation, containing either a `QueryNode` or a `CommandNode`.
+Layers are asynchronous because catalog and function lookup can require I/O. They execute once in order; there is no implicit
 fixed-point iteration or unbounded retry on unresolved requests.
 
 The resolution layer binds tables, attributes, functions, lambdas, parameters,
@@ -99,10 +100,14 @@ configuration stay unchanged through analysis and lowering.
 ## Execution boundaries
 
 `QueryAnalyzer` is the production entry point for SQL, Spark Connect, schema
-inspection, EXPLAIN, and session commands. Query analysis runs through
-`AnalysisPipeline`; command query inputs use the same resolver and receive the
-configured additional layers before lowering. There is no legacy resolver or
-backend-plan import path.
+inspection, EXPLAIN, and session commands. Both queries and commands enter
+`AnalysisPipeline` as deferred requests. `CommandNode` contains a deferred
+`CommandKind` whose request is a `spec::CommandPlan`, just as `QueryKind` uses a
+`spec::QueryPlan`. The resolution layer resolves commands and their nested query
+inputs in one identity domain. It also accepts assembled commands containing
+native and deferred children. Configured additional layers receive the entire
+resolved `Plan` once, including commands and their query inputs, before lowering.
+There is no separate command analysis entry point or backend-plan import path.
 
 Native command representations retain typed query inputs, predicates, assignments,
 checks, and defaults. INSERT resolves DEFAULT slots against the target schema.
@@ -115,8 +120,9 @@ Row-identity functions and scalar Python iterator calls become native relational
 operators. Projected EXISTS becomes a native mark join or scalar count; grouped
 correlation binds to grouping outputs before lowering. Computed sort keys are
 materialized as native attributes. Recovery of missing inputs carries hidden slots
-through transparent operators and stops at relation boundaries. Explicit input sorts required by order-sensitive aggregates are marked
-in the IR so backend optimization preserves them. Temporary views, CTE references,
+through transparent operators and stops at relation boundaries. Explicit input
+sorts required by order-sensitive aggregates are marked in the native query tree
+so backend optimization preserves them. Temporary views, CTE references,
 subqueries, lambda scopes, and command inputs share the same identity rules.
 
 `sail-plan::analysis::typing` owns call resolution, cast metadata,

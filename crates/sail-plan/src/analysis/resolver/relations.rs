@@ -7,7 +7,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use super::{CteDefinition, NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -16,7 +16,7 @@ impl Resolver<'_, '_> {
         &mut self,
         root: spec::QueryPlan,
         references: Vec<spec::QueryPlan>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let previous_references = self.relations.clone();
         let previous_ctes = self.ctes.clone();
         let result = async {
@@ -66,7 +66,7 @@ impl Resolver<'_, '_> {
         kind: spec::SubqueryType,
         values: Vec<spec::Expr>,
         negated: bool,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         let query = self.relations.get(&plan_id).cloned().ok_or_else(|| {
             PlanError::analysis(format!(
@@ -113,23 +113,21 @@ impl Resolver<'_, '_> {
         values: Vec<spec::Expr>,
         query: spec::QueryPlan,
         negated: bool,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         let mut outer = vec![];
         for value in values {
             let value = self.expression(value, schema).await?.expression;
             outer.push(value.transform_up::<PlanError>(&mut |mut e| {
-                e.node = Deferred::Resolved(match e.node.into_resolved("IN outer value")? {
-                    ExpressionNode::Attribute(attribute) => ExpressionNode::OuterAttribute {
+                e.kind = Deferred::Resolved(match e.kind.into_resolved("IN outer value")? {
+                    ExprKind::Attribute(attribute) => ExprKind::OuterAttribute {
                         depth: 1,
                         attribute,
                     },
-                    ExpressionNode::OuterAttribute { depth, attribute } => {
-                        ExpressionNode::OuterAttribute {
-                            depth: depth + 1,
-                            attribute,
-                        }
-                    }
+                    ExprKind::OuterAttribute { depth, attribute } => ExprKind::OuterAttribute {
+                        depth: depth + 1,
+                        attribute,
+                    },
                     node => node,
                 });
                 Ok(e)
@@ -156,13 +154,13 @@ impl Resolver<'_, '_> {
         )?;
         Ok(NamedExpression {
             name: "in_subquery".into(),
-            expression: LogicalExpression {
+            expression: ExprNode {
                 id: self.context.ids.expression(),
-                node: Deferred::Resolved(ExpressionNode::Exists {
+                kind: Deferred::Resolved(ExprKind::Exists {
                     query: Box::new(query),
                     negated,
                 }),
-                result_type: Deferred::Resolved(ExpressionType::new(
+                result_type: Deferred::Resolved(ExprType::new(
                     arrow_schema::DataType::Boolean,
                     false,
                 )),
@@ -173,7 +171,7 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn identifier(&mut self, request: spec::Expr) -> PlanResult<spec::ObjectName> {
         let expression = self
-            .expression(request, &PlanSchema::default())
+            .expression(request, &QuerySchema::default())
             .await?
             .expression;
         let value = crate::analysis::lowering::evaluate_constant(&expression)?;

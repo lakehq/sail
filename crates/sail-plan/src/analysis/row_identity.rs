@@ -1,14 +1,14 @@
 //! Materialize per-row identity functions before backend lowering.
 use std::collections::HashMap;
 
-use sail_query::rewrite::{QueryRewriter, walk_expression, walk_plan};
+use sail_query::rewrite::{QueryRewriter, walk_expression, walk_query};
 
 use super::deferred::Deferred;
-use super::ir::*;
+use super::model::*;
 use crate::error::{PlanError, PlanResult};
 
-pub(super) fn materialize(plan: LogicalPlan, ids: &mut IdGenerator) -> PlanResult<LogicalPlan> {
-    Materialize { ids }.rewrite_plan(plan)
+pub(super) fn materialize(plan: QueryNode, ids: &mut IdGenerator) -> PlanResult<QueryNode> {
+    Materialize { ids }.rewrite_query(plan)
 }
 
 struct Materialize<'a> {
@@ -18,22 +18,22 @@ struct Materialize<'a> {
 impl QueryRewriter for Materialize<'_> {
     type Error = PlanError;
 
-    fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
-        let plan = walk_plan(self, plan)?;
+    fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
+        let plan = walk_query(self, plan)?;
         let original = plan.schema.resolved("row identity output")?.clone();
         let mut extractor = Extract {
             ids: self.ids,
             attributes: HashMap::new(),
         };
-        let node = match plan.node.into_resolved("row identity plan")? {
-            PlanNode::Project { input, expressions } => {
+        let node = match plan.kind.into_resolved("row identity plan")? {
+            QueryKind::Project { input, expressions } => {
                 let expressions = extractor.rewrite_projections(expressions)?;
-                PlanNode::Project {
+                QueryKind::Project {
                     input: Box::new(extractor.input(*input)?),
                     expressions,
                 }
             }
-            PlanNode::Aggregate {
+            QueryKind::Aggregate {
                 input,
                 grouping,
                 grouping_sets,
@@ -42,7 +42,7 @@ impl QueryRewriter for Materialize<'_> {
             } => {
                 let grouping = extractor.rewrite_projections(grouping)?;
                 let aggregates = extractor.rewrite_projections(aggregates)?;
-                PlanNode::Aggregate {
+                QueryKind::Aggregate {
                     input: Box::new(extractor.input(*input)?),
                     grouping,
                     grouping_sets,
@@ -50,40 +50,40 @@ impl QueryRewriter for Materialize<'_> {
                     aggregates,
                 }
             }
-            PlanNode::Window { input, expressions } => {
+            QueryKind::Window { input, expressions } => {
                 let expressions = extractor.rewrite_projections(expressions)?;
-                PlanNode::Window {
+                QueryKind::Window {
                     input: Box::new(extractor.input(*input)?),
                     expressions,
                 }
             }
-            PlanNode::Filter { input, condition } => {
+            QueryKind::Filter { input, condition } => {
                 let condition = Box::new(extractor.rewrite_expression(*condition)?);
-                PlanNode::Filter {
+                QueryKind::Filter {
                     input: Box::new(extractor.input(*input)?),
                     condition,
                 }
             }
-            PlanNode::Sort {
+            QueryKind::Sort {
                 input,
                 order,
                 global,
                 required,
             } => {
                 let order = extractor.rewrite_sorts(order)?;
-                PlanNode::Sort {
+                QueryKind::Sort {
                     input: Box::new(extractor.input(*input)?),
                     order,
                     global,
                     required,
                 }
             }
-            PlanNode::DistinctOn { input, keys } => {
+            QueryKind::DistinctOn { input, keys } => {
                 let keys = keys
                     .into_iter()
                     .map(|e| extractor.rewrite_expression(e))
                     .collect::<PlanResult<_>>()?;
-                PlanNode::DistinctOn {
+                QueryKind::DistinctOn {
                     input: Box::new(extractor.input(*input)?),
                     keys,
                 }
@@ -93,10 +93,10 @@ impl QueryRewriter for Materialize<'_> {
         // Operators that preserve their input also carry the internal slots.
         // Remove these slots at the operator boundary by identity projection.
         let additions = match &node {
-            PlanNode::Window { input, .. }
-            | PlanNode::Filter { input, .. }
-            | PlanNode::Sort { input, .. }
-            | PlanNode::DistinctOn { input, .. } => input
+            QueryKind::Window { input, .. }
+            | QueryKind::Filter { input, .. }
+            | QueryKind::Sort { input, .. }
+            | QueryKind::DistinctOn { input, .. } => input
                 .schema
                 .resolved("row identity input")?
                 .attributes
@@ -107,13 +107,13 @@ impl QueryRewriter for Materialize<'_> {
             _ => vec![],
         };
         if additions.is_empty() {
-            return Ok(LogicalPlan {
-                node: Deferred::Resolved(node),
+            return Ok(QueryNode {
+                kind: Deferred::Resolved(node),
                 schema: Deferred::Resolved(original),
             });
         }
         let mut schema = original.clone();
-        if let PlanNode::Window { input, expressions } = &node {
+        if let QueryKind::Window { input, expressions } = &node {
             schema = input.schema.resolved("window input")?.clone();
             schema
                 .attributes
@@ -121,8 +121,8 @@ impl QueryRewriter for Materialize<'_> {
         } else {
             schema.attributes.extend(additions);
         }
-        let input = LogicalPlan {
-            node: Deferred::Resolved(node),
+        let input = QueryNode {
+            kind: Deferred::Resolved(node),
             schema: Deferred::Resolved(schema),
         };
         let expressions = original
@@ -130,17 +130,17 @@ impl QueryRewriter for Materialize<'_> {
             .iter()
             .map(|attribute| {
                 Ok(Projection {
-                    expression: LogicalExpression {
+                    expression: ExprNode {
                         id: extractor.ids.expression(),
-                        node: Deferred::Resolved(ExpressionNode::Attribute(attribute.id)),
+                        kind: Deferred::Resolved(ExprKind::Attribute(attribute.id)),
                         result_type: attribute.result_type.clone(),
                     },
                     attribute: attribute.clone(),
                 })
             })
             .collect::<PlanResult<_>>()?;
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Project {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input),
                 expressions,
             }),
@@ -155,14 +155,14 @@ struct Extract<'a> {
 }
 
 impl Extract<'_> {
-    fn input(&self, mut input: LogicalPlan) -> PlanResult<LogicalPlan> {
+    fn input(&self, mut input: QueryNode) -> PlanResult<QueryNode> {
         // Stable order also makes explain output deterministic.
         for kind in [RowIdentityKind::Monotonic, RowIdentityKind::Partition] {
             if let Some(attribute) = self.attributes.get(&kind) {
                 let mut schema = input.schema.resolved("row identity input")?.clone();
                 schema.attributes.push(attribute.clone());
-                input = LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::RowIdentity {
+                input = QueryNode {
+                    kind: Deferred::Resolved(QueryKind::RowIdentity {
                         input: Box::new(input),
                         attribute: attribute.clone(),
                         kind,
@@ -178,20 +178,17 @@ impl Extract<'_> {
 impl QueryRewriter for Extract<'_> {
     type Error = PlanError;
 
-    fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+    fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
         // Subqueries have already been materialized in their own row scope.
         Ok(plan)
     }
 
-    fn rewrite_expression(
-        &mut self,
-        expression: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+    fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
         let mut expression = walk_expression(self, expression)?;
-        let ExpressionNode::ScalarFunction {
+        let ExprKind::ScalarFunction {
             function,
             arguments,
-        } = expression.node.resolved("row identity expression")?
+        } = expression.kind.resolved("row identity expression")?
         else {
             return Ok(expression);
         };
@@ -218,7 +215,7 @@ impl QueryRewriter for Extract<'_> {
                 result_type: expression.result_type.clone(),
             }
         });
-        expression.node = Deferred::Resolved(ExpressionNode::Attribute(attribute.id));
+        expression.kind = Deferred::Resolved(ExprKind::Attribute(attribute.id));
         Ok(expression)
     }
 }

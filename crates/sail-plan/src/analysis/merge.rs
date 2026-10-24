@@ -3,20 +3,20 @@
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-use datafusion_expr::LogicalPlan as BackendPlan;
+use datafusion_expr::LogicalPlan;
 use sail_common_datafusion::datasource as backend;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
-use super::ir::*;
+use super::model::*;
 use super::row_level::{CheckConstraint, Condition};
 use crate::error::{PlanError, PlanResult};
 
 #[derive(Debug)]
 pub struct MergeOperation {
-    pub target: LogicalPlan,
-    pub source: LogicalPlan,
+    pub target: QueryNode,
+    pub source: QueryNode,
     pub metadata: backend::RowLevelTarget,
     pub target_alias: Option<String>,
     pub source_alias: Option<String>,
@@ -26,12 +26,12 @@ pub struct MergeOperation {
     pub matched: Vec<MergeClause>,
     pub source_missing: Vec<MergeClause>,
     pub target_missing: Vec<MergeClause>,
-    pub generated: Vec<(String, LogicalExpression)>,
-    pub defaults: Vec<(String, LogicalExpression)>,
+    pub generated: Vec<(String, ExprNode)>,
+    pub defaults: Vec<(String, ExprNode)>,
     pub constraints: Vec<CheckConstraint>,
-    pub join_keys: Vec<(LogicalExpression, LogicalExpression)>,
-    pub residual: Vec<LogicalExpression>,
-    pub target_predicates: Vec<LogicalExpression>,
+    pub join_keys: Vec<(ExprNode, ExprNode)>,
+    pub residual: Vec<ExprNode>,
+    pub target_predicates: Vec<ExprNode>,
 }
 
 #[derive(Debug)]
@@ -43,15 +43,15 @@ pub struct MergeClause {
 #[derive(Debug)]
 pub enum MergeAction {
     Delete,
-    Update(Vec<(AttributeId, LogicalExpression)>),
-    Insert(Vec<(AttributeId, LogicalExpression)>),
+    Update(Vec<(AttributeId, ExprNode)>),
+    Insert(Vec<(AttributeId, ExprNode)>),
 }
 
 impl MergeOperation {
-    pub(super) async fn lower(self, session: &SessionContext) -> PlanResult<BackendPlan> {
+    pub(super) async fn lower(self, session: &SessionContext) -> PlanResult<LogicalPlan> {
         let target_schema = self.target.schema.resolved("MERGE target")?.clone();
         let source_schema = self.source.schema.resolved("MERGE source")?.clone();
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: target_schema
                 .attributes
                 .iter()
@@ -59,8 +59,8 @@ impl MergeOperation {
                 .cloned()
                 .collect(),
         };
-        let target = LogicalQuery { plan: self.target }.into_named_plan()?.plan;
-        let source = LogicalQuery { plan: self.source }.into_named_plan()?.plan;
+        let target = crate::analysis::lowering::lower_query(self.target)?.plan;
+        let source = crate::analysis::lowering::lower_query(self.source)?.plan;
         let target = Arc::new(if let Some(alias) = &self.target_alias {
             datafusion_expr::LogicalPlanBuilder::new(target)
                 .alias(alias.as_str())?
@@ -220,11 +220,11 @@ impl MergeOperation {
 }
 
 struct Bindings<'a> {
-    schema: &'a PlanSchema,
-    target: &'a PlanSchema,
+    schema: &'a QuerySchema,
+    target: &'a QuerySchema,
 }
 impl Bindings<'_> {
-    fn expression(&self, expression: &LogicalExpression) -> PlanResult<datafusion_expr::Expr> {
+    fn expression(&self, expression: &ExprNode) -> PlanResult<datafusion_expr::Expr> {
         super::lowering::checked_expression(expression, self.schema)
     }
     fn condition(&self, value: Option<Condition>) -> PlanResult<Option<ExprWithSource>> {
@@ -239,7 +239,7 @@ impl Bindings<'_> {
     }
     fn assignments(
         &self,
-        values: Vec<(AttributeId, LogicalExpression)>,
+        values: Vec<(AttributeId, ExprNode)>,
     ) -> PlanResult<Vec<backend::MergeAssignment>> {
         values
             .into_iter()
@@ -254,7 +254,7 @@ impl Bindings<'_> {
     }
     fn named(
         &self,
-        values: Vec<(String, LogicalExpression)>,
+        values: Vec<(String, ExprNode)>,
     ) -> PlanResult<Vec<(String, datafusion_expr::Expr)>> {
         values
             .into_iter()

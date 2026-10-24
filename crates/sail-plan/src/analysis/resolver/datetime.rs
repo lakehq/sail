@@ -16,7 +16,7 @@ use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 
@@ -24,8 +24,8 @@ impl Resolver<'_, '_> {
     pub(super) fn datetime_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         let part = match name {
             "years" => Some("YEAR"),
             "day" | "dayofmonth" => Some("DAY"),
@@ -312,17 +312,13 @@ impl Resolver<'_, '_> {
         Ok(Some(result))
     }
 
-    pub(super) fn integer_part(
-        &mut self,
-        value: LogicalExpression,
-        part: &str,
-    ) -> PlanResult<LogicalExpression> {
+    pub(super) fn integer_part(&mut self, value: ExprNode, part: &str) -> PlanResult<ExprNode> {
         let part = self.literal(ScalarValue::Utf8(Some(part.to_uppercase())));
         let result = self.scalar("date_part", vec![part, value])?;
         self.cast(result, DataType::Int32)
     }
 
-    fn trunc_part(&mut self, part: LogicalExpression) -> PlanResult<LogicalExpression> {
+    fn trunc_part(&mut self, part: ExprNode) -> PlanResult<ExprNode> {
         let mut branches = vec![];
         for (aliases, name) in [
             (vec!["mon", "mm"], "month"),
@@ -348,9 +344,9 @@ impl Resolver<'_, '_> {
 
     pub(super) fn declare_nullable(
         &mut self,
-        value: LogicalExpression,
+        value: ExprNode,
         nullable: bool,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         if nullable && !value.result_type.resolved("nullable result")?.nullable {
             let null = self.literal(ScalarValue::try_from(
                 &value.result_type.resolved("nullable result")?.data_type,
@@ -362,7 +358,7 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn resolve_to_date(&mut self, values: Vec<LogicalExpression>) -> PlanResult<LogicalExpression> {
+    fn resolve_to_date(&mut self, values: Vec<ExprNode>) -> PlanResult<ExprNode> {
         let null_on_error = !self.context.config.ansi_mode;
         if values.len() == 1 {
             let value = values.one()?;
@@ -420,11 +416,7 @@ impl Resolver<'_, '_> {
         )
     }
 
-    fn resolve_to_timestamp(
-        &mut self,
-        name: &str,
-        values: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+    fn resolve_to_timestamp(&mut self, name: &str, values: Vec<ExprNode>) -> PlanResult<ExprNode> {
         let ntz = name == "to_timestamp_ntz"
             || (name != "to_timestamp_ltz"
                 && matches!(
@@ -466,9 +458,10 @@ impl Resolver<'_, '_> {
                 "{name} requires 1 or 2 arguments"
             )));
         }
-        if values.iter().any(
-            |v| matches!(&v.node, Deferred::Resolved(ExpressionNode::Literal(v)) if v.is_null()),
-        ) {
+        if values
+            .iter()
+            .any(|v| matches!(&v.kind, Deferred::Resolved(ExprKind::Literal(v)) if v.is_null()))
+        {
             return Ok(self.literal(ScalarValue::TimestampMicrosecond(None, timezone)));
         }
         let value = self.scalar_udf(

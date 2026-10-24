@@ -12,7 +12,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use super::Resolver;
 use super::write::{TableInfo, WriteColumnMatch};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::writer::WriteOperation;
 use crate::error::{PlanError, PlanResult};
 const DELTA_FORMAT: &str = "delta";
@@ -27,10 +27,10 @@ struct DeltaCheckConstraint {
 impl Resolver<'_, '_> {
     pub(super) async fn rewrite_data_source_delta_table_features(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         format: &str,
         info: &WriteOperation,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         if !is_delta_format(format) {
             return Ok(input);
         }
@@ -132,10 +132,10 @@ impl Resolver<'_, '_> {
 
     pub(super) async fn rewrite_delta_check_constraints_from_options(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         format: &str,
         info: &WriteOperation,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         if !is_delta_format(format) {
             return Ok(input);
         }
@@ -145,9 +145,9 @@ impl Resolver<'_, '_> {
 
     pub(super) async fn apply_delta_table_constraints(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         info: &TableInfo,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         if !is_delta_format(&info.format) {
             return Ok(input);
         }
@@ -226,9 +226,9 @@ impl Resolver<'_, '_> {
     }
     async fn apply_delta_check_constraints(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         constraints: Vec<DeltaCheckConstraint>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         if constraints.is_empty() {
             return Ok(input);
         }
@@ -266,10 +266,10 @@ impl Resolver<'_, '_> {
                 ),
             };
             let error = self.write_error(message)?;
-            let condition = LogicalExpression {
+            let condition = ExprNode {
                 id: self.context.ids.expression(),
-                result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
-                node: Deferred::Resolved(ExpressionNode::TruthTest {
+                result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
+                kind: Deferred::Resolved(ExprKind::TruthTest {
                     expression: Box::new(expression),
                     value: Some(true),
                     negated: false,
@@ -279,8 +279,8 @@ impl Resolver<'_, '_> {
         }
         let valid = self.literal(ScalarValue::Int8(Some(1)));
         let condition = self.binary(validation, Operator::Eq, valid)?;
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Filter {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Filter {
                 input: Box::new(input),
                 condition: Box::new(condition),
             }),
@@ -435,7 +435,7 @@ impl Resolver<'_, '_> {
         &mut self,
         format: &str,
         options: &[OptionLayer],
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<Vec<crate::analysis::row_level::CheckConstraint>> {
         if !is_delta_format(format) {
             return Ok(vec![]);

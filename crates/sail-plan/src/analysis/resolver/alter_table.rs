@@ -9,9 +9,8 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use super::write_constraints::strip_delta_check_constraint_prefix;
 use super::{NamedExpression, Resolver};
-use crate::analysis::command::LogicalCommand;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 impl Resolver<'_, '_> {
     pub(super) async fn resolve_delta_alter_table_or_catalog(
@@ -19,7 +18,7 @@ impl Resolver<'_, '_> {
         table: spec::ObjectName,
         if_exists: bool,
         operation: spec::AlterTableOperation,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         if let Some(key) = delta_constraint_property_mutation_key(&operation)
             && self.alter_table_target_is_delta(&table, if_exists).await?
         {
@@ -91,9 +90,9 @@ impl Resolver<'_, '_> {
                     .iter()
                     .any(|(generated, _)| generated.name() == field.name())
             })
-            .map(|field| self.attribute(field.name().clone(), ExpressionType::from_field(field)))
+            .map(|field| self.attribute(field.name().clone(), ExprType::from_field(field)))
             .collect();
-        let schema = PlanSchema { attributes };
+        let schema = QuerySchema { attributes };
         for (field, source) in generated {
             let expression = self
                 .expression(super::write_input::parse_expression(source)?, &schema)
@@ -120,7 +119,7 @@ impl Resolver<'_, '_> {
         if_exists: bool,
         name: String,
         request: spec::ExprWithSource,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let status = match self
             .context
             .session
@@ -130,7 +129,7 @@ impl Resolver<'_, '_> {
         {
             Ok(status) => status,
             Err(CatalogError::NotFound(_, _)) if if_exists => {
-                return Ok(LogicalCommand::Query(Self::empty(false)));
+                return Ok(CommandKind::Query(Self::empty(false)));
             }
             Err(error) => return Err(error.into()),
         };
@@ -186,17 +185,17 @@ impl Resolver<'_, '_> {
                 "Delta CHECK constraint `{name}` expression `{source}` must evaluate to BOOLEAN, got {data_type}"
             )));
         }
-        let condition = LogicalExpression {
+        let condition = ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::TruthTest {
+            kind: Deferred::Resolved(ExprKind::TruthTest {
                 expression: Box::new(expression),
                 value: Some(true),
                 negated: true,
             }),
-            result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+            result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
         };
-        let input = LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Filter {
+        let input = QueryNode {
+            kind: Deferred::Resolved(QueryKind::Filter {
                 input: Box::new(input),
                 condition: Box::new(condition),
             }),
@@ -214,7 +213,7 @@ impl Resolver<'_, '_> {
                 expression,
             }],
         )?;
-        let command = LogicalCommand::Catalog(CatalogCommand::AlterTable {
+        let command = CommandKind::Catalog(CatalogCommand::AlterTable {
             table: table.into(),
             if_exists,
             options: AlterTableOptions::AddCheckConstraint {
@@ -222,9 +221,9 @@ impl Resolver<'_, '_> {
                 expression: source,
             },
         });
-        Ok(LogicalCommand::Barrier {
-            preconditions: vec![LogicalCommand::Query(validation)],
-            command: Box::new(command),
+        Ok(CommandKind::Barrier {
+            preconditions: vec![CommandKind::Query(validation).into()],
+            command: Box::new(command.into()),
         })
     }
 }

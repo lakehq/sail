@@ -15,16 +15,16 @@ use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn misc_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
+        values: &mut Vec<ExprNode>,
         names: &[String],
-    ) -> PlanResult<Option<LogicalExpression>> {
+    ) -> PlanResult<Option<ExprNode>> {
         if !matches!(
             name,
             "assert_true"
@@ -154,11 +154,11 @@ impl Resolver<'_, '_> {
             }
             "sha2" => {
                 let (value, bits) = values.two()?;
-                let function = match bits.node.resolved("sha2 bit length")? {
-                    ExpressionNode::Literal(ScalarValue::Int32(Some(0 | 256))) => "sha256",
-                    ExpressionNode::Literal(ScalarValue::Int32(Some(224))) => "sha224",
-                    ExpressionNode::Literal(ScalarValue::Int32(Some(384))) => "sha384",
-                    ExpressionNode::Literal(ScalarValue::Int32(Some(512))) => "sha512",
+                let function = match bits.kind.resolved("sha2 bit length")? {
+                    ExprKind::Literal(ScalarValue::Int32(Some(0 | 256))) => "sha256",
+                    ExprKind::Literal(ScalarValue::Int32(Some(224))) => "sha224",
+                    ExprKind::Literal(ScalarValue::Int32(Some(384))) => "sha384",
+                    ExprKind::Literal(ScalarValue::Int32(Some(512))) => "sha512",
                     _ => {
                         return Err(PlanError::invalid(
                             "The second argument of sha2 must be a literal integer.",
@@ -238,11 +238,11 @@ impl Resolver<'_, '_> {
         Ok(Some(result))
     }
 
-    fn raw_negative(&mut self, value: LogicalExpression) -> LogicalExpression {
-        LogicalExpression {
+    fn raw_negative(&mut self, value: ExprNode) -> ExprNode {
+        ExprNode {
             id: self.context.ids.expression(),
             result_type: value.result_type.clone(),
-            node: Deferred::Resolved(ExpressionNode::Negative(Box::new(value))),
+            kind: Deferred::Resolved(ExprKind::Negative(Box::new(value))),
         }
     }
 }

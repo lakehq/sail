@@ -22,8 +22,7 @@ use sail_common_datafusion::lakeprocedure::{
 use uuid::Uuid;
 
 use super::Resolver;
-use crate::analysis::command::LogicalCommand;
-use crate::analysis::ir::PlanSchema;
+use crate::analysis::model::{CommandKind, QuerySchema};
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -32,7 +31,7 @@ impl Resolver<'_, '_> {
         procedure_name: spec::ObjectName,
         arguments: Vec<spec::Expr>,
         named_arguments: Vec<(spec::Identifier, spec::Expr)>,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let procedure_parts = procedure_name
             .parts()
             .iter()
@@ -190,7 +189,7 @@ impl Resolver<'_, '_> {
             target,
             invocation,
         };
-        Ok(LogicalCommand::Procedure {
+        Ok(CommandKind::Procedure {
             call: Box::new(call),
             target: planning_target,
         })
@@ -201,7 +200,7 @@ impl Resolver<'_, '_> {
         argument: spec::Expr,
         data_type: LakeProcedureDataType,
     ) -> PlanResult<LakeProcedureValue> {
-        let schema = PlanSchema::default();
+        let schema = QuerySchema::default();
         let target = match data_type {
             LakeProcedureDataType::Boolean => spec::DataType::Boolean,
             LakeProcedureDataType::Int32 => spec::DataType::Int32,

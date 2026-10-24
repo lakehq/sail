@@ -6,14 +6,14 @@ use arrow_schema::Schema;
 use datafusion_expr::JoinType;
 use sail_python_udf::udf::pyspark_scalar_iter_udf::PySparkScalarPandasIterUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
-use sail_query::rewrite::{QueryRewriter, walk_expression, walk_plan};
+use sail_query::rewrite::{QueryRewriter, walk_expression, walk_query};
 
 use super::deferred::Deferred;
-use super::ir::*;
+use super::model::*;
 use crate::error::{PlanError, PlanResult};
 
-pub(super) fn materialize(plan: LogicalPlan, ids: &mut IdGenerator) -> PlanResult<LogicalPlan> {
-    Materialize { ids }.rewrite_plan(plan)
+pub(super) fn materialize(plan: QueryNode, ids: &mut IdGenerator) -> PlanResult<QueryNode> {
+    Materialize { ids }.rewrite_query(plan)
 }
 
 struct Materialize<'a> {
@@ -23,11 +23,11 @@ struct Materialize<'a> {
 impl QueryRewriter for Materialize<'_> {
     type Error = PlanError;
 
-    fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
-        let plan = walk_plan(self, plan)?;
+    fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
+        let plan = walk_query(self, plan)?;
         let output = plan.schema.into_resolved("iterator output")?;
-        let mut node = plan.node.into_resolved("iterator plan")?;
-        if let PlanNode::Join {
+        let mut node = plan.kind.into_resolved("iterator plan")?;
+        if let QueryKind::Join {
             lateral,
             left,
             right,
@@ -41,7 +41,7 @@ impl QueryRewriter for Materialize<'_> {
                 predicates.into_iter().partition(|predicate| {
                     predicate
                         .any(&|node| {
-                            let ExpressionNode::ScalarFunction {
+                            let ExprKind::ScalarFunction {
                                 function,
                                 arguments,
                             } = node
@@ -62,8 +62,8 @@ impl QueryRewriter for Materialize<'_> {
                         "scalar iterator UDF referencing both join inputs requires an inner join",
                     ));
                 }
-                let input = LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Join {
+                let input = QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Join {
                         lateral,
                         left,
                         right,
@@ -74,15 +74,15 @@ impl QueryRewriter for Materialize<'_> {
                 };
                 let condition = conjunction(outside, self.ids)?
                     .ok_or_else(|| PlanError::internal("missing iterator predicate"))?;
-                return self.rewrite_plan(LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Filter {
+                return self.rewrite_query(QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Filter {
                         input: Box::new(input),
                         condition,
                     }),
                     schema: Deferred::Resolved(output),
                 });
             }
-            node = PlanNode::Join {
+            node = QueryKind::Join {
                 lateral,
                 left,
                 right,
@@ -96,15 +96,15 @@ impl QueryRewriter for Materialize<'_> {
             replacements: vec![],
         };
         let node = match node {
-            PlanNode::Project { input, expressions } => {
+            QueryKind::Project { input, expressions } => {
                 extract.inputs.push(*input);
                 let expressions = extract.rewrite_projections(expressions)?;
-                PlanNode::Project {
+                QueryKind::Project {
                     input: extract.input()?,
                     expressions,
                 }
             }
-            PlanNode::Aggregate {
+            QueryKind::Aggregate {
                 input,
                 grouping,
                 grouping_sets,
@@ -114,7 +114,7 @@ impl QueryRewriter for Materialize<'_> {
                 extract.inputs.push(*input);
                 let grouping = extract.rewrite_projections(grouping)?;
                 let aggregates = extract.rewrite_projections(aggregates)?;
-                PlanNode::Aggregate {
+                QueryKind::Aggregate {
                     input: extract.input()?,
                     grouping,
                     grouping_sets,
@@ -122,23 +122,23 @@ impl QueryRewriter for Materialize<'_> {
                     aggregates,
                 }
             }
-            PlanNode::Window { input, expressions } => {
+            QueryKind::Window { input, expressions } => {
                 extract.inputs.push(*input);
                 let expressions = extract.rewrite_projections(expressions)?;
-                PlanNode::Window {
+                QueryKind::Window {
                     input: extract.input()?,
                     expressions,
                 }
             }
-            PlanNode::Filter { input, condition } => {
+            QueryKind::Filter { input, condition } => {
                 extract.inputs.push(*input);
                 let condition = Box::new(extract.rewrite_expression(*condition)?);
-                PlanNode::Filter {
+                QueryKind::Filter {
                     input: extract.input()?,
                     condition,
                 }
             }
-            PlanNode::Sort {
+            QueryKind::Sort {
                 input,
                 order,
                 global,
@@ -146,25 +146,25 @@ impl QueryRewriter for Materialize<'_> {
             } => {
                 extract.inputs.push(*input);
                 let order = extract.rewrite_sorts(order)?;
-                PlanNode::Sort {
+                QueryKind::Sort {
                     input: extract.input()?,
                     order,
                     global,
                     required,
                 }
             }
-            PlanNode::DistinctOn { input, keys } => {
+            QueryKind::DistinctOn { input, keys } => {
                 extract.inputs.push(*input);
                 let keys = keys
                     .into_iter()
                     .map(|e| extract.rewrite_expression(e))
                     .collect::<PlanResult<_>>()?;
-                PlanNode::DistinctOn {
+                QueryKind::DistinctOn {
                     input: extract.input()?,
                     keys,
                 }
             }
-            PlanNode::Repartition {
+            QueryKind::Repartition {
                 input,
                 partitioning,
             } => {
@@ -185,12 +185,12 @@ impl QueryRewriter for Materialize<'_> {
                     ),
                     value => value,
                 };
-                PlanNode::Repartition {
+                QueryKind::Repartition {
                     input: extract.input()?,
                     partitioning,
                 }
             }
-            PlanNode::Join {
+            QueryKind::Join {
                 lateral,
                 left,
                 right,
@@ -203,7 +203,7 @@ impl QueryRewriter for Materialize<'_> {
                     .transpose()?;
                 let right = extract.input()?;
                 let left = extract.input()?;
-                PlanNode::Join {
+                QueryKind::Join {
                     lateral,
                     left,
                     right,
@@ -214,7 +214,7 @@ impl QueryRewriter for Materialize<'_> {
             node => node,
         };
         let attributes = match &node {
-            PlanNode::Window { input, expressions } => input
+            QueryKind::Window { input, expressions } => input
                 .schema
                 .resolved("iterator window")?
                 .attributes
@@ -222,13 +222,13 @@ impl QueryRewriter for Materialize<'_> {
                 .cloned()
                 .chain(expressions.iter().map(|p| p.attribute.clone()))
                 .collect(),
-            PlanNode::Filter { input, .. }
-            | PlanNode::Sort { input, .. }
-            | PlanNode::Repartition { input, .. }
-            | PlanNode::DistinctOn { input, .. } => {
+            QueryKind::Filter { input, .. }
+            | QueryKind::Sort { input, .. }
+            | QueryKind::Repartition { input, .. }
+            | QueryKind::DistinctOn { input, .. } => {
                 input.schema.resolved("iterator input")?.attributes.clone()
             }
-            PlanNode::Join {
+            QueryKind::Join {
                 left, right, kind, ..
             } => {
                 let left = &left.schema.resolved("iterator join left")?.attributes;
@@ -266,8 +266,8 @@ impl QueryRewriter for Materialize<'_> {
             _ => output.attributes.clone(),
         };
         if attributes.len() == output.attributes.len() {
-            return Ok(LogicalPlan {
-                node: Deferred::Resolved(node),
+            return Ok(QueryNode {
+                kind: Deferred::Resolved(node),
                 schema: Deferred::Resolved(output),
             });
         }
@@ -279,12 +279,12 @@ impl QueryRewriter for Materialize<'_> {
                 attribute: a.clone(),
             })
             .collect();
-        let input = LogicalPlan {
-            node: Deferred::Resolved(node),
-            schema: Deferred::Resolved(PlanSchema { attributes }),
+        let input = QueryNode {
+            kind: Deferred::Resolved(node),
+            schema: Deferred::Resolved(QuerySchema { attributes }),
         };
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Project {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input),
                 expressions,
             }),
@@ -295,12 +295,12 @@ impl QueryRewriter for Materialize<'_> {
 
 struct Extract<'a> {
     ids: &'a mut IdGenerator,
-    inputs: Vec<LogicalPlan>,
-    replacements: Vec<(LogicalExpression, Attribute)>,
+    inputs: Vec<QueryNode>,
+    replacements: Vec<(ExprNode, Attribute)>,
 }
 
 impl Extract<'_> {
-    fn input(&mut self) -> PlanResult<Box<LogicalPlan>> {
+    fn input(&mut self) -> PlanResult<Box<QueryNode>> {
         self.inputs
             .pop()
             .map(Box::new)
@@ -311,19 +311,16 @@ impl Extract<'_> {
 impl QueryRewriter for Extract<'_> {
     type Error = PlanError;
 
-    fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+    fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
         Ok(plan)
     }
 
-    fn rewrite_expression(
-        &mut self,
-        expression: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+    fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
         let expression = walk_expression(self, expression)?;
-        let ExpressionNode::ScalarFunction {
+        let ExprKind::ScalarFunction {
             function,
             arguments,
-        } = expression.node.resolved("iterator expression")?
+        } = expression.kind.resolved("iterator expression")?
         else {
             return Ok(expression);
         };
@@ -403,18 +400,18 @@ impl QueryRewriter for Extract<'_> {
             Arc::new(Schema::new(fields)),
             Arc::clone(udf.config()),
         )?;
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: projections.iter().map(|p| p.attribute.clone()).collect(),
         };
-        let input = LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Project {
+        let input = QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input),
                 expressions: projections,
             }),
             schema: Deferred::Resolved(schema),
         };
-        self.inputs[index] = LogicalPlan {
-            node: Deferred::Resolved(PlanNode::MapPartitions {
+        self.inputs[index] = QueryNode {
+            kind: Deferred::Resolved(QueryKind::MapPartitions {
                 input: Box::new(input),
                 function: Arc::new(stream),
             }),
@@ -427,10 +424,10 @@ impl QueryRewriter for Extract<'_> {
     }
 }
 
-fn reference(attribute: &Attribute, ids: &mut IdGenerator) -> LogicalExpression {
-    LogicalExpression {
+fn reference(attribute: &Attribute, ids: &mut IdGenerator) -> ExprNode {
+    ExprNode {
         id: ids.expression(),
-        node: Deferred::Resolved(ExpressionNode::Attribute(attribute.id)),
+        kind: Deferred::Resolved(ExprKind::Attribute(attribute.id)),
         result_type: attribute.result_type.clone(),
     }
 }
@@ -442,23 +439,18 @@ fn is_iterator(function: &datafusion_expr::ScalarUDF) -> bool {
         .is_some_and(|u| u.kind() == PySparkUdfKind::ScalarPandasIter)
 }
 
-fn in_scope(expression: &LogicalExpression, plan: &LogicalPlan) -> bool {
+fn in_scope(expression: &ExprNode, plan: &QueryNode) -> bool {
     let Ok(schema) = plan.schema.resolved("iterator scope") else {
         return false;
     };
     expression
-        .any(
-            &|node| matches!(node, ExpressionNode::Attribute(id) if schema.attribute(*id).is_err()),
-        )
+        .any(&|node| matches!(node, ExprKind::Attribute(id) if schema.attribute(*id).is_err()))
         .is_ok_and(|missing| !missing)
 }
 
-fn split_conjunction(
-    expression: LogicalExpression,
-    output: &mut Vec<LogicalExpression>,
-) -> PlanResult<()> {
-    match expression.node.resolved("join predicate")? {
-        ExpressionNode::Binary {
+fn split_conjunction(expression: ExprNode, output: &mut Vec<ExprNode>) -> PlanResult<()> {
+    match expression.kind.resolved("join predicate")? {
+        ExprKind::Binary {
             left,
             operator: datafusion_expr::Operator::And,
             right,
@@ -472,9 +464,9 @@ fn split_conjunction(
 }
 
 fn conjunction(
-    expressions: Vec<LogicalExpression>,
+    expressions: Vec<ExprNode>,
     ids: &mut IdGenerator,
-) -> PlanResult<Option<Box<LogicalExpression>>> {
+) -> PlanResult<Option<Box<ExprNode>>> {
     let mut expressions = expressions.into_iter();
     let Some(mut result) = expressions.next() else {
         return Ok(None);

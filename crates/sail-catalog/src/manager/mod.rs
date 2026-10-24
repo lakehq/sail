@@ -3,10 +3,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::extension::SessionExtension;
-use sail_query::ir::LogicalPlan;
+use sail_query::model::QueryNode;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
-use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};
+use crate::manager::tracker::{CatalogFunctionId, CatalogObjectTracker, CatalogQueryId};
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
 
@@ -147,18 +147,12 @@ impl CatalogManager {
         self.tracker.get_tracked_function(id)
     }
 
-    pub fn track_logical_plan(
-        &self,
-        plan: Arc<LogicalPlan>,
-    ) -> CatalogResult<CatalogLogicalPlanId> {
-        self.tracker.track_logical_plan(plan)
+    pub fn track_query(&self, plan: Arc<QueryNode>) -> CatalogResult<CatalogQueryId> {
+        self.tracker.track_query(plan)
     }
 
-    pub fn get_tracked_logical_plan(
-        &self,
-        id: CatalogLogicalPlanId,
-    ) -> CatalogResult<Arc<LogicalPlan>> {
-        self.tracker.get_tracked_logical_plan(id)
+    pub fn get_tracked_query(&self, id: CatalogQueryId) -> CatalogResult<Arc<QueryNode>> {
+        self.tracker.get_tracked_query(id)
     }
 }
 

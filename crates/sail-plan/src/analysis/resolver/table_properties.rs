@@ -15,7 +15,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
 use super::Resolver;
-use crate::analysis::command::LogicalCommand;
+use crate::analysis::model::CommandKind;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -23,7 +23,7 @@ impl Resolver<'_, '_> {
         &mut self,
         table: spec::ObjectName,
         property: Option<String>,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let registry = self.context.session.extension::<DataSourceRegistry>()?;
         let path_table = match table.parts() {
             [format, path]
@@ -172,7 +172,7 @@ impl Resolver<'_, '_> {
         let source = datafusion::datasource::provider_as_source(Arc::new(
             datafusion::datasource::MemTable::try_new(batch.schema(), vec![vec![batch]])?,
         ));
-        Ok(LogicalCommand::Query(self.scan(
+        Ok(CommandKind::Query(self.scan(
             "table_properties".into(),
             source,
             vec![],

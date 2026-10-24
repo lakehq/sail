@@ -18,15 +18,15 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn math_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         if !matches!(
             name,
             "+" | "-"
@@ -203,7 +203,7 @@ impl Resolver<'_, '_> {
         Ok(Some(result))
     }
 
-    fn string_to_double(&mut self, value: LogicalExpression) -> PlanResult<LogicalExpression> {
+    fn string_to_double(&mut self, value: ExprNode) -> PlanResult<ExprNode> {
         if self.context.config.ansi_mode {
             self.cast(value, DataType::Float64)
         } else {
@@ -211,7 +211,7 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn negate(&mut self, value: LogicalExpression) -> PlanResult<LogicalExpression> {
+    fn negate(&mut self, value: ExprNode) -> PlanResult<ExprNode> {
         let data_type = value
             .result_type
             .resolved("negation input")?
@@ -233,13 +233,13 @@ impl Resolver<'_, '_> {
             );
         }
         if data_type.is_floating() {
-            return Ok(LogicalExpression {
+            return Ok(ExprNode {
                 id: self.context.ids.expression(),
                 result_type: value.result_type.clone(),
-                node: Deferred::Resolved(ExpressionNode::Negative(Box::new(value))),
+                kind: Deferred::Resolved(ExprKind::Negative(Box::new(value))),
             });
         }
-        let folded = if let Deferred::Resolved(ExpressionNode::Literal(value)) = &value.node {
+        let folded = if let Deferred::Resolved(ExprKind::Literal(value)) = &value.kind {
             match value {
                 ScalarValue::Int8(Some(v)) => v.checked_neg().map(|v| ScalarValue::Int8(Some(v))),
                 ScalarValue::Int16(Some(v)) => v.checked_neg().map(|v| ScalarValue::Int16(Some(v))),
@@ -264,9 +264,9 @@ impl Resolver<'_, '_> {
     fn arithmetic(
         &mut self,
         name: &str,
-        mut left: LogicalExpression,
-        mut right: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+        mut left: ExprNode,
+        mut right: ExprNode,
+    ) -> PlanResult<ExprNode> {
         let left_type = left
             .result_type
             .resolved("arithmetic left")?
@@ -403,10 +403,10 @@ impl Resolver<'_, '_> {
 
     fn safe_divisor(
         &mut self,
-        value: LogicalExpression,
+        value: ExprNode,
         data_type: &DataType,
         message: &str,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         if matches!(data_type, DataType::Interval(_) | DataType::Duration(_)) {
             return Ok(value);
         }
@@ -432,9 +432,9 @@ impl Resolver<'_, '_> {
     }
 }
 
-fn is_zero_literal(expression: &LogicalExpression) -> bool {
-    match &expression.node {
-        Deferred::Resolved(ExpressionNode::Literal(value)) => {
+fn is_zero_literal(expression: &ExprNode) -> bool {
+    match &expression.kind {
+        Deferred::Resolved(ExprKind::Literal(value)) => {
             value.data_type().is_numeric()
                 && !value.is_null()
                 && value
@@ -442,7 +442,7 @@ fn is_zero_literal(expression: &LogicalExpression) -> bool {
                     .is_ok_and(|v| matches!(v, ScalarValue::Float64(Some(value)) if value == 0.0))
         }
         Deferred::Resolved(
-            ExpressionNode::Cast { expression, .. } | ExpressionNode::WithMetadata(expression),
+            ExprKind::Cast { expression, .. } | ExprKind::WithMetadata(expression),
         ) => is_zero_literal(expression),
         _ => false,
     }

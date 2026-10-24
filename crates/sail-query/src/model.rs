@@ -14,72 +14,82 @@ use educe::Educe;
 use sail_common::spec;
 
 use super::deferred::{Deferred, Resolvable};
+use crate::rewrite::{QueryRewriter, walk_expression};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ExpressionId(pub u64);
+pub struct ExprId(pub u64);
 
 /// A materialized output slot. Unlike an expression occurrence, an attribute is
 /// shared by all references to the same output slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AttributeId(pub u64);
 
-/// A query-local allocator shared by every analysis layer and nested scope.
+/// A plan-local allocator shared by every analysis layer and nested scope.
 #[derive(Debug, Default)]
 pub struct IdGenerator {
     next_expression: u64,
     next_attribute: u64,
 }
 
-impl IdGenerator {
-    /// Reserve identities supplied by a previous pass before allocating new nodes.
-    pub fn reserve_plan(&mut self, plan: &LogicalPlan) -> PlanResult<()> {
-        use crate::rewrite::{QueryRewriter, walk_expression};
-        struct Reserve<'a>(&'a mut IdGenerator);
-        impl QueryRewriter for Reserve<'_> {
-            type Error = datafusion_common::DataFusionError;
-            fn rewrite_attribute(&mut self, attribute: Attribute) -> PlanResult<Attribute> {
-                for id in [attribute.id, attribute.origin] {
-                    self.0.next_attribute =
+struct Reserve<'a>(&'a mut IdGenerator);
+impl QueryRewriter for Reserve<'_> {
+    type Error = datafusion_common::DataFusionError;
+    fn rewrite_attribute(&mut self, attribute: Attribute) -> PlanResult<Attribute> {
+        for id in [attribute.id, attribute.origin] {
+            self.0.next_attribute = self.0.next_attribute.max(
+                id.0.checked_add(1)
+                    .ok_or_else(|| plan_datafusion_err!("attribute identity space exhausted"))?,
+            );
+        }
+        Ok(attribute)
+    }
+    fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
+        self.0.next_expression = self.0.next_expression.max(
+            expression
+                .id
+                .0
+                .checked_add(1)
+                .ok_or_else(|| plan_datafusion_err!("expression identity space exhausted"))?,
+        );
+        if let Deferred::Resolved(ExprKind::HigherOrderFunction { arguments, .. }) =
+            &expression.kind
+        {
+            for argument in arguments {
+                if let FunctionArg::Lambda { id, .. } = argument {
+                    self.0.next_expression =
                         self.0
-                            .next_attribute
+                            .next_expression
                             .max(id.0.checked_add(1).ok_or_else(|| {
-                                plan_datafusion_err!("attribute identity space exhausted")
+                                plan_datafusion_err!("lambda identity space exhausted")
                             })?);
                 }
-                Ok(attribute)
-            }
-            fn rewrite_expression(
-                &mut self,
-                expression: LogicalExpression,
-            ) -> PlanResult<LogicalExpression> {
-                self.0.next_expression =
-                    self.0
-                        .next_expression
-                        .max(expression.id.0.checked_add(1).ok_or_else(|| {
-                            plan_datafusion_err!("expression identity space exhausted")
-                        })?);
-                if let Deferred::Resolved(ExpressionNode::HigherOrderFunction {
-                    arguments, ..
-                }) = &expression.node
-                {
-                    for argument in arguments {
-                        if let FunctionArgument::Lambda { id, .. } = argument {
-                            self.0.next_expression =
-                                self.0.next_expression.max(id.0.checked_add(1).ok_or_else(
-                                    || plan_datafusion_err!("lambda identity space exhausted"),
-                                )?);
-                        }
-                    }
-                }
-                walk_expression(self, expression)
             }
         }
-        Reserve(self).rewrite_plan(plan.clone())?;
+        walk_expression(self, expression)
+    }
+}
+
+impl IdGenerator {
+    /// Reserve identities supplied by a previous pass before allocating new nodes.
+    pub fn reserve_query(&mut self, plan: &QueryNode) -> PlanResult<()> {
+        Reserve(self).rewrite_query(plan.clone())?;
         Ok(())
     }
 
-    pub fn expression(&mut self) -> ExpressionId {
-        let id = ExpressionId(self.next_expression);
+    /// Reserve identities in expressions stored outside a query tree.
+    pub fn reserve_expression(&mut self, expression: &ExprNode) -> PlanResult<()> {
+        Reserve(self).rewrite_expression(expression.clone())?;
+        Ok(())
+    }
+
+    /// Reserve binding attributes stored outside a query tree.
+    pub fn reserve_schema(&mut self, schema: &QuerySchema) -> PlanResult<()> {
+        Reserve(self).rewrite_schema(schema.clone())?;
+        Ok(())
+    }
+
+    pub fn expression(&mut self) -> ExprId {
+        let id = ExprId(self.next_expression);
         self.next_expression += 1;
         id
     }
@@ -94,13 +104,13 @@ impl IdGenerator {
 /// The semantic result of an expression. Display names do not participate in
 /// typing. Data type, nullability, and extension metadata resolve atomically.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExpressionType {
+pub struct ExprType {
     pub data_type: DataType,
     pub nullable: bool,
     pub metadata: HashMap<String, String>,
 }
 
-impl ExpressionType {
+impl ExprType {
     pub fn new(data_type: DataType, nullable: bool) -> Self {
         Self {
             data_type,
@@ -125,7 +135,7 @@ impl ExpressionType {
     }
 }
 
-impl Resolvable for ExpressionType {
+impl Resolvable for ExprType {
     type Request = Infer;
 }
 
@@ -143,19 +153,19 @@ pub struct Attribute {
     pub qualified_position: usize,
     pub plan_ids: Vec<i64>,
     pub hidden: bool,
-    pub result_type: Deferred<ExpressionType>,
+    pub result_type: Deferred<ExprType>,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct PlanSchema {
+pub struct QuerySchema {
     pub attributes: Vec<Attribute>,
 }
 
-impl Resolvable for PlanSchema {
+impl Resolvable for QuerySchema {
     type Request = Infer;
 }
 
-impl PlanSchema {
+impl QuerySchema {
     pub fn arrow_schema(&self) -> PlanResult<arrow_schema::Schema> {
         let fields = self
             .attributes
@@ -179,37 +189,37 @@ impl PlanSchema {
 }
 
 #[derive(Debug, Clone)]
-pub struct LogicalExpression {
-    pub id: ExpressionId,
-    pub node: Deferred<ExpressionNode>,
-    pub result_type: Deferred<ExpressionType>,
+pub struct ExprNode {
+    pub id: ExprId,
+    pub kind: Deferred<ExprKind>,
+    pub result_type: Deferred<ExprType>,
 }
 
-impl LogicalExpression {
-    pub fn unresolved(id: ExpressionId, expression: spec::Expr) -> Self {
+impl ExprNode {
+    pub fn unresolved(id: ExprId, expression: spec::Expr) -> Self {
         Self {
             id,
-            node: Deferred::unresolved(expression),
+            kind: Deferred::unresolved(expression),
             result_type: Deferred::unresolved(Infer),
         }
     }
 
-    pub fn literal(id: ExpressionId, value: ScalarValue) -> Self {
-        let result_type = ExpressionType::new(value.data_type(), value.is_null());
+    pub fn literal(id: ExprId, value: ScalarValue) -> Self {
+        let result_type = ExprType::new(value.data_type(), value.is_null());
         Self {
             id,
-            node: Deferred::Resolved(ExpressionNode::Literal(value)),
+            kind: Deferred::Resolved(ExprKind::Literal(value)),
             result_type: Deferred::Resolved(result_type),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum ExpressionNode {
+pub enum ExprKind {
     Literal(ScalarValue),
-    WithMetadata(Box<LogicalExpression>),
+    WithMetadata(Box<ExprNode>),
     TruthTest {
-        expression: Box<LogicalExpression>,
+        expression: Box<ExprNode>,
         value: Option<bool>,
         negated: bool,
     },
@@ -221,126 +231,126 @@ pub enum ExpressionNode {
     },
     ScalarFunction {
         function: Arc<ScalarUDF>,
-        arguments: Vec<LogicalExpression>,
+        arguments: Vec<ExprNode>,
     },
     AggregateFunction {
         function: Arc<AggregateUDF>,
-        arguments: Vec<LogicalExpression>,
+        arguments: Vec<ExprNode>,
         distinct: bool,
-        filter: Option<Box<LogicalExpression>>,
-        order_by: Vec<SortExpression>,
+        filter: Option<Box<ExprNode>>,
+        order_by: Vec<SortKey>,
         null_treatment: Option<datafusion_expr::expr::NullTreatment>,
     },
     WindowFunction {
         function: WindowFunctionDefinition,
-        arguments: Vec<LogicalExpression>,
-        partition_by: Vec<LogicalExpression>,
-        order_by: Vec<SortExpression>,
+        arguments: Vec<ExprNode>,
+        partition_by: Vec<ExprNode>,
+        order_by: Vec<SortKey>,
         frame: WindowFrame,
-        filter: Option<Box<LogicalExpression>>,
+        filter: Option<Box<ExprNode>>,
         distinct: bool,
         null_treatment: Option<datafusion_expr::expr::NullTreatment>,
     },
     HigherOrderFunction {
         function: Arc<HigherOrderUDF>,
-        arguments: Vec<FunctionArgument>,
+        arguments: Vec<FunctionArg>,
     },
     LambdaVariable(AttributeId),
     Binary {
-        left: Box<LogicalExpression>,
+        left: Box<ExprNode>,
         operator: Operator,
-        right: Box<LogicalExpression>,
+        right: Box<ExprNode>,
     },
     Cast {
-        expression: Box<LogicalExpression>,
-        target: ExpressionType,
+        expression: Box<ExprNode>,
+        target: ExprType,
         safe: bool,
     },
-    Not(Box<LogicalExpression>),
-    IsNull(Box<LogicalExpression>),
-    IsNotNull(Box<LogicalExpression>),
-    Negative(Box<LogicalExpression>),
+    Not(Box<ExprNode>),
+    IsNull(Box<ExprNode>),
+    IsNotNull(Box<ExprNode>),
+    Negative(Box<ExprNode>),
     Case {
-        operand: Option<Box<LogicalExpression>>,
-        branches: Vec<(LogicalExpression, LogicalExpression)>,
-        otherwise: Option<Box<LogicalExpression>>,
+        operand: Option<Box<ExprNode>>,
+        branches: Vec<(ExprNode, ExprNode)>,
+        otherwise: Option<Box<ExprNode>>,
     },
     Between {
-        expression: Box<LogicalExpression>,
-        low: Box<LogicalExpression>,
-        high: Box<LogicalExpression>,
+        expression: Box<ExprNode>,
+        low: Box<ExprNode>,
+        high: Box<ExprNode>,
         negated: bool,
     },
     Like {
-        expression: Box<LogicalExpression>,
-        pattern: Box<LogicalExpression>,
+        expression: Box<ExprNode>,
+        pattern: Box<ExprNode>,
         negated: bool,
         escape_char: Option<char>,
         case_insensitive: bool,
     },
     SimilarTo {
-        expression: Box<LogicalExpression>,
-        pattern: Box<LogicalExpression>,
+        expression: Box<ExprNode>,
+        pattern: Box<ExprNode>,
         negated: bool,
         escape_char: Option<char>,
         case_insensitive: bool,
     },
     InList {
-        expression: Box<LogicalExpression>,
-        values: Vec<LogicalExpression>,
+        expression: Box<ExprNode>,
+        values: Vec<ExprNode>,
         negated: bool,
     },
-    ScalarSubquery(Box<LogicalPlan>),
+    ScalarSubquery(Box<QueryNode>),
     Exists {
-        query: Box<LogicalPlan>,
+        query: Box<QueryNode>,
         negated: bool,
     },
     InSubquery {
-        expression: Box<LogicalExpression>,
-        query: Box<LogicalPlan>,
+        expression: Box<ExprNode>,
+        query: Box<QueryNode>,
         negated: bool,
     },
 }
 
-impl Resolvable for ExpressionNode {
+impl Resolvable for ExprKind {
     type Request = spec::Expr;
 }
 
 /// A lambda has a parameter schema and a typed body; it is not represented as
 /// a scalar expression with an artificial Arrow Null type.
 #[derive(Debug, Clone)]
-pub enum FunctionArgument {
-    Value(Box<LogicalExpression>),
+pub enum FunctionArg {
+    Value(Box<ExprNode>),
     Lambda {
-        id: ExpressionId,
-        parameters: PlanSchema,
-        body: Box<LogicalExpression>,
+        id: ExprId,
+        parameters: QuerySchema,
+        body: Box<ExprNode>,
     },
 }
 
 #[derive(Debug, Clone)]
-pub struct SortExpression {
-    pub expression: LogicalExpression,
+pub struct SortKey {
+    pub expression: ExprNode,
     pub ascending: bool,
     pub nulls_first: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Projection {
-    pub expression: LogicalExpression,
+    pub expression: ExprNode,
     pub attribute: Attribute,
 }
 
 #[derive(Debug, Clone)]
-pub struct LogicalPlan {
-    pub node: Deferred<PlanNode>,
-    pub schema: Deferred<PlanSchema>,
+pub struct QueryNode {
+    pub kind: Deferred<QueryKind>,
+    pub schema: Deferred<QuerySchema>,
 }
 
-impl LogicalPlan {
+impl QueryNode {
     pub fn unresolved(plan: spec::QueryPlan) -> Self {
         Self {
-            node: Deferred::unresolved(plan),
+            kind: Deferred::unresolved(plan),
             schema: Deferred::unresolved(Infer),
         }
     }
@@ -350,9 +360,9 @@ impl LogicalPlan {
 /// a source handle, not a pre-built backend plan or a resolver fallback.
 #[derive(Clone, Educe)]
 #[educe(Debug)]
-pub enum PlanNode {
+pub enum QueryKind {
     Scope {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
     },
     Empty {
         produce_one_row: bool,
@@ -364,32 +374,32 @@ pub enum PlanNode {
         partitions: usize,
     },
     Unnest {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
         column: AttributeId,
         outer: bool,
     },
     DistinctOn {
-        input: Box<LogicalPlan>,
-        keys: Vec<LogicalExpression>,
+        input: Box<QueryNode>,
+        keys: Vec<ExprNode>,
     },
     RowIdentity {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
         attribute: Attribute,
         kind: RowIdentityKind,
     },
     MapPartitions {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
         function: Arc<dyn crate::udf::StreamUDF>,
     },
     RemoteCheckpoint {
         relation_id: String,
     },
     Repartition {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
         partitioning: Partitioning,
     },
     Values {
-        rows: Vec<Vec<LogicalExpression>>,
+        rows: Vec<Vec<ExprNode>>,
     },
     Scan {
         name: String,
@@ -398,15 +408,15 @@ pub enum PlanNode {
         projection: Option<Vec<usize>>,
     },
     Project {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
         expressions: Vec<Projection>,
     },
     Filter {
-        input: Box<LogicalPlan>,
-        condition: Box<LogicalExpression>,
+        input: Box<QueryNode>,
+        condition: Box<ExprNode>,
     },
     Aggregate {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
         grouping: Vec<Projection>,
         /// Indices into `grouping`; duplicate sets remain distinct groups.
         grouping_sets: Option<Vec<Vec<usize>>>,
@@ -414,37 +424,37 @@ pub enum PlanNode {
         aggregates: Vec<Projection>,
     },
     Window {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
         expressions: Vec<Projection>,
     },
     Sort {
-        input: Box<LogicalPlan>,
-        order: Vec<SortExpression>,
+        input: Box<QueryNode>,
+        order: Vec<SortKey>,
         global: bool,
         /// Preserve an explicit upstream sort for order-sensitive consumers.
         required: bool,
     },
     Limit {
-        input: Box<LogicalPlan>,
-        skip: Option<Box<LogicalExpression>>,
-        fetch: Option<Box<LogicalExpression>>,
+        input: Box<QueryNode>,
+        skip: Option<Box<ExprNode>>,
+        fetch: Option<Box<ExprNode>>,
     },
     Join {
         lateral: bool,
-        left: Box<LogicalPlan>,
-        right: Box<LogicalPlan>,
+        left: Box<QueryNode>,
+        right: Box<QueryNode>,
         kind: JoinType,
-        condition: Option<Box<LogicalExpression>>,
+        condition: Option<Box<ExprNode>>,
     },
     Union {
-        inputs: Vec<LogicalPlan>,
+        inputs: Vec<QueryNode>,
     },
     Distinct {
-        input: Box<LogicalPlan>,
+        input: Box<QueryNode>,
     },
 }
 
-impl Resolvable for PlanNode {
+impl Resolvable for QueryKind {
     type Request = spec::QueryPlan;
 }
 
@@ -452,8 +462,8 @@ impl Resolvable for PlanNode {
 pub enum Partitioning {
     RoundRobin(usize),
     Coalesce(usize),
-    Hash(Vec<LogicalExpression>, usize),
-    Distribute(Vec<LogicalExpression>),
+    Hash(Vec<ExprNode>, usize),
+    Distribute(Vec<ExprNode>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -23,7 +23,7 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing::cast::{
     build_rename_target_type, decimal_cast_can_overflow, needs_struct_field_rename,
 };
@@ -311,21 +311,16 @@ impl Resolver<'_, '_> {
         if !target_field.metadata().is_empty() {
             let mut result_type = expression.result_type.resolved("cast result")?.clone();
             result_type.metadata.extend(target_field.metadata().clone());
-            expression = LogicalExpression {
+            expression = ExprNode {
                 id: self.context.ids.expression(),
                 result_type: Deferred::Resolved(result_type),
-                node: Deferred::Resolved(ExpressionNode::WithMetadata(Box::new(expression))),
+                kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(expression))),
             };
         }
         Ok(NamedExpression { name, expression })
     }
 
-    fn cast_mode(
-        &mut self,
-        value: LogicalExpression,
-        target: DataType,
-        safe: bool,
-    ) -> PlanResult<LogicalExpression> {
+    fn cast_mode(&mut self, value: ExprNode, target: DataType, safe: bool) -> PlanResult<ExprNode> {
         if safe {
             self.try_cast(value, target)
         } else {
@@ -334,18 +329,18 @@ impl Resolver<'_, '_> {
     }
 }
 
-fn needs_cast_name(expression: &LogicalExpression) -> PlanResult<bool> {
-    if matches!(&expression.node, Deferred::Unresolved(request) if matches!(request.as_ref(), spec::Expr::DefaultColumnValue))
+fn needs_cast_name(expression: &ExprNode) -> PlanResult<bool> {
+    if matches!(&expression.kind, Deferred::Unresolved(request) if matches!(request.as_ref(), spec::Expr::DefaultColumnValue))
     {
         return Err(PlanError::invalid(
             "DEFAULT must be a standalone assignment value",
         ));
     }
-    Ok(match expression.node.resolved("cast name")? {
-        ExpressionNode::WithMetadata(_)
-        | ExpressionNode::Attribute(_)
-        | ExpressionNode::OuterAttribute { .. } => false,
-        ExpressionNode::Cast { expression, .. } => needs_cast_name(expression)?,
+    Ok(match expression.kind.resolved("cast name")? {
+        ExprKind::WithMetadata(_) | ExprKind::Attribute(_) | ExprKind::OuterAttribute { .. } => {
+            false
+        }
+        ExprKind::Cast { expression, .. } => needs_cast_name(expression)?,
         _ => true,
     })
 }

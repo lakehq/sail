@@ -9,16 +9,16 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn array_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
+        values: &mut Vec<ExprNode>,
         names: &[String],
-    ) -> PlanResult<Option<LogicalExpression>> {
+    ) -> PlanResult<Option<ExprNode>> {
         if name == "array_sort" && values.len() == 1 {
             let array = std::mem::take(values).one()?;
             let direction = self.literal(ScalarValue::Utf8(Some("ASC".into())));
@@ -65,11 +65,11 @@ impl Resolver<'_, '_> {
                     .iter()
                     .zip(names)
                     .enumerate()
-                    .map(|(i, (v, n))| match v.node {
+                    .map(|(i, (v, n))| match v.kind {
                         Deferred::Resolved(
-                            ExpressionNode::Attribute(_)
-                            | ExpressionNode::OuterAttribute { .. }
-                            | ExpressionNode::WithMetadata(_),
+                            ExprKind::Attribute(_)
+                            | ExprKind::OuterAttribute { .. }
+                            | ExprKind::WithMetadata(_),
                         ) => n.clone(),
                         _ => i.to_string(),
                     })
@@ -233,7 +233,7 @@ impl Resolver<'_, '_> {
         Ok(Some(result))
     }
 
-    fn compact_array(&mut self, value: LogicalExpression) -> PlanResult<LogicalExpression> {
+    fn compact_array(&mut self, value: ExprNode) -> PlanResult<ExprNode> {
         self.scalar_udf(
             Arc::new(ScalarUDF::from(SparkArrayCompact::new())),
             vec![value],
@@ -242,10 +242,10 @@ impl Resolver<'_, '_> {
 
     pub(super) fn repeat_array(
         &mut self,
-        element: LogicalExpression,
-        count: LogicalExpression,
+        element: ExprNode,
+        count: ExprNode,
         target: DataType,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let element_type = crate::analysis::typing::collection::nullable_array_type(
             &element
                 .result_type
@@ -263,10 +263,10 @@ impl Resolver<'_, '_> {
 impl Resolver<'_, '_> {
     fn insert_array(
         &mut self,
-        array: LogicalExpression,
-        position: LogicalExpression,
-        value: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+        array: ExprNode,
+        position: ExprNode,
+        value: ExprNode,
+    ) -> PlanResult<ExprNode> {
         let copy = self.copy_expression(&array)?;
         let array_input = self.list_nullability(copy, true)?;
         let copy = self.copy_expression(&array_input)?;

@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-use datafusion_expr::LogicalPlan as BackendPlan;
+use datafusion_expr::LogicalPlan;
 use sail_common_datafusion::datasource::{
     DataSourceRegistry, DeleteInfo, DeltaCheckConstraintExpr, DeltaConstraintViolation,
     RowLevelTarget, UpdateAssignment, UpdateInfo,
@@ -11,12 +11,12 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
-use super::ir::*;
+use super::model::*;
 use crate::error::PlanResult;
 
 #[derive(Debug)]
 pub struct Condition {
-    pub expression: LogicalExpression,
+    pub expression: ExprNode,
     pub source: Option<String>,
 }
 
@@ -24,13 +24,13 @@ pub struct Condition {
 pub struct CheckConstraint {
     pub name: String,
     pub source: String,
-    pub expression: LogicalExpression,
+    pub expression: ExprNode,
     pub violation: DeltaConstraintViolation,
 }
 
 #[derive(Debug)]
 pub struct RowOperation {
-    pub input: LogicalPlan,
+    pub input: QueryNode,
     pub target: RowLevelTarget,
     pub condition: Option<Condition>,
     pub case_sensitive: bool,
@@ -41,18 +41,18 @@ pub struct RowOperation {
 pub enum RowAction {
     Delete,
     Update {
-        assignments: Vec<(String, LogicalExpression)>,
-        generated: Vec<(String, LogicalExpression)>,
+        assignments: Vec<(String, ExprNode)>,
+        generated: Vec<(String, ExprNode)>,
         constraints: Vec<CheckConstraint>,
     },
 }
 
 impl RowOperation {
-    pub(super) async fn lower(self, session: &SessionContext) -> PlanResult<BackendPlan> {
+    pub(super) async fn lower(self, session: &SessionContext) -> PlanResult<LogicalPlan> {
         let schema = self.input.schema.resolved("row-level input")?.clone();
         let resolved_target_field_names =
             schema.attributes.iter().map(|a| a.name.clone()).collect();
-        let target_plan = Arc::new(LogicalQuery { plan: self.input }.into_named_plan()?.plan);
+        let target_plan = Arc::new(crate::analysis::lowering::lower_query(self.input)?.plan);
         let input_schema = Arc::clone(target_plan.schema());
         let condition = self
             .condition

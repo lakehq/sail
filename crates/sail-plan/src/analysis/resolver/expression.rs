@@ -12,7 +12,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use super::{NamedExpression, Resolver};
 use crate::analysis::data_type::DataTypeResolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
@@ -28,7 +28,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn expression(
         &mut self,
         request: spec::Expr,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         if let Some((_, value)) = self
             .expression_replacements
@@ -46,10 +46,10 @@ impl Resolver<'_, '_> {
         if matches!(request, spec::Expr::DefaultColumnValue) {
             return Ok(NamedExpression {
                 name: "DEFAULT".into(),
-                expression: LogicalExpression {
+                expression: ExprNode {
                     id,
-                    node: Deferred::unresolved(request),
-                    result_type: Deferred::Resolved(ExpressionType::new(DataType::Null, true)),
+                    kind: Deferred::unresolved(request),
+                    result_type: Deferred::Resolved(ExprType::new(DataType::Null, true)),
                 },
             });
         }
@@ -89,14 +89,14 @@ impl Resolver<'_, '_> {
                     .extension::<PlanService>()?
                     .plan_formatter()
                     .literal_to_string(&value, &self.context.config.session_timezone)?;
-                let mut result_type = ExpressionType::new(value.data_type(), value.is_null());
+                let mut result_type = ExprType::new(value.data_type(), value.is_null());
                 if let Some(metadata) = metadata {
                     result_type.metadata.insert(
                         spec::SAIL_SPARK_INTERVAL_METADATA_KEY.into(),
                         metadata.to_json()?,
                     );
                 }
-                (name, ExpressionNode::Literal(value), result_type)
+                (name, ExprKind::Literal(value), result_type)
             }
             spec::Expr::UnresolvedAttribute {
                 name,
@@ -169,7 +169,7 @@ impl Resolver<'_, '_> {
                 }
                 (
                     name,
-                    ExpressionNode::WithMetadata(Box::new(inner.expression)),
+                    ExprKind::WithMetadata(Box::new(inner.expression)),
                     result_type,
                 )
             }
@@ -338,7 +338,7 @@ impl Resolver<'_, '_> {
                         low.name,
                         high.name
                     ),
-                    ExpressionNode::Between {
+                    ExprKind::Between {
                         expression: Box::new(typing::coerce(
                             value.expression,
                             &common,
@@ -356,7 +356,7 @@ impl Resolver<'_, '_> {
                         )?),
                         negated,
                     },
-                    ExpressionType::new(DataType::Boolean, nullable),
+                    ExprType::new(DataType::Boolean, nullable),
                 )
             }
             spec::Expr::IsDistinctFrom { left, right }
@@ -394,7 +394,7 @@ impl Resolver<'_, '_> {
                         .nullable;
                 (
                     format!("({} SIMILAR TO {})", value.name, pattern.name),
-                    ExpressionNode::SimilarTo {
+                    ExprKind::SimilarTo {
                         expression: Box::new(typing::coerce(
                             value.expression,
                             &DataType::Utf8,
@@ -409,7 +409,7 @@ impl Resolver<'_, '_> {
                         escape_char,
                         case_insensitive,
                     },
-                    ExpressionType::new(DataType::Boolean, nullable),
+                    ExprType::new(DataType::Boolean, nullable),
                 )
             }
             spec::Expr::InSubquery {
@@ -461,12 +461,12 @@ impl Resolver<'_, '_> {
                         value.name,
                         if negated { "NOT " } else { "" }
                     ),
-                    ExpressionNode::InSubquery {
+                    ExprKind::InSubquery {
                         expression: Box::new(left),
                         query: Box::new(query),
                         negated,
                     },
-                    ExpressionType::new(DataType::Boolean, nullable),
+                    ExprType::new(DataType::Boolean, nullable),
                 )
             }
             spec::Expr::InList {
@@ -496,16 +496,16 @@ impl Resolver<'_, '_> {
                 let inner = self.expression(*expr, schema).await?;
                 (
                     format!("({} IS NULL)", inner.name),
-                    ExpressionNode::IsNull(Box::new(inner.expression)),
-                    ExpressionType::new(DataType::Boolean, false),
+                    ExprKind::IsNull(Box::new(inner.expression)),
+                    ExprType::new(DataType::Boolean, false),
                 )
             }
             spec::Expr::IsNotNull(expr) => {
                 let inner = self.expression(*expr, schema).await?;
                 (
                     format!("({} IS NOT NULL)", inner.name),
-                    ExpressionNode::IsNotNull(Box::new(inner.expression)),
-                    ExpressionType::new(DataType::Boolean, false),
+                    ExprKind::IsNotNull(Box::new(inner.expression)),
+                    ExprType::new(DataType::Boolean, false),
                 )
             }
             spec::Expr::IsTrue(expr) => {
@@ -542,7 +542,7 @@ impl Resolver<'_, '_> {
                 result_type.nullable = true;
                 (
                     "scalarsubquery()".into(),
-                    ExpressionNode::ScalarSubquery(Box::new(query)),
+                    ExprKind::ScalarSubquery(Box::new(query)),
                     result_type,
                 )
             }
@@ -550,11 +550,11 @@ impl Resolver<'_, '_> {
                 let query = self.subquery(*subquery, schema).await?;
                 (
                     "exists()".into(),
-                    ExpressionNode::Exists {
+                    ExprKind::Exists {
                         query: Box::new(query),
                         negated,
                     },
-                    ExpressionType::new(DataType::Boolean, false),
+                    ExprType::new(DataType::Boolean, false),
                 )
             }
             spec::Expr::IdentifierClause { expr } => {
@@ -588,8 +588,8 @@ impl Resolver<'_, '_> {
                     .get(&key)
                     .cloned()
                     .ok_or_else(|| PlanError::analysis(format!("unbound parameter: {name}")))?;
-                let result_type = ExpressionType::new(value.data_type(), value.is_null());
-                (name, ExpressionNode::Literal(value), result_type)
+                let result_type = ExprType::new(value.data_type(), value.is_null());
+                (name, ExprKind::Literal(value), result_type)
             }
             expression => {
                 return Err(PlanError::unsupported(format!(
@@ -599,9 +599,9 @@ impl Resolver<'_, '_> {
         };
         Ok(NamedExpression {
             name,
-            expression: LogicalExpression {
+            expression: ExprNode {
                 id,
-                node: Deferred::Resolved(node),
+                kind: Deferred::Resolved(node),
                 result_type: Deferred::Resolved(result_type),
             },
         })
@@ -611,8 +611,8 @@ impl Resolver<'_, '_> {
     pub(super) async fn subquery(
         &mut self,
         query: spec::QueryPlan,
-        schema: &PlanSchema,
-    ) -> PlanResult<LogicalPlan> {
+        schema: &QuerySchema,
+    ) -> PlanResult<QueryNode> {
         let depth = self.outer.len();
         let recovery = self.recovery.take();
         if let Some(scope) = recovery {
@@ -632,11 +632,11 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     async fn truth_test(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         expression: spec::Expr,
         value: Option<bool>,
         negated: bool,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         let inner = self.expression(expression, schema).await?;
         let expression =
@@ -652,14 +652,14 @@ impl Resolver<'_, '_> {
                     None => "UNKNOWN",
                 }
             ),
-            expression: LogicalExpression {
+            expression: ExprNode {
                 id,
-                node: Deferred::Resolved(ExpressionNode::TruthTest {
+                kind: Deferred::Resolved(ExprKind::TruthTest {
                     expression: Box::new(expression),
                     value,
                     negated,
                 }),
-                result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+                result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
             },
         })
     }
@@ -668,10 +668,10 @@ impl Resolver<'_, '_> {
     pub(super) async fn sort(
         &mut self,
         sort: spec::SortOrder,
-        schema: &PlanSchema,
-    ) -> PlanResult<SortExpression> {
+        schema: &QuerySchema,
+    ) -> PlanResult<SortKey> {
         let ascending = !matches!(sort.direction, spec::SortDirection::Descending);
-        Ok(SortExpression {
+        Ok(SortKey {
             expression: self.expression(*sort.child, schema).await?.expression,
             ascending,
             nulls_first: match sort.null_ordering {
@@ -685,9 +685,9 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     async fn function(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         function: spec::UnresolvedFunction,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         let spec::UnresolvedFunction {
             function_name,
@@ -801,7 +801,7 @@ impl Resolver<'_, '_> {
                 && !is_distinct
             {
                 names.push("1".into());
-                values.push(LogicalExpression::literal(
+                values.push(ExprNode::literal(
                     self.context.ids.expression(),
                     ScalarValue::Int64(Some(1)),
                 ));
@@ -927,9 +927,9 @@ impl Resolver<'_, '_> {
             if matches!(name.as_str(), "+" | "positive") {
                 value
             } else {
-                LogicalExpression {
+                ExprNode {
                     id,
-                    node: Deferred::Resolved(ExpressionNode::Negative(Box::new(value))),
+                    kind: Deferred::Resolved(ExprKind::Negative(Box::new(value))),
                     result_type: Deferred::Resolved(result_type),
                 }
             }
@@ -938,10 +938,10 @@ impl Resolver<'_, '_> {
             let value = values.one()?;
             let nullable = value.result_type.resolved("predicate input")?.nullable;
             let (node, nullable) = match name.as_str() {
-                "isnull" => (ExpressionNode::IsNull(Box::new(value)), false),
-                "isnotnull" => (ExpressionNode::IsNotNull(Box::new(value)), false),
+                "isnull" => (ExprKind::IsNull(Box::new(value)), false),
+                "isnotnull" => (ExprKind::IsNotNull(Box::new(value)), false),
                 _ => (
-                    ExpressionNode::Not(Box::new(typing::coerce(
+                    ExprKind::Not(Box::new(typing::coerce(
                         value,
                         &DataType::Boolean,
                         &mut self.context.ids,
@@ -949,10 +949,10 @@ impl Resolver<'_, '_> {
                     nullable,
                 ),
             };
-            LogicalExpression {
+            ExprNode {
                 id,
-                node: Deferred::Resolved(node),
-                result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, nullable)),
+                kind: Deferred::Resolved(node),
+                result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, nullable)),
             }
         } else if name == "named_struct" {
             scalar_clause()?;
@@ -994,14 +994,14 @@ impl Resolver<'_, '_> {
                 .enumerate()
                 .map(|(i, (value, name))| {
                     if matches!(
-                        value.node,
+                        value.kind,
                         Deferred::Resolved(
-                            ExpressionNode::Attribute(_)
-                                | ExpressionNode::OuterAttribute { .. }
-                                | ExpressionNode::WithMetadata(_)
-                                | ExpressionNode::LambdaVariable(_)
+                            ExprKind::Attribute(_)
+                                | ExprKind::OuterAttribute { .. }
+                                | ExprKind::WithMetadata(_)
+                                | ExprKind::LambdaVariable(_)
                         )
-                    ) || matches!(&value.node, Deferred::Resolved(ExpressionNode::ScalarFunction { function, .. }) if function.name() == "get_field") {
+                    ) || matches!(&value.kind, Deferred::Resolved(ExprKind::ScalarFunction { function, .. }) if function.name() == "get_field") {
                         name.clone()
                     } else {
                         format!("col{}", i + 1)

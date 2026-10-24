@@ -10,8 +10,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_function::scalar::struct_function::StructFunction;
 
 use super::Resolver;
-use crate::analysis::command::LogicalCommand;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::row_level::{RowAction, RowOperation};
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
@@ -66,7 +65,7 @@ impl Resolver<'_, '_> {
         table_alias: Option<spec::Identifier>,
         assignments: Vec<(spec::ObjectName, spec::Expr)>,
         condition: Option<spec::ExprWithSource>,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         if self.context.config.store_assignment_policy == StoreAssignmentPolicy::Legacy {
             return Err(PlanError::analysis(
                 "LEGACY store assignment policy is disallowed in Spark data source V2. Please set the configuration spark.sql.storeAssignmentPolicy to other values.",
@@ -168,7 +167,7 @@ impl Resolver<'_, '_> {
         let constraints = self
             .row_level_constraints(&target.format, &target.options, &schema)
             .await?;
-        Ok(LogicalCommand::RowOperation(Box::new(RowOperation {
+        Ok(CommandKind::RowOperation(Box::new(RowOperation {
             input,
             target,
             condition,
@@ -185,8 +184,8 @@ impl Resolver<'_, '_> {
     async fn resolve_update_assignment_value(
         &mut self,
         value: UpdateAssignmentValue,
-        schema: &PlanSchema,
-    ) -> PlanResult<LogicalExpression> {
+        schema: &QuerySchema,
+    ) -> PlanResult<ExprNode> {
         match value {
             UpdateAssignmentValue::Expression(expression) => {
                 let expression = self.expression(expression, schema).await?.expression;
@@ -231,10 +230,10 @@ impl Resolver<'_, '_> {
 
     pub(super) fn align_store_value(
         &mut self,
-        value: LogicalExpression,
+        value: ExprNode,
         target: &DataType,
         fill_missing: bool,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let source = value
             .result_type
             .resolved("assignment value")?

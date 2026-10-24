@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use datafusion_common::Result;
 
 use crate::deferred::Deferred;
-use crate::ir::*;
+use crate::model::*;
 
-impl LogicalPlan {
+impl QueryNode {
     /// Copy an analyzed relation into a query-local ID domain. The same mapping
     /// is used across subqueries, outer references, and nested lambda scopes.
     pub fn instantiate(&self, ids: &mut IdGenerator) -> Result<Self> {
@@ -66,8 +66,8 @@ impl Instance<'_> {
         Ok(attribute)
     }
 
-    fn schema(&mut self, schema: PlanSchema) -> Result<PlanSchema> {
-        Ok(PlanSchema {
+    fn schema(&mut self, schema: QuerySchema) -> Result<QuerySchema> {
+        Ok(QuerySchema {
             attributes: schema
                 .attributes
                 .into_iter()
@@ -76,49 +76,47 @@ impl Instance<'_> {
         })
     }
 
-    fn expression(&mut self, expression: LogicalExpression) -> Result<LogicalExpression> {
+    fn expression(&mut self, expression: ExprNode) -> Result<ExprNode> {
         expression.result_type.resolved("stored expression type")?;
         let mut expression = expression.map_children(&mut |child| self.expression(child))?;
         expression.id = self.ids.expression();
-        expression.node =
-            Deferred::Resolved(match expression.node.into_resolved("stored expression")? {
-                ExpressionNode::Attribute(id) => ExpressionNode::Attribute(self.id(id)),
-                ExpressionNode::OuterAttribute { depth, attribute } => {
-                    ExpressionNode::OuterAttribute {
-                        depth,
-                        attribute: self.id(attribute),
-                    }
+        expression.kind =
+            Deferred::Resolved(match expression.kind.into_resolved("stored expression")? {
+                ExprKind::Attribute(id) => ExprKind::Attribute(self.id(id)),
+                ExprKind::OuterAttribute { depth, attribute } => ExprKind::OuterAttribute {
+                    depth,
+                    attribute: self.id(attribute),
+                },
+                ExprKind::LambdaVariable(id) => ExprKind::LambdaVariable(self.id(id)),
+                ExprKind::ScalarSubquery(query) => {
+                    ExprKind::ScalarSubquery(Box::new(self.plan(*query)?))
                 }
-                ExpressionNode::LambdaVariable(id) => ExpressionNode::LambdaVariable(self.id(id)),
-                ExpressionNode::ScalarSubquery(query) => {
-                    ExpressionNode::ScalarSubquery(Box::new(self.plan(*query)?))
-                }
-                ExpressionNode::Exists { query, negated } => ExpressionNode::Exists {
+                ExprKind::Exists { query, negated } => ExprKind::Exists {
                     query: Box::new(self.plan(*query)?),
                     negated,
                 },
-                ExpressionNode::InSubquery {
+                ExprKind::InSubquery {
                     expression,
                     query,
                     negated,
-                } => ExpressionNode::InSubquery {
+                } => ExprKind::InSubquery {
                     expression,
                     query: Box::new(self.plan(*query)?),
                     negated,
                 },
-                ExpressionNode::HigherOrderFunction {
+                ExprKind::HigherOrderFunction {
                     function,
                     arguments,
-                } => ExpressionNode::HigherOrderFunction {
+                } => ExprKind::HigherOrderFunction {
                     function,
                     arguments: arguments
                         .into_iter()
                         .map(|argument| {
                             Ok(match argument {
-                                FunctionArgument::Value(_) => argument,
-                                FunctionArgument::Lambda {
+                                FunctionArg::Value(_) => argument,
+                                FunctionArg::Lambda {
                                     parameters, body, ..
-                                } => FunctionArgument::Lambda {
+                                } => FunctionArg::Lambda {
                                     id: self.ids.expression(),
                                     parameters: self.schema(parameters)?,
                                     body: Box::new(self.expression(*body)?),
@@ -144,11 +142,11 @@ impl Instance<'_> {
             .collect()
     }
 
-    fn sorts(&mut self, sorts: Vec<SortExpression>) -> Result<Vec<SortExpression>> {
+    fn sorts(&mut self, sorts: Vec<SortKey>) -> Result<Vec<SortKey>> {
         sorts
             .into_iter()
             .map(|sort| {
-                Ok(SortExpression {
+                Ok(SortKey {
                     expression: self.expression(sort.expression)?,
                     ..sort
                 })
@@ -156,17 +154,17 @@ impl Instance<'_> {
             .collect()
     }
 
-    fn plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
+    fn plan(&mut self, plan: QueryNode) -> Result<QueryNode> {
         let schema = self.schema(plan.schema.into_resolved("stored plan schema")?)?;
-        let node = match plan.node.into_resolved("stored plan node")? {
-            node @ (PlanNode::Empty { .. }
-            | PlanNode::Range { .. }
-            | PlanNode::Scan { .. }
-            | PlanNode::RemoteCheckpoint { .. }) => node,
-            PlanNode::Scope { input } => PlanNode::Scope {
+        let node = match plan.kind.into_resolved("stored plan node")? {
+            node @ (QueryKind::Empty { .. }
+            | QueryKind::Range { .. }
+            | QueryKind::Scan { .. }
+            | QueryKind::RemoteCheckpoint { .. }) => node,
+            QueryKind::Scope { input } => QueryKind::Scope {
                 input: Box::new(self.plan(*input)?),
             },
-            PlanNode::Values { rows } => PlanNode::Values {
+            QueryKind::Values { rows } => QueryKind::Values {
                 rows: rows
                     .into_iter()
                     .map(|row| {
@@ -176,43 +174,43 @@ impl Instance<'_> {
                     })
                     .collect::<Result<_>>()?,
             },
-            PlanNode::Project { input, expressions } => PlanNode::Project {
+            QueryKind::Project { input, expressions } => QueryKind::Project {
                 input: Box::new(self.plan(*input)?),
                 expressions: self.projections(expressions)?,
             },
-            PlanNode::Filter { input, condition } => PlanNode::Filter {
+            QueryKind::Filter { input, condition } => QueryKind::Filter {
                 input: Box::new(self.plan(*input)?),
                 condition: Box::new(self.expression(*condition)?),
             },
-            PlanNode::Aggregate {
+            QueryKind::Aggregate {
                 input,
                 grouping,
                 aggregates,
                 grouping_sets,
                 grouping_id,
-            } => PlanNode::Aggregate {
+            } => QueryKind::Aggregate {
                 input: Box::new(self.plan(*input)?),
                 grouping: self.projections(grouping)?,
                 aggregates: self.projections(aggregates)?,
                 grouping_sets,
                 grouping_id: grouping_id.map(|a| self.attribute(a)).transpose()?,
             },
-            PlanNode::Window { input, expressions } => PlanNode::Window {
+            QueryKind::Window { input, expressions } => QueryKind::Window {
                 input: Box::new(self.plan(*input)?),
                 expressions: self.projections(expressions)?,
             },
-            PlanNode::Sort {
+            QueryKind::Sort {
                 input,
                 order,
                 global,
                 required,
-            } => PlanNode::Sort {
+            } => QueryKind::Sort {
                 input: Box::new(self.plan(*input)?),
                 order: self.sorts(order)?,
                 global,
                 required,
             },
-            PlanNode::Limit { input, skip, fetch } => PlanNode::Limit {
+            QueryKind::Limit { input, skip, fetch } => QueryKind::Limit {
                 input: Box::new(self.plan(*input)?),
                 skip: skip
                     .map(|e| self.expression(*e).map(Box::new))
@@ -221,13 +219,13 @@ impl Instance<'_> {
                     .map(|e| self.expression(*e).map(Box::new))
                     .transpose()?,
             },
-            PlanNode::Join {
+            QueryKind::Join {
                 lateral,
                 left,
                 right,
                 kind,
                 condition,
-            } => PlanNode::Join {
+            } => QueryKind::Join {
                 lateral,
                 left: Box::new(self.plan(*left)?),
                 right: Box::new(self.plan(*right)?),
@@ -236,48 +234,48 @@ impl Instance<'_> {
                     .map(|e| self.expression(*e).map(Box::new))
                     .transpose()?,
             },
-            PlanNode::Union { inputs } => PlanNode::Union {
+            QueryKind::Union { inputs } => QueryKind::Union {
                 inputs: inputs
                     .into_iter()
                     .map(|input| self.plan(input))
                     .collect::<Result<_>>()?,
             },
-            PlanNode::Distinct { input } => PlanNode::Distinct {
+            QueryKind::Distinct { input } => QueryKind::Distinct {
                 input: Box::new(self.plan(*input)?),
             },
-            PlanNode::RowIdentity {
+            QueryKind::RowIdentity {
                 input,
                 attribute,
                 kind,
-            } => PlanNode::RowIdentity {
+            } => QueryKind::RowIdentity {
                 input: Box::new(self.plan(*input)?),
                 attribute: self.attribute(attribute)?,
                 kind,
             },
-            PlanNode::MapPartitions { input, function } => PlanNode::MapPartitions {
+            QueryKind::MapPartitions { input, function } => QueryKind::MapPartitions {
                 input: Box::new(self.plan(*input)?),
                 function,
             },
-            PlanNode::Unnest {
+            QueryKind::Unnest {
                 input,
                 column,
                 outer,
-            } => PlanNode::Unnest {
+            } => QueryKind::Unnest {
                 input: Box::new(self.plan(*input)?),
                 column: self.id(column),
                 outer,
             },
-            PlanNode::DistinctOn { input, keys } => PlanNode::DistinctOn {
+            QueryKind::DistinctOn { input, keys } => QueryKind::DistinctOn {
                 input: Box::new(self.plan(*input)?),
                 keys: keys
                     .into_iter()
                     .map(|e| self.expression(e))
                     .collect::<Result<_>>()?,
             },
-            PlanNode::Repartition {
+            QueryKind::Repartition {
                 input,
                 partitioning,
-            } => PlanNode::Repartition {
+            } => QueryKind::Repartition {
                 input: Box::new(self.plan(*input)?),
                 partitioning: match partitioning {
                     Partitioning::Hash(expressions, count) => Partitioning::Hash(
@@ -297,8 +295,8 @@ impl Instance<'_> {
                 },
             },
         };
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(node),
+        Ok(QueryNode {
+            kind: Deferred::Resolved(node),
             schema: Deferred::Resolved(schema),
         })
     }

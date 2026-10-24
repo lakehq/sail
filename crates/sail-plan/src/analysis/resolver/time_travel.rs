@@ -3,11 +3,11 @@ use chrono::{SecondsFormat, TimeZone, Utc};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Volatility;
 use sail_common::spec;
-use sail_query::rewrite::{QueryRewriter, walk_expression, walk_plan};
+use sail_query::rewrite::{QueryRewriter, walk_expression, walk_query};
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
@@ -33,7 +33,7 @@ impl Resolver<'_, '_> {
         };
         let kind = if timestamp { "timestamp" } else { "version" };
         let expression = self
-            .expression(request, &PlanSchema::default())
+            .expression(request, &QuerySchema::default())
             .await
             .map_err(|e| {
                 Self::invalid_time_travel_message(
@@ -179,41 +179,36 @@ struct TimeTravelExpression<'a> {
 impl QueryRewriter for TimeTravelExpression<'_> {
     type Error = PlanError;
 
-    fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+    fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
         self.plan_depth += 1;
-        let result = walk_plan(self, plan);
+        let result = walk_query(self, plan);
         self.plan_depth -= 1;
         result
     }
 
-    fn rewrite_expression(
-        &mut self,
-        expression: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
-        let node = expression.node.resolved("time travel expression")?;
+    fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
+        let node = expression.kind.resolved("time travel expression")?;
         let message = match node {
-            ExpressionNode::Attribute(_) if self.plan_depth == 0 => {
+            ExprKind::Attribute(_) if self.plan_depth == 0 => {
                 Some("expression cannot refer to any columns")
             }
-            ExpressionNode::OuterAttribute { .. } => {
-                Some("expression cannot refer to any outer columns")
-            }
-            ExpressionNode::ScalarFunction { function, .. }
+            ExprKind::OuterAttribute { .. } => Some("expression cannot refer to any outer columns"),
+            ExprKind::ScalarFunction { function, .. }
                 if function.signature().volatility == Volatility::Volatile =>
             {
                 Some("expression must be deterministic")
             }
-            ExpressionNode::HigherOrderFunction { function, .. }
+            ExprKind::HigherOrderFunction { function, .. }
                 if function.signature().volatility == Volatility::Volatile =>
             {
                 Some("expression must be deterministic")
             }
-            ExpressionNode::AggregateFunction { function, .. }
+            ExprKind::AggregateFunction { function, .. }
                 if function.signature().volatility == Volatility::Volatile =>
             {
                 Some("expression must be deterministic")
             }
-            ExpressionNode::WindowFunction { function, .. }
+            ExprKind::WindowFunction { function, .. }
                 if function.signature().volatility == Volatility::Volatile =>
             {
                 Some("expression must be deterministic")
@@ -227,20 +222,19 @@ impl QueryRewriter for TimeTravelExpression<'_> {
             )));
         }
         let mut expression = walk_expression(self, expression)?;
-        if let Deferred::Resolved(ExpressionNode::ScalarSubquery(query)) = expression.node {
+        if let Deferred::Resolved(ExprKind::ScalarSubquery(query)) = expression.kind {
             let schema = query.schema.clone();
-            expression.node =
-                Deferred::Resolved(ExpressionNode::ScalarSubquery(Box::new(LogicalPlan {
-                    schema,
-                    node: Deferred::Resolved(PlanNode::Limit {
-                        input: query,
-                        skip: None,
-                        fetch: Some(Box::new(LogicalExpression::literal(
-                            self.ids.expression(),
-                            ScalarValue::Int64(Some(2)),
-                        ))),
-                    }),
-                })));
+            expression.kind = Deferred::Resolved(ExprKind::ScalarSubquery(Box::new(QueryNode {
+                schema,
+                kind: Deferred::Resolved(QueryKind::Limit {
+                    input: query,
+                    skip: None,
+                    fetch: Some(Box::new(ExprNode::literal(
+                        self.ids.expression(),
+                        ScalarValue::Int64(Some(2)),
+                    ))),
+                }),
+            })));
         }
         Ok(expression)
     }

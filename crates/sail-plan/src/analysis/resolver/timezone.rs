@@ -10,7 +10,7 @@ use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestam
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 
 use super::Resolver;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 
@@ -18,8 +18,8 @@ impl Resolver<'_, '_> {
     pub(super) fn timezone_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         if !matches!(
             name,
             "convert_timezone"
@@ -63,7 +63,7 @@ impl Resolver<'_, '_> {
                 let mut eager = false;
                 for arg in &args {
                     eager |= arg.any(&|node| match node {
-                        ExpressionNode::ScalarFunction { function, .. } => function.inner().is::<sail_python_udf::udf::pyspark_udf::PySparkUDF>() || function.inner().is::<sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant>(),
+                        ExprKind::ScalarFunction { function, .. } => function.inner().is::<sail_python_udf::udf::pyspark_udf::PySparkUDF>() || function.inner().is::<sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant>(),
                         _ => false,
                     })?;
                 }
@@ -139,9 +139,9 @@ impl Resolver<'_, '_> {
 
     fn ntz_timestamp(
         &mut self,
-        value: LogicalExpression,
+        value: ExprNode,
         relative_to_utc: bool,
-    ) -> PlanResult<(LogicalExpression, TimeUnit)> {
+    ) -> PlanResult<(ExprNode, TimeUnit)> {
         let kind = value
             .result_type
             .resolved("timestamp input")?

@@ -9,13 +9,13 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use super::Resolver;
 use super::aggregate_functions::AggregateOptions;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
 pub(super) struct WindowOptions {
-    pub partition_by: Vec<LogicalExpression>,
-    pub order_by: Vec<SortExpression>,
+    pub partition_by: Vec<ExprNode>,
+    pub order_by: Vec<SortKey>,
     pub frame: WindowFrame,
     pub aggregate: AggregateOptions,
 }
@@ -43,9 +43,9 @@ impl Resolver<'_, '_> {
         &mut self,
         name: &str,
         function: WindowFunctionDefinition,
-        mut arguments: Vec<LogicalExpression>,
+        mut arguments: Vec<ExprNode>,
         mut options: WindowOptions,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         if let WindowFunctionDefinition::AggregateUDF(function) = function {
             let name = if name == "array_join" {
                 "listagg"
@@ -73,8 +73,8 @@ impl Resolver<'_, '_> {
                 }
                 let (value, flag) = arguments.two()?;
                 options.aggregate.ignore_nulls =
-                    Some(match flag.node.into_resolved("null treatment")? {
-                        ExpressionNode::Literal(ScalarValue::Boolean(Some(flag))) => flag,
+                    Some(match flag.kind.into_resolved("null treatment")? {
+                        ExprKind::Literal(ScalarValue::Boolean(Some(flag))) => flag,
                         _ => {
                             return Err(PlanError::invalid(
                                 "requires a boolean literal as the second argument",
@@ -97,8 +97,8 @@ impl Resolver<'_, '_> {
                 .pop()
                 .ok_or_else(|| PlanError::internal("missing nth_value flag"))?;
             options.aggregate.ignore_nulls =
-                match flag.node.into_resolved("nth_value null treatment")? {
-                    ExpressionNode::Literal(ScalarValue::Boolean(flag)) => flag,
+                match flag.kind.into_resolved("nth_value null treatment")? {
+                    ExprKind::Literal(ScalarValue::Boolean(flag)) => flag,
                     _ => {
                         return Err(PlanError::invalid(
                             "nth_value third argument should be boolean scalar",
@@ -112,10 +112,10 @@ impl Resolver<'_, '_> {
         )?;
         let arguments =
             typing::coerce_arguments(arguments, &resolved.arguments, &mut self.context.ids)?;
-        let result = LogicalExpression {
+        let result = ExprNode {
             id: self.context.ids.expression(),
-            result_type: Deferred::Resolved(ExpressionType::from_field(&resolved.result)),
-            node: Deferred::Resolved(ExpressionNode::WindowFunction {
+            result_type: Deferred::Resolved(ExprType::from_field(&resolved.result)),
+            kind: Deferred::Resolved(ExprKind::WindowFunction {
                 function,
                 arguments,
                 partition_by: options.partition_by,
@@ -141,19 +141,19 @@ impl Resolver<'_, '_> {
 
     fn aggregate_to_window(
         &mut self,
-        expression: LogicalExpression,
-        partition: &[LogicalExpression],
-        order: &[SortExpression],
+        expression: ExprNode,
+        partition: &[ExprNode],
+        order: &[SortKey],
         frame: &WindowFrame,
-    ) -> PlanResult<LogicalExpression> {
-        if let Deferred::Resolved(ExpressionNode::AggregateFunction {
+    ) -> PlanResult<ExprNode> {
+        if let Deferred::Resolved(ExprKind::AggregateFunction {
             function,
             arguments,
             distinct,
             filter,
             null_treatment,
             ..
-        }) = expression.node
+        }) = expression.kind
         {
             let partition_by = partition
                 .iter()
@@ -162,17 +162,17 @@ impl Resolver<'_, '_> {
             let order_by = order
                 .iter()
                 .map(|s| {
-                    Ok(SortExpression {
+                    Ok(SortKey {
                         expression: self.copy_expression(&s.expression)?,
                         ascending: s.ascending,
                         nulls_first: s.nulls_first,
                     })
                 })
                 .collect::<PlanResult<_>>()?;
-            Ok(LogicalExpression {
+            Ok(ExprNode {
                 id: expression.id,
                 result_type: expression.result_type,
-                node: Deferred::Resolved(ExpressionNode::WindowFunction {
+                kind: Deferred::Resolved(ExprKind::WindowFunction {
                     function: WindowFunctionDefinition::AggregateUDF(function),
                     arguments,
                     partition_by,

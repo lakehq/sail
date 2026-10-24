@@ -11,11 +11,11 @@ use sail_sql_analyzer::parser::parse_interval;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
-fn window_interval_micros(expr: &LogicalExpression) -> PlanResult<i64> {
-    let Deferred::Resolved(ExpressionNode::Literal(value)) = &expr.node else {
+fn window_interval_micros(expr: &ExprNode) -> PlanResult<i64> {
+    let Deferred::Resolved(ExprKind::Literal(value)) = &expr.kind else {
         return Err(PlanError::invalid(
             "window durations and start time must be literal strings, intervals, or integers",
         ));
@@ -63,7 +63,7 @@ const MAX_OVERLAPPING_WINDOWS: i64 = 1_000_000;
 
 /// Parses and validates the `window` durations from the full argument list
 /// (`args[0]` is the time column; `args[1..]` are window/slide/start).
-fn parse_window_spec(args: &[LogicalExpression]) -> PlanResult<WindowSpec> {
+fn parse_window_spec(args: &[ExprNode]) -> PlanResult<WindowSpec> {
     if !(2..=4).contains(&args.len()) {
         return Err(PlanError::invalid(format!(
             "window requires 2 to 4 arguments, got {}",
@@ -138,10 +138,7 @@ fn window_field_type(
 }
 
 impl Resolver<'_, '_> {
-    pub(super) fn window_buckets(
-        &mut self,
-        values: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+    pub(super) fn window_buckets(&mut self, values: Vec<ExprNode>) -> PlanResult<ExprNode> {
         let spec = parse_window_spec(&values)?;
         let time = values
             .into_iter()
@@ -162,10 +159,7 @@ impl Resolver<'_, '_> {
         )
     }
 
-    pub(super) fn window_time(
-        &mut self,
-        values: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+    pub(super) fn window_time(&mut self, values: Vec<ExprNode>) -> PlanResult<ExprNode> {
         let value = values.one()?;
         let kind = &value
             .result_type

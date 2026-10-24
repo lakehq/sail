@@ -5,7 +5,7 @@ use sail_common::spec;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::scope::ResolutionScope;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
@@ -27,12 +27,12 @@ impl Resolver<'_, '_> {
                 .any(|name| self.name_key(name.as_ref()) == self.name_key(&attribute.name))
     }
 
-    fn missing(&mut self, attribute: &Attribute) -> PlanResult<LogicalExpression> {
+    fn missing(&mut self, attribute: &Attribute) -> PlanResult<ExprNode> {
         let reference = self.reference(attribute)?;
-        let null = LogicalExpression {
+        let null = ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::IsNull(Box::new(reference))),
-            result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+            kind: Deferred::Resolved(ExprKind::IsNull(Box::new(reference))),
+            result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
         };
         let data_type = &attribute
             .result_type
@@ -61,7 +61,7 @@ impl Resolver<'_, '_> {
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
         values: Vec<spec::Expr>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let input = self.query(input).await?;
         let input = self.visible_output(input)?;
         if values.is_empty()
@@ -98,9 +98,9 @@ impl Resolver<'_, '_> {
                 ) {
                     let mut target = target.clone();
                     target.nullable = true;
-                    let value = LogicalExpression {
+                    let value = ExprNode {
                         id: self.context.ids.expression(),
-                        node: Deferred::Resolved(ExpressionNode::Cast {
+                        kind: Deferred::Resolved(ExprKind::Cast {
                             expression: Box::new(value),
                             target: target.clone(),
                             safe: true,
@@ -131,7 +131,7 @@ impl Resolver<'_, '_> {
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
         min_non_nulls: Option<usize>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let input = self.query(input).await?;
         let input = self.visible_output(input)?;
         let mut predicates = vec![];
@@ -140,14 +140,14 @@ impl Resolver<'_, '_> {
                 continue;
             }
             let missing = self.missing(attribute)?;
-            predicates.push(LogicalExpression {
+            predicates.push(ExprNode {
                 id: self.context.ids.expression(),
-                node: Deferred::Resolved(ExpressionNode::TruthTest {
+                kind: Deferred::Resolved(ExprKind::TruthTest {
                     expression: Box::new(missing),
                     value: Some(false),
                     negated: false,
                 }),
-                result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+                result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
             });
         }
         let condition = if let Some(count) = min_non_nulls.filter(|n| *n > 0) {
@@ -182,7 +182,7 @@ impl Resolver<'_, '_> {
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
         replacements: Vec<spec::Replacement>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let input = self.query(input).await?;
         let input = self.visible_output(input)?;
         let schema = input.schema.resolved("replace input")?;
@@ -241,17 +241,14 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion::async_recursion]
-    pub(super) async fn deduplicate(
-        &mut self,
-        dedup: spec::Deduplicate,
-    ) -> PlanResult<LogicalPlan> {
+    pub(super) async fn deduplicate(&mut self, dedup: spec::Deduplicate) -> PlanResult<QueryNode> {
         let input = self.query(*dedup.input).await?;
         if dedup.within_watermark {
             return Err(PlanError::todo("deduplicate within watermark"));
         }
         let schema = input.schema.resolved("deduplicate input")?;
         let node = if dedup.all_columns_as_keys && dedup.column_names.is_empty() {
-            PlanNode::Distinct {
+            QueryKind::Distinct {
                 input: Box::new(input.clone()),
             }
         } else if !dedup.all_columns_as_keys && !dedup.column_names.is_empty() {
@@ -262,7 +259,7 @@ impl Resolver<'_, '_> {
                     .resolve(&[name.into()], None)?;
                 keys.push(self.reference(schema.attribute(bound.id)?)?);
             }
-            PlanNode::DistinctOn {
+            QueryKind::DistinctOn {
                 input: Box::new(input.clone()),
                 keys,
             }
@@ -271,9 +268,9 @@ impl Resolver<'_, '_> {
                 "must specify deduplicate column names or use all columns as keys",
             ));
         };
-        Ok(LogicalPlan {
+        Ok(QueryNode {
             schema: input.schema,
-            node: Deferred::Resolved(node),
+            kind: Deferred::Resolved(node),
         })
     }
 
@@ -283,7 +280,7 @@ impl Resolver<'_, '_> {
         input: spec::QueryPlan,
         name: String,
         mut parameters: Vec<spec::Expr>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let mut input = self.query(input).await?;
         let name = name.to_ascii_uppercase();
         if !matches!(name.as_str(), "REPARTITION" | "COALESCE") {
@@ -369,9 +366,9 @@ impl Resolver<'_, '_> {
             }
             Partitioning::Hash(expressions, count)
         };
-        let partitioned = LogicalPlan {
+        let partitioned = QueryNode {
             schema: input.schema.clone(),
-            node: Deferred::Resolved(PlanNode::Repartition {
+            kind: Deferred::Resolved(QueryKind::Repartition {
                 input: Box::new(input),
                 partitioning,
             }),

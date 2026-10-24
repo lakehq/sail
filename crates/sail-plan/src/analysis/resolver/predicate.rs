@@ -10,7 +10,7 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing::predicate::*;
 use crate::error::{PlanError, PlanResult};
 
@@ -18,8 +18,8 @@ impl Resolver<'_, '_> {
     pub(super) fn predicate_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         if !matches!(
             name,
             "in" | "like" | "ilike" | "rlike" | "regexp" | "regexp_like"
@@ -88,18 +88,18 @@ impl Resolver<'_, '_> {
 
     pub(super) fn pattern(
         &mut self,
-        value: LogicalExpression,
-        pattern: LogicalExpression,
+        value: ExprNode,
+        pattern: ExprNode,
         regex: bool,
         case_insensitive: bool,
         escape_char: Option<char>,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let value = self.cast(value, DataType::Utf8)?;
         let pattern = self.cast(pattern, DataType::Utf8)?;
         let nullable = value.result_type.resolved("pattern value")?.nullable
             || pattern.result_type.resolved("pattern")?.nullable;
         let node = if regex {
-            ExpressionNode::SimilarTo {
+            ExprKind::SimilarTo {
                 expression: Box::new(value),
                 pattern: Box::new(pattern),
                 negated: false,
@@ -107,7 +107,7 @@ impl Resolver<'_, '_> {
                 case_insensitive,
             }
         } else {
-            ExpressionNode::Like {
+            ExprKind::Like {
                 expression: Box::new(value),
                 pattern: Box::new(pattern),
                 negated: false,
@@ -115,10 +115,10 @@ impl Resolver<'_, '_> {
                 case_insensitive,
             }
         };
-        Ok(LogicalExpression {
+        Ok(ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(node),
-            result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, nullable)),
+            kind: Deferred::Resolved(node),
+            result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, nullable)),
         })
     }
 }
@@ -126,10 +126,10 @@ impl Resolver<'_, '_> {
 impl Resolver<'_, '_> {
     pub(super) fn predicate_pair(
         &mut self,
-        mut left: LogicalExpression,
+        mut left: ExprNode,
         operator: Operator,
-        mut right: LogicalExpression,
-    ) -> PlanResult<(LogicalExpression, LogicalExpression)> {
+        mut right: ExprNode,
+    ) -> PlanResult<(ExprNode, ExprNode)> {
         if !is_comparison(operator) {
             return Ok((left, right));
         }
@@ -172,9 +172,9 @@ impl Resolver<'_, '_> {
 
     fn predicate_timestamp(
         &mut self,
-        value: LogicalExpression,
+        value: ExprNode,
         timezone: Option<Arc<str>>,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         self.scalar_udf(
             Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
                 timezone,
@@ -185,7 +185,7 @@ impl Resolver<'_, '_> {
         )
     }
 
-    fn predicate_string(&mut self, mut value: LogicalExpression) -> PlanResult<LogicalExpression> {
+    fn predicate_string(&mut self, mut value: ExprNode) -> PlanResult<ExprNode> {
         let field = value
             .result_type
             .resolved("predicate string input")?
@@ -213,10 +213,7 @@ impl Resolver<'_, '_> {
         self.scalar_udf(Arc::new(ScalarUDF::from(SparkToUtf8::new())), args)
     }
 
-    pub(super) fn in_arguments(
-        &mut self,
-        values: Vec<LogicalExpression>,
-    ) -> PlanResult<Vec<LogicalExpression>> {
+    pub(super) fn in_arguments(&mut self, values: Vec<ExprNode>) -> PlanResult<Vec<ExprNode>> {
         let types = values
             .iter()
             .map(|v| Ok(v.result_type.resolved("IN input")?.data_type.clone()))
@@ -238,9 +235,9 @@ impl Resolver<'_, '_> {
 
     fn in_coercion(
         &mut self,
-        mut value: LogicalExpression,
+        mut value: ExprNode,
         policy: &TimestampStringInCoercion,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let data_type = value.result_type.resolved("IN coercion")?.data_type.clone();
         if !timestamp_string_coercion_requires_rewrite(&data_type, policy) {
             return Ok(value);
@@ -282,12 +279,11 @@ impl Resolver<'_, '_> {
                     DataType::List(field) | DataType::LargeList(field) => field.clone(),
                     _ => return Ok(value),
                 };
-                let parameter =
-                    self.attribute("element".into(), ExpressionType::from_field(&field));
-                let variable = LogicalExpression {
+                let parameter = self.attribute("element".into(), ExprType::from_field(&field));
+                let variable = ExprNode {
                     id: self.context.ids.expression(),
                     result_type: parameter.result_type.clone(),
-                    node: Deferred::Resolved(ExpressionNode::LambdaVariable(parameter.id)),
+                    kind: Deferred::Resolved(ExprKind::LambdaVariable(parameter.id)),
                 };
                 let body = self.in_coercion(variable, element)?;
                 let function = Arc::new(HigherOrderUDF::new_from_impl(
@@ -308,16 +304,16 @@ impl Resolver<'_, '_> {
                     &fields,
                     &[None, None],
                 )?;
-                Ok(LogicalExpression {
+                Ok(ExprNode {
                     id: self.context.ids.expression(),
-                    result_type: Deferred::Resolved(ExpressionType::from_field(&result.result)),
-                    node: Deferred::Resolved(ExpressionNode::HigherOrderFunction {
+                    result_type: Deferred::Resolved(ExprType::from_field(&result.result)),
+                    kind: Deferred::Resolved(ExprKind::HigherOrderFunction {
                         function,
                         arguments: vec![
-                            FunctionArgument::Value(Box::new(value)),
-                            FunctionArgument::Lambda {
+                            FunctionArg::Value(Box::new(value)),
+                            FunctionArg::Lambda {
                                 id: self.context.ids.expression(),
-                                parameters: PlanSchema {
+                                parameters: QuerySchema {
                                     attributes: vec![parameter],
                                 },
                                 body: Box::new(body),
@@ -397,13 +393,13 @@ impl Resolver<'_, '_> {
 
     pub(super) fn in_list(
         &mut self,
-        value: LogicalExpression,
-        list: Vec<LogicalExpression>,
+        value: ExprNode,
+        list: Vec<ExprNode>,
         negated: bool,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let compare = matches!(value.result_type.resolved("IN input")?.data_type, DataType::List(_) | DataType::LargeList(_))
             && list.iter().any(null_literal)
-            && !value.any(&|node| matches!(node, ExpressionNode::ScalarFunction { function, .. } if function.signature().volatility == datafusion_expr::Volatility::Volatile))?;
+            && !value.any(&|node| matches!(node, ExprKind::ScalarFunction { function, .. } if function.signature().volatility == datafusion_expr::Volatility::Volatile))?;
         let mut values = vec![value];
         values.extend(list);
         let mut values = self.in_arguments(values)?.into_iter();
@@ -438,18 +434,18 @@ impl Resolver<'_, '_> {
     }
 }
 
-fn null_literal(value: &LogicalExpression) -> bool {
-    match &value.node {
-        Deferred::Resolved(ExpressionNode::Literal(value)) => value.is_null(),
+fn null_literal(value: &ExprNode) -> bool {
+    match &value.kind {
+        Deferred::Resolved(ExprKind::Literal(value)) => value.is_null(),
         Deferred::Resolved(
-            ExpressionNode::Cast { expression, .. } | ExpressionNode::WithMetadata(expression),
+            ExprKind::Cast { expression, .. } | ExprKind::WithMetadata(expression),
         ) => null_literal(expression),
         _ => false,
     }
 }
 
 fn interval_metadata(
-    value: &LogicalExpression,
+    value: &ExprNode,
     data_type: &DataType,
 ) -> PlanResult<Option<sail_common::spec::SparkIntervalMetadata>> {
     use sail_common::spec::{SAIL_SPARK_INTERVAL_METADATA_KEY, SparkIntervalMetadata};

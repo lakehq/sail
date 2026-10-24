@@ -16,7 +16,7 @@ use sail_common_datafusion::lakerelation::{
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -24,7 +24,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn data_source(
         &mut self,
         source: spec::ReadDataSource,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let spec::ReadDataSource {
             format,
             schema,
@@ -67,7 +67,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn named_table(
         &mut self,
         table: spec::ReadNamedTable,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let spec::ReadNamedTable {
             name,
             temporal,
@@ -263,9 +263,9 @@ impl Resolver<'_, '_> {
                 } else {
                     self.rename(input, columns.into_iter().map(|c| c.name.into()).collect())?
                 };
-                LogicalPlan {
+                QueryNode {
                     schema: input.schema.clone(),
-                    node: Deferred::Resolved(PlanNode::Scope {
+                    kind: Deferred::Resolved(QueryKind::Scope {
                         input: Box::new(input),
                     }),
                 }
@@ -277,9 +277,9 @@ impl Resolver<'_, '_> {
                     ));
                 }
                 let input = plan.instantiate(&mut self.context.ids)?;
-                LogicalPlan {
+                QueryNode {
                     schema: input.schema.clone(),
-                    node: Deferred::Resolved(PlanNode::Scope {
+                    kind: Deferred::Resolved(QueryKind::Scope {
                         input: Box::new(input),
                     }),
                 }

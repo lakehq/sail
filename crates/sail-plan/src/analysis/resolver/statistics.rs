@@ -8,7 +8,7 @@ use sail_function::scalar::math::random::Random;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::scope::ResolutionScope;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
@@ -20,7 +20,7 @@ impl Resolver<'_, '_> {
         input: spec::QueryPlan,
         left: spec::Identifier,
         right: spec::Identifier,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let name = format!("{}_{}", left.as_ref(), right.as_ref());
         let input = self.query(input).await?;
         let schema = input.schema.resolved("crosstab input")?;
@@ -41,9 +41,9 @@ impl Resolver<'_, '_> {
                 expression,
             }],
         )?;
-        let distinct = LogicalPlan {
+        let distinct = QueryNode {
             schema: distinct.schema.clone(),
-            node: Deferred::Resolved(PlanNode::Distinct {
+            kind: Deferred::Resolved(QueryKind::Distinct {
                 input: Box::new(distinct),
             }),
         };
@@ -104,10 +104,10 @@ impl Resolver<'_, '_> {
         &mut self,
         input: spec::QueryPlan,
         limit: spec::Expr,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let input = self.query(input).await?;
         let limit = self
-            .expression(limit, &PlanSchema::default())
+            .expression(limit, &QuerySchema::default())
             .await?
             .expression;
         let value = crate::analysis::lowering::evaluate_constant(&limit)?;
@@ -151,7 +151,7 @@ impl Resolver<'_, '_> {
         right: spec::Identifier,
         function: &str,
         name: &str,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let input = self.query(input).await?;
         let schema = input.schema.resolved("statistic input")?;
         let mut arguments = vec![];
@@ -180,7 +180,7 @@ impl Resolver<'_, '_> {
         column: spec::Expr,
         fractions: Vec<spec::Fraction>,
         seed: Option<i64>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         if fractions.iter().any(|f| !(0.0..=1.0).contains(&f.fraction)) {
             return Err(PlanError::invalid(
                 "All fraction values must be >= 0.0 and <= 1.0",
@@ -227,7 +227,7 @@ impl Resolver<'_, '_> {
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
         statistics: Vec<String>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let input = self.query(input).await?;
         let input = self.visible_output(input)?;
         let schema = input.schema.resolved("summary input")?;

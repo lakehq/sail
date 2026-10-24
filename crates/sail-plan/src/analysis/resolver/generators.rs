@@ -10,7 +10,7 @@ use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 
 use super::{NamedExpression, Resolver};
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 pub(super) fn is_generator(expression: &spec::Expr) -> bool {
@@ -27,9 +27,9 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn generator(
         &mut self,
-        mut input: LogicalPlan,
+        mut input: QueryNode,
         request: spec::Expr,
-    ) -> PlanResult<(LogicalPlan, Vec<NamedExpression>)> {
+    ) -> PlanResult<(QueryNode, Vec<NamedExpression>)> {
         let (request, aliases) = match request {
             spec::Expr::Alias { expr, name, .. } => (*expr, Some(name)),
             request => (request, None),
@@ -161,8 +161,8 @@ impl Resolver<'_, '_> {
                 }
                 for field in &arguments[1..] {
                     if !matches!(
-                        field.node,
-                        crate::analysis::deferred::Deferred::Resolved(ExpressionNode::Literal(
+                        field.kind,
+                        crate::analysis::deferred::Deferred::Resolved(ExprKind::Literal(
                             ScalarValue::Utf8(Some(_))
                         ))
                     ) {
@@ -270,10 +270,9 @@ impl Resolver<'_, '_> {
         Ok((input, expressions))
     }
 
-    fn stack_rows(&mut self, arguments: Vec<LogicalExpression>) -> PlanResult<LogicalExpression> {
+    fn stack_rows(&mut self, arguments: Vec<ExprNode>) -> PlanResult<ExprNode> {
         let (rows, mut values) = arguments.at_least_one()?;
-        let crate::analysis::deferred::Deferred::Resolved(ExpressionNode::Literal(rows)) =
-            rows.node
+        let crate::analysis::deferred::Deferred::Resolved(ExprKind::Literal(rows)) = rows.kind
         else {
             return Err(PlanError::invalid(
                 "stack expects integer literal as first argument",

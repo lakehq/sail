@@ -19,13 +19,13 @@ use crate::error::PlanResult;
 /// Resolve a native scalar call before constructing any DataFusion expression.
 /// Each inserted cast receives a fresh occurrence ID; the call retains its ID.
 pub fn resolve_scalar_call(
-    id: super::ir::ExpressionId,
+    id: super::model::ExprId,
     function: std::sync::Arc<datafusion_expr::ScalarUDF>,
-    arguments: Vec<super::ir::LogicalExpression>,
-    ids: &mut super::ir::IdGenerator,
-) -> PlanResult<super::ir::LogicalExpression> {
+    arguments: Vec<super::model::ExprNode>,
+    ids: &mut super::model::IdGenerator,
+) -> PlanResult<super::model::ExprNode> {
     use super::deferred::Deferred;
-    use super::ir::{ExpressionNode, ExpressionType, LogicalExpression};
+    use super::model::{ExprKind, ExprNode, ExprType};
 
     let fields = arguments
         .iter()
@@ -39,8 +39,8 @@ pub fn resolve_scalar_call(
     let literals = arguments
         .iter()
         .map(
-            |argument| match argument.node.resolved("function argument")? {
-                ExpressionNode::Literal(value) => Ok(Some(value)),
+            |argument| match argument.kind.resolved("function argument")? {
+                ExprKind::Literal(value) => Ok(Some(value)),
                 _ => Ok(None),
             },
         )
@@ -89,25 +89,25 @@ pub fn resolve_scalar_call(
             coerce(argument, field.data_type(), ids)
         })
         .collect::<PlanResult<Vec<_>>>()?;
-    Ok(LogicalExpression {
+    Ok(ExprNode {
         id,
-        node: Deferred::Resolved(ExpressionNode::ScalarFunction {
+        kind: Deferred::Resolved(ExprKind::ScalarFunction {
             function,
             arguments,
         }),
-        result_type: Deferred::Resolved(ExpressionType::from_field(&typing.result)),
+        result_type: Deferred::Resolved(ExprType::from_field(&typing.result)),
     })
 }
 
 /// Insert an implicit cast, materializing literal conversions when possible. Shared by
 /// operators, functions, VALUES, and set operations.
 pub fn coerce(
-    expression: super::ir::LogicalExpression,
+    expression: super::model::ExprNode,
     target: &arrow_schema::DataType,
-    ids: &mut super::ir::IdGenerator,
-) -> PlanResult<super::ir::LogicalExpression> {
+    ids: &mut super::model::IdGenerator,
+) -> PlanResult<super::model::ExprNode> {
     use super::deferred::Deferred;
-    use super::ir::{ExpressionNode, ExpressionType, LogicalExpression};
+    use super::model::{ExprKind, ExprNode, ExprType};
     let source = expression.result_type.resolved("cast input type")?;
     if &source.data_type == target {
         return Ok(expression);
@@ -137,22 +137,22 @@ pub fn coerce(
             source.data_type
         )));
     }
-    let target = ExpressionType::from_field(&coercion::cast_field(&source.to_field(""), target));
+    let target = ExprType::from_field(&coercion::cast_field(&source.to_field(""), target));
     // Keep typed constants visible to source pruning and literal-sensitive
     // functions before any backend optimizer runs. Failed conversions retain
     // their cast so evaluation preserves the normal runtime error behavior.
-    if let Deferred::Resolved(ExpressionNode::Literal(value)) = &expression.node
+    if let Deferred::Resolved(ExprKind::Literal(value)) = &expression.kind
         && let Ok(value) = value.cast_to(&target.data_type)
     {
-        return Ok(LogicalExpression {
+        return Ok(ExprNode {
             id: ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::Literal(value)),
+            kind: Deferred::Resolved(ExprKind::Literal(value)),
             result_type: Deferred::Resolved(target),
         });
     }
-    Ok(LogicalExpression {
+    Ok(ExprNode {
         id: ids.expression(),
-        node: Deferred::Resolved(ExpressionNode::Cast {
+        kind: Deferred::Resolved(ExprKind::Cast {
             expression: Box::new(expression),
             target: target.clone(),
             safe: false,
@@ -162,14 +162,14 @@ pub fn coerce(
 }
 
 pub fn resolve_binary(
-    id: super::ir::ExpressionId,
-    left: super::ir::LogicalExpression,
+    id: super::model::ExprId,
+    left: super::model::ExprNode,
     operator: datafusion_expr::Operator,
-    right: super::ir::LogicalExpression,
-    ids: &mut super::ir::IdGenerator,
-) -> PlanResult<super::ir::LogicalExpression> {
+    right: super::model::ExprNode,
+    ids: &mut super::model::IdGenerator,
+) -> PlanResult<super::model::ExprNode> {
     use super::deferred::Deferred;
-    use super::ir::{ExpressionNode, ExpressionType, LogicalExpression};
+    use super::model::{ExprKind, ExprNode, ExprType};
     let typing = coercion::binary(
         &left.result_type.resolved("left operand type")?.to_field(""),
         operator,
@@ -178,26 +178,26 @@ pub fn resolve_binary(
             .resolved("right operand type")?
             .to_field(""),
     )?;
-    Ok(LogicalExpression {
+    Ok(ExprNode {
         id,
-        node: Deferred::Resolved(ExpressionNode::Binary {
+        kind: Deferred::Resolved(ExprKind::Binary {
             left: Box::new(coerce(left, &typing.left, ids)?),
             operator,
             right: Box::new(coerce(right, &typing.right, ids)?),
         }),
-        result_type: Deferred::Resolved(ExpressionType::new(typing.result, typing.nullable)),
+        result_type: Deferred::Resolved(ExprType::new(typing.result, typing.nullable)),
     })
 }
 
 pub fn resolve_in_list(
-    id: super::ir::ExpressionId,
-    expression: super::ir::LogicalExpression,
-    values: Vec<super::ir::LogicalExpression>,
+    id: super::model::ExprId,
+    expression: super::model::ExprNode,
+    values: Vec<super::model::ExprNode>,
     negated: bool,
-    ids: &mut super::ir::IdGenerator,
-) -> PlanResult<super::ir::LogicalExpression> {
+    ids: &mut super::model::IdGenerator,
+) -> PlanResult<super::model::ExprNode> {
     use super::deferred::Deferred;
-    use super::ir::{ExpressionNode, ExpressionType, LogicalExpression};
+    use super::model::{ExprKind, ExprNode, ExprType};
     let fields = std::iter::once(&expression)
         .chain(&values)
         .map(|value| Ok(value.result_type.resolved("IN argument type")?))
@@ -209,9 +209,9 @@ pub fn resolve_in_list(
             .map(|field| field.data_type.clone())
             .collect::<Vec<_>>(),
     )?;
-    Ok(LogicalExpression {
+    Ok(ExprNode {
         id,
-        node: Deferred::Resolved(ExpressionNode::InList {
+        kind: Deferred::Resolved(ExprKind::InList {
             expression: Box::new(coerce(expression, &common, ids)?),
             values: values
                 .into_iter()
@@ -219,22 +219,19 @@ pub fn resolve_in_list(
                 .collect::<PlanResult<_>>()?,
             negated,
         }),
-        result_type: Deferred::Resolved(ExpressionType::new(
-            arrow_schema::DataType::Boolean,
-            nullable,
-        )),
+        result_type: Deferred::Resolved(ExprType::new(arrow_schema::DataType::Boolean, nullable)),
     })
 }
 
 pub fn resolve_case(
-    id: super::ir::ExpressionId,
-    operand: Option<super::ir::LogicalExpression>,
-    branches: Vec<(super::ir::LogicalExpression, super::ir::LogicalExpression)>,
-    otherwise: Option<super::ir::LogicalExpression>,
-    ids: &mut super::ir::IdGenerator,
-) -> PlanResult<super::ir::LogicalExpression> {
+    id: super::model::ExprId,
+    operand: Option<super::model::ExprNode>,
+    branches: Vec<(super::model::ExprNode, super::model::ExprNode)>,
+    otherwise: Option<super::model::ExprNode>,
+    ids: &mut super::model::IdGenerator,
+) -> PlanResult<super::model::ExprNode> {
     use super::deferred::Deferred;
-    use super::ir::{ExpressionNode, ExpressionType, LogicalExpression};
+    use super::model::{ExprKind, ExprNode, ExprType};
     if branches.is_empty() {
         return Err(crate::error::PlanError::analysis(
             "CASE requires at least one branch",
@@ -265,15 +262,15 @@ pub fn resolve_case(
                 continue;
             }
             let mut inner = value;
-            while let ExpressionNode::Cast {
+            while let ExprKind::Cast {
                 expression,
                 safe: false,
                 ..
-            } = inner.node.resolved("CASE branch")?
+            } = inner.kind.resolved("CASE branch")?
             {
                 inner = expression;
             }
-            matches!(condition.node.resolved("CASE condition")?, ExpressionNode::IsNotNull(test) if test.equivalent(inner)?)
+            matches!(condition.kind.resolved("CASE condition")?, ExprKind::IsNotNull(test) if test.equivalent(inner)?)
         } else {
             false
         };
@@ -315,19 +312,19 @@ pub fn resolve_case(
     let otherwise = otherwise
         .map(|value| coerce(value, &result_type, ids).map(Box::new))
         .transpose()?;
-    Ok(LogicalExpression {
+    Ok(ExprNode {
         id,
-        node: Deferred::Resolved(ExpressionNode::Case {
+        kind: Deferred::Resolved(ExprKind::Case {
             operand,
             branches,
             otherwise,
         }),
-        result_type: Deferred::Resolved(ExpressionType::new(result_type, nullable)),
+        result_type: Deferred::Resolved(ExprType::new(result_type, nullable)),
     })
 }
 
 pub fn argument_fields(
-    arguments: &[super::ir::LogicalExpression],
+    arguments: &[super::model::ExprNode],
 ) -> PlanResult<Vec<arrow_schema::FieldRef>> {
     arguments
         .iter()
@@ -341,10 +338,10 @@ pub fn argument_fields(
 }
 
 pub fn coerce_arguments(
-    arguments: Vec<super::ir::LogicalExpression>,
+    arguments: Vec<super::model::ExprNode>,
     fields: &[arrow_schema::FieldRef],
-    ids: &mut super::ir::IdGenerator,
-) -> PlanResult<Vec<super::ir::LogicalExpression>> {
+    ids: &mut super::model::IdGenerator,
+) -> PlanResult<Vec<super::model::ExprNode>> {
     coercion::validate_arity("function coercion", fields.len(), arguments.len())?;
     arguments
         .into_iter()
@@ -355,22 +352,18 @@ pub fn coerce_arguments(
 
 /// Conservative reachability for searched CASE branches. In particular a NULL
 /// result behind `IS NULL(nonnullable)` cannot make the whole CASE nullable.
-fn condition_can_be_true(expression: &super::ir::LogicalExpression) -> PlanResult<bool> {
-    use super::ir::ExpressionNode;
-    Ok(match expression.node.resolved("CASE condition")? {
-        ExpressionNode::Literal(datafusion_common::ScalarValue::Boolean(value)) => {
-            *value == Some(true)
-        }
-        ExpressionNode::IsNull(value) => {
-            value.result_type.resolved("NULL predicate input")?.nullable
-        }
-        ExpressionNode::WithMetadata(value) => condition_can_be_true(value)?,
-        ExpressionNode::Binary {
+fn condition_can_be_true(expression: &super::model::ExprNode) -> PlanResult<bool> {
+    use super::model::ExprKind;
+    Ok(match expression.kind.resolved("CASE condition")? {
+        ExprKind::Literal(datafusion_common::ScalarValue::Boolean(value)) => *value == Some(true),
+        ExprKind::IsNull(value) => value.result_type.resolved("NULL predicate input")?.nullable,
+        ExprKind::WithMetadata(value) => condition_can_be_true(value)?,
+        ExprKind::Binary {
             left,
             operator: datafusion_expr::Operator::And,
             right,
         } => condition_can_be_true(left)? && condition_can_be_true(right)?,
-        ExpressionNode::Binary {
+        ExprKind::Binary {
             left,
             operator: datafusion_expr::Operator::Or,
             right,

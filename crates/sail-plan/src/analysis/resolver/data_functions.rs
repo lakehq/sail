@@ -18,15 +18,15 @@ use sail_function::scalar::xml::to_xml::SparkToXml;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn data_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         let target = match name {
             "bigint" => Some(DataType::Int64),
             "binary" => Some(DataType::Binary),
@@ -92,7 +92,7 @@ impl Resolver<'_, '_> {
             }
             "from_csv" | "from_json" | "from_xml" => {
                 if let Some(schema) = values.get_mut(1)
-                    && !matches!(schema.node, Deferred::Resolved(ExpressionNode::Literal(_)))
+                    && !matches!(schema.kind, Deferred::Resolved(ExprKind::Literal(_)))
                     && let Ok(value) = crate::analysis::lowering::evaluate_constant(schema)
                 {
                     let value = if name == "from_xml" {
@@ -136,27 +136,27 @@ impl Resolver<'_, '_> {
             }
             "get_json_object" => {
                 let (value, path) = values.two()?;
-                let paths = if let Deferred::Resolved(ExpressionNode::Literal(ScalarValue::Utf8(
-                    Some(path),
-                ))) = &path.node
-                {
-                    let Some(paths) = json_path_parser().parse(path).into_result().ok() else {
-                        return Ok(Some(self.literal(ScalarValue::Utf8(None))));
+                let paths =
+                    if let Deferred::Resolved(ExprKind::Literal(ScalarValue::Utf8(Some(path)))) =
+                        &path.kind
+                    {
+                        let Some(paths) = json_path_parser().parse(path).into_result().ok() else {
+                            return Ok(Some(self.literal(ScalarValue::Utf8(None))));
+                        };
+                        paths
+                            .into_iter()
+                            .map(|v| self.literal(v))
+                            .collect::<Vec<_>>()
+                    } else {
+                        let copy = self.copy_expression(&path)?;
+                        let pattern = self.literal(ScalarValue::Utf8(Some("$.%".into())));
+                        let matches = self.pattern(copy, pattern, false, false, None)?;
+                        let three = self.literal(ScalarValue::Int64(Some(3)));
+                        let key = self.scalar("substr", vec![path, three])?;
+                        let yes = self.literal(ScalarValue::Boolean(Some(true)));
+                        let empty = self.literal(ScalarValue::Utf8(Some("".into())));
+                        vec![self.case(vec![(matches, key), (yes, empty)], None)?]
                     };
-                    paths
-                        .into_iter()
-                        .map(|v| self.literal(v))
-                        .collect::<Vec<_>>()
-                } else {
-                    let copy = self.copy_expression(&path)?;
-                    let pattern = self.literal(ScalarValue::Utf8(Some("$.%".into())));
-                    let matches = self.pattern(copy, pattern, false, false, None)?;
-                    let three = self.literal(ScalarValue::Int64(Some(3)));
-                    let key = self.scalar("substr", vec![path, three])?;
-                    let yes = self.literal(ScalarValue::Boolean(Some(true)));
-                    let empty = self.literal(ScalarValue::Utf8(Some("".into())));
-                    vec![self.case(vec![(matches, key), (yes, empty)], None)?]
-                };
                 let mut arguments = vec![value];
                 arguments.extend(paths);
                 self.scalar_udf(json_as_text_udf(), arguments)?

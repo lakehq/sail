@@ -17,15 +17,15 @@ use sail_function::scalar::string::spark_to_char::SparkToChar;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn string_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         if !matches!(
             name,
             "ascii"
@@ -175,8 +175,8 @@ impl Resolver<'_, '_> {
             "overlay" => {
                 if values.len() == 4
                     && matches!(
-                        values[3].node,
-                        Deferred::Resolved(ExpressionNode::Literal(
+                        values[3].kind,
+                        Deferred::Resolved(ExprKind::Literal(
                             ScalarValue::Int32(Some(-1)) | ScalarValue::Int64(Some(-1))
                         ))
                     )
@@ -193,10 +193,10 @@ impl Resolver<'_, '_> {
             "position" | "locate" => self.position(values)?,
             "regexp_replace" => {
                 let (value, pattern, replacement) = values.three()?;
-                let single = match (&pattern.node, &replacement.node) {
+                let single = match (&pattern.kind, &replacement.kind) {
                     (
-                        Deferred::Resolved(ExpressionNode::Literal(pattern)),
-                        Deferred::Resolved(ExpressionNode::Literal(replacement)),
+                        Deferred::Resolved(ExprKind::Literal(pattern)),
+                        Deferred::Resolved(ExprKind::Literal(replacement)),
                     ) => {
                         match (
                             pattern.try_as_str().flatten(),
@@ -303,9 +303,7 @@ impl Resolver<'_, '_> {
                         vec![value, format],
                     )?
                 } else if kind.is_binary() {
-                    let ExpressionNode::Literal(literal) =
-                        format.node.resolved("to_char format")?
-                    else {
+                    let ExprKind::Literal(literal) = format.kind.resolved("to_char format")? else {
                         return Err(PlanError::invalid(
                             "to_char: the `format` parameter must be a string literal for binary input",
                         ));
@@ -347,11 +345,7 @@ impl Resolver<'_, '_> {
         Ok(Some(result))
     }
 
-    fn logical_string(
-        &mut self,
-        value: LogicalExpression,
-        safe: bool,
-    ) -> PlanResult<LogicalExpression> {
+    fn logical_string(&mut self, value: ExprNode, safe: bool) -> PlanResult<ExprNode> {
         let target = match value.result_type.resolved("string input")?.data_type {
             DataType::LargeBinary | DataType::LargeUtf8 => DataType::LargeUtf8,
             DataType::Utf8View => DataType::Utf8View,
@@ -364,7 +358,7 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn substring(&mut self, mut values: Vec<LogicalExpression>) -> PlanResult<LogicalExpression> {
+    fn substring(&mut self, mut values: Vec<ExprNode>) -> PlanResult<ExprNode> {
         let length = if values.len() == 3 {
             values.pop()
         } else {
@@ -372,10 +366,10 @@ impl Resolver<'_, '_> {
         };
         let (string, position) = values.two()?;
         let string = self.logical_string(string, false)?;
-        let position = match position.node.resolved("substring position")? {
-            ExpressionNode::Literal(ScalarValue::Int32(Some(n))) if *n > 0 => position,
-            ExpressionNode::Literal(ScalarValue::Int64(Some(n))) if *n > 0 => position,
-            ExpressionNode::Literal(ScalarValue::Int32(Some(0)) | ScalarValue::Int64(Some(0))) => {
+        let position = match position.kind.resolved("substring position")? {
+            ExprKind::Literal(ScalarValue::Int32(Some(n))) if *n > 0 => position,
+            ExprKind::Literal(ScalarValue::Int64(Some(n))) if *n > 0 => position,
+            ExprKind::Literal(ScalarValue::Int32(Some(0)) | ScalarValue::Int64(Some(0))) => {
                 self.literal(ScalarValue::Int64(Some(1)))
             }
             _ => {
@@ -406,7 +400,7 @@ impl Resolver<'_, '_> {
         self.cast(result, DataType::Utf8)
     }
 
-    fn position(&mut self, mut values: Vec<LogicalExpression>) -> PlanResult<LogicalExpression> {
+    fn position(&mut self, mut values: Vec<ExprNode>) -> PlanResult<ExprNode> {
         let start = if values.len() == 3 {
             values.pop()
         } else {

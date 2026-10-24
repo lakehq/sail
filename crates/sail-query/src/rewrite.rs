@@ -6,7 +6,7 @@
 use datafusion_common::DataFusionError;
 
 use crate::deferred::Deferred;
-use crate::ir::*;
+use crate::model::*;
 
 pub trait QueryRewriter: Sized {
     type Error: From<DataFusionError>;
@@ -14,8 +14,8 @@ pub trait QueryRewriter: Sized {
     fn rewrite_attribute(&mut self, attribute: Attribute) -> Result<Attribute, Self::Error> {
         Ok(attribute)
     }
-    fn rewrite_schema(&mut self, schema: PlanSchema) -> Result<PlanSchema, Self::Error> {
-        Ok(PlanSchema {
+    fn rewrite_schema(&mut self, schema: QuerySchema) -> Result<QuerySchema, Self::Error> {
+        Ok(QuerySchema {
             attributes: schema
                 .attributes
                 .into_iter()
@@ -23,14 +23,11 @@ pub trait QueryRewriter: Sized {
                 .collect::<Result<_, _>>()?,
         })
     }
-    fn rewrite_expression(
-        &mut self,
-        expression: LogicalExpression,
-    ) -> Result<LogicalExpression, Self::Error> {
+    fn rewrite_expression(&mut self, expression: ExprNode) -> Result<ExprNode, Self::Error> {
         walk_expression(self, expression)
     }
-    fn rewrite_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan, Self::Error> {
-        walk_plan(self, plan)
+    fn rewrite_query(&mut self, plan: QueryNode) -> Result<QueryNode, Self::Error> {
+        walk_query(self, plan)
     }
     fn rewrite_projections(
         &mut self,
@@ -47,14 +44,11 @@ pub trait QueryRewriter: Sized {
             .collect()
     }
 
-    fn rewrite_sorts(
-        &mut self,
-        sorts: Vec<SortExpression>,
-    ) -> Result<Vec<SortExpression>, Self::Error> {
+    fn rewrite_sorts(&mut self, sorts: Vec<SortKey>) -> Result<Vec<SortKey>, Self::Error> {
         sorts
             .into_iter()
             .map(|sort| {
-                Ok(SortExpression {
+                Ok(SortKey {
                     expression: self.rewrite_expression(sort.expression)?,
                     ..sort
                 })
@@ -64,46 +58,46 @@ pub trait QueryRewriter: Sized {
 }
 pub fn walk_expression<R: QueryRewriter>(
     rewriter: &mut R,
-    expression: LogicalExpression,
-) -> Result<LogicalExpression, R::Error> {
-    if matches!(expression.node, Deferred::Unresolved(_)) {
+    expression: ExprNode,
+) -> Result<ExprNode, R::Error> {
+    if matches!(expression.kind, Deferred::Unresolved(_)) {
         return Ok(expression);
     }
     let mut expression =
         expression.map_children(&mut |child| rewriter.rewrite_expression(child))?;
-    expression.node =
-        Deferred::Resolved(match expression.node.into_resolved("expression rewrite")? {
-            ExpressionNode::ScalarSubquery(query) => {
-                ExpressionNode::ScalarSubquery(Box::new(rewriter.rewrite_plan(*query)?))
+    expression.kind =
+        Deferred::Resolved(match expression.kind.into_resolved("expression rewrite")? {
+            ExprKind::ScalarSubquery(query) => {
+                ExprKind::ScalarSubquery(Box::new(rewriter.rewrite_query(*query)?))
             }
-            ExpressionNode::Exists { query, negated } => ExpressionNode::Exists {
-                query: Box::new(rewriter.rewrite_plan(*query)?),
+            ExprKind::Exists { query, negated } => ExprKind::Exists {
+                query: Box::new(rewriter.rewrite_query(*query)?),
                 negated,
             },
-            ExpressionNode::InSubquery {
+            ExprKind::InSubquery {
                 expression,
                 query,
                 negated,
-            } => ExpressionNode::InSubquery {
+            } => ExprKind::InSubquery {
                 expression,
-                query: Box::new(rewriter.rewrite_plan(*query)?),
+                query: Box::new(rewriter.rewrite_query(*query)?),
                 negated,
             },
-            ExpressionNode::HigherOrderFunction {
+            ExprKind::HigherOrderFunction {
                 function,
                 arguments,
-            } => ExpressionNode::HigherOrderFunction {
+            } => ExprKind::HigherOrderFunction {
                 function,
                 arguments: arguments
                     .into_iter()
                     .map(|argument| {
                         Ok(match argument {
-                            FunctionArgument::Value(_) => argument,
-                            FunctionArgument::Lambda {
+                            FunctionArg::Value(_) => argument,
+                            FunctionArg::Lambda {
                                 id,
                                 parameters,
                                 body,
-                            } => FunctionArgument::Lambda {
+                            } => FunctionArg::Lambda {
                                 id,
                                 parameters: rewriter.rewrite_schema(parameters)?,
                                 body: Box::new(rewriter.rewrite_expression(*body)?),
@@ -117,26 +111,26 @@ pub fn walk_expression<R: QueryRewriter>(
     Ok(expression)
 }
 
-pub fn walk_plan<R: QueryRewriter>(
+pub fn walk_query<R: QueryRewriter>(
     rewriter: &mut R,
-    plan: LogicalPlan,
-) -> Result<LogicalPlan, R::Error> {
+    plan: QueryNode,
+) -> Result<QueryNode, R::Error> {
     let schema = match plan.schema {
         Deferred::Resolved(schema) => Deferred::Resolved(rewriter.rewrite_schema(schema)?),
         schema => schema,
     };
-    let Deferred::Resolved(node) = plan.node else {
-        return Ok(LogicalPlan { schema, ..plan });
+    let Deferred::Resolved(node) = plan.kind else {
+        return Ok(QueryNode { schema, ..plan });
     };
     let node = match node {
-        node @ (PlanNode::Empty { .. }
-        | PlanNode::Range { .. }
-        | PlanNode::Scan { .. }
-        | PlanNode::RemoteCheckpoint { .. }) => node,
-        PlanNode::Scope { input } => PlanNode::Scope {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        node @ (QueryKind::Empty { .. }
+        | QueryKind::Range { .. }
+        | QueryKind::Scan { .. }
+        | QueryKind::RemoteCheckpoint { .. }) => node,
+        QueryKind::Scope { input } => QueryKind::Scope {
+            input: Box::new(rewriter.rewrite_query(*input)?),
         },
-        PlanNode::Values { rows } => PlanNode::Values {
+        QueryKind::Values { rows } => QueryKind::Values {
             rows: rows
                 .into_iter()
                 .map(|row| {
@@ -146,22 +140,22 @@ pub fn walk_plan<R: QueryRewriter>(
                 })
                 .collect::<Result<_, R::Error>>()?,
         },
-        PlanNode::Project { input, expressions } => PlanNode::Project {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        QueryKind::Project { input, expressions } => QueryKind::Project {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             expressions: rewriter.rewrite_projections(expressions)?,
         },
-        PlanNode::Filter { input, condition } => PlanNode::Filter {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        QueryKind::Filter { input, condition } => QueryKind::Filter {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             condition: Box::new(rewriter.rewrite_expression(*condition)?),
         },
-        PlanNode::Aggregate {
+        QueryKind::Aggregate {
             input,
             grouping,
             aggregates,
             grouping_sets,
             grouping_id,
-        } => PlanNode::Aggregate {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        } => QueryKind::Aggregate {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             grouping: rewriter.rewrite_projections(grouping)?,
             aggregates: rewriter.rewrite_projections(aggregates)?,
             grouping_sets,
@@ -169,23 +163,23 @@ pub fn walk_plan<R: QueryRewriter>(
                 .map(|a| rewriter.rewrite_attribute(a))
                 .transpose()?,
         },
-        PlanNode::Window { input, expressions } => PlanNode::Window {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        QueryKind::Window { input, expressions } => QueryKind::Window {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             expressions: rewriter.rewrite_projections(expressions)?,
         },
-        PlanNode::Sort {
+        QueryKind::Sort {
             input,
             order,
             global,
             required,
-        } => PlanNode::Sort {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        } => QueryKind::Sort {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             order: rewriter.rewrite_sorts(order)?,
             global,
             required,
         },
-        PlanNode::Limit { input, skip, fetch } => PlanNode::Limit {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        QueryKind::Limit { input, skip, fetch } => QueryKind::Limit {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             skip: skip
                 .map(|e| rewriter.rewrite_expression(*e).map(Box::new))
                 .transpose()?,
@@ -193,64 +187,64 @@ pub fn walk_plan<R: QueryRewriter>(
                 .map(|e| rewriter.rewrite_expression(*e).map(Box::new))
                 .transpose()?,
         },
-        PlanNode::Join {
+        QueryKind::Join {
             lateral,
             left,
             right,
             kind,
             condition,
-        } => PlanNode::Join {
+        } => QueryKind::Join {
             lateral,
-            left: Box::new(rewriter.rewrite_plan(*left)?),
-            right: Box::new(rewriter.rewrite_plan(*right)?),
+            left: Box::new(rewriter.rewrite_query(*left)?),
+            right: Box::new(rewriter.rewrite_query(*right)?),
             kind,
             condition: condition
                 .map(|e| rewriter.rewrite_expression(*e).map(Box::new))
                 .transpose()?,
         },
-        PlanNode::Union { inputs } => PlanNode::Union {
+        QueryKind::Union { inputs } => QueryKind::Union {
             inputs: inputs
                 .into_iter()
-                .map(|input| rewriter.rewrite_plan(input))
+                .map(|input| rewriter.rewrite_query(input))
                 .collect::<Result<_, R::Error>>()?,
         },
-        PlanNode::Distinct { input } => PlanNode::Distinct {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        QueryKind::Distinct { input } => QueryKind::Distinct {
+            input: Box::new(rewriter.rewrite_query(*input)?),
         },
-        PlanNode::RowIdentity {
+        QueryKind::RowIdentity {
             input,
             attribute,
             kind,
-        } => PlanNode::RowIdentity {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        } => QueryKind::RowIdentity {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             attribute: rewriter.rewrite_attribute(attribute)?,
             kind,
         },
-        PlanNode::MapPartitions { input, function } => PlanNode::MapPartitions {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        QueryKind::MapPartitions { input, function } => QueryKind::MapPartitions {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             function,
         },
-        PlanNode::Unnest {
+        QueryKind::Unnest {
             input,
             column,
             outer,
-        } => PlanNode::Unnest {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        } => QueryKind::Unnest {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             column,
             outer,
         },
-        PlanNode::DistinctOn { input, keys } => PlanNode::DistinctOn {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        QueryKind::DistinctOn { input, keys } => QueryKind::DistinctOn {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             keys: keys
                 .into_iter()
                 .map(|e| rewriter.rewrite_expression(e))
                 .collect::<Result<_, R::Error>>()?,
         },
-        PlanNode::Repartition {
+        QueryKind::Repartition {
             input,
             partitioning,
-        } => PlanNode::Repartition {
-            input: Box::new(rewriter.rewrite_plan(*input)?),
+        } => QueryKind::Repartition {
+            input: Box::new(rewriter.rewrite_query(*input)?),
             partitioning: match partitioning {
                 Partitioning::Hash(expressions, count) => Partitioning::Hash(
                     expressions
@@ -269,8 +263,8 @@ pub fn walk_plan<R: QueryRewriter>(
             },
         },
     };
-    Ok(LogicalPlan {
-        node: Deferred::Resolved(node),
+    Ok(QueryNode {
+        kind: Deferred::Resolved(node),
         schema,
     })
 }

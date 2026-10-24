@@ -7,24 +7,20 @@ use datafusion_expr::{Operator, ScalarUDF};
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
-    pub(super) fn cast(
-        &mut self,
-        expression: LogicalExpression,
-        target: DataType,
-    ) -> PlanResult<LogicalExpression> {
+    pub(super) fn cast(&mut self, expression: ExprNode, target: DataType) -> PlanResult<ExprNode> {
         typing::coerce(expression, &target, &mut self.context.ids)
     }
 
     pub(super) fn case(
         &mut self,
-        branches: Vec<(LogicalExpression, LogicalExpression)>,
-        otherwise: Option<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+        branches: Vec<(ExprNode, ExprNode)>,
+        otherwise: Option<ExprNode>,
+    ) -> PlanResult<ExprNode> {
         typing::resolve_case(
             self.context.ids.expression(),
             None,
@@ -34,51 +30,44 @@ impl Resolver<'_, '_> {
         )
     }
 
-    pub(super) fn not(&mut self, expression: LogicalExpression) -> PlanResult<LogicalExpression> {
+    pub(super) fn not(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
         let expression = self.cast(expression, DataType::Boolean)?;
-        Ok(LogicalExpression {
+        Ok(ExprNode {
             id: self.context.ids.expression(),
             result_type: expression.result_type.clone(),
-            node: Deferred::Resolved(ExpressionNode::Not(Box::new(expression))),
+            kind: Deferred::Resolved(ExprKind::Not(Box::new(expression))),
         })
     }
 
-    pub(super) fn is_not_null(&mut self, expression: LogicalExpression) -> LogicalExpression {
-        LogicalExpression {
+    pub(super) fn is_not_null(&mut self, expression: ExprNode) -> ExprNode {
+        ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::IsNotNull(Box::new(expression))),
-            result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+            kind: Deferred::Resolved(ExprKind::IsNotNull(Box::new(expression))),
+            result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
         }
     }
 
-    pub(super) fn is_null(&mut self, expression: LogicalExpression) -> LogicalExpression {
-        LogicalExpression {
+    pub(super) fn is_null(&mut self, expression: ExprNode) -> ExprNode {
+        ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::IsNull(Box::new(expression))),
-            result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+            kind: Deferred::Resolved(ExprKind::IsNull(Box::new(expression))),
+            result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
         }
     }
 
-    pub(super) fn copy_expression(
-        &mut self,
-        expression: &LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+    pub(super) fn copy_expression(&mut self, expression: &ExprNode) -> PlanResult<ExprNode> {
         use sail_query::rewrite::{QueryRewriter, walk_expression};
         struct Copy<'a>(&'a mut IdGenerator);
         impl QueryRewriter for Copy<'_> {
             type Error = PlanError;
-            fn rewrite_expression(
-                &mut self,
-                expression: LogicalExpression,
-            ) -> PlanResult<LogicalExpression> {
+            fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
                 let mut expression = walk_expression(self, expression)?;
                 expression.id = self.0.expression();
-                if let Deferred::Resolved(ExpressionNode::HigherOrderFunction {
-                    arguments, ..
-                }) = &mut expression.node
+                if let Deferred::Resolved(ExprKind::HigherOrderFunction { arguments, .. }) =
+                    &mut expression.kind
                 {
                     for argument in arguments {
-                        if let FunctionArgument::Lambda { id, .. } = argument {
+                        if let FunctionArg::Lambda { id, .. } = argument {
                             *id = self.0.expression();
                         }
                     }
@@ -89,16 +78,16 @@ impl Resolver<'_, '_> {
         Copy(&mut self.context.ids).rewrite_expression(expression.clone())
     }
 
-    pub(super) fn literal(&mut self, value: ScalarValue) -> LogicalExpression {
-        LogicalExpression::literal(self.context.ids.expression(), value)
+    pub(super) fn literal(&mut self, value: ScalarValue) -> ExprNode {
+        ExprNode::literal(self.context.ids.expression(), value)
     }
 
     pub(super) fn binary(
         &mut self,
-        left: LogicalExpression,
+        left: ExprNode,
         operator: Operator,
-        right: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+        right: ExprNode,
+    ) -> PlanResult<ExprNode> {
         let (left, right) = self.predicate_pair(left, operator, right)?;
         typing::resolve_binary(
             self.context.ids.expression(),
@@ -131,19 +120,15 @@ impl Resolver<'_, '_> {
             })
     }
 
-    pub(super) fn scalar(
-        &mut self,
-        name: &str,
-        arguments: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+    pub(super) fn scalar(&mut self, name: &str, arguments: Vec<ExprNode>) -> PlanResult<ExprNode> {
         self.scalar_udf(self.scalar_kernel(name)?, arguments)
     }
 
     pub(super) fn scalar_udf(
         &mut self,
         function: Arc<ScalarUDF>,
-        arguments: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+        arguments: Vec<ExprNode>,
+    ) -> PlanResult<ExprNode> {
         typing::resolve_scalar_call(
             self.context.ids.expression(),
             function,
@@ -155,8 +140,8 @@ impl Resolver<'_, '_> {
     pub(super) fn aggregate_call(
         &mut self,
         function: Arc<datafusion_expr::AggregateUDF>,
-        arguments: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+        arguments: Vec<ExprNode>,
+    ) -> PlanResult<ExprNode> {
         self.aggregate_call_with_options(
             function,
             arguments,
@@ -166,9 +151,9 @@ impl Resolver<'_, '_> {
 
     pub(super) fn try_cast(
         &mut self,
-        expression: LogicalExpression,
+        expression: ExprNode,
         data_type: DataType,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let field = expression
             .result_type
             .resolved("try cast input")?
@@ -179,14 +164,14 @@ impl Resolver<'_, '_> {
                 field.data_type()
             )));
         }
-        let mut target = ExpressionType::from_field(
-            &crate::analysis::typing::coercion::cast_field(&field, &data_type),
-        );
+        let mut target = ExprType::from_field(&crate::analysis::typing::coercion::cast_field(
+            &field, &data_type,
+        ));
         target.nullable = true;
-        Ok(LogicalExpression {
+        Ok(ExprNode {
             id: self.context.ids.expression(),
             result_type: Deferred::Resolved(target.clone()),
-            node: Deferred::Resolved(ExpressionNode::Cast {
+            kind: Deferred::Resolved(ExprKind::Cast {
                 expression: Box::new(expression),
                 target,
                 safe: true,
@@ -194,10 +179,10 @@ impl Resolver<'_, '_> {
         })
     }
 
-    pub(super) fn limit(&mut self, input: LogicalPlan, skip: i64, fetch: i64) -> LogicalPlan {
-        LogicalPlan {
+    pub(super) fn limit(&mut self, input: QueryNode, skip: i64, fetch: i64) -> QueryNode {
+        QueryNode {
             schema: input.schema.clone(),
-            node: Deferred::Resolved(PlanNode::Limit {
+            kind: Deferred::Resolved(QueryKind::Limit {
                 input: Box::new(input),
                 skip: Some(Box::new(self.literal(ScalarValue::Int64(Some(skip))))),
                 fetch: Some(Box::new(self.literal(ScalarValue::Int64(Some(fetch))))),
@@ -208,9 +193,9 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn execute(
         &self,
-        plan: LogicalPlan,
+        plan: QueryNode,
     ) -> PlanResult<Vec<arrow::record_batch::RecordBatch>> {
-        let plan = LogicalQuery { plan }.into_named_plan()?.plan;
+        let plan = crate::analysis::lowering::lower_query(plan)?.plan;
         Ok(self
             .context
             .session
@@ -220,7 +205,7 @@ impl Resolver<'_, '_> {
             .await?)
     }
 
-    pub(super) fn union(&mut self, inputs: Vec<LogicalPlan>) -> PlanResult<LogicalPlan> {
+    pub(super) fn union(&mut self, inputs: Vec<QueryNode>) -> PlanResult<QueryNode> {
         let first = inputs
             .first()
             .ok_or_else(|| PlanError::analysis("UNION requires an input"))?
@@ -247,7 +232,7 @@ impl Resolver<'_, '_> {
                     .map(|f| f.data_type.clone())
                     .collect::<Vec<_>>(),
             )?;
-            let mut result_type = ExpressionType::new(data_type, fields.iter().any(|f| f.nullable));
+            let mut result_type = ExprType::new(data_type, fields.iter().any(|f| f.nullable));
             result_type
                 .metadata
                 .clone_from(&column.result_type.resolved("UNION first field")?.metadata);
@@ -279,16 +264,13 @@ impl Resolver<'_, '_> {
             }
             resolved.push(self.project(input, expressions)?);
         }
-        Ok(LogicalPlan {
-            schema: Deferred::Resolved(PlanSchema { attributes }),
-            node: Deferred::Resolved(PlanNode::Union { inputs: resolved }),
+        Ok(QueryNode {
+            schema: Deferred::Resolved(QuerySchema { attributes }),
+            kind: Deferred::Resolved(QueryKind::Union { inputs: resolved }),
         })
     }
 
-    pub(super) fn filter(
-        input: LogicalPlan,
-        condition: LogicalExpression,
-    ) -> PlanResult<LogicalPlan> {
+    pub(super) fn filter(input: QueryNode, condition: ExprNode) -> PlanResult<QueryNode> {
         if condition
             .result_type
             .resolved("filter predicate")?
@@ -297,9 +279,9 @@ impl Resolver<'_, '_> {
         {
             return Err(PlanError::analysis("filter predicate must be boolean"));
         }
-        Ok(LogicalPlan {
+        Ok(QueryNode {
             schema: input.schema.clone(),
-            node: Deferred::Resolved(PlanNode::Filter {
+            kind: Deferred::Resolved(QueryKind::Filter {
                 input: Box::new(input),
                 condition: Box::new(condition),
             }),
@@ -309,10 +291,10 @@ impl Resolver<'_, '_> {
     /// Add a materialized value without changing the identities of existing slots.
     pub(super) fn append(
         &mut self,
-        input: LogicalPlan,
-        expression: LogicalExpression,
+        input: QueryNode,
+        expression: ExprNode,
         name: String,
-    ) -> PlanResult<(LogicalPlan, Attribute)> {
+    ) -> PlanResult<(QueryNode, Attribute)> {
         let mut schema = input.schema.resolved("append input")?.clone();
         let mut expressions = schema
             .attributes
@@ -338,9 +320,9 @@ impl Resolver<'_, '_> {
         });
         schema.attributes.push(attribute.clone());
         Ok((
-            LogicalPlan {
+            QueryNode {
                 schema: Deferred::Resolved(schema),
-                node: Deferred::Resolved(PlanNode::Project {
+                kind: Deferred::Resolved(QueryKind::Project {
                     input: Box::new(input),
                     expressions,
                 }),
@@ -351,9 +333,9 @@ impl Resolver<'_, '_> {
 
     pub(super) fn select_attributes(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         attributes: Vec<Attribute>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let expressions = attributes
             .iter()
             .map(|attribute| {
@@ -363,9 +345,9 @@ impl Resolver<'_, '_> {
                 })
             })
             .collect::<PlanResult<_>>()?;
-        Ok(LogicalPlan {
-            schema: Deferred::Resolved(PlanSchema { attributes }),
-            node: Deferred::Resolved(PlanNode::Project {
+        Ok(QueryNode {
+            schema: Deferred::Resolved(QuerySchema { attributes }),
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input),
                 expressions,
             }),
@@ -374,10 +356,10 @@ impl Resolver<'_, '_> {
 
     pub(super) fn unnest(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         column: &Attribute,
         outer: bool,
-    ) -> PlanResult<(LogicalPlan, Attribute)> {
+    ) -> PlanResult<(QueryNode, Attribute)> {
         let field = match &column.result_type.resolved("unnest input")?.data_type {
             DataType::List(field)
             | DataType::LargeList(field)
@@ -390,7 +372,7 @@ impl Resolver<'_, '_> {
         };
         // DataFusion's physical UNNEST exposes nullable element slots even for
         // non-nullable element fields. Preserve that contract at this boundary.
-        let mut result_type = ExpressionType::from_field(field);
+        let mut result_type = ExprType::from_field(field);
         result_type.nullable = true;
         let attribute = self.attribute(column.name.clone(), result_type);
         let mut schema = input.schema.resolved("unnest input")?.clone();
@@ -401,9 +383,9 @@ impl Resolver<'_, '_> {
             .ok_or_else(|| PlanError::internal("unnest column not in input"))?;
         schema.attributes[position] = attribute.clone();
         Ok((
-            LogicalPlan {
+            QueryNode {
                 schema: Deferred::Resolved(schema),
-                node: Deferred::Resolved(PlanNode::Unnest {
+                kind: Deferred::Resolved(QueryKind::Unnest {
                     input: Box::new(input),
                     column: column.id,
                     outer,

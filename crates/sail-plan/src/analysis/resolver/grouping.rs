@@ -4,7 +4,7 @@ use datafusion_expr::Operator;
 use sail_common::spec;
 
 use super::{NamedExpression, Resolver};
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 const MAX_GROUPING_SETS: usize = 65536;
@@ -15,7 +15,7 @@ impl Resolver<'_, '_> {
         &mut self,
         requests: Vec<spec::Expr>,
         projections: &[Option<NamedExpression>],
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<(Vec<NamedExpression>, Option<Vec<Vec<usize>>>)> {
         let has_sets = requests.iter().any(|r| {
             matches!(
@@ -59,7 +59,7 @@ impl Resolver<'_, '_> {
         &mut self,
         request: spec::Expr,
         projections: &[Option<NamedExpression>],
-        schema: &PlanSchema,
+        schema: &QuerySchema,
         keys: &mut Vec<NamedExpression>,
     ) -> PlanResult<Vec<Vec<usize>>> {
         match request {
@@ -126,7 +126,7 @@ impl Resolver<'_, '_> {
         &mut self,
         request: spec::Expr,
         projections: &[Option<NamedExpression>],
-        schema: &PlanSchema,
+        schema: &QuerySchema,
         keys: &mut Vec<NamedExpression>,
     ) -> PlanResult<usize> {
         let value = if let Some(position) = super::aggregate_request::ordinal(&request) {
@@ -149,7 +149,7 @@ impl Resolver<'_, '_> {
         if value.expression.any(&|node| {
             matches!(
                 node,
-                ExpressionNode::AggregateFunction { .. } | ExpressionNode::WindowFunction { .. }
+                ExprKind::AggregateFunction { .. } | ExprKind::WindowFunction { .. }
             )
         })? {
             return Err(PlanError::analysis(
@@ -189,10 +189,10 @@ impl Resolver<'_, '_> {
     pub(super) fn grouping_mask(
         &mut self,
         name: &str,
-        arguments: &[LogicalExpression],
+        arguments: &[ExprNode],
         grouping: &[Projection],
         id: Option<&Attribute>,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let id = id.ok_or_else(|| PlanError::analysis("[UNSUPPORTED_GROUPING_EXPRESSION] grouping functions can only be used with grouping sets, cube, or rollup"))?;
         let value = self.reference(id)?;
         let kind = id

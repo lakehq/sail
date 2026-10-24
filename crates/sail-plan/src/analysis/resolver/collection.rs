@@ -11,7 +11,7 @@ use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use super::Resolver;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 
@@ -19,8 +19,8 @@ impl Resolver<'_, '_> {
     pub(super) fn collection_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         if !matches!(
             name,
             "size"
@@ -229,16 +229,16 @@ impl Resolver<'_, '_> {
         Ok(Some(result))
     }
 
-    pub(super) fn raise_error(&mut self, message: String) -> PlanResult<LogicalExpression> {
+    pub(super) fn raise_error(&mut self, message: String) -> PlanResult<ExprNode> {
         let message = self.literal(ScalarValue::Utf8(Some(message)));
         self.scalar_udf(Arc::new(ScalarUDF::from(RaiseError::new())), vec![message])
     }
 
     pub(super) fn list_nullability(
         &mut self,
-        value: LogicalExpression,
+        value: ExprNode,
         nullable: bool,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let target = crate::analysis::typing::collection::list_nullability(
             &value.result_type.resolved("list input")?.data_type,
             nullable,
@@ -246,11 +246,7 @@ impl Resolver<'_, '_> {
         self.cast(value, target)
     }
 
-    fn map_nullability(
-        &mut self,
-        value: LogicalExpression,
-        nullable: bool,
-    ) -> PlanResult<LogicalExpression> {
+    fn map_nullability(&mut self, value: ExprNode, nullable: bool) -> PlanResult<ExprNode> {
         let target = crate::analysis::typing::collection::map_nullability(
             &value.result_type.resolved("map input")?.data_type,
             nullable,
@@ -258,10 +254,7 @@ impl Resolver<'_, '_> {
         self.cast(value, target)
     }
 
-    fn ansi_map_arguments(
-        &mut self,
-        arguments: Vec<LogicalExpression>,
-    ) -> PlanResult<Vec<LogicalExpression>> {
+    fn ansi_map_arguments(&mut self, arguments: Vec<ExprNode>) -> PlanResult<Vec<ExprNode>> {
         let types = arguments
             .iter()
             .map(|a| Ok(a.result_type.resolved("map argument")?.data_type.clone()))

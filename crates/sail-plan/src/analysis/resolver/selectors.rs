@@ -6,7 +6,7 @@ use datafusion_expr::ScalarUDF;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::scope::ResolutionScope;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
@@ -37,10 +37,10 @@ impl Resolver<'_, '_> {
 
     pub(super) fn resolve_attribute(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         parts: &[String],
         plan_id: Option<i64>,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         self.validate_source_binding(parts, plan_id)?;
         if let Some(result) = self.recovery_attribute(id, parts, plan_id, schema) {
@@ -60,16 +60,16 @@ impl Resolver<'_, '_> {
             };
             let mut value = NamedExpression {
                 name: source.attribute(bound.id)?.name.clone(),
-                expression: LogicalExpression {
+                expression: ExprNode {
                     id: if length == parts.len() {
                         id
                     } else {
                         self.context.ids.expression()
                     },
-                    node: Deferred::Resolved(if bound.depth == 0 {
-                        ExpressionNode::Attribute(bound.id)
+                    kind: Deferred::Resolved(if bound.depth == 0 {
+                        ExprKind::Attribute(bound.id)
                     } else {
-                        ExpressionNode::OuterAttribute {
+                        ExprKind::OuterAttribute {
                             depth: bound.depth,
                             attribute: bound.id,
                         }
@@ -80,7 +80,7 @@ impl Resolver<'_, '_> {
             for (i, field) in parts[length..].iter().enumerate() {
                 let extraction = NamedExpression {
                     name: field.clone(),
-                    expression: LogicalExpression::literal(
+                    expression: ExprNode::literal(
                         self.context.ids.expression(),
                         ScalarValue::Utf8(Some(field.clone())),
                     ),
@@ -138,7 +138,7 @@ impl Resolver<'_, '_> {
 
     fn resolve_outer_attribute(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         parts: &[String],
         plan_id: Option<i64>,
     ) -> PlanResult<Option<NamedExpression>> {
@@ -158,14 +158,13 @@ impl Resolver<'_, '_> {
                         value
                             .expression
                             .transform_up::<PlanError>(&mut |mut value| {
-                                if let Deferred::Resolved(ExpressionNode::Attribute(attribute)) =
-                                    value.node
+                                if let Deferred::Resolved(ExprKind::Attribute(attribute)) =
+                                    value.kind
                                 {
-                                    value.node =
-                                        Deferred::Resolved(ExpressionNode::OuterAttribute {
-                                            depth: outer.len() - index,
-                                            attribute,
-                                        });
+                                    value.kind = Deferred::Resolved(ExprKind::OuterAttribute {
+                                        depth: outer.len() - index,
+                                        attribute,
+                                    });
                                 }
                                 Ok(value)
                             })?;
@@ -188,7 +187,7 @@ impl Resolver<'_, '_> {
 
     pub(super) fn extract_value(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         child: NamedExpression,
         mut extraction: NamedExpression,
     ) -> PlanResult<NamedExpression> {
@@ -201,8 +200,8 @@ impl Resolver<'_, '_> {
         let function = match data_type {
             DataType::Struct(fields) => {
                 name.clone_from(&extraction.name);
-                let ExpressionNode::Literal(value) =
-                    extraction.expression.node.resolved("struct selector")?
+                let ExprKind::Literal(value) =
+                    extraction.expression.kind.resolved("struct selector")?
                 else {
                     return Err(PlanError::analysis("extraction must be a literal string"));
                 };
@@ -224,7 +223,7 @@ impl Resolver<'_, '_> {
                         "ambiguous reference to the field: {requested}"
                     )));
                 }
-                extraction.expression.node = Deferred::Resolved(ExpressionNode::Literal(
+                extraction.expression.kind = Deferred::Resolved(ExprKind::Literal(
                     ScalarValue::Utf8(Some(field.name().clone())),
                 ));
                 self.scalar_kernel("get_field")?
@@ -236,10 +235,8 @@ impl Resolver<'_, '_> {
                     vec![child.expression, extraction.expression],
                     &mut self.context.ids,
                 )?;
-                let first = LogicalExpression::literal(
-                    self.context.ids.expression(),
-                    ScalarValue::Int64(Some(1)),
-                );
+                let first =
+                    ExprNode::literal(self.context.ids.expression(), ScalarValue::Int64(Some(1)));
                 return Ok(NamedExpression {
                     name,
                     expression: typing::resolve_scalar_call(
@@ -255,8 +252,8 @@ impl Resolver<'_, '_> {
             | DataType::FixedSizeList(field, _)
                 if matches!(field.data_type(), DataType::Struct(_))
                     && matches!(
-                        extraction.expression.node,
-                        Deferred::Resolved(ExpressionNode::Literal(ScalarValue::Utf8(_)))
+                        extraction.expression.kind,
+                        Deferred::Resolved(ExprKind::Literal(ScalarValue::Utf8(_)))
                     ) =>
             {
                 let DataType::Struct(fields) = field.data_type() else {

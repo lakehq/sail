@@ -5,7 +5,7 @@ use datafusion_expr::{WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFun
 use sail_common::spec;
 
 use super::{NamedExpression, Resolver};
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
@@ -13,10 +13,10 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn window_expression(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         expression: spec::Expr,
         window: spec::Window,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         let (call, inline) = match expression {
             spec::Expr::UnresolvedFunction(call) => (call, None),
@@ -82,13 +82,13 @@ impl Resolver<'_, '_> {
                     sail_python_udf::udf::pyspark_udaf::PySparkAggregateMode::Window,
                 )
                 .await?;
-            let ExpressionNode::AggregateFunction {
+            let ExprKind::AggregateFunction {
                 function,
                 arguments,
                 ..
             } = resolved
                 .expression
-                .node
+                .kind
                 .into_resolved("Python window function")?
             else {
                 return Err(PlanError::analysis(
@@ -235,7 +235,7 @@ impl Resolver<'_, '_> {
         &mut self,
         bound: spec::WindowFrameBoundary,
         units: WindowFrameUnits,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<WindowFrameBound> {
         let (value, preceding) = match bound {
             spec::WindowFrameBoundary::CurrentRow => return Ok(WindowFrameBound::CurrentRow),

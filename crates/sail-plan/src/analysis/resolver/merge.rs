@@ -6,10 +6,9 @@ use sail_common::spec;
 use sail_common_datafusion::column_features::ColumnFeatures;
 
 use super::Resolver;
-use crate::analysis::command::LogicalCommand;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
 use crate::analysis::merge::{MergeAction, MergeClause, MergeOperation};
+use crate::analysis::model::*;
 use crate::analysis::row_level::Condition;
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
@@ -18,7 +17,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn resolve_command_merge_into(
         &mut self,
         request: spec::MergeInto,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         validate_clause_order(&request.clauses)?;
         if self.context.config.store_assignment_policy == StoreAssignmentPolicy::Legacy {
             return Err(PlanError::analysis(
@@ -212,7 +211,7 @@ impl Resolver<'_, '_> {
         let constraints = self
             .row_level_constraints(&metadata.format, &metadata.options, &target_schema)
             .await?;
-        Ok(LogicalCommand::Merge(Box::new(MergeOperation {
+        Ok(CommandKind::Merge(Box::new(MergeOperation {
             target,
             source,
             metadata,
@@ -235,9 +234,9 @@ impl Resolver<'_, '_> {
 
     fn evolve_merge_target(
         &mut self,
-        input: LogicalPlan,
-        source: &PlanSchema,
-    ) -> PlanResult<LogicalPlan> {
+        input: QueryNode,
+        source: &QuerySchema,
+    ) -> PlanResult<QueryNode> {
         let schema = input.schema.resolved("MERGE evolution target")?;
         let mut expressions = vec![];
         for attribute in &schema.attributes {
@@ -267,7 +266,7 @@ impl Resolver<'_, '_> {
             let expression = self.align_store_value(expression, evolved.data_type(), true)?;
             output.id = self.context.ids.attribute();
             output.origin = output.id;
-            output.result_type = Deferred::Resolved(ExpressionType::from_field(&evolved));
+            output.result_type = Deferred::Resolved(ExprType::from_field(&evolved));
             expressions.push(Projection {
                 attribute: output,
                 expression,
@@ -317,11 +316,11 @@ impl Resolver<'_, '_> {
                 expression,
             });
         }
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: expressions.iter().map(|p| p.attribute.clone()).collect(),
         };
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Project {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input),
                 expressions,
             }),
@@ -331,10 +330,10 @@ impl Resolver<'_, '_> {
 
     fn merge_star_assignments(
         &mut self,
-        target: &PlanSchema,
-        source: &PlanSchema,
+        target: &QuerySchema,
+        source: &QuerySchema,
         inserting: bool,
-    ) -> PlanResult<Vec<(AttributeId, LogicalExpression)>> {
+    ) -> PlanResult<Vec<(AttributeId, ExprNode)>> {
         let mut values = vec![];
         for attribute in &target.attributes {
             let field = attribute.result_type.resolved("MERGE star target")?;
@@ -365,16 +364,16 @@ impl Resolver<'_, '_> {
     async fn merge_condition(
         &mut self,
         request: Option<spec::ExprWithSource>,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<Option<Condition>> {
         let condition = self.row_level_condition("MERGE", request, schema).await?;
         if let Some(condition) = &condition {
             if condition.expression.any(&|node| {
                 matches!(
                     node,
-                    ExpressionNode::ScalarSubquery(_)
-                        | ExpressionNode::Exists { .. }
-                        | ExpressionNode::InSubquery { .. }
+                    ExprKind::ScalarSubquery(_)
+                        | ExprKind::Exists { .. }
+                        | ExprKind::InSubquery { .. }
                 )
             })? {
                 return Err(PlanError::analysis(
@@ -384,8 +383,7 @@ impl Resolver<'_, '_> {
             if condition.expression.any(&|node| {
                 matches!(
                     node,
-                    ExpressionNode::AggregateFunction { .. }
-                        | ExpressionNode::WindowFunction { .. }
+                    ExprKind::AggregateFunction { .. } | ExprKind::WindowFunction { .. }
                 )
             })? {
                 return Err(PlanError::analysis(
@@ -399,18 +397,18 @@ impl Resolver<'_, '_> {
     async fn merge_assignments(
         &mut self,
         requests: Vec<(spec::ObjectName, spec::Expr)>,
-        target: &PlanSchema,
-        scope: &PlanSchema,
-    ) -> PlanResult<Vec<(AttributeId, LogicalExpression)>> {
+        target: &QuerySchema,
+        scope: &QuerySchema,
+    ) -> PlanResult<Vec<(AttributeId, ExprNode)>> {
         let mut seen = HashSet::new();
         let mut result = vec![];
         for (name, request) in requests {
             let parts = Vec::<String>::from(name);
             let expression_id = self.context.ids.expression();
             let column = self.resolve_attribute(expression_id, &parts, None, target)?;
-            let ExpressionNode::Attribute(id) = column
+            let ExprKind::Attribute(id) = column
                 .expression
-                .node
+                .kind
                 .into_resolved("MERGE target column")?
             else {
                 return Err(PlanError::invalid(
@@ -461,8 +459,8 @@ impl Resolver<'_, '_> {
 
     fn validate_merge_star(
         &self,
-        target: &PlanSchema,
-        source: &PlanSchema,
+        target: &QuerySchema,
+        source: &QuerySchema,
         evolution: bool,
     ) -> PlanResult<()> {
         for attribute in &target.attributes {
@@ -512,25 +510,21 @@ impl Resolver<'_, '_> {
     #[expect(clippy::type_complexity)]
     fn merge_join_keys(
         &mut self,
-        expression: &LogicalExpression,
-        target: &PlanSchema,
-        source: &PlanSchema,
-    ) -> PlanResult<(
-        Vec<(LogicalExpression, LogicalExpression)>,
-        Vec<LogicalExpression>,
-        Vec<LogicalExpression>,
-    )> {
+        expression: &ExprNode,
+        target: &QuerySchema,
+        source: &QuerySchema,
+    ) -> PlanResult<(Vec<(ExprNode, ExprNode)>, Vec<ExprNode>, Vec<ExprNode>)> {
         let mut predicates = vec![];
         split_and(expression, &mut predicates)?;
         let mut keys = vec![];
         let mut residual = vec![];
         let mut target_predicates = vec![];
         for predicate in predicates {
-            if let ExpressionNode::Binary {
+            if let ExprKind::Binary {
                 left,
                 operator: Operator::Eq,
                 right,
-            } = predicate.node.resolved("MERGE equality")?
+            } = predicate.kind.resolved("MERGE equality")?
             {
                 let left_domain = domain(left, target, source)?;
                 let right_domain = domain(right, target, source)?;
@@ -552,18 +546,12 @@ impl Resolver<'_, '_> {
     }
 }
 
-fn domain(
-    expression: &LogicalExpression,
-    target: &PlanSchema,
-    source: &PlanSchema,
-) -> PlanResult<u8> {
+fn domain(expression: &ExprNode, target: &QuerySchema, source: &QuerySchema) -> PlanResult<u8> {
     let mut domain = 0;
     expression
         .clone()
         .transform_up::<PlanError>(&mut |expression| {
-            if let ExpressionNode::Attribute(id) =
-                expression.node.resolved("MERGE expression domain")?
-            {
+            if let ExprKind::Attribute(id) = expression.kind.resolved("MERGE expression domain")? {
                 domain |= if target.attribute(*id).is_ok() {
                     1
                 } else if source.attribute(*id).is_ok() {
@@ -577,15 +565,12 @@ fn domain(
     Ok(domain)
 }
 
-fn split_and<'a>(
-    expression: &'a LogicalExpression,
-    output: &mut Vec<&'a LogicalExpression>,
-) -> PlanResult<()> {
-    if let ExpressionNode::Binary {
+fn split_and<'a>(expression: &'a ExprNode, output: &mut Vec<&'a ExprNode>) -> PlanResult<()> {
+    if let ExprKind::Binary {
         left,
         operator: Operator::And,
         right,
-    } = expression.node.resolved("MERGE predicate")?
+    } = expression.kind.resolved("MERGE predicate")?
     {
         split_and(left, output)?;
         split_and(right, output)?;

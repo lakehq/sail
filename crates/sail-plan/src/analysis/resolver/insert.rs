@@ -6,8 +6,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use super::Resolver;
 use super::write::{TableInfo, WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
-use crate::analysis::command::LogicalCommand;
-use crate::analysis::ir::LogicalPlan;
+use crate::analysis::model::{CommandKind, QueryNode};
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -22,7 +21,7 @@ impl Resolver<'_, '_> {
         file_format: Option<spec::TableFileFormat>,
         row_format: Option<spec::TableRowFormat>,
         options: Vec<(String, String)>,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let Some(location) = location else {
             return Err(PlanError::invalid(
                 "missing location for INSERT OVERWRITE DIRECTORY",
@@ -63,7 +62,7 @@ impl Resolver<'_, '_> {
         mode: spec::InsertMode,
         partition: Vec<(spec::Identifier, Option<spec::Expr>)>,
         if_not_exists: bool,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         use spec::InsertMode;
 
         if if_not_exists {
@@ -155,12 +154,12 @@ impl Resolver<'_, '_> {
     /// source location carried in the view options.
     async fn resolve_insert_into_temporary_view(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         source: TemporaryViewSource,
         columns: Vec<TableColumnStatus>,
         mode: WriteMode,
         column_match: WriteColumnMatch,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let TemporaryViewSource { format, options } = source;
         let info = TableInfo {
             lakehouse_table: None,

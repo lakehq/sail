@@ -10,15 +10,15 @@ use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn datetime_arithmetic_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         if !matches!(
             name,
             "add_years"
@@ -78,8 +78,8 @@ impl Resolver<'_, '_> {
                 crate::analysis::typing::coercion::validate_arity(name, values.len(), 3)?;
                 if values.iter().any(|v| {
                     matches!(
-                        v.node,
-                        Deferred::Resolved(ExpressionNode::Literal(ScalarValue::Null))
+                        v.kind,
+                        Deferred::Resolved(ExprKind::Literal(ScalarValue::Null))
                     )
                 }) {
                     self.literal(ScalarValue::Null)
@@ -93,9 +93,9 @@ impl Resolver<'_, '_> {
         Ok(Some(result))
     }
 
-    fn datetime_unit(&self, value: &LogicalExpression) -> PlanResult<String> {
-        match value.node.resolved("datetime unit")? {
-            ExpressionNode::Literal(value) => value
+    fn datetime_unit(&self, value: &ExprNode) -> PlanResult<String> {
+        match value.kind.resolved("datetime unit")? {
+            ExprKind::Literal(value) => value
                 .try_as_str()
                 .flatten()
                 .map(|s| s.trim().to_uppercase())
@@ -110,11 +110,11 @@ impl Resolver<'_, '_> {
 
     fn date_interval(
         &mut self,
-        date: LogicalExpression,
-        quantity: LogicalExpression,
+        date: ExprNode,
+        quantity: ExprNode,
         unit: &str,
         operator: Operator,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let suffix = self.literal(ScalarValue::Utf8(Some(format!(" {unit}"))));
         let interval = self.binary(quantity, Operator::StringConcat, suffix)?;
         let interval = self.cast(
@@ -133,8 +133,8 @@ impl Resolver<'_, '_> {
         &mut self,
         name: &str,
         unit: &str,
-        quantity: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+        quantity: ExprNode,
+    ) -> PlanResult<ExprNode> {
         let (index, factor, calendar) = match unit {
             "YEAR" => (0, 1.0, true),
             "QUARTER" => (1, 3.0, true),
@@ -181,10 +181,7 @@ impl Resolver<'_, '_> {
         self.scalar_udf(Arc::new(function), args)
     }
 
-    fn datetime_difference(
-        &mut self,
-        values: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+    fn datetime_difference(&mut self, values: Vec<ExprNode>) -> PlanResult<ExprNode> {
         if values.len() == 2 {
             let (left, right) = values.two()?;
             return self.date_days_difference(left, right);
@@ -218,11 +215,7 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn date_days_difference(
-        &mut self,
-        left: LogicalExpression,
-        right: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+    fn date_days_difference(&mut self, left: ExprNode, right: ExprNode) -> PlanResult<ExprNode> {
         let left = self.cast(left, DataType::Date32)?;
         let right = self.cast(right, DataType::Date32)?;
         let left = self.cast(left, DataType::Int64)?;
@@ -230,12 +223,12 @@ impl Resolver<'_, '_> {
         self.binary(left, Operator::Minus, right)
     }
 
-    fn timestamp_micros(&mut self, value: LogicalExpression) -> PlanResult<LogicalExpression> {
+    fn timestamp_micros(&mut self, value: ExprNode) -> PlanResult<ExprNode> {
         let value = self.cast(value, DataType::Timestamp(TimeUnit::Microsecond, None))?;
         self.cast(value, DataType::Int64)
     }
 
-    fn timestamp_months(&mut self, value: LogicalExpression) -> PlanResult<LogicalExpression> {
+    fn timestamp_months(&mut self, value: ExprNode) -> PlanResult<ExprNode> {
         let year_value = self.copy_expression(&value)?;
         let year = self.integer_part(year_value, "YEAR")?;
         let month = self.integer_part(value, "MONTH")?;
@@ -244,7 +237,7 @@ impl Resolver<'_, '_> {
         self.binary(year, Operator::Plus, month)
     }
 
-    fn timestamp_time_micros(&mut self, value: LogicalExpression) -> PlanResult<LogicalExpression> {
+    fn timestamp_time_micros(&mut self, value: ExprNode) -> PlanResult<ExprNode> {
         let copy = self.copy_expression(&value)?;
         let day = self.literal(ScalarValue::Utf8(Some("DAY".into())));
         let midnight = self.scalar("date_trunc", vec![day, value])?;
@@ -255,9 +248,9 @@ impl Resolver<'_, '_> {
 
     fn timestamp_day_time_before(
         &mut self,
-        left: LogicalExpression,
-        right: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+        left: ExprNode,
+        right: ExprNode,
+    ) -> PlanResult<ExprNode> {
         let l = self.copy_expression(&left)?;
         let r = self.copy_expression(&right)?;
         let l = self.integer_part(l, "DAY")?;
@@ -273,11 +266,7 @@ impl Resolver<'_, '_> {
         self.binary(before, Operator::Or, same_before)
     }
 
-    fn timestamp_month_diff(
-        &mut self,
-        start: LogicalExpression,
-        end: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+    fn timestamp_month_diff(&mut self, start: ExprNode, end: ExprNode) -> PlanResult<ExprNode> {
         let start = self.cast(start, DataType::Timestamp(TimeUnit::Microsecond, None))?;
         let end = self.cast(end, DataType::Timestamp(TimeUnit::Microsecond, None))?;
         let s = self.copy_expression(&start)?;
@@ -318,10 +307,7 @@ impl Resolver<'_, '_> {
         self.case(branches, None)
     }
 
-    fn months_between(
-        &mut self,
-        mut args: Vec<LogicalExpression>,
-    ) -> PlanResult<LogicalExpression> {
+    fn months_between(&mut self, mut args: Vec<ExprNode>) -> PlanResult<ExprNode> {
         let round = if args.len() == 3 {
             args.pop()
                 .ok_or_else(|| PlanError::internal("missing round flag"))?

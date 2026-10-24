@@ -2,7 +2,7 @@ use sail_common::spec;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -12,10 +12,10 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     async fn recover_aggregate_sort(
         &mut self,
-        mut input: LogicalPlan,
+        mut input: QueryNode,
         request: spec::Expr,
         sorting: bool,
-    ) -> PlanResult<(LogicalPlan, NamedExpression)> {
+    ) -> PlanResult<(QueryNode, NamedExpression)> {
         let result = self
             .expression(request.clone(), input.schema.resolved("expression input")?)
             .await;
@@ -23,7 +23,7 @@ impl Resolver<'_, '_> {
             Ok(value)
                 if !value
                     .expression
-                    .any(&|node| matches!(node, ExpressionNode::AggregateFunction { .. }))? =>
+                    .any(&|node| matches!(node, ExprKind::AggregateFunction { .. }))? =>
             {
                 return Ok((input, result?));
             }
@@ -40,8 +40,8 @@ impl Resolver<'_, '_> {
             PlanError::analysis("aggregate expression is not available in this scope")
         });
         let mut schema = input.schema.into_resolved("recovery schema")?;
-        let (node, value) = match input.node.into_resolved("recovery input")? {
-            PlanNode::Project {
+        let (node, value) = match input.kind.into_resolved("recovery input")? {
+            QueryKind::Project {
                 input: child,
                 mut expressions,
             } => {
@@ -54,7 +54,7 @@ impl Resolver<'_, '_> {
                     .expression
                     .clone()
                     .transform_up::<PlanError>(&mut |expression| {
-                        if let Deferred::Resolved(ExpressionNode::Attribute(id)) = &expression.node
+                        if let Deferred::Resolved(ExprKind::Attribute(id)) = &expression.kind
                             && !schema.attributes.iter().any(|a| a.id == *id)
                             && !required.contains(id)
                         {
@@ -75,14 +75,14 @@ impl Resolver<'_, '_> {
                     schema.attributes.push(attribute);
                 }
                 (
-                    PlanNode::Project {
+                    QueryKind::Project {
                         input: Box::new(child),
                         expressions,
                     },
                     value,
                 )
             }
-            PlanNode::Aggregate {
+            QueryKind::Aggregate {
                 input: child,
                 grouping,
                 grouping_sets,
@@ -105,7 +105,7 @@ impl Resolver<'_, '_> {
                     .chain(aggregates.iter().map(|p| p.attribute.clone()))
                     .collect();
                 (
-                    PlanNode::Aggregate {
+                    QueryKind::Aggregate {
                         input: child,
                         grouping,
                         grouping_sets,
@@ -115,7 +115,7 @@ impl Resolver<'_, '_> {
                     value,
                 )
             }
-            PlanNode::Filter {
+            QueryKind::Filter {
                 input: child,
                 condition,
             } => {
@@ -124,14 +124,14 @@ impl Resolver<'_, '_> {
                     .await?;
                 extend_schema(&mut schema, &child)?;
                 (
-                    PlanNode::Filter {
+                    QueryKind::Filter {
                         input: Box::new(child),
                         condition,
                     },
                     value,
                 )
             }
-            PlanNode::Sort {
+            QueryKind::Sort {
                 input: child,
                 order,
                 global,
@@ -142,7 +142,7 @@ impl Resolver<'_, '_> {
                     .await?;
                 extend_schema(&mut schema, &child)?;
                 (
-                    PlanNode::Sort {
+                    QueryKind::Sort {
                         input: Box::new(child),
                         order,
                         global,
@@ -151,7 +151,7 @@ impl Resolver<'_, '_> {
                     value,
                 )
             }
-            PlanNode::Window {
+            QueryKind::Window {
                 input: child,
                 expressions,
             } => {
@@ -164,14 +164,14 @@ impl Resolver<'_, '_> {
                     .attributes
                     .extend(expressions.iter().map(|p| p.attribute.clone()));
                 (
-                    PlanNode::Window {
+                    QueryKind::Window {
                         input: Box::new(child),
                         expressions,
                     },
                     value,
                 )
             }
-            PlanNode::Repartition {
+            QueryKind::Repartition {
                 input: child,
                 partitioning,
             } => {
@@ -180,14 +180,14 @@ impl Resolver<'_, '_> {
                     .await?;
                 extend_schema(&mut schema, &child)?;
                 (
-                    PlanNode::Repartition {
+                    QueryKind::Repartition {
                         input: Box::new(child),
                         partitioning,
                     },
                     value,
                 )
             }
-            PlanNode::Limit {
+            QueryKind::Limit {
                 input: child,
                 skip,
                 fetch,
@@ -197,7 +197,7 @@ impl Resolver<'_, '_> {
                     .await?;
                 extend_schema(&mut schema, &child)?;
                 (
-                    PlanNode::Limit {
+                    QueryKind::Limit {
                         input: Box::new(child),
                         skip,
                         fetch,
@@ -207,16 +207,16 @@ impl Resolver<'_, '_> {
             }
             _ => return Err(original_error),
         };
-        input.node = Deferred::Resolved(node);
+        input.kind = Deferred::Resolved(node);
         input.schema = Deferred::Resolved(schema);
         Ok((input, value))
     }
 
     fn rebase_projection(
         &mut self,
-        expression: LogicalExpression,
+        expression: ExprNode,
         projections: &[Projection],
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         for projection in projections {
             if expression.equivalent(&projection.expression)? {
                 return self.reference(&projection.attribute);
@@ -227,9 +227,9 @@ impl Resolver<'_, '_> {
 
     pub(super) fn restore_output(
         &mut self,
-        input: LogicalPlan,
-        schema: PlanSchema,
-    ) -> PlanResult<LogicalPlan> {
+        input: QueryNode,
+        schema: QuerySchema,
+    ) -> PlanResult<QueryNode> {
         if input
             .schema
             .resolved("recovered output")?
@@ -250,8 +250,8 @@ impl Resolver<'_, '_> {
                 })
             })
             .collect::<PlanResult<_>>()?;
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Project {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input),
                 expressions,
             }),
@@ -260,7 +260,7 @@ impl Resolver<'_, '_> {
     }
 }
 
-fn extend_schema(schema: &mut PlanSchema, child: &LogicalPlan) -> PlanResult<()> {
+fn extend_schema(schema: &mut QuerySchema, child: &QueryNode) -> PlanResult<()> {
     for attribute in &child.schema.resolved("recovered input")?.attributes {
         if !schema.attributes.iter().any(|a| a.id == attribute.id) {
             schema.attributes.push(attribute.clone());
@@ -272,37 +272,34 @@ fn extend_schema(schema: &mut PlanSchema, child: &LogicalPlan) -> PlanResult<()>
 #[derive(Clone)]
 pub(super) struct RecoveryScope {
     combined: Vec<AttributeId>,
-    schemas: Vec<PlanSchema>,
-    local: PlanSchema,
+    schemas: Vec<QuerySchema>,
+    local: QuerySchema,
     sorting: bool,
 }
 
-fn recovery_child(plan: &LogicalPlan) -> Option<&LogicalPlan> {
-    match &plan.node {
+fn recovery_child(plan: &QueryNode) -> Option<&QueryNode> {
+    match &plan.kind {
         Deferred::Resolved(
-            PlanNode::Project { input, .. }
-            | PlanNode::Filter { input, .. }
-            | PlanNode::Sort { input, .. }
-            | PlanNode::Limit { input, .. }
-            | PlanNode::Window { input, .. }
-            | PlanNode::Repartition { input, .. }
-            | PlanNode::RowIdentity { input, .. }
-            | PlanNode::Unnest { input, .. },
+            QueryKind::Project { input, .. }
+            | QueryKind::Filter { input, .. }
+            | QueryKind::Sort { input, .. }
+            | QueryKind::Limit { input, .. }
+            | QueryKind::Window { input, .. }
+            | QueryKind::Repartition { input, .. }
+            | QueryKind::RowIdentity { input, .. }
+            | QueryKind::Unnest { input, .. },
         ) => Some(input),
         _ => None,
     }
 }
 
 impl Resolver<'_, '_> {
-    pub(super) fn discard_extraction_scope(
-        &mut self,
-        expression: &LogicalExpression,
-    ) -> PlanResult<()> {
+    pub(super) fn discard_extraction_scope(&mut self, expression: &ExprNode) -> PlanResult<()> {
         let mut attributes = vec![];
         expression.clone().transform_up::<PlanError>(&mut |value| {
-            match &value.node {
-                Deferred::Resolved(ExpressionNode::Attribute(id)) => attributes.push((0, *id)),
-                Deferred::Resolved(ExpressionNode::OuterAttribute { depth, attribute }) => {
+            match &value.kind {
+                Deferred::Resolved(ExprKind::Attribute(id)) => attributes.push((0, *id)),
+                Deferred::Resolved(ExprKind::OuterAttribute { depth, attribute }) => {
                     attributes.push((*depth, *attribute))
                 }
                 _ => {}
@@ -331,7 +328,7 @@ impl Resolver<'_, '_> {
         Ok(())
     }
 
-    pub(super) fn recovery_local_schema<'s>(&'s self, schema: &'s PlanSchema) -> &'s PlanSchema {
+    pub(super) fn recovery_local_schema<'s>(&'s self, schema: &'s QuerySchema) -> &'s QuerySchema {
         self.recovery
             .as_ref()
             .filter(|r| r.applies(schema))
@@ -340,10 +337,10 @@ impl Resolver<'_, '_> {
 
     pub(super) fn recovery_attribute(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         parts: &[String],
         plan_id: Option<i64>,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> Option<PlanResult<NamedExpression>> {
         let scope = self.recovery.as_ref().filter(|r| r.applies(schema))?;
         let schemas = scope.schemas.clone();
@@ -376,7 +373,7 @@ impl Resolver<'_, '_> {
             }
         }
         let recovery = self.recovery.take();
-        let result = self.resolve_attribute(id, parts, plan_id, &PlanSchema::default());
+        let result = self.resolve_attribute(id, parts, plan_id, &QuerySchema::default());
         self.recovery = recovery;
         Some(result)
     }
@@ -384,17 +381,17 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn recover_expression(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         request: spec::Expr,
         sorting: bool,
-    ) -> PlanResult<(LogicalPlan, NamedExpression)> {
+    ) -> PlanResult<(QueryNode, NamedExpression)> {
         let mut schemas = vec![input.schema.resolved("recovery input")?.clone()];
         let mut child = &input;
         while let Some(next) = recovery_child(child) {
             schemas.push(next.schema.resolved("recovery child")?.clone());
             child = next;
         }
-        if sorting && matches!(&child.node, Deferred::Resolved(PlanNode::Aggregate { .. })) {
+        if sorting && matches!(&child.kind, Deferred::Resolved(QueryKind::Aggregate { .. })) {
             // Aggregate arguments need extraction as well as name binding.
             return self.recover_aggregate_sort(input, request, sorting).await;
         }
@@ -404,7 +401,7 @@ impl Resolver<'_, '_> {
                 .await
                 .map(|value| (input, value));
         }
-        let mut combined = PlanSchema::default();
+        let mut combined = QuerySchema::default();
         let mut seen = std::collections::HashSet::new();
         for schema in &schemas {
             for attribute in &schema.attributes {
@@ -445,9 +442,9 @@ impl Resolver<'_, '_> {
 
     fn carry_attributes(
         &mut self,
-        mut plan: LogicalPlan,
+        mut plan: QueryNode,
         required: &std::collections::HashSet<AttributeId>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let output = plan.schema.resolved("recovery output")?;
         let missing = required
             .iter()
@@ -458,9 +455,9 @@ impl Resolver<'_, '_> {
             return Ok(plan);
         }
         let mut schema = output.clone();
-        let node = plan.node.into_resolved("recovery node")?;
+        let node = plan.kind.into_resolved("recovery node")?;
         let node = match node {
-            PlanNode::Project {
+            QueryKind::Project {
                 input,
                 mut expressions,
             } => {
@@ -476,31 +473,31 @@ impl Resolver<'_, '_> {
                         schema.attributes.push(attribute);
                     }
                 }
-                PlanNode::Project {
+                QueryKind::Project {
                     input: Box::new(input),
                     expressions,
                 }
             }
-            PlanNode::Window { input, expressions } => {
+            QueryKind::Window { input, expressions } => {
                 let input = self.carry_attributes(*input, &missing)?;
                 schema = input.schema.resolved("window recovery")?.clone();
                 schema
                     .attributes
                     .extend(expressions.iter().map(|p| p.attribute.clone()));
-                PlanNode::Window {
+                QueryKind::Window {
                     input: Box::new(input),
                     expressions,
                 }
             }
-            PlanNode::Filter { input, condition } => {
+            QueryKind::Filter { input, condition } => {
                 let input = self.carry_attributes(*input, &missing)?;
                 extend_schema(&mut schema, &input)?;
-                PlanNode::Filter {
+                QueryKind::Filter {
                     input: Box::new(input),
                     condition,
                 }
             }
-            PlanNode::Sort {
+            QueryKind::Sort {
                 input,
                 order,
                 global,
@@ -508,34 +505,34 @@ impl Resolver<'_, '_> {
             } => {
                 let input = self.carry_attributes(*input, &missing)?;
                 extend_schema(&mut schema, &input)?;
-                PlanNode::Sort {
+                QueryKind::Sort {
                     input: Box::new(input),
                     order,
                     global,
                     required,
                 }
             }
-            PlanNode::Limit { input, skip, fetch } => {
+            QueryKind::Limit { input, skip, fetch } => {
                 let input = self.carry_attributes(*input, &missing)?;
                 extend_schema(&mut schema, &input)?;
-                PlanNode::Limit {
+                QueryKind::Limit {
                     input: Box::new(input),
                     skip,
                     fetch,
                 }
             }
-            PlanNode::Repartition {
+            QueryKind::Repartition {
                 input,
                 partitioning,
             } => {
                 let input = self.carry_attributes(*input, &missing)?;
                 extend_schema(&mut schema, &input)?;
-                PlanNode::Repartition {
+                QueryKind::Repartition {
                     input: Box::new(input),
                     partitioning,
                 }
             }
-            PlanNode::RowIdentity {
+            QueryKind::RowIdentity {
                 input,
                 attribute,
                 kind,
@@ -543,13 +540,13 @@ impl Resolver<'_, '_> {
                 let input = self.carry_attributes(*input, &missing)?;
                 schema = input.schema.resolved("identity recovery")?.clone();
                 schema.attributes.push(attribute.clone());
-                PlanNode::RowIdentity {
+                QueryKind::RowIdentity {
                     input: Box::new(input),
                     attribute,
                     kind,
                 }
             }
-            PlanNode::Unnest {
+            QueryKind::Unnest {
                 input,
                 column,
                 outer,
@@ -560,7 +557,7 @@ impl Resolver<'_, '_> {
                         schema.attributes.push(attribute.clone());
                     }
                 }
-                PlanNode::Unnest {
+                QueryKind::Unnest {
                     input: Box::new(input),
                     column,
                     outer,
@@ -572,14 +569,14 @@ impl Resolver<'_, '_> {
                 ));
             }
         };
-        plan.node = Deferred::Resolved(node);
+        plan.kind = Deferred::Resolved(node);
         plan.schema = Deferred::Resolved(schema);
         Ok(plan)
     }
 }
 
 impl RecoveryScope {
-    fn applies(&self, schema: &PlanSchema) -> bool {
+    fn applies(&self, schema: &QuerySchema) -> bool {
         self.combined
             .iter()
             .copied()
@@ -593,13 +590,10 @@ struct Required {
 }
 impl sail_query::rewrite::QueryRewriter for Required {
     type Error = PlanError;
-    fn rewrite_expression(
-        &mut self,
-        expression: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+    fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
         if let Deferred::Resolved(
-            ExpressionNode::Attribute(id) | ExpressionNode::OuterAttribute { attribute: id, .. },
-        ) = &expression.node
+            ExprKind::Attribute(id) | ExprKind::OuterAttribute { attribute: id, .. },
+        ) = &expression.kind
             && self.reachable.contains(id)
         {
             self.attributes.insert(*id);

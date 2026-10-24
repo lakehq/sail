@@ -15,7 +15,7 @@ pub enum CatalogObject {
     View,
     Function,
     TemporaryView,
-    LogicalPlan,
+    Query,
 }
 
 impl fmt::Display for CatalogObject {
@@ -29,7 +29,7 @@ impl fmt::Display for CatalogObject {
             CatalogObject::View => "View",
             CatalogObject::Function => "Function",
             CatalogObject::TemporaryView => "Temporary View",
-            CatalogObject::LogicalPlan => "Logical Plan",
+            CatalogObject::Query => "Query",
         };
         write!(f, "{name}")
     }

@@ -3,7 +3,7 @@
 //! Backend plans and expressions are never stored in the tree.
 pub mod deferred;
 mod instantiate;
-pub mod ir;
+pub mod model;
 pub mod tree;
 
 pub mod udf;

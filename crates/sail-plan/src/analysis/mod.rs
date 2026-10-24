@@ -14,9 +14,9 @@ use crate::error::PlanResult;
 pub mod command;
 pub mod data_type;
 pub use sail_query::deferred;
-pub mod ir;
 mod literal;
 pub mod lowering;
+pub mod model;
 mod ordering;
 pub mod resolver;
 mod row_identity;
@@ -28,7 +28,7 @@ pub mod row_level;
 pub mod typing;
 pub mod writer;
 
-use ir::{IdGenerator, LogicalQuery};
+use model::{IdGenerator, Plan};
 
 pub struct AnalysisContext<'a> {
     pub session: &'a SessionContext,
@@ -36,15 +36,12 @@ pub struct AnalysisContext<'a> {
     pub ids: IdGenerator,
 }
 
+/// A pass over a complete query or command, including its nested inputs.
 #[async_trait]
 pub trait AnalysisLayer: Send + Sync {
     fn name(&self) -> &str;
 
-    async fn transform(
-        &self,
-        query: LogicalQuery,
-        context: &mut AnalysisContext<'_>,
-    ) -> PlanResult<LogicalQuery>;
+    async fn transform(&self, plan: Plan, context: &mut AnalysisContext<'_>) -> PlanResult<Plan>;
 }
 
 /// Resolution is mandatory and first. Subsequent layers execute once, in order;
@@ -67,24 +64,20 @@ impl AnalysisPipeline {
         self
     }
 
-    pub async fn analyze(
-        &self,
-        query: LogicalQuery,
-        context: &mut AnalysisContext<'_>,
-    ) -> PlanResult<LogicalQuery> {
-        let query = self.resolver.transform(query, context).await?;
-        self.apply_layers(query, context).await
+    pub async fn analyze(&self, plan: Plan, context: &mut AnalysisContext<'_>) -> PlanResult<Plan> {
+        let plan = self.resolver.transform(plan, context).await?;
+        self.apply_layers(plan, context).await
     }
 
     pub(super) async fn apply_layers(
         &self,
-        mut query: LogicalQuery,
+        mut plan: Plan,
         context: &mut AnalysisContext<'_>,
-    ) -> PlanResult<LogicalQuery> {
+    ) -> PlanResult<Plan> {
         for layer in &self.layers {
-            query = layer.transform(query, context).await?;
+            plan = layer.transform(plan, context).await?;
         }
-        Ok(query)
+        Ok(plan)
     }
 }
 
@@ -107,7 +100,7 @@ impl<'a> QueryAnalyzer<'a> {
         Self {
             session,
             config,
-            pipeline: AnalysisPipeline::new(resolver::ResolveQuery),
+            pipeline: AnalysisPipeline::new(resolver::ResolvePlan),
         }
     }
 
@@ -116,25 +109,13 @@ impl<'a> QueryAnalyzer<'a> {
         self
     }
 
-    pub async fn analyze(
-        &self,
-        plan: sail_common::spec::Plan,
-    ) -> PlanResult<command::AnalyzedPlan> {
+    pub async fn analyze(&self, plan: sail_common::spec::Plan) -> PlanResult<Plan> {
         let mut context = AnalysisContext {
             session: self.session,
             config: Arc::clone(&self.config),
             ids: IdGenerator::default(),
         };
-        match plan {
-            sail_common::spec::Plan::Query(request) => Ok(command::AnalyzedPlan::Query(
-                self.pipeline.analyze(request.into(), &mut context).await?,
-            )),
-            plan => {
-                let mut plan = resolver::analyze_plan(plan, &mut context).await?;
-                plan.apply_layers(&self.pipeline, &mut context).await?;
-                Ok(plan)
-            }
-        }
+        self.pipeline.analyze(plan.into(), &mut context).await
     }
 
     pub async fn plan(&self, plan: sail_common::spec::Plan) -> PlanResult<NamedPlan> {

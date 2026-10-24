@@ -3,7 +3,7 @@ use sail_common::spec;
 
 use super::Resolver;
 use super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
-use crate::analysis::command::LogicalCommand;
+use crate::analysis::model::CommandKind;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -11,7 +11,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn resolve_command_write_stream(
         &mut self,
         write_stream: spec::WriteStream,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         use spec::WriteStreamSinkDestination;
 
         let spec::WriteStream {

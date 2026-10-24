@@ -10,15 +10,15 @@ use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use super::Resolver;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn conditional_function(
         &mut self,
         name: &str,
-        values: &mut Vec<LogicalExpression>,
-    ) -> PlanResult<Option<LogicalExpression>> {
+        values: &mut Vec<ExprNode>,
+    ) -> PlanResult<Option<ExprNode>> {
         if !matches!(
             name,
             "case" | "when" | "if" | "coalesce" | "nvl" | "ifnull" | "nullifzero" | "zeroifnull"
@@ -126,10 +126,7 @@ impl Resolver<'_, '_> {
         Ok(Some(result))
     }
 
-    pub(super) fn temporal_branches(
-        &mut self,
-        values: Vec<LogicalExpression>,
-    ) -> PlanResult<Vec<LogicalExpression>> {
+    pub(super) fn temporal_branches(&mut self, values: Vec<ExprNode>) -> PlanResult<Vec<ExprNode>> {
         let types = values
             .iter()
             .map(|v| {

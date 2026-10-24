@@ -20,7 +20,7 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use super::{NamedExpression, Resolver};
 use crate::analysis::data_type::DataTypeResolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
@@ -82,9 +82,9 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn inline_python(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         request: spec::CommonInlineUserDefinedFunction,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         let spec::CommonInlineUserDefinedFunction {
             function_name,
@@ -112,13 +112,13 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn python_arguments(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         name: &str,
         definition: PythonFunction,
         deterministic: bool,
         distinct: bool,
         requests: Vec<spec::Expr>,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
         mode: PySparkAggregateMode,
     ) -> PlanResult<NamedExpression> {
         let mut names = vec![];
@@ -177,16 +177,16 @@ impl Resolver<'_, '_> {
     #[expect(clippy::too_many_arguments)]
     pub(super) fn python_call(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         name: &str,
         definition: PythonFunction,
         deterministic: bool,
         distinct: bool,
-        mut arguments: Vec<LogicalExpression>,
+        mut arguments: Vec<ExprNode>,
         names: &[String],
         keywords: &[Option<String>],
         mode: PySparkAggregateMode,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         use spec::PySparkUdfType as Kind;
         let mut input_types = typing::argument_fields(&arguments)?
             .iter()
@@ -246,7 +246,7 @@ impl Resolver<'_, '_> {
             }
         };
         for argument in &arguments {
-            if argument.any(&|node| matches!(node, ExpressionNode::AggregateFunction { .. }))? {
+            if argument.any(&|node| matches!(node, ExprKind::AggregateFunction { .. }))? {
                 return Err(PlanError::analysis(format!(
                     "The aggregate function '{name}' cannot take an argument containing another aggregate function."
                 )));
@@ -272,9 +272,9 @@ impl Resolver<'_, '_> {
         let mut expression =
             self.aggregate_call(Arc::new(AggregateUDF::from(function)), arguments)?;
         expression.id = id;
-        if let Deferred::Resolved(ExpressionNode::AggregateFunction {
+        if let Deferred::Resolved(ExprKind::AggregateFunction {
             distinct: value, ..
-        }) = &mut expression.node
+        }) = &mut expression.kind
         {
             *value = distinct;
         }
@@ -311,7 +311,7 @@ impl Resolver<'_, '_> {
         &mut self,
         request: spec::QueryPlan,
         function: spec::CommonInlineUserDefinedFunction,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             is_distinct,
@@ -372,14 +372,14 @@ impl Resolver<'_, '_> {
         );
         let attributes = fields
             .iter()
-            .map(|field| self.attribute(field.name().clone(), ExpressionType::from_field(field)))
+            .map(|field| self.attribute(field.name().clone(), ExprType::from_field(field)))
             .collect();
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::MapPartitions {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::MapPartitions {
                 input: Box::new(input),
                 function: Arc::new(function),
             }),
-            schema: Deferred::Resolved(PlanSchema { attributes }),
+            schema: Deferred::Resolved(QuerySchema { attributes }),
         })
     }
 }

@@ -12,7 +12,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use super::Resolver;
-use crate::analysis::command::LogicalCommand;
+use crate::analysis::model::CommandKind;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -20,7 +20,7 @@ impl Resolver<'_, '_> {
         &self,
         table: spec::ObjectName,
         definition: spec::TableDefinition,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let spec::TableDefinition {
             external,
             columns,
@@ -96,7 +96,7 @@ impl Resolver<'_, '_> {
         table: spec::ObjectName,
         definition: spec::TableDefinition,
         query: spec::QueryPlan,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         use super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
             external,
@@ -482,7 +482,7 @@ impl Resolver<'_, '_> {
         table: spec::ObjectName,
         if_exists: bool,
         operation: spec::AlterTableOperation,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let options = match operation {
             spec::AlterTableOperation::AlterIdentifierFields { names, drop } => {
                 AlterTableOptions::AlterIdentifierFields {

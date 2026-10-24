@@ -37,7 +37,7 @@ use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIE
 
 use super::Resolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
@@ -118,17 +118,17 @@ pub(super) struct AggregateOptions {
     pub distinct: bool,
     pub window: bool,
     pub ignore_nulls: Option<bool>,
-    pub filter: Option<Box<LogicalExpression>>,
-    pub order_by: Vec<SortExpression>,
+    pub filter: Option<Box<ExprNode>>,
+    pub order_by: Vec<SortKey>,
 }
 
 impl Resolver<'_, '_> {
     pub(super) fn aggregate_call_with_options(
         &mut self,
         function: Arc<AggregateUDF>,
-        arguments: Vec<LogicalExpression>,
+        arguments: Vec<ExprNode>,
         options: AggregateOptions,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let fields = typing::argument_fields(&arguments)?;
         let resolved = crate::analysis::typing::aggregate::resolve(&function, &fields)?;
         let arguments =
@@ -137,9 +137,9 @@ impl Resolver<'_, '_> {
             .filter
             .map(|value| self.cast(*value, DataType::Boolean).map(Box::new))
             .transpose()?;
-        Ok(LogicalExpression {
+        Ok(ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::AggregateFunction {
+            kind: Deferred::Resolved(ExprKind::AggregateFunction {
                 function,
                 arguments,
                 distinct: options.distinct,
@@ -153,7 +153,7 @@ impl Resolver<'_, '_> {
                     }
                 }),
             }),
-            result_type: Deferred::Resolved(ExpressionType::from_field(&resolved.result)),
+            result_type: Deferred::Resolved(ExprType::from_field(&resolved.result)),
         })
     }
 
@@ -161,9 +161,9 @@ impl Resolver<'_, '_> {
         &mut self,
         name: &str,
         function: Arc<AggregateUDF>,
-        mut args: Vec<LogicalExpression>,
+        mut args: Vec<ExprNode>,
         mut options: AggregateOptions,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         if name == "mode" && args.is_empty() {
             let [sort] = options.order_by.as_slice() else {
                 return Err(PlanError::analysis(
@@ -185,8 +185,8 @@ impl Resolver<'_, '_> {
                 let flag = args
                     .pop()
                     .ok_or_else(|| PlanError::internal("missing null treatment"))?;
-                options.ignore_nulls = Some(match flag.node.into_resolved("null treatment")? {
-                    ExpressionNode::Literal(ScalarValue::Boolean(Some(flag))) => flag,
+                options.ignore_nulls = Some(match flag.kind.into_resolved("null treatment")? {
+                    ExprKind::Literal(ScalarValue::Boolean(Some(flag))) => flag,
                     _ => {
                         return Err(PlanError::invalid(
                             "requires a boolean literal as the second argument",
@@ -366,7 +366,7 @@ impl Resolver<'_, '_> {
                     .next()
                     .unwrap_or_else(|| self.literal(ScalarValue::Utf8(Some(String::new()))));
                 if options.distinct && !options.window {
-                    options.order_by = vec![SortExpression {
+                    options.order_by = vec![SortKey {
                         expression: self.copy_expression(&value)?,
                         ascending: true,
                         nulls_first: true,
@@ -413,9 +413,9 @@ impl Resolver<'_, '_> {
 
     pub(super) fn string_sum_arguments(
         &mut self,
-        args: Vec<LogicalExpression>,
-        filter: Option<&LogicalExpression>,
-    ) -> PlanResult<Vec<LogicalExpression>> {
+        args: Vec<ExprNode>,
+        filter: Option<&ExprNode>,
+    ) -> PlanResult<Vec<ExprNode>> {
         args.into_iter()
             .map(|mut arg| {
                 let kind = arg.result_type.resolved("sum argument")?.data_type.clone();
@@ -437,11 +437,11 @@ impl Resolver<'_, '_> {
     }
 }
 
-fn typed_null_literal(value: &LogicalExpression) -> bool {
-    match &value.node {
-        Deferred::Resolved(ExpressionNode::Literal(value)) => value.is_null(),
+fn typed_null_literal(value: &ExprNode) -> bool {
+    match &value.kind {
+        Deferred::Resolved(ExprKind::Literal(value)) => value.is_null(),
         Deferred::Resolved(
-            ExpressionNode::Cast { expression, .. } | ExpressionNode::WithMetadata(expression),
+            ExprKind::Cast { expression, .. } | ExprKind::WithMetadata(expression),
         ) => typed_null_literal(expression),
         _ => false,
     }

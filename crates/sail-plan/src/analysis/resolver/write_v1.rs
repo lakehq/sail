@@ -2,7 +2,7 @@ use sail_common::spec;
 
 use super::Resolver;
 use super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
-use crate::analysis::command::LogicalCommand;
+use crate::analysis::model::CommandKind;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
@@ -10,7 +10,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn resolve_command_write(
         &mut self,
         write: spec::Write,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         use spec::{SaveMode, SaveType, TableSaveMethod};
 
         let spec::Write {

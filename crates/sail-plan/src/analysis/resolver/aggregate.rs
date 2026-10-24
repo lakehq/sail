@@ -1,28 +1,28 @@
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn aggregate(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         grouping: Vec<NamedExpression>,
         output: Vec<NamedExpression>,
-        having: Option<LogicalExpression>,
-    ) -> PlanResult<LogicalPlan> {
+        having: Option<ExprNode>,
+    ) -> PlanResult<QueryNode> {
         self.aggregate_with_sets(input, grouping, output, having, None)
     }
 
     pub(super) fn aggregate_with_sets(
         &mut self,
-        mut input: LogicalPlan,
+        mut input: QueryNode,
         mut grouping: Vec<NamedExpression>,
         mut output: Vec<NamedExpression>,
-        mut having: Option<LogicalExpression>,
+        mut having: Option<ExprNode>,
         grouping_sets: Option<Vec<Vec<usize>>>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         self.grouping_metadata(&mut input, &mut grouping, &mut output, &mut having)?;
         let schema = input.schema.resolved("aggregate input")?;
         let mut grouping = grouping
@@ -36,8 +36,7 @@ impl Resolver<'_, '_> {
             }
             let duplicates = counts.into_values().max().unwrap_or(1) - 1;
             let kind = datafusion_expr::Aggregate::grouping_id_type(grouping.len(), duplicates);
-            let mut attribute =
-                self.attribute("grouping_id".into(), ExpressionType::new(kind, false));
+            let mut attribute = self.attribute("grouping_id".into(), ExprType::new(kind, false));
             attribute.hidden = true;
             for key in &mut grouping {
                 let mut field = key.attribute.result_type.resolved("grouping type")?.clone();
@@ -73,7 +72,7 @@ impl Resolver<'_, '_> {
                 )
             })
             .transpose()?;
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: grouping
                 .iter()
                 .map(|projection| projection.attribute.clone())
@@ -85,8 +84,8 @@ impl Resolver<'_, '_> {
                 )
                 .collect(),
         };
-        let mut aggregate = LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Aggregate {
+        let mut aggregate = QueryNode {
+            kind: Deferred::Resolved(QueryKind::Aggregate {
                 input: Box::new(input),
                 grouping,
                 grouping_sets,
@@ -101,8 +100,8 @@ impl Resolver<'_, '_> {
                 &arrow_schema::DataType::Boolean,
                 &mut self.context.ids,
             )?;
-            aggregate = LogicalPlan {
-                node: Deferred::Resolved(PlanNode::Filter {
+            aggregate = QueryNode {
+                kind: Deferred::Resolved(QueryKind::Filter {
                     input: Box::new(aggregate),
                     condition: Box::new(condition),
                 }),
@@ -114,24 +113,24 @@ impl Resolver<'_, '_> {
 
     pub(super) fn aggregate_expression(
         &mut self,
-        expression: LogicalExpression,
+        expression: ExprNode,
         grouping: &[Projection],
         aggregates: &mut Vec<Projection>,
         grouping_id: Option<&Attribute>,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         for key in grouping {
             if expression.equivalent(&key.expression)? {
                 return self.reference(&key.attribute);
             }
         }
-        if let ExpressionNode::AggregateFunction {
+        if let ExprKind::AggregateFunction {
             function,
             arguments,
             distinct,
             filter,
             order_by,
             null_treatment,
-        } = expression.node.resolved("aggregate expression")?
+        } = expression.kind.resolved("aggregate expression")?
             && matches!(function.name(), "grouping" | "grouping_id")
         {
             if *distinct || filter.is_some() || !order_by.is_empty() || null_treatment.is_some() {
@@ -139,8 +138,8 @@ impl Resolver<'_, '_> {
             }
             return self.grouping_mask(function.name(), arguments, grouping, grouping_id);
         }
-        match expression.node.resolved("aggregate expression")? {
-            ExpressionNode::AggregateFunction {
+        match expression.kind.resolved("aggregate expression")? {
+            ExprKind::AggregateFunction {
                 arguments,
                 filter,
                 order_by,
@@ -161,8 +160,7 @@ impl Resolver<'_, '_> {
                     if argument.any(&|node| {
                         matches!(
                             node,
-                            ExpressionNode::AggregateFunction { .. }
-                                | ExpressionNode::WindowFunction { .. }
+                            ExprKind::AggregateFunction { .. } | ExprKind::WindowFunction { .. }
                         )
                     })? {
                         return Err(PlanError::analysis(
@@ -184,17 +182,17 @@ impl Resolver<'_, '_> {
                 });
                 Ok(reference)
             }
-            ExpressionNode::HigherOrderFunction { .. } => {
+            ExprKind::HigherOrderFunction { .. } => {
                 let mut expression = expression;
-                let Deferred::Resolved(ExpressionNode::HigherOrderFunction { arguments, .. }) =
-                    &mut expression.node
+                let Deferred::Resolved(ExprKind::HigherOrderFunction { arguments, .. }) =
+                    &mut expression.kind
                 else {
                     unreachable!()
                 };
                 for argument in arguments {
                     let value = match argument {
-                        FunctionArgument::Value(value) => value,
-                        FunctionArgument::Lambda { body, .. } => body,
+                        FunctionArg::Value(value) => value,
+                        FunctionArg::Lambda { body, .. } => body,
                     };
                     **value = self.aggregate_expression(
                         *value.clone(),
@@ -205,9 +203,7 @@ impl Resolver<'_, '_> {
                 }
                 self.retype(expression)
             }
-            ExpressionNode::ScalarSubquery(_)
-            | ExpressionNode::Exists { .. }
-            | ExpressionNode::InSubquery { .. } => {
+            ExprKind::ScalarSubquery(_) | ExprKind::Exists { .. } | ExprKind::InSubquery { .. } => {
                 use sail_query::rewrite::QueryRewriter;
                 GroupOuter {
                     resolver: self,
@@ -217,7 +213,7 @@ impl Resolver<'_, '_> {
                 }
                 .rewrite_expression(expression)
             }
-            ExpressionNode::Attribute(_) => Err(PlanError::analysis(
+            ExprKind::Attribute(_) => Err(PlanError::analysis(
                 "expression references a column that is not grouped or aggregated",
             )),
             node if is_invalid_volatile(node) => Err(PlanError::analysis(
@@ -233,21 +229,21 @@ impl Resolver<'_, '_> {
     }
 }
 
-fn is_invalid_volatile(node: &ExpressionNode) -> bool {
-    matches!(node, ExpressionNode::ScalarFunction { function, .. }
+fn is_invalid_volatile(node: &ExprKind) -> bool {
+    matches!(node, ExprKind::ScalarFunction { function, .. }
         if function.signature().volatility == datafusion_expr::Volatility::Volatile && function.as_async().is_none()
         && !function.inner().is::<sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId>()
         && !function.inner().is::<sail_function::scalar::misc::spark_partition_id::SparkPartitionId>())
 }
 
-fn volatile_name(expression: &LogicalExpression) -> PlanResult<Option<String>> {
+fn volatile_name(expression: &ExprNode) -> PlanResult<Option<String>> {
     let mut found = None;
     expression
         .clone()
         .transform_up::<PlanError>(&mut |expression| {
-            if let Deferred::Resolved(node) = &expression.node
+            if let Deferred::Resolved(node) = &expression.kind
                 && is_invalid_volatile(node)
-                && let ExpressionNode::ScalarFunction { function, .. } = node
+                && let ExprKind::ScalarFunction { function, .. } = node
             {
                 found = Some(function.name().to_string());
             }
@@ -262,35 +258,52 @@ struct GroupOuter<'a, 'b, 'c, 'd> {
     resolver: &'a mut Resolver<'b, 'c>,
     grouping: &'d [Projection],
     depth: usize,
-    fields: std::collections::HashMap<AttributeId, ExpressionType>,
+    fields: std::collections::HashMap<AttributeId, ExprType>,
 }
 impl sail_query::rewrite::QueryRewriter for GroupOuter<'_, '_, '_, '_> {
     type Error = PlanError;
-    fn rewrite_expression(
-        &mut self,
-        expression: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+    fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
         let boundary = matches!(
-            expression.node,
+            expression.kind,
             Deferred::Resolved(
-                ExpressionNode::ScalarSubquery(_)
-                    | ExpressionNode::Exists { .. }
-                    | ExpressionNode::InSubquery { .. }
+                ExprKind::ScalarSubquery(_) | ExprKind::Exists { .. } | ExprKind::InSubquery { .. }
             )
         );
-        if !boundary && self.depth > 0 && expression.any(&|n| matches!(n, ExpressionNode::OuterAttribute { depth, .. } if *depth == self.depth))?
-            && !expression.any(&|n| match n { ExpressionNode::Attribute(_) | ExpressionNode::LambdaVariable(_) => true, ExpressionNode::OuterAttribute { depth, .. } => *depth != self.depth, _ => false })? {
-            let local = expression.clone().transform_up::<PlanError>(&mut |mut value| {
-                if let Deferred::Resolved(ExpressionNode::OuterAttribute { attribute, .. }) = value.node { value.node = Deferred::Resolved(ExpressionNode::Attribute(attribute)); }
-                Ok(value)
-            })?;
+        if !boundary
+            && self.depth > 0
+            && expression.any(
+                &|n| matches!(n, ExprKind::OuterAttribute { depth, .. } if *depth == self.depth),
+            )?
+            && !expression.any(&|n| match n {
+                ExprKind::Attribute(_) | ExprKind::LambdaVariable(_) => true,
+                ExprKind::OuterAttribute { depth, .. } => *depth != self.depth,
+                _ => false,
+            })?
+        {
+            let local = expression
+                .clone()
+                .transform_up::<PlanError>(&mut |mut value| {
+                    if let Deferred::Resolved(ExprKind::OuterAttribute { attribute, .. }) =
+                        value.kind
+                    {
+                        value.kind = Deferred::Resolved(ExprKind::Attribute(attribute));
+                    }
+                    Ok(value)
+                })?;
             for key in self.grouping {
                 if local.equivalent(&key.expression)? {
-                    return Ok(LogicalExpression { id: expression.id, node: Deferred::Resolved(ExpressionNode::OuterAttribute { depth: self.depth, attribute: key.attribute.id }), result_type: key.attribute.result_type.clone() });
+                    return Ok(ExprNode {
+                        id: expression.id,
+                        kind: Deferred::Resolved(ExprKind::OuterAttribute {
+                            depth: self.depth,
+                            attribute: key.attribute.id,
+                        }),
+                        result_type: key.attribute.result_type.clone(),
+                    });
                 }
             }
         }
-        if matches!(expression.node, Deferred::Resolved(ExpressionNode::OuterAttribute { depth, .. }) if depth == self.depth && self.depth > 0)
+        if matches!(expression.kind, Deferred::Resolved(ExprKind::OuterAttribute { depth, .. }) if depth == self.depth && self.depth > 0)
         {
             return Err(PlanError::analysis(
                 "correlated expression references a column that is not grouped or aggregated",
@@ -323,8 +336,8 @@ impl sail_query::rewrite::QueryRewriter for GroupOuter<'_, '_, '_, '_> {
             })
             .collect()
     }
-    fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
-        let mut plan = sail_query::rewrite::walk_plan(self, plan)?;
+    fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
+        let mut plan = sail_query::rewrite::walk_query(self, plan)?;
         if let Deferred::Resolved(schema) = &mut plan.schema {
             for attribute in &mut schema.attributes {
                 if let Some(field) = self.fields.get(&attribute.id) {

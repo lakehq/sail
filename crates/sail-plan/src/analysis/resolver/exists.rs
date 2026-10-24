@@ -4,22 +4,22 @@ use std::collections::{HashMap, HashSet};
 use arrow_schema::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{JoinType, Operator};
-use sail_query::rewrite::{QueryRewriter, walk_expression, walk_plan};
+use sail_query::rewrite::{QueryRewriter, walk_expression, walk_query};
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     pub(super) fn projected_exists(
         &mut self,
-        input: &mut LogicalPlan,
-        expression: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+        input: &mut QueryNode,
+        expression: ExprNode,
+    ) -> PlanResult<ExprNode> {
         expression.transform_up::<PlanError>(&mut |expression| {
-            let ExpressionNode::Exists { query, negated } =
-                expression.node.resolved("projected expression")?
+            let ExprKind::Exists { query, negated } =
+                expression.kind.resolved("projected expression")?
             else {
                 return Ok(expression);
             };
@@ -32,21 +32,21 @@ impl Resolver<'_, '_> {
 
     fn exists_value(
         &mut self,
-        input: &mut LogicalPlan,
-        mut query: LogicalPlan,
-    ) -> PlanResult<LogicalExpression> {
+        input: &mut QueryNode,
+        mut query: QueryNode,
+    ) -> PlanResult<ExprNode> {
         if !contains_outer(&query)? {
             return self.exists_count(query, 0);
         }
         loop {
-            query = match query.node.into_resolved("EXISTS input")? {
-                PlanNode::Project { input, .. }
-                | PlanNode::Scope { input }
-                | PlanNode::Sort { input, .. } => *input,
-                PlanNode::Aggregate { ref grouping, .. } if grouping.is_empty() => {
+            query = match query.kind.into_resolved("EXISTS input")? {
+                QueryKind::Project { input, .. }
+                | QueryKind::Scope { input }
+                | QueryKind::Sort { input, .. } => *input,
+                QueryKind::Aggregate { ref grouping, .. } if grouping.is_empty() => {
                     return Ok(self.literal(ScalarValue::Boolean(Some(true))));
                 }
-                PlanNode::Limit { input, skip, fetch } => {
+                QueryKind::Limit { input, skip, fetch } => {
                     if fetch.as_deref().map(bound).transpose()? == Some(0) {
                         return Ok(self.literal(ScalarValue::Boolean(Some(false))));
                     }
@@ -61,7 +61,7 @@ impl Resolver<'_, '_> {
                     *input
                 }
                 node => {
-                    query.node = Deferred::Resolved(node);
+                    query.kind = Deferred::Resolved(node);
                     break;
                 }
             };
@@ -71,18 +71,18 @@ impl Resolver<'_, '_> {
             resolver: self,
             predicates: vec![],
         };
-        let query = pull.rewrite_plan(query)?;
+        let query = pull.rewrite_query(query)?;
         let predicates = std::mem::take(&mut pull.predicates);
         let mut condition = None;
         for predicate in predicates {
             let predicate = predicate.transform_up::<PlanError>(&mut |mut value| {
-                if let Deferred::Resolved(ExpressionNode::OuterAttribute { depth, attribute }) =
-                    value.node
+                if let Deferred::Resolved(ExprKind::OuterAttribute { depth, attribute }) =
+                    value.kind
                 {
-                    value.node = Deferred::Resolved(if depth == 1 {
-                        ExpressionNode::Attribute(attribute)
+                    value.kind = Deferred::Resolved(if depth == 1 {
+                        ExprKind::Attribute(attribute)
                     } else {
-                        ExpressionNode::OuterAttribute {
+                        ExprKind::OuterAttribute {
                             depth: depth - 1,
                             attribute,
                         }
@@ -95,16 +95,13 @@ impl Resolver<'_, '_> {
                 Some(previous) => self.binary(previous, Operator::And, predicate)?,
             });
         }
-        let mark = self.attribute(
-            "exists".into(),
-            ExpressionType::new(DataType::Boolean, false),
-        );
+        let mark = self.attribute("exists".into(), ExprType::new(DataType::Boolean, false));
         let mut schema = input.schema.resolved("EXISTS left")?.clone();
         schema.attributes.push(mark.clone());
         let left = std::mem::replace(input, Self::empty(false));
-        *input = LogicalPlan {
+        *input = QueryNode {
             schema: Deferred::Resolved(schema),
-            node: Deferred::Resolved(PlanNode::Join {
+            kind: Deferred::Resolved(QueryKind::Join {
                 left: Box::new(left),
                 right: Box::new(query),
                 kind: JoinType::LeftMark,
@@ -115,7 +112,7 @@ impl Resolver<'_, '_> {
         self.reference(&mark)
     }
 
-    fn exists_count(&mut self, query: LogicalPlan, skip: i64) -> PlanResult<LogicalExpression> {
+    fn exists_count(&mut self, query: QueryNode, skip: i64) -> PlanResult<ExprNode> {
         let one = self.literal(ScalarValue::Int64(Some(1)));
         let count = self.aggregate_call(self.aggregate_kernel("count")?, vec![one])?;
         let skip = self.literal(ScalarValue::Int64(Some(skip)));
@@ -129,17 +126,17 @@ impl Resolver<'_, '_> {
             }],
             None,
         )?;
-        let value = LogicalExpression {
+        let value = ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::ScalarSubquery(Box::new(query))),
-            result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, true)),
+            kind: Deferred::Resolved(ExprKind::ScalarSubquery(Box::new(query))),
+            result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, true)),
         };
         let no = self.literal(ScalarValue::Boolean(Some(false)));
         self.scalar("coalesce", vec![value, no])
     }
 }
 
-fn bound(value: &LogicalExpression) -> PlanResult<i64> {
+fn bound(value: &ExprNode) -> PlanResult<i64> {
     let value = crate::analysis::lowering::evaluate_constant(value)?.cast_to(&DataType::Int64)?;
     match value {
         ScalarValue::Int64(Some(value)) if value >= 0 => Ok(value),
@@ -149,27 +146,24 @@ fn bound(value: &LogicalExpression) -> PlanResult<i64> {
     }
 }
 
-fn scalar_aggregate(plan: &LogicalPlan) -> PlanResult<bool> {
-    Ok(match plan.node.resolved("EXISTS scalar input")? {
-        PlanNode::Project { input, .. }
-        | PlanNode::Scope { input }
-        | PlanNode::Sort { input, .. } => scalar_aggregate(input)?,
-        PlanNode::Aggregate { grouping, .. } => grouping.is_empty(),
+fn scalar_aggregate(plan: &QueryNode) -> PlanResult<bool> {
+    Ok(match plan.kind.resolved("EXISTS scalar input")? {
+        QueryKind::Project { input, .. }
+        | QueryKind::Scope { input }
+        | QueryKind::Sort { input, .. } => scalar_aggregate(input)?,
+        QueryKind::Aggregate { grouping, .. } => grouping.is_empty(),
         _ => false,
     })
 }
 
-fn contains_outer(plan: &LogicalPlan) -> PlanResult<bool> {
+fn contains_outer(plan: &QueryNode) -> PlanResult<bool> {
     struct Find(bool);
     impl QueryRewriter for Find {
         type Error = PlanError;
-        fn rewrite_expression(
-            &mut self,
-            expression: LogicalExpression,
-        ) -> PlanResult<LogicalExpression> {
+        fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
             if matches!(
-                expression.node,
-                Deferred::Resolved(ExpressionNode::OuterAttribute { .. })
+                expression.kind,
+                Deferred::Resolved(ExprKind::OuterAttribute { .. })
             ) {
                 self.0 = true;
             }
@@ -177,30 +171,30 @@ fn contains_outer(plan: &LogicalPlan) -> PlanResult<bool> {
         }
     }
     let mut find = Find(false);
-    find.rewrite_plan(plan.clone())?;
+    find.rewrite_query(plan.clone())?;
     Ok(find.0)
 }
 
-fn correlated_cast(plan: &LogicalPlan) -> PlanResult<bool> {
+fn correlated_cast(plan: &QueryNode) -> PlanResult<bool> {
     struct Find(bool);
     impl QueryRewriter for Find {
         type Error = PlanError;
-        fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
-            if let Deferred::Resolved(PlanNode::Filter { condition, .. }) = &plan.node {
+        fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
+            if let Deferred::Resolved(QueryKind::Filter { condition, .. }) = &plan.kind {
                 for predicate in conjunctions(*condition.clone())? {
-                    if predicate.any(&|n| matches!(n, ExpressionNode::OuterAttribute { .. }))?
-                        && predicate.any(&|n| matches!(n, ExpressionNode::Cast { expression, .. } if expression.any(&|n| matches!(n, ExpressionNode::Attribute(_))).unwrap_or(false)))? { self.0 = true; }
+                    if predicate.any(&|n| matches!(n, ExprKind::OuterAttribute { .. }))?
+                        && predicate.any(&|n| matches!(n, ExprKind::Cast { expression, .. } if expression.any(&|n| matches!(n, ExprKind::Attribute(_))).unwrap_or(false)))? { self.0 = true; }
                 }
             }
-            walk_plan(self, plan)
+            walk_query(self, plan)
         }
     }
     let mut find = Find(false);
-    find.rewrite_plan(plan.clone())?;
+    find.rewrite_query(plan.clone())?;
     Ok(find.0)
 }
 
-fn validate_correlated(plan: &LogicalPlan, counting: bool) -> PlanResult<()> {
+fn validate_correlated(plan: &QueryNode, counting: bool) -> PlanResult<()> {
     if counting && correlated_cast(plan)? {
         return Err(PlanError::unsupported(
             "projected correlated EXISTS with cast correlation below aggregation",
@@ -209,14 +203,14 @@ fn validate_correlated(plan: &LogicalPlan, counting: bool) -> PlanResult<()> {
     struct Validate;
     impl QueryRewriter for Validate {
         type Error = PlanError;
-        fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
-            match plan.node.resolved("correlated EXISTS operator")? {
-                PlanNode::Window { input, .. } if contains_outer(input)? => {
+        fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
+            match plan.kind.resolved("correlated EXISTS operator")? {
+                QueryKind::Window { input, .. } if contains_outer(input)? => {
                     return Err(PlanError::unsupported(
                         "projected correlated EXISTS with correlation below a window",
                     ));
                 }
-                PlanNode::Aggregate {
+                QueryKind::Aggregate {
                     input, grouping, ..
                 } => {
                     if grouping.is_empty() {
@@ -230,7 +224,7 @@ fn validate_correlated(plan: &LogicalPlan, counting: bool) -> PlanResult<()> {
                         ));
                     }
                 }
-                PlanNode::Limit { input, skip, .. }
+                QueryKind::Limit { input, skip, .. }
                     if contains_outer(input)?
                         || skip.as_deref().map(bound).transpose()?.unwrap_or(0) > 0 =>
                 {
@@ -240,16 +234,16 @@ fn validate_correlated(plan: &LogicalPlan, counting: bool) -> PlanResult<()> {
                 }
                 _ => {}
             }
-            walk_plan(self, plan)
+            walk_query(self, plan)
         }
     }
-    Validate.rewrite_plan(plan.clone())?;
+    Validate.rewrite_query(plan.clone())?;
     Ok(())
 }
 
-fn conjunctions(value: LogicalExpression) -> PlanResult<Vec<LogicalExpression>> {
-    match value.node.resolved("EXISTS predicate")? {
-        ExpressionNode::Binary {
+fn conjunctions(value: ExprNode) -> PlanResult<Vec<ExprNode>> {
+    match value.kind.resolved("EXISTS predicate")? {
+        ExprKind::Binary {
             left,
             operator: Operator::And,
             right,
@@ -264,34 +258,31 @@ fn conjunctions(value: LogicalExpression) -> PlanResult<Vec<LogicalExpression>> 
 
 struct PullCorrelation<'a, 'b, 'c> {
     resolver: &'a mut Resolver<'b, 'c>,
-    predicates: Vec<LogicalExpression>,
+    predicates: Vec<ExprNode>,
 }
 impl QueryRewriter for PullCorrelation<'_, '_, '_> {
     type Error = PlanError;
-    fn rewrite_expression(
-        &mut self,
-        expression: LogicalExpression,
-    ) -> PlanResult<LogicalExpression> {
+    fn rewrite_expression(&mut self, expression: ExprNode) -> PlanResult<ExprNode> {
         Ok(expression)
     }
-    fn rewrite_plan(&mut self, plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+    fn rewrite_query(&mut self, plan: QueryNode) -> PlanResult<QueryNode> {
         let before = self.predicates.len();
-        let mut plan = walk_plan(self, plan)?;
+        let mut plan = walk_query(self, plan)?;
         let mut schema = plan.schema.into_resolved("correlated output")?;
         let mut required = HashSet::new();
         for predicate in &self.predicates {
             predicate.clone().transform_up::<PlanError>(&mut |value| {
-                if let Deferred::Resolved(ExpressionNode::Attribute(id)) = value.node {
+                if let Deferred::Resolved(ExprKind::Attribute(id)) = value.kind {
                     required.insert(id);
                 }
                 Ok(value)
             })?;
         }
-        plan.node = Deferred::Resolved(match plan.node.into_resolved("correlated operator")? {
-            PlanNode::Filter { input, condition } => {
+        plan.kind = Deferred::Resolved(match plan.kind.into_resolved("correlated operator")? {
+            QueryKind::Filter { input, condition } => {
                 let mut local = None;
                 for value in conjunctions(*condition)? {
-                    if value.any(&|n| matches!(n, ExpressionNode::OuterAttribute { .. }))? {
+                    if value.any(&|n| matches!(n, ExprKind::OuterAttribute { .. }))? {
                         self.predicates.push(value);
                     } else {
                         local = Some(match local {
@@ -306,12 +297,12 @@ impl QueryRewriter for PullCorrelation<'_, '_, '_> {
                     return Ok(*input);
                 };
                 schema = input.schema.resolved("correlated filter")?.clone();
-                PlanNode::Filter {
+                QueryKind::Filter {
                     input,
                     condition: Box::new(condition),
                 }
             }
-            PlanNode::Project {
+            QueryKind::Project {
                 input,
                 mut expressions,
             } => {
@@ -326,9 +317,9 @@ impl QueryRewriter for PullCorrelation<'_, '_, '_> {
                         schema.attributes.push(attribute.clone());
                     }
                 }
-                PlanNode::Project { input, expressions }
+                QueryKind::Project { input, expressions }
             }
-            PlanNode::Aggregate {
+            QueryKind::Aggregate {
                 input,
                 mut grouping,
                 mut grouping_sets,
@@ -340,7 +331,7 @@ impl QueryRewriter for PullCorrelation<'_, '_, '_> {
                     if !required.contains(&source.id) {
                         continue;
                     }
-                    let existing = grouping.iter().find(|p| matches!(p.expression.node, Deferred::Resolved(ExpressionNode::Attribute(id)) if id == source.id));
+                    let existing = grouping.iter().find(|p| matches!(p.expression.kind, Deferred::Resolved(ExprKind::Attribute(id)) if id == source.id));
                     let attribute = if let Some(existing) = existing {
                         existing.attribute.clone()
                     } else {
@@ -363,7 +354,7 @@ impl QueryRewriter for PullCorrelation<'_, '_, '_> {
                 }
                 for predicate in &mut self.predicates {
                     *predicate = predicate.clone().transform_up::<PlanError>(&mut |value| {
-                        if let Deferred::Resolved(ExpressionNode::Attribute(id)) = value.node
+                        if let Deferred::Resolved(ExprKind::Attribute(id)) = value.kind
                             && let Some(attribute) = mapping.get(&id)
                         {
                             return self.resolver.reference(attribute);
@@ -377,7 +368,7 @@ impl QueryRewriter for PullCorrelation<'_, '_, '_> {
                     .chain(grouping_id.iter().cloned())
                     .chain(aggregates.iter().map(|p| p.attribute.clone()))
                     .collect();
-                PlanNode::Aggregate {
+                QueryKind::Aggregate {
                     input,
                     grouping,
                     grouping_sets,
@@ -385,11 +376,11 @@ impl QueryRewriter for PullCorrelation<'_, '_, '_> {
                     aggregates,
                 }
             }
-            PlanNode::Scope { input } => {
+            QueryKind::Scope { input } => {
                 schema = input.schema.resolved("correlated scope")?.clone();
-                PlanNode::Scope { input }
+                QueryKind::Scope { input }
             }
-            PlanNode::Join { kind, .. }
+            QueryKind::Join { kind, .. }
                 if self.predicates.len() > before && kind != JoinType::Inner =>
             {
                 return Err(PlanError::unsupported(

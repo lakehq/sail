@@ -6,16 +6,13 @@ use sail_common::spec;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
-    pub(super) async fn set_operation(
-        &mut self,
-        set: spec::SetOperation,
-    ) -> PlanResult<LogicalPlan> {
+    pub(super) async fn set_operation(&mut self, set: spec::SetOperation) -> PlanResult<QueryNode> {
         if set.allow_missing_columns && !set.by_name {
             return Err(PlanError::analysis("missing columns require UNION BY NAME"));
         }
@@ -24,7 +21,7 @@ impl Resolver<'_, '_> {
         }
         let left = self.query(*set.left).await?;
         let right = self.query(*set.right).await?;
-        let visible = |plan: &LogicalPlan| -> PlanResult<Vec<Attribute>> {
+        let visible = |plan: &QueryNode| -> PlanResult<Vec<Attribute>> {
             Ok(plan
                 .schema
                 .resolved("set operation input")?
@@ -100,9 +97,7 @@ impl Resolver<'_, '_> {
             for attribute in [&a, &b] {
                 values.push(match attribute {
                     Some(attribute) => self.reference(attribute)?,
-                    None => {
-                        LogicalExpression::literal(self.context.ids.expression(), ScalarValue::Null)
-                    }
+                    None => ExprNode::literal(self.context.ids.expression(), ScalarValue::Null),
                 });
             }
             let fields = typing::argument_fields(&values)?;
@@ -141,12 +136,10 @@ impl Resolver<'_, '_> {
                 let mut field = value.result_type.resolved("set input field")?.clone();
                 if field.metadata != result_type.metadata {
                     field.metadata.clone_from(&result_type.metadata);
-                    *value = LogicalExpression {
+                    *value = ExprNode {
                         id: self.context.ids.expression(),
                         result_type: Deferred::Resolved(field),
-                        node: Deferred::Resolved(ExpressionNode::WithMetadata(Box::new(
-                            value.clone(),
-                        ))),
+                        kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(value.clone()))),
                     };
                 }
             }
@@ -167,11 +160,11 @@ impl Resolver<'_, '_> {
         let mut left = self.project(left, left_values)?;
         let mut right = self.project(right, right_values)?;
         if set.set_op_type == spec::SetOpType::Union {
-            let union = LogicalPlan {
-                node: Deferred::Resolved(PlanNode::Union {
+            let union = QueryNode {
+                kind: Deferred::Resolved(QueryKind::Union {
                     inputs: vec![left, right],
                 }),
-                schema: Deferred::Resolved(PlanSchema {
+                schema: Deferred::Resolved(QuerySchema {
                     attributes: outputs,
                 }),
             };
@@ -217,8 +210,8 @@ impl Resolver<'_, '_> {
             });
         }
         let schema = left.schema.clone();
-        let join = LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Join {
+        let join = QueryNode {
+            kind: Deferred::Resolved(QueryKind::Join {
                 lateral: false,
                 left: Box::new(left),
                 right: Box::new(right),
@@ -247,17 +240,17 @@ impl Resolver<'_, '_> {
         self.project(join, output)
     }
 
-    fn distinct(input: LogicalPlan) -> LogicalPlan {
+    fn distinct(input: QueryNode) -> QueryNode {
         let schema = input.schema.clone();
-        LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Distinct {
+        QueryNode {
+            kind: Deferred::Resolved(QueryKind::Distinct {
                 input: Box::new(input),
             }),
             schema,
         }
     }
 
-    fn number_duplicates(&mut self, input: LogicalPlan) -> PlanResult<LogicalPlan> {
+    fn number_duplicates(&mut self, input: QueryNode) -> PlanResult<QueryNode> {
         let mut schema = input.schema.resolved("duplicate input")?.clone();
         let partition_by = schema
             .attributes
@@ -268,10 +261,10 @@ impl Resolver<'_, '_> {
             datafusion::functions_window::row_number::row_number_udwf(),
         );
         let field = crate::analysis::typing::aggregate::resolve_window(&function, &[])?.result;
-        let result_type = ExpressionType::from_field(&field);
-        let expression = LogicalExpression {
+        let result_type = ExprType::from_field(&field);
+        let expression = ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::WindowFunction {
+            kind: Deferred::Resolved(ExprKind::WindowFunction {
                 function,
                 arguments: vec![],
                 partition_by,
@@ -285,8 +278,8 @@ impl Resolver<'_, '_> {
         };
         let attribute = self.attribute("duplicate_number".into(), result_type);
         schema.attributes.push(attribute.clone());
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Window {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Window {
                 input: Box::new(input),
                 expressions: vec![Projection {
                     expression,

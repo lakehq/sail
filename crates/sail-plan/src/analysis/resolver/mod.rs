@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use sail_common::spec;
 
 use super::deferred::Deferred;
-use super::ir::*;
+use super::model::*;
 use super::{AnalysisContext, AnalysisLayer};
 use crate::error::PlanResult;
 
@@ -41,6 +41,7 @@ mod merge;
 mod misc;
 mod native;
 mod pivot;
+mod plan;
 mod predicate;
 mod procedure;
 mod python;
@@ -75,26 +76,21 @@ mod write_v1;
 mod write_v2;
 
 #[derive(Default)]
-pub struct ResolveQuery;
+pub struct ResolvePlan;
 
 #[async_trait]
-impl AnalysisLayer for ResolveQuery {
+impl AnalysisLayer for ResolvePlan {
     fn name(&self) -> &str {
-        "resolve_query"
+        "resolve_plan"
     }
 
     async fn transform(
         &self,
-        query: LogicalQuery,
+        mut plan: Plan,
         context: &mut AnalysisContext<'_>,
-    ) -> PlanResult<LogicalQuery> {
-        let mut resolver = Resolver::new(context);
-        resolver.context.ids.reserve_plan(&query.plan)?;
-        let plan = resolver.native_plan(query.plan).await?;
-        let plan = super::row_identity::materialize(plan, &mut resolver.context.ids)?;
-        let plan = super::scalar_iterator::materialize(plan, &mut resolver.context.ids)?;
-        let plan = super::ordering::preserve(plan)?;
-        Ok(LogicalQuery { plan })
+    ) -> PlanResult<Plan> {
+        plan.reserve_ids(&mut context.ids)?;
+        Resolver::new(context).native_plan(plan).await
     }
 }
 
@@ -102,8 +98,8 @@ struct Resolver<'a, 'b> {
     context: &'a mut AnalysisContext<'b>,
     expression_aliases: Vec<NamedExpression>,
     expression_replacements: Vec<(spec::Expr, NamedExpression)>,
-    outer: Vec<PlanSchema>,
-    lambdas: Vec<PlanSchema>,
+    outer: Vec<QuerySchema>,
+    lambdas: Vec<QuerySchema>,
     // Definitions retain semantic origins; references allocate occurrence IDs.
     ctes: HashMap<String, Arc<CteDefinition>>,
     parameters: HashMap<String, datafusion_common::ScalarValue>,
@@ -114,26 +110,18 @@ struct Resolver<'a, 'b> {
     discarded_predicate: bool,
     cte_origins: std::collections::HashSet<AttributeId>,
     parameter_origins: std::collections::HashSet<AttributeId>,
-    bindings: HashMap<i64, Vec<PlanSchema>>,
+    bindings: HashMap<i64, Vec<QuerySchema>>,
 }
 
 struct CteDefinition {
-    plan: LogicalPlan,
+    plan: QueryNode,
     parameter: bool,
 }
 
 #[derive(Debug)]
 struct NamedExpression {
     name: String,
-    expression: LogicalExpression,
-}
-
-/// Analyze a query or command with one identity domain for every nested input.
-pub async fn analyze_plan(
-    plan: spec::Plan,
-    context: &mut AnalysisContext<'_>,
-) -> PlanResult<super::command::AnalyzedPlan> {
-    Resolver::new(context).plan(plan).await
+    expression: ExprNode,
 }
 
 impl<'a, 'b> Resolver<'a, 'b> {
@@ -167,7 +155,7 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn attribute(&mut self, name: String, result_type: ExpressionType) -> Attribute {
+    fn attribute(&mut self, name: String, result_type: ExprType) -> Attribute {
         let id = self.context.ids.attribute();
         Attribute {
             id,
@@ -181,26 +169,28 @@ impl Resolver<'_, '_> {
         }
     }
 
-    fn reference(&mut self, attribute: &Attribute) -> PlanResult<LogicalExpression> {
-        Ok(LogicalExpression {
+    fn reference(&mut self, attribute: &Attribute) -> PlanResult<ExprNode> {
+        Ok(ExprNode {
             id: self.context.ids.expression(),
-            node: Deferred::Resolved(ExpressionNode::Attribute(attribute.id)),
+            kind: Deferred::Resolved(ExprKind::Attribute(attribute.id)),
             result_type: Deferred::Resolved(
                 attribute.result_type.resolved("attribute type")?.clone(),
             ),
         })
     }
 
-    fn projection(&mut self, named: NamedExpression, input: &PlanSchema) -> PlanResult<Projection> {
+    fn projection(
+        &mut self,
+        named: NamedExpression,
+        input: &QuerySchema,
+    ) -> PlanResult<Projection> {
         let result_type = named
             .expression
             .result_type
             .resolved("projection expression type")?
             .clone();
         let mut attribute = self.attribute(named.name, result_type);
-        if let ExpressionNode::Attribute(id) =
-            named.expression.node.resolved("projection expression")?
-        {
+        if let ExprKind::Attribute(id) = named.expression.kind.resolved("projection expression")? {
             let source = input.attribute(*id)?;
             attribute.origin = source.origin;
             attribute.qualifier.clone_from(&source.qualifier);
@@ -215,9 +205,9 @@ impl Resolver<'_, '_> {
 
     fn project(
         &mut self,
-        mut input: LogicalPlan,
+        mut input: QueryNode,
         expressions: Vec<NamedExpression>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let mut windows: Vec<Projection> = vec![];
         let expressions = expressions
             .into_iter()
@@ -226,8 +216,8 @@ impl Resolver<'_, '_> {
                 let expression =
                     expression.transform_up::<crate::error::PlanError>(&mut |expression| {
                         if matches!(
-                            expression.node.resolved("project expression")?,
-                            ExpressionNode::WindowFunction { .. }
+                            expression.kind.resolved("project expression")?,
+                            ExprKind::WindowFunction { .. }
                         ) {
                             for window in &windows {
                                 if window.expression.equivalent(&expression)? {
@@ -268,8 +258,8 @@ impl Resolver<'_, '_> {
         for window in windows {
             let mut schema = input.schema.resolved("window input")?.clone();
             schema.attributes.push(window.attribute.clone());
-            input = LogicalPlan {
-                node: Deferred::Resolved(PlanNode::Window {
+            input = QueryNode {
+                kind: Deferred::Resolved(QueryKind::Window {
                     input: Box::new(input),
                     expressions: vec![window],
                 }),
@@ -281,11 +271,11 @@ impl Resolver<'_, '_> {
             .into_iter()
             .map(|expression| self.projection(expression, schema))
             .collect::<PlanResult<Vec<_>>>()?;
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: expressions.iter().map(|p| p.attribute.clone()).collect(),
         };
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Project {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input),
                 expressions,
             }),

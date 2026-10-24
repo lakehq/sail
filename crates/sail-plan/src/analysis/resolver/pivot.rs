@@ -10,12 +10,12 @@ use sail_function::scalar::struct_function::StructFunction;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
-    fn pivot_tuple(&mut self, mut values: Vec<LogicalExpression>) -> PlanResult<LogicalExpression> {
+    fn pivot_tuple(&mut self, mut values: Vec<ExprNode>) -> PlanResult<ExprNode> {
         if values.len() == 1 {
             return Ok(values.remove(0));
         }
@@ -31,13 +31,13 @@ impl Resolver<'_, '_> {
         column: &Attribute,
         value: &ScalarValue,
         fast: bool,
-    ) -> PlanResult<LogicalExpression> {
+    ) -> PlanResult<ExprNode> {
         let reference = self.reference(column)?;
         if value.is_null() {
-            return Ok(LogicalExpression {
+            return Ok(ExprNode {
                 id: self.context.ids.expression(),
-                node: Deferred::Resolved(ExpressionNode::IsNull(Box::new(reference))),
-                result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+                kind: Deferred::Resolved(ExprKind::IsNull(Box::new(reference))),
+                result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
             });
         }
         let value = value.cast_to(&column.result_type.resolved("pivot column")?.data_type)?;
@@ -49,7 +49,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion::async_recursion]
-    pub(super) async fn pivot(&mut self, pivot: spec::Pivot) -> PlanResult<LogicalPlan> {
+    pub(super) async fn pivot(&mut self, pivot: spec::Pivot) -> PlanResult<QueryNode> {
         let input = self.query(*pivot.input).await?;
         let input = self.visible_output(input)?;
         let schema = input.schema.resolved("pivot input")?;
@@ -63,8 +63,8 @@ impl Resolver<'_, '_> {
         }
         let column_name = columns
             .iter()
-            .map(|value| match &value.node {
-                Deferred::Resolved(ExpressionNode::Attribute(id)) => schema
+            .map(|value| match &value.kind {
+                Deferred::Resolved(ExprKind::Attribute(id)) => schema
                     .attribute(*id)
                     .map(|a| a.name.clone())
                     .map_err(PlanError::from),
@@ -116,9 +116,9 @@ impl Resolver<'_, '_> {
                     expression: reference,
                 }],
             )?;
-            let distinct = LogicalPlan {
+            let distinct = QueryNode {
                 schema: distinct.schema.clone(),
-                node: Deferred::Resolved(PlanNode::Distinct {
+                kind: Deferred::Resolved(QueryKind::Distinct {
                     input: Box::new(distinct),
                 }),
             };
@@ -156,7 +156,7 @@ impl Resolver<'_, '_> {
                 let mut expressions = vec![];
                 for expression in value.values {
                     expressions.push(
-                        self.expression(expression, &PlanSchema::default())
+                        self.expression(expression, &QuerySchema::default())
                             .await?
                             .expression,
                     );
@@ -193,12 +193,12 @@ impl Resolver<'_, '_> {
                     named
                         .expression
                         .transform_up::<PlanError>(&mut |mut expression| {
-                            if let Deferred::Resolved(ExpressionNode::AggregateFunction {
+                            if let Deferred::Resolved(ExprKind::AggregateFunction {
                                 function,
                                 filter,
                                 null_treatment,
                                 ..
-                            }) = &mut expression.node
+                            }) = &mut expression.kind
                             {
                                 let predicate = self.pivot_predicate(&column, &value, fast)?;
                                 *filter = Some(Box::new(match filter.take() {
@@ -220,9 +220,8 @@ impl Resolver<'_, '_> {
                     let mut count =
                         self.aggregate_call(self.aggregate_kernel("count")?, vec![one])?;
                     let predicate = self.pivot_predicate(&column, &value, fast)?;
-                    if let Deferred::Resolved(ExpressionNode::AggregateFunction {
-                        filter, ..
-                    }) = &mut count.node
+                    if let Deferred::Resolved(ExprKind::AggregateFunction { filter, .. }) =
+                        &mut count.kind
                     {
                         *filter = Some(Box::new(predicate));
                     }
@@ -251,7 +250,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion::async_recursion]
-    pub(super) async fn unpivot(&mut self, unpivot: spec::Unpivot) -> PlanResult<LogicalPlan> {
+    pub(super) async fn unpivot(&mut self, unpivot: spec::Unpivot) -> PlanResult<QueryNode> {
         let input = self.query(*unpivot.input).await?;
         let input = self.visible_output(input)?;
         let schema = input.schema.resolved("unpivot input")?;
@@ -370,10 +369,10 @@ impl Resolver<'_, '_> {
                 let reference = self.reference(&element)?;
                 let selector = self.literal(ScalarValue::Utf8(Some(name.clone())));
                 let value = self.scalar("get_field", vec![reference, selector])?;
-                let present = LogicalExpression {
+                let present = ExprNode {
                     id: self.context.ids.expression(),
-                    node: Deferred::Resolved(ExpressionNode::IsNotNull(Box::new(value))),
-                    result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+                    kind: Deferred::Resolved(ExprKind::IsNotNull(Box::new(value))),
+                    result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
                 };
                 condition = self.binary(condition, Operator::Or, present)?;
             }
@@ -386,9 +385,9 @@ impl Resolver<'_, '_> {
             ids.push(NamedExpression { name, expression });
         }
         let input = self.project(input, ids)?;
-        Ok(LogicalPlan {
+        Ok(QueryNode {
             schema: input.schema.clone(),
-            node: Deferred::Resolved(PlanNode::Scope {
+            kind: Deferred::Resolved(QueryKind::Scope {
                 input: Box::new(input),
             }),
         })
@@ -396,13 +395,13 @@ impl Resolver<'_, '_> {
 }
 
 fn collect_attributes(
-    expression: &LogicalExpression,
+    expression: &ExprNode,
     attributes: &mut HashSet<AttributeId>,
 ) -> PlanResult<()> {
     expression
         .clone()
         .transform_up::<PlanError>(&mut |expression| {
-            if let Deferred::Resolved(ExpressionNode::Attribute(id)) = expression.node {
+            if let Deferred::Resolved(ExprKind::Attribute(id)) = expression.kind {
                 attributes.insert(id);
             }
             Ok(expression)
@@ -410,10 +409,10 @@ fn collect_attributes(
     Ok(())
 }
 
-fn check_pivot_aggregate(expression: &LogicalExpression, schema: &PlanSchema) -> PlanResult<()> {
-    match expression.node.resolved("pivot aggregate")? {
-        ExpressionNode::AggregateFunction { .. } => Ok(()),
-        ExpressionNode::Attribute(id) => Err(PlanError::analysis(format!(
+fn check_pivot_aggregate(expression: &ExprNode, schema: &QuerySchema) -> PlanResult<()> {
+    match expression.kind.resolved("pivot aggregate")? {
+        ExprKind::AggregateFunction { .. } => Ok(()),
+        ExprKind::Attribute(id) => Err(PlanError::analysis(format!(
             "Aggregate expression required for pivot, but '{}' did not appear in any aggregate function",
             schema.attribute(*id)?.name
         ))),

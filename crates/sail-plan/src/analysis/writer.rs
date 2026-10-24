@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
-use datafusion_expr::{Extension, LogicalPlan as BackendPlan};
+use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::provider::CatalogPartitionField;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
@@ -12,21 +12,20 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
-use super::command::LogicalCommand;
-use super::ir::*;
+use super::model::*;
 use crate::error::PlanResult;
 
 #[derive(Debug)]
 pub struct WriteOperation {
-    pub input: LogicalPlan,
+    pub input: QueryNode,
     pub format: String,
     pub mode: WriteDisposition,
     pub partition_by: Vec<CatalogPartitionField>,
-    pub sort_order: Vec<SortExpression>,
+    pub sort_order: Vec<SortKey>,
     pub bucket_by: Option<BucketBy>,
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
-    pub preconditions: Vec<LogicalCommand>,
+    pub preconditions: Vec<CommandNode>,
 }
 
 #[derive(Debug)]
@@ -37,14 +36,14 @@ pub enum WriteDisposition {
     Overwrite,
     OverwritePartitions,
     OverwriteIf {
-        condition: Box<LogicalExpression>,
-        schema: PlanSchema,
+        condition: Box<ExprNode>,
+        schema: QuerySchema,
         source: Option<String>,
     },
 }
 
 impl WriteOperation {
-    pub(super) async fn lower(self, session: &SessionContext) -> PlanResult<BackendPlan> {
+    pub(super) async fn lower(self, session: &SessionContext) -> PlanResult<LogicalPlan> {
         let input_schema = self.input.schema.resolved("write input")?.clone();
         let sort_order = self
             .sort_order
@@ -95,7 +94,7 @@ impl WriteOperation {
                 },
             )
             .await?;
-        Ok(BackendPlan::Extension(Extension {
+        Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(sail_logical_plan::barrier::BarrierNode::new(
                 preconditions,
                 Arc::new(plan),

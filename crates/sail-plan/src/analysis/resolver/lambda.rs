@@ -8,7 +8,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
@@ -47,7 +47,7 @@ enum Slot {
         request: spec::Expr,
         captured: Option<Box<NamedExpression>>,
         names: Vec<String>,
-        parameters: Option<PlanSchema>,
+        parameters: Option<QuerySchema>,
         body: Option<Box<NamedExpression>>,
     },
 }
@@ -79,7 +79,7 @@ impl Slot {
 impl Resolver<'_, '_> {
     pub(super) fn lambda_variable(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         name: &[String],
     ) -> PlanResult<Option<NamedExpression>> {
         let Some((first, fields)) = name.split_first() else {
@@ -97,13 +97,13 @@ impl Resolver<'_, '_> {
         };
         let mut value = NamedExpression {
             name: attribute.name.clone(),
-            expression: LogicalExpression {
+            expression: ExprNode {
                 id: if fields.is_empty() {
                     id
                 } else {
                     self.context.ids.expression()
                 },
-                node: Deferred::Resolved(ExpressionNode::LambdaVariable(attribute.id)),
+                kind: Deferred::Resolved(ExprKind::LambdaVariable(attribute.id)),
                 result_type: attribute.result_type,
             },
         };
@@ -115,7 +115,7 @@ impl Resolver<'_, '_> {
             };
             let extraction = NamedExpression {
                 name: field.clone(),
-                expression: LogicalExpression::literal(
+                expression: ExprNode::literal(
                     self.context.ids.expression(),
                     datafusion_common::ScalarValue::Utf8(Some(field.clone())),
                 ),
@@ -128,11 +128,11 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn higher_order(
         &mut self,
-        id: ExpressionId,
+        id: ExprId,
         name: String,
         mut function: Arc<HigherOrderUDF>,
         arguments: Vec<spec::Expr>,
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<NamedExpression> {
         let mut slots = vec![];
         let mut implicit_map_lambda = false;
@@ -283,12 +283,12 @@ impl Resolver<'_, '_> {
                         "{name} requires two lambda parameters"
                     )));
                 }
-                let parameters = PlanSchema {
+                let parameters = QuerySchema {
                     attributes: names
                         .iter()
                         .zip(fields)
                         .map(|(name, field)| {
-                            self.attribute(name.clone(), ExpressionType::from_field(&field))
+                            self.attribute(name.clone(), ExprType::from_field(&field))
                         })
                         .collect(),
                 };
@@ -368,8 +368,8 @@ impl Resolver<'_, '_> {
                 .iter()
                 .map(|slot| match slot {
                     Slot::Value(value) => {
-                        match value.expression.node.resolved("higher-order argument")? {
-                            ExpressionNode::Literal(value) => Ok(Some(value)),
+                        match value.expression.kind.resolved("higher-order argument")? {
+                            ExprKind::Literal(value) => Ok(Some(value)),
                             _ => Ok(None),
                         }
                     }
@@ -400,7 +400,7 @@ impl Resolver<'_, '_> {
                 match slot {
                     Slot::Value(value) => {
                         names.push(value.name);
-                        arguments.push(FunctionArgument::Value(Box::new(value.expression)));
+                        arguments.push(FunctionArg::Value(Box::new(value.expression)));
                     }
                     Slot::Lambda {
                         names: parameters_names,
@@ -437,7 +437,7 @@ impl Resolver<'_, '_> {
                                 });
                             }
                         }
-                        arguments.push(FunctionArgument::Lambda {
+                        arguments.push(FunctionArg::Lambda {
                             id: self.context.ids.expression(),
                             parameters,
                             body: Box::new(body.expression),
@@ -453,13 +453,13 @@ impl Resolver<'_, '_> {
             let display_name = format!("{name}({})", names.join(", "));
             return Ok(NamedExpression {
                 name: display_name,
-                expression: LogicalExpression {
+                expression: ExprNode {
                     id,
-                    node: Deferred::Resolved(ExpressionNode::HigherOrderFunction {
+                    kind: Deferred::Resolved(ExprKind::HigherOrderFunction {
                         function,
                         arguments,
                     }),
-                    result_type: Deferred::Resolved(ExpressionType::from_field(&result.result)),
+                    result_type: Deferred::Resolved(ExprType::from_field(&result.result)),
                 },
             });
         }
@@ -480,14 +480,14 @@ fn unwrap_alias(expression: spec::Expr) -> spec::Expr {
     }
 }
 
-fn references(expression: &LogicalExpression, id: AttributeId) -> PlanResult<bool> {
-    let node = expression.node.resolved("lambda capture")?;
-    if matches!(node, ExpressionNode::LambdaVariable(variable) if *variable == id) {
+fn references(expression: &ExprNode, id: AttributeId) -> PlanResult<bool> {
+    let node = expression.kind.resolved("lambda capture")?;
+    if matches!(node, ExprKind::LambdaVariable(variable) if *variable == id) {
         return Ok(true);
     }
-    if let ExpressionNode::HigherOrderFunction { arguments, .. } = node {
+    if let ExprKind::HigherOrderFunction { arguments, .. } = node {
         for argument in arguments {
-            if let FunctionArgument::Lambda { body, .. } = argument
+            if let FunctionArg::Lambda { body, .. } = argument
                 && references(body, id)?
             {
                 return Ok(true);

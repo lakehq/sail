@@ -10,56 +10,54 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::InvariantLevel;
 use datafusion_expr::{
-    EmptyRelation, Expr, ExprSchemable, LogicalPlan as BackendPlan, LogicalPlanBuilder, Subquery,
-    Union, Values, expr,
+    EmptyRelation, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Subquery, Union, Values,
+    expr,
 };
 
-use super::ir::*;
+use super::model::*;
 use crate::analysis::NamedPlan;
 use crate::error::{PlanError, PlanResult};
 
-impl LogicalQuery {
-    pub fn into_named_plan(self) -> PlanResult<NamedPlan> {
-        let output = self.plan.schema.resolved("query output schema")?;
-        let names = output
+pub fn lower_query(query: QueryNode) -> PlanResult<NamedPlan> {
+    let output = query.schema.resolved("query output schema")?;
+    let names = output
+        .attributes
+        .iter()
+        .filter(|a| !a.hidden)
+        .map(|a| a.name.clone())
+        .collect();
+    let mut context = LoweringContext::default();
+    let mut plan = context.plan(&query)?;
+    if output.attributes.iter().any(|a| a.hidden) {
+        let expressions = output
             .attributes
             .iter()
             .filter(|a| !a.hidden)
-            .map(|a| a.name.clone())
-            .collect();
-        let mut context = LoweringContext::default();
-        let mut plan = context.plan(&self.plan)?;
-        if output.attributes.iter().any(|a| a.hidden) {
-            let expressions = output
-                .attributes
-                .iter()
-                .filter(|a| !a.hidden)
-                .map(|a| Expr::Column(Column::from_name(backend_name(a.id))))
-                .collect::<Vec<_>>();
-            plan = LogicalPlanBuilder::new(plan)
-                .project(expressions)?
-                .build()?;
-        }
-        plan.check_invariants(InvariantLevel::Executable)?;
-        Ok(NamedPlan {
-            plan,
-            fields: Some(names),
-        })
+            .map(|a| Expr::Column(Column::from_name(backend_name(a.id))))
+            .collect::<Vec<_>>();
+        plan = LogicalPlanBuilder::new(plan)
+            .project(expressions)?
+            .build()?;
     }
+    plan.check_invariants(InvariantLevel::Executable)?;
+    Ok(NamedPlan {
+        plan,
+        fields: Some(names),
+    })
 }
 
 #[derive(Default)]
 struct LoweringContext {
-    expression_ids: HashSet<ExpressionId>,
-    outer: Vec<PlanSchema>,
-    lambdas: Vec<PlanSchema>,
+    expression_ids: HashSet<ExprId>,
+    outer: Vec<QuerySchema>,
+    lambdas: Vec<QuerySchema>,
 }
 
 pub(super) fn backend_name(id: AttributeId) -> String {
     format!("#{}", id.0)
 }
 
-fn backend_schema(schema: &PlanSchema) -> PlanResult<DFSchemaRef> {
+fn backend_schema(schema: &QuerySchema) -> PlanResult<DFSchemaRef> {
     let mut ids = HashSet::new();
     let fields = schema
         .attributes
@@ -85,16 +83,16 @@ fn backend_schema(schema: &PlanSchema) -> PlanResult<DFSchemaRef> {
 }
 
 impl LoweringContext {
-    fn plan(&mut self, plan: &LogicalPlan) -> PlanResult<BackendPlan> {
+    fn plan(&mut self, plan: &QueryNode) -> PlanResult<LogicalPlan> {
         let output = plan.schema.resolved("plan schema")?;
         let expected_schema = backend_schema(output)?;
-        let lowered = match plan.node.resolved("plan node")? {
-            PlanNode::Scope { input } => self.plan(input)?,
-            PlanNode::Empty { produce_one_row } => BackendPlan::EmptyRelation(EmptyRelation {
+        let lowered = match plan.kind.resolved("plan node")? {
+            QueryKind::Scope { input } => self.plan(input)?,
+            QueryKind::Empty { produce_one_row } => LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: *produce_one_row,
                 schema: Arc::new(DFSchema::empty()),
             }),
-            PlanNode::Range {
+            QueryKind::Range {
                 start,
                 end,
                 step,
@@ -103,7 +101,7 @@ impl LoweringContext {
                 let [attribute] = output.attributes.as_slice() else {
                     return Err(PlanError::analysis("range requires one output attribute"));
                 };
-                BackendPlan::Extension(datafusion_expr::Extension {
+                LogicalPlan::Extension(datafusion_expr::Extension {
                     node: Arc::new(sail_logical_plan::range::RangeNode::try_new(
                         backend_name(attribute.id),
                         *start,
@@ -113,26 +111,26 @@ impl LoweringContext {
                     )?),
                 })
             }
-            PlanNode::RowIdentity { input, attribute, kind } => {
+            QueryKind::RowIdentity { input, attribute, kind } => {
                 let input = Arc::new(self.plan(input)?);
                 let name = backend_name(attribute.id);
                 let node: Arc<dyn datafusion_expr::UserDefinedLogicalNode> = match kind {
                     RowIdentityKind::Monotonic => Arc::new(sail_logical_plan::monotonic_id::MonotonicIdNode::try_new(input, name)?),
                     RowIdentityKind::Partition => Arc::new(sail_logical_plan::spark_partition_id::SparkPartitionIdNode::try_new(input, name)?),
                 };
-                BackendPlan::Extension(datafusion_expr::Extension { node })
+                LogicalPlan::Extension(datafusion_expr::Extension { node })
             }
-            PlanNode::MapPartitions { input, function } => BackendPlan::Extension(datafusion_expr::Extension {
+            QueryKind::MapPartitions { input, function } => LogicalPlan::Extension(datafusion_expr::Extension {
                 node: Arc::new(sail_logical_plan::map_partitions::MapPartitionsNode::try_new(
                     Arc::new(self.plan(input)?), output.attributes.iter().map(|a| backend_name(a.id)).collect(), vec![None; output.attributes.len()], Arc::clone(function),
                 )?),
             }),
-            PlanNode::RemoteCheckpoint { relation_id } => BackendPlan::Extension(datafusion_expr::Extension {
+            QueryKind::RemoteCheckpoint { relation_id } => LogicalPlan::Extension(datafusion_expr::Extension {
                 node: Arc::new(sail_logical_plan::remote_checkpoint::RemoteCheckpointRelationNode::try_new(
                     relation_id.clone(), Arc::new(expected_schema.as_arrow().clone()),
                 )?),
             }),
-            PlanNode::Unnest { input, column, outer } => {
+            QueryKind::Unnest { input, column, outer } => {
                 let input = self.plan(input)?;
                 let plan = datafusion_expr::builder::unnest_with_options(
                     input,
@@ -145,13 +143,13 @@ impl LoweringContext {
                 )?;
                 rename_outputs(plan, output)?
             }
-            PlanNode::DistinctOn { input, keys } => {
+            QueryKind::DistinctOn { input, keys } => {
                 let lowered = self.plan(input)?;
                 let keys = keys.iter().map(|e| self.expression(e, input.schema.resolved("distinct input")?)).collect::<PlanResult<Vec<_>>>()?;
                 let select = lowered.schema().columns().into_iter().map(Expr::Column).collect();
-                BackendPlan::Distinct(datafusion_expr::Distinct::On(datafusion_expr::DistinctOn::try_new(keys, select, None, Arc::new(lowered))?))
+                LogicalPlan::Distinct(datafusion_expr::Distinct::On(datafusion_expr::DistinctOn::try_new(keys, select, None, Arc::new(lowered))?))
             }
-            PlanNode::Repartition {
+            QueryKind::Repartition {
                 input,
                 partitioning,
             } => {
@@ -180,7 +178,7 @@ impl LoweringContext {
                             .collect::<PlanResult<_>>()?,
                     ),
                 };
-                BackendPlan::Extension(datafusion_expr::Extension {
+                LogicalPlan::Extension(datafusion_expr::Extension {
                     node: Arc::new(ExplicitRepartitionNode::new(
                         Arc::new(lowered),
                         count,
@@ -190,7 +188,7 @@ impl LoweringContext {
                 })
             }
 
-            PlanNode::Values { rows } => {
+            QueryKind::Values { rows } => {
                 let values = rows
                     .iter()
                     .map(|row| {
@@ -214,17 +212,17 @@ impl LoweringContext {
                                         "VALUES requires unresolved type coercion",
                                     ));
                                 }
-                                self.expression(value, &PlanSchema::default())
+                                self.expression(value, &QuerySchema::default())
                             })
                             .collect::<PlanResult<Vec<_>>>()
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
-                BackendPlan::Values(Values {
+                LogicalPlan::Values(Values {
                     schema: Arc::clone(&expected_schema),
                     values,
                 })
             }
-            PlanNode::Scan {
+            QueryKind::Scan {
                 name,
                 source,
                 projection,
@@ -242,17 +240,17 @@ impl LoweringContext {
                 let scan = LogicalPlanBuilder::scan(name.clone(), source, projection.clone())?.build()?;
                 rename_outputs(scan, output)?
             }
-            PlanNode::Project { input, expressions } => {
+            QueryKind::Project { input, expressions } => {
                 let lowered_input = self.plan(input)?;
                 let schema = input.schema.resolved("projection input")?;
                 let expressions = self.projections(expressions, schema)?;
-                BackendPlan::Projection(datafusion_expr::Projection::try_new_with_schema(
+                LogicalPlan::Projection(datafusion_expr::Projection::try_new_with_schema(
                     expressions,
                     Arc::new(lowered_input),
                     Arc::clone(&expected_schema),
                 )?)
             }
-            PlanNode::Filter { input, condition } => {
+            QueryKind::Filter { input, condition } => {
                 let lowered_input = self.plan(input)?;
                 let predicate =
                     self.expression(condition, input.schema.resolved("filter input")?)?;
@@ -260,7 +258,7 @@ impl LoweringContext {
                     .filter(predicate)?
                     .build()?
             }
-            PlanNode::Aggregate { input, grouping, grouping_sets, grouping_id, aggregates } => {
+            QueryKind::Aggregate { input, grouping, grouping_sets, grouping_id, aggregates } => {
                 let lowered_input = self.plan(input)?;
                 let schema = input.schema.resolved("aggregate input")?;
                 let aggregates = self.projections(aggregates, schema)?;
@@ -268,15 +266,15 @@ impl LoweringContext {
                     if grouping_id.is_none() { return Err(PlanError::analysis("grouping sets require an ID attribute")); }
                     let grouping = grouping.iter().map(|p| Ok(self.expression(&p.expression, schema)?.alias(backend_name(p.attribute.id)))).collect::<PlanResult<Vec<_>>>()?;
                     let sets = sets.iter().map(|set| set.iter().map(|i| grouping.get(*i).cloned().ok_or_else(|| PlanError::analysis("invalid grouping set index"))).collect::<PlanResult<Vec<_>>>()).collect::<PlanResult<Vec<_>>>()?;
-                    let aggregate = BackendPlan::Aggregate(datafusion_expr::Aggregate::try_new(Arc::new(lowered_input), vec![Expr::GroupingSet(expr::GroupingSet::GroupingSets(sets))], aggregates)?);
+                    let aggregate = LogicalPlan::Aggregate(datafusion_expr::Aggregate::try_new(Arc::new(lowered_input), vec![Expr::GroupingSet(expr::GroupingSet::GroupingSets(sets))], aggregates)?);
                     rename_outputs(aggregate, output)?
                 } else {
                     if grouping_id.is_some() { return Err(PlanError::analysis("grouping ID requires grouping sets")); }
                     let grouping = self.projections(grouping, schema)?;
-                    BackendPlan::Aggregate(datafusion_expr::Aggregate::try_new_with_schema(Arc::new(lowered_input), grouping, aggregates, Arc::clone(&expected_schema))?)
+                    LogicalPlan::Aggregate(datafusion_expr::Aggregate::try_new_with_schema(Arc::new(lowered_input), grouping, aggregates, Arc::clone(&expected_schema))?)
                 }
             }
-            PlanNode::Sort {
+            QueryKind::Sort {
                 input,
                 order,
                 global,
@@ -286,15 +284,15 @@ impl LoweringContext {
                 let schema = input.schema.resolved("sort input")?;
                 let order = self.sorts(order, schema)?;
                 if *required {
-                    BackendPlan::Extension(datafusion_expr::Extension {
+                    LogicalPlan::Extension(datafusion_expr::Extension {
                         node: Arc::new(sail_logical_plan::sort::RequiredSortNode::new(
                             Arc::new(lowered_input), order, None, !*global,
                         )),
                     })
                 } else if *global {
-                    BackendPlan::Sort(datafusion_expr::Sort { input: Arc::new(lowered_input), expr: order, fetch: None })
+                    LogicalPlan::Sort(datafusion_expr::Sort { input: Arc::new(lowered_input), expr: order, fetch: None })
                 } else {
-                    BackendPlan::Extension(datafusion_expr::Extension {
+                    LogicalPlan::Extension(datafusion_expr::Extension {
                         node: Arc::new(sail_logical_plan::sort::SortWithinPartitionsNode::new(
                             Arc::new(lowered_input),
                             order,
@@ -303,17 +301,17 @@ impl LoweringContext {
                     })
                 }
             }
-            PlanNode::Window { input, expressions } => {
+            QueryKind::Window { input, expressions } => {
                 let lowered_input = self.plan(input)?;
                 let schema = input.schema.resolved("window input")?;
                 let expressions = self.projections(expressions, schema)?;
-                BackendPlan::Window(datafusion_expr::Window::try_new_with_schema(
+                LogicalPlan::Window(datafusion_expr::Window::try_new_with_schema(
                     expressions,
                     Arc::new(lowered_input),
                     Arc::clone(&expected_schema),
                 )?)
             }
-            PlanNode::Limit { input, skip, fetch } => {
+            QueryKind::Limit { input, skip, fetch } => {
                 let lowered_input = self.plan(input)?;
                 let schema = input.schema.resolved("limit input")?;
                 let skip = skip
@@ -328,7 +326,7 @@ impl LoweringContext {
                     .limit_by_expr(skip, fetch)?
                     .build()?
             }
-            PlanNode::Join {
+            QueryKind::Join {
                 lateral,
                 left,
                 right,
@@ -338,9 +336,9 @@ impl LoweringContext {
                 let lowered_left = self.plan(left)?;
                 let lowered_right = if *lateral {
                     let subquery = self.subquery(right, left.schema.resolved("lateral left input")?)?;
-                    if subquery.outer_ref_columns.is_empty() { Arc::unwrap_or_clone(subquery.subquery) } else { BackendPlan::Subquery(subquery) }
+                    if subquery.outer_ref_columns.is_empty() { Arc::unwrap_or_clone(subquery.subquery) } else { LogicalPlan::Subquery(subquery) }
                 } else { self.plan(right)? };
-                let schema = PlanSchema {
+                let schema = QuerySchema {
                     attributes: left
                         .schema
                         .resolved("join left input")?
@@ -361,7 +359,7 @@ impl LoweringContext {
                     rename_outputs(joined, output)?
                 } else { joined }
             }
-            PlanNode::Union { inputs } => {
+            QueryKind::Union { inputs } => {
                 if inputs.is_empty() {
                     return Err(PlanError::analysis("UNION requires at least one input"));
                 }
@@ -392,12 +390,12 @@ impl LoweringContext {
                         Ok(Arc::new(input))
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
-                BackendPlan::Union(Union {
+                LogicalPlan::Union(Union {
                     inputs,
                     schema: Arc::clone(&expected_schema),
                 })
             }
-            PlanNode::Distinct { input } => LogicalPlanBuilder::new(self.plan(input)?)
+            QueryKind::Distinct { input } => LogicalPlanBuilder::new(self.plan(input)?)
                 .distinct()?
                 .build()?,
         };
@@ -421,7 +419,7 @@ impl LoweringContext {
     fn projections(
         &mut self,
         projections: &[Projection],
-        schema: &PlanSchema,
+        schema: &QuerySchema,
     ) -> PlanResult<Vec<Expr>> {
         projections
             .iter()
@@ -446,11 +444,7 @@ impl LoweringContext {
             .collect()
     }
 
-    fn sorts(
-        &mut self,
-        order: &[SortExpression],
-        schema: &PlanSchema,
-    ) -> PlanResult<Vec<expr::Sort>> {
+    fn sorts(&mut self, order: &[SortKey], schema: &QuerySchema) -> PlanResult<Vec<expr::Sort>> {
         order
             .iter()
             .map(|sort| {
@@ -463,7 +457,7 @@ impl LoweringContext {
             .collect()
     }
 
-    fn subquery(&mut self, query: &LogicalPlan, schema: &PlanSchema) -> PlanResult<Subquery> {
+    fn subquery(&mut self, query: &QueryNode, schema: &QuerySchema) -> PlanResult<Subquery> {
         self.outer.push(schema.clone());
         let result = self.plan(query);
         self.outer.pop();
@@ -476,11 +470,7 @@ impl LoweringContext {
         })
     }
 
-    fn expression(
-        &mut self,
-        expression: &LogicalExpression,
-        schema: &PlanSchema,
-    ) -> PlanResult<Expr> {
+    fn expression(&mut self, expression: &ExprNode, schema: &QuerySchema) -> PlanResult<Expr> {
         if !self.expression_ids.insert(expression.id) {
             return Err(PlanError::analysis(format!(
                 "duplicate expression identity: {:?}",
@@ -488,14 +478,14 @@ impl LoweringContext {
             )));
         }
         let expected = expression.result_type.resolved("expression type")?;
-        let lowered = match expression.node.resolved("expression node")? {
-            ExpressionNode::Literal(value) => Expr::Literal(
+        let lowered = match expression.kind.resolved("expression node")? {
+            ExprKind::Literal(value) => Expr::Literal(
                 value.clone(),
                 (!expected.metadata.is_empty()).then(|| {
                     datafusion_common::metadata::FieldMetadata::from(expected.metadata.clone())
                 }),
             ),
-            ExpressionNode::WithMetadata(inner) => {
+            ExprKind::WithMetadata(inner) => {
                 let source = inner.result_type.resolved("metadata source")?;
                 let value = self.expression(inner, schema)?;
                 if source
@@ -518,7 +508,7 @@ impl LoweringContext {
                     ))
                 }
             }
-            ExpressionNode::TruthTest {
+            ExprKind::TruthTest {
                 expression,
                 value,
                 negated,
@@ -533,11 +523,11 @@ impl LoweringContext {
                     (None, true) => Expr::IsNotUnknown(expression),
                 }
             }
-            ExpressionNode::Attribute(id) => {
+            ExprKind::Attribute(id) => {
                 schema.attribute(*id)?;
                 Expr::Column(Column::from_name(backend_name(*id)))
             }
-            ExpressionNode::OuterAttribute { depth, attribute } => {
+            ExprKind::OuterAttribute { depth, attribute } => {
                 let index = self
                     .outer
                     .len()
@@ -551,7 +541,7 @@ impl LoweringContext {
                     .to_field(backend_name(attribute.id));
                 Expr::OuterReferenceColumn(field, Column::from_name(backend_name(attribute.id)))
             }
-            ExpressionNode::ScalarFunction {
+            ExprKind::ScalarFunction {
                 function,
                 arguments,
             } => {
@@ -561,7 +551,7 @@ impl LoweringContext {
                     .collect::<PlanResult<Vec<_>>>()?;
                 function.call(arguments)
             }
-            ExpressionNode::AggregateFunction {
+            ExprKind::AggregateFunction {
                 function,
                 arguments,
                 distinct,
@@ -589,7 +579,7 @@ impl LoweringContext {
                     },
                 })
             }
-            ExpressionNode::Binary {
+            ExprKind::Binary {
                 left,
                 operator,
                 right,
@@ -598,7 +588,7 @@ impl LoweringContext {
                 *operator,
                 Box::new(self.expression(right, schema)?),
             )),
-            ExpressionNode::WindowFunction {
+            ExprKind::WindowFunction {
                 function,
                 arguments,
                 partition_by,
@@ -634,15 +624,15 @@ impl LoweringContext {
                     },
                 }))
             }
-            ExpressionNode::HigherOrderFunction {
+            ExprKind::HigherOrderFunction {
                 function,
                 arguments,
             } => {
                 let args = arguments
                     .iter()
                     .map(|argument| match argument {
-                        FunctionArgument::Value(value) => self.expression(value, schema),
-                        FunctionArgument::Lambda {
+                        FunctionArg::Value(value) => self.expression(value, schema),
+                        FunctionArg::Lambda {
                             id,
                             parameters,
                             body,
@@ -672,7 +662,7 @@ impl LoweringContext {
                     args,
                 ))
             }
-            ExpressionNode::LambdaVariable(id) => {
+            ExprKind::LambdaVariable(id) => {
                 let attribute = self
                     .lambdas
                     .iter()
@@ -687,7 +677,7 @@ impl LoweringContext {
                     .to_field(backend_name(*id));
                 Expr::LambdaVariable(expr::LambdaVariable::new(backend_name(*id), Some(field)))
             }
-            ExpressionNode::Cast {
+            ExprKind::Cast {
                 expression,
                 target,
                 safe,
@@ -700,17 +690,13 @@ impl LoweringContext {
                     Expr::Cast(expr::Cast { expr: value, field })
                 }
             }
-            ExpressionNode::Not(value) => Expr::Not(Box::new(self.expression(value, schema)?)),
-            ExpressionNode::IsNull(value) => {
-                Expr::IsNull(Box::new(self.expression(value, schema)?))
-            }
-            ExpressionNode::IsNotNull(value) => {
+            ExprKind::Not(value) => Expr::Not(Box::new(self.expression(value, schema)?)),
+            ExprKind::IsNull(value) => Expr::IsNull(Box::new(self.expression(value, schema)?)),
+            ExprKind::IsNotNull(value) => {
                 Expr::IsNotNull(Box::new(self.expression(value, schema)?))
             }
-            ExpressionNode::Negative(value) => {
-                Expr::Negative(Box::new(self.expression(value, schema)?))
-            }
-            ExpressionNode::Case {
+            ExprKind::Negative(value) => Expr::Negative(Box::new(self.expression(value, schema)?)),
+            ExprKind::Case {
                 operand,
                 branches,
                 otherwise,
@@ -734,7 +720,7 @@ impl LoweringContext {
                     .transpose()?;
                 Expr::Case(Case::new(operand, branches, otherwise))
             }
-            ExpressionNode::Between {
+            ExprKind::Between {
                 expression,
                 low,
                 high,
@@ -745,7 +731,7 @@ impl LoweringContext {
                 Box::new(self.expression(low, schema)?),
                 Box::new(self.expression(high, schema)?),
             )),
-            ExpressionNode::Like {
+            ExprKind::Like {
                 expression,
                 pattern,
                 negated,
@@ -758,7 +744,7 @@ impl LoweringContext {
                 *escape_char,
                 *case_insensitive,
             )),
-            ExpressionNode::SimilarTo {
+            ExprKind::SimilarTo {
                 expression,
                 pattern,
                 negated,
@@ -771,7 +757,7 @@ impl LoweringContext {
                 *escape_char,
                 *case_insensitive,
             )),
-            ExpressionNode::InList {
+            ExprKind::InList {
                 expression,
                 values,
                 negated,
@@ -783,13 +769,11 @@ impl LoweringContext {
                     .collect::<PlanResult<Vec<_>>>()?;
                 Expr::InList(InList::new(expression, values, *negated))
             }
-            ExpressionNode::ScalarSubquery(query) => {
-                Expr::ScalarSubquery(self.subquery(query, schema)?)
-            }
-            ExpressionNode::Exists { query, negated } => {
+            ExprKind::ScalarSubquery(query) => Expr::ScalarSubquery(self.subquery(query, schema)?),
+            ExprKind::Exists { query, negated } => {
                 Expr::Exists(Exists::new(self.subquery(query, schema)?, *negated))
             }
-            ExpressionNode::InSubquery {
+            ExprKind::InSubquery {
                 expression,
                 query,
                 negated,
@@ -802,7 +786,7 @@ impl LoweringContext {
                 ))
             }
         };
-        let mut actual = ExpressionType::from_field(
+        let mut actual = ExprType::from_field(
             lowered
                 .to_field(backend_schema(schema)?.as_ref())?
                 .1
@@ -811,14 +795,12 @@ impl LoweringContext {
         // Use resolved child nullability rather than recursively re-deriving it
         // from backend expressions. DataFusion's scalar-subquery and null-safe
         // comparison rules differ from SQL's semantic result fields.
-        match expression.node.resolved("expression node")? {
-            ExpressionNode::ScalarSubquery(_) => actual.nullable = true,
-            ExpressionNode::WithMetadata(child)
-            | ExpressionNode::Not(child)
-            | ExpressionNode::Negative(child) => {
+        match expression.kind.resolved("expression node")? {
+            ExprKind::ScalarSubquery(_) => actual.nullable = true,
+            ExprKind::WithMetadata(child) | ExprKind::Not(child) | ExprKind::Negative(child) => {
                 actual.nullable = child.result_type.resolved("child type")?.nullable;
             }
-            ExpressionNode::Binary {
+            ExprKind::Binary {
                 left,
                 operator,
                 right,
@@ -830,15 +812,15 @@ impl LoweringContext {
                 ) && (left.result_type.resolved("left type")?.nullable
                     || right.result_type.resolved("right type")?.nullable);
             }
-            ExpressionNode::ScalarFunction {
+            ExprKind::ScalarFunction {
                 function,
                 arguments,
             } => {
                 let fields = crate::analysis::typing::argument_fields(arguments)?;
                 let literals = arguments
                     .iter()
-                    .map(|arg| match &arg.node {
-                        super::deferred::Deferred::Resolved(ExpressionNode::Literal(value)) => {
+                    .map(|arg| match &arg.kind {
+                        super::deferred::Deferred::Resolved(ExprKind::Literal(value)) => {
                             Some(value)
                         }
                         _ => None,
@@ -863,7 +845,7 @@ impl LoweringContext {
     }
 }
 
-fn rename_outputs(plan: BackendPlan, schema: &PlanSchema) -> PlanResult<BackendPlan> {
+fn rename_outputs(plan: LogicalPlan, schema: &QuerySchema) -> PlanResult<LogicalPlan> {
     let columns = plan.schema().columns();
     if columns.len() != schema.attributes.len() {
         return Err(PlanError::analysis(
@@ -882,10 +864,8 @@ fn rename_outputs(plan: BackendPlan, schema: &PlanSchema) -> PlanResult<BackendP
 
 /// Evaluate an already analyzed constant at an analysis-time execution boundary.
 /// No name resolution or coercion occurs here.
-pub fn evaluate_constant(
-    expression: &LogicalExpression,
-) -> PlanResult<datafusion_common::ScalarValue> {
-    let expression = LoweringContext::default().expression(expression, &PlanSchema::default())?;
+pub fn evaluate_constant(expression: &ExprNode) -> PlanResult<datafusion_common::ScalarValue> {
+    let expression = LoweringContext::default().expression(expression, &QuerySchema::default())?;
     use datafusion_common::tree_node::{Transformed, TreeNode};
     let evaluator = sail_common_datafusion::literal::LiteralEvaluator::new();
     // Some constant kernels return one-element arrays. Materialize their
@@ -903,8 +883,8 @@ pub fn evaluate_constant(
 
 /// Expose display names exactly once for a sink or another external consumer.
 /// Internal bindings remain attribute IDs throughout the entire query tree.
-pub(super) fn external_plan(input: LogicalPlan) -> PlanResult<BackendPlan> {
-    let named = LogicalQuery { plan: input }.into_named_plan()?;
+pub(super) fn external_plan(input: QueryNode) -> PlanResult<LogicalPlan> {
+    let named = crate::analysis::lowering::lower_query(input)?;
     let names = named.fields.unwrap_or_default();
     let expressions = named
         .plan
@@ -920,10 +900,7 @@ pub(super) fn external_plan(input: LogicalPlan) -> PlanResult<BackendPlan> {
 }
 
 /// Bind a checked expression to the external schema used by a data source.
-pub(super) fn external_expression(
-    expression: &LogicalExpression,
-    schema: &PlanSchema,
-) -> PlanResult<Expr> {
+pub(super) fn external_expression(expression: &ExprNode, schema: &QuerySchema) -> PlanResult<Expr> {
     use datafusion_common::tree_node::{Transformed, TreeNode};
     let expression = LoweringContext::default().expression(expression, schema)?;
     let names = schema
@@ -948,10 +925,7 @@ pub(super) fn external_expression(
         .data)
 }
 
-pub(super) fn checked_expression(
-    expression: &LogicalExpression,
-    schema: &PlanSchema,
-) -> PlanResult<Expr> {
+pub(super) fn checked_expression(expression: &ExprNode, schema: &QuerySchema) -> PlanResult<Expr> {
     LoweringContext::default().expression(expression, schema)
 }
 
@@ -965,7 +939,7 @@ mod tests {
     use crate::analysis::deferred::Deferred;
     use crate::analysis::typing::resolve_scalar_call;
 
-    fn attribute(id: AttributeId, name: &str, result_type: ExpressionType) -> Attribute {
+    fn attribute(id: AttributeId, name: &str, result_type: ExprType) -> Attribute {
         Attribute {
             id,
             origin: id,
@@ -978,25 +952,23 @@ mod tests {
         }
     }
 
-    fn project(expression: LogicalExpression, output: Attribute) -> LogicalQuery {
-        LogicalQuery {
-            plan: LogicalPlan {
-                node: Deferred::Resolved(PlanNode::Project {
-                    input: Box::new(LogicalPlan {
-                        node: Deferred::Resolved(PlanNode::Empty {
-                            produce_one_row: true,
-                        }),
-                        schema: Deferred::Resolved(PlanSchema::default()),
+    fn project(expression: ExprNode, output: Attribute) -> QueryNode {
+        QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
+                input: Box::new(QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Empty {
+                        produce_one_row: true,
                     }),
-                    expressions: vec![Projection {
-                        expression,
-                        attribute: output.clone(),
-                    }],
+                    schema: Deferred::Resolved(QuerySchema::default()),
                 }),
-                schema: Deferred::Resolved(PlanSchema {
-                    attributes: vec![output],
-                }),
-            },
+                expressions: vec![Projection {
+                    expression,
+                    attribute: output.clone(),
+                }],
+            }),
+            schema: Deferred::Resolved(QuerySchema {
+                attributes: vec![output],
+            }),
         }
     }
 
@@ -1004,8 +976,8 @@ mod tests {
     fn scalar_arguments_are_normalized_before_lowering() -> PlanResult<()> {
         let mut ids = IdGenerator::default();
         let arguments = vec![
-            LogicalExpression::literal(ids.expression(), ScalarValue::Int32(Some(1))),
-            LogicalExpression::literal(ids.expression(), ScalarValue::Int64(Some(2))),
+            ExprNode::literal(ids.expression(), ScalarValue::Int32(Some(1))),
+            ExprNode::literal(ids.expression(), ScalarValue::Int64(Some(2))),
         ];
         let expression = resolve_scalar_call(
             ids.expression(),
@@ -1013,21 +985,20 @@ mod tests {
             arguments,
             &mut ids,
         )?;
-        let ExpressionNode::ScalarFunction { arguments, .. } =
-            expression.node.resolved("scalar call")?
+        let ExprKind::ScalarFunction { arguments, .. } = expression.kind.resolved("scalar call")?
         else {
             return Err(PlanError::internal("expected scalar function"));
         };
         assert!(matches!(
-            arguments[0].node.resolved("typed literal")?,
-            ExpressionNode::Literal(ScalarValue::Int64(Some(1)))
+            arguments[0].kind.resolved("typed literal")?,
+            ExprKind::Literal(ScalarValue::Int64(Some(1)))
         ));
         let output = attribute(
             ids.attribute(),
             "items",
             expression.result_type.resolved("result")?.clone(),
         );
-        let lowered = project(expression, output).into_named_plan()?;
+        let lowered = lower_query(project(expression, output))?;
         assert_eq!(lowered.fields, Some(vec!["items".into()]));
         assert!(!lowered.plan.schema().field(0).is_nullable());
         assert!(
@@ -1038,56 +1009,42 @@ mod tests {
 
     #[test]
     fn unresolved_and_stale_types_are_rejected() -> PlanResult<()> {
-        let expression = LogicalExpression::literal(ExpressionId(1), ScalarValue::Int32(Some(1)));
-        let output = attribute(
-            AttributeId(1),
-            "x",
-            ExpressionType::new(DataType::Int64, false),
-        );
-        assert!(
-            project(expression.clone(), output)
-                .into_named_plan()
-                .is_err()
-        );
+        let expression = ExprNode::literal(ExprId(1), ScalarValue::Int32(Some(1)));
+        let output = attribute(AttributeId(1), "x", ExprType::new(DataType::Int64, false));
+        assert!(lower_query(project(expression.clone(), output)).is_err());
         let mut unresolved = expression;
         unresolved.result_type = Deferred::unresolved(Infer);
-        let output = attribute(
-            AttributeId(1),
-            "x",
-            ExpressionType::new(DataType::Int32, false),
-        );
-        assert!(project(unresolved, output).into_named_plan().is_err());
+        let output = attribute(AttributeId(1), "x", ExprType::new(DataType::Int32, false));
+        assert!(lower_query(project(unresolved, output)).is_err());
         Ok(())
     }
 
     #[test]
     fn duplicate_display_names_do_not_collide() -> PlanResult<()> {
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: vec![
                 attribute(
                     AttributeId(1),
                     "value",
-                    ExpressionType::new(DataType::Int32, false),
+                    ExprType::new(DataType::Int32, false),
                 ),
                 attribute(
                     AttributeId(2),
                     "value",
-                    ExpressionType::new(DataType::Int32, false),
+                    ExprType::new(DataType::Int32, false),
                 ),
             ],
         };
-        let query = LogicalQuery {
-            plan: LogicalPlan {
-                node: Deferred::Resolved(PlanNode::Values {
-                    rows: vec![vec![
-                        LogicalExpression::literal(ExpressionId(1), ScalarValue::Int32(Some(1))),
-                        LogicalExpression::literal(ExpressionId(2), ScalarValue::Int32(Some(2))),
-                    ]],
-                }),
-                schema: Deferred::Resolved(schema),
-            },
+        let query = QueryNode {
+            kind: Deferred::Resolved(QueryKind::Values {
+                rows: vec![vec![
+                    ExprNode::literal(ExprId(1), ScalarValue::Int32(Some(1))),
+                    ExprNode::literal(ExprId(2), ScalarValue::Int32(Some(2))),
+                ]],
+            }),
+            schema: Deferred::Resolved(schema),
         };
-        let lowered = query.into_named_plan()?;
+        let lowered = lower_query(query)?;
         assert_eq!(lowered.fields, Some(vec!["value".into(), "value".into()]));
         assert_ne!(
             lowered.plan.schema().field(0).name(),
@@ -1098,24 +1055,24 @@ mod tests {
 
     #[test]
     fn unresolved_subquery_does_not_escape_validation() -> PlanResult<()> {
-        let expression = LogicalExpression {
-            id: ExpressionId(1),
-            node: Deferred::Resolved(ExpressionNode::Exists {
-                query: Box::new(LogicalPlan::unresolved(sail_common::spec::QueryPlan::new(
+        let expression = ExprNode {
+            id: ExprId(1),
+            kind: Deferred::Resolved(ExprKind::Exists {
+                query: Box::new(QueryNode::unresolved(sail_common::spec::QueryPlan::new(
                     sail_common::spec::QueryNode::Empty {
                         produce_one_row: true,
                     },
                 ))),
                 negated: false,
             }),
-            result_type: Deferred::Resolved(ExpressionType::new(DataType::Boolean, false)),
+            result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
         };
         let output = attribute(
             AttributeId(1),
             "exists",
-            ExpressionType::new(DataType::Boolean, false),
+            ExprType::new(DataType::Boolean, false),
         );
-        assert!(project(expression, output).into_named_plan().is_err());
+        assert!(lower_query(project(expression, output)).is_err());
         Ok(())
     }
 }

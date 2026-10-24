@@ -12,17 +12,17 @@ use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGr
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 struct GroupInput {
-    plan: LogicalPlan,
+    plan: QueryNode,
     keys: Vec<Attribute>,
     values: Vec<Attribute>,
     offsets: Vec<usize>,
 }
 struct CollectedGroup {
-    plan: LogicalPlan,
+    plan: QueryNode,
     keys: Vec<Attribute>,
     value: Attribute,
     types: Vec<DataType>,
@@ -36,7 +36,7 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     async fn group_input(
         &mut self,
-        mut input: LogicalPlan,
+        mut input: QueryNode,
         requests: Vec<spec::Expr>,
         grouping: Vec<spec::Expr>,
     ) -> PlanResult<GroupInput> {
@@ -106,10 +106,10 @@ impl Resolver<'_, '_> {
 
     pub(super) fn unpack_struct_list(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         array: &Attribute,
         fields: &Fields,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let (input, element) = self.unnest(input, array, false)?;
         let mut output = vec![];
         for field in fields {
@@ -125,7 +125,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion::async_recursion]
-    pub(super) async fn group_map(&mut self, map: spec::GroupMap) -> PlanResult<LogicalPlan> {
+    pub(super) async fn group_map(&mut self, map: spec::GroupMap) -> PlanResult<QueryNode> {
         let spec::GroupMap {
             input,
             grouping_expressions,
@@ -216,8 +216,8 @@ impl Resolver<'_, '_> {
             .collect::<PlanResult<Vec<_>>>()?;
         let mut expression =
             self.aggregate_call(Arc::new(AggregateUDF::from(function)), arguments)?;
-        if let Deferred::Resolved(ExpressionNode::AggregateFunction { distinct, .. }) =
-            &mut expression.node
+        if let Deferred::Resolved(ExprKind::AggregateFunction { distinct, .. }) =
+            &mut expression.kind
         {
             *distinct = is_distinct;
         }
@@ -242,9 +242,9 @@ impl Resolver<'_, '_> {
         )?;
         let array = plan.schema.resolved("group result")?.attributes[0].clone();
         let input = self.unpack_struct_list(plan, &array, &fields)?;
-        Ok(LogicalPlan {
+        Ok(QueryNode {
             schema: input.schema.clone(),
-            node: Deferred::Resolved(PlanNode::Scope {
+            kind: Deferred::Resolved(QueryKind::Scope {
                 input: Box::new(input),
             }),
         })
@@ -267,8 +267,8 @@ impl Resolver<'_, '_> {
             let key = self
                 .expression(request, plan.schema.resolved("co-group input")?)
                 .await?;
-            let position = match key.expression.node.resolved("co-group key")? {
-                ExpressionNode::Attribute(id) => values.iter().position(|a| a.id == *id),
+            let position = match key.expression.kind.resolved("co-group key")? {
+                ExprKind::Attribute(id) => values.iter().position(|a| a.id == *id),
                 _ => None,
             };
             let index = if let Some(position) = position {
@@ -330,15 +330,15 @@ impl Resolver<'_, '_> {
             .iter()
             .map(|p| p.attribute.clone())
             .collect::<Vec<_>>();
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: keys
                 .iter()
                 .cloned()
                 .chain(std::iter::once(value.clone()))
                 .collect(),
         };
-        let plan = LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Aggregate {
+        let plan = QueryNode {
+            kind: Deferred::Resolved(QueryKind::Aggregate {
                 input: Box::new(plan),
                 grouping,
                 grouping_sets: None,
@@ -361,7 +361,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion::async_recursion]
-    pub(super) async fn co_group_map(&mut self, map: spec::CoGroupMap) -> PlanResult<LogicalPlan> {
+    pub(super) async fn co_group_map(&mut self, map: spec::CoGroupMap) -> PlanResult<QueryNode> {
         let spec::CoGroupMap {
             input,
             input_grouping_expressions,
@@ -471,15 +471,15 @@ impl Resolver<'_, '_> {
                 attribute.result_type = Deferred::Resolved(field);
             }
         }
-        let schema = PlanSchema { attributes };
+        let schema = QuerySchema { attributes };
         let args = [left.value.id, right.value.id]
             .into_iter()
             .map(|id| self.reference(schema.attribute(id)?))
             .collect::<PlanResult<Vec<_>>>()?;
         let expression = self.scalar_udf(Arc::new(ScalarUDF::from(function)), args)?;
-        let plan = LogicalPlan {
+        let plan = QueryNode {
             schema: Deferred::Resolved(schema),
-            node: Deferred::Resolved(PlanNode::Join {
+            kind: Deferred::Resolved(QueryKind::Join {
                 lateral: false,
                 left: Box::new(left.plan),
                 right: Box::new(right.plan),
@@ -500,9 +500,9 @@ impl Resolver<'_, '_> {
         )?;
         let array = plan.schema.resolved("co-group result")?.attributes[0].clone();
         let input = self.unpack_struct_list(plan, &array, &fields)?;
-        Ok(LogicalPlan {
+        Ok(QueryNode {
             schema: input.schema.clone(),
-            node: Deferred::Resolved(PlanNode::Scope {
+            kind: Deferred::Resolved(QueryKind::Scope {
                 input: Box::new(input),
             }),
         })

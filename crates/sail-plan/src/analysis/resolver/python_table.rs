@@ -13,7 +13,7 @@ use sail_query::udf::StreamUDF;
 use super::{NamedExpression, Resolver};
 use crate::analysis::data_type::DataTypeResolver;
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 
 pub(super) struct PythonTableFunction {
@@ -52,7 +52,7 @@ impl Resolver<'_, '_> {
     pub(super) async fn inline_python_table(
         &mut self,
         request: spec::CommonInlineUserDefinedTableFunction,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let spec::CommonInlineUserDefinedTableFunction {
             function_name,
             deterministic,
@@ -91,13 +91,13 @@ impl Resolver<'_, '_> {
     #[async_recursion::async_recursion]
     pub(super) async fn python_table(
         &mut self,
-        mut input: LogicalPlan,
+        mut input: QueryNode,
         name: &str,
         function: PythonTableFunction,
         deterministic: bool,
         requests: Vec<spec::Expr>,
         aliases: Option<Vec<String>>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let passthrough = input.schema.resolved("UDTF input")?.attributes.clone();
         let mut arguments = vec![];
         let mut keywords = vec![];
@@ -171,15 +171,15 @@ impl Resolver<'_, '_> {
                     .chain(&fields.attributes)
                     .cloned()
                     .collect();
-                input = LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Join {
+                input = QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Join {
                         lateral: false,
                         left: Box::new(input),
                         right: Box::new(table),
                         kind: datafusion_common::JoinType::Inner,
                         condition: None,
                     }),
-                    schema: Deferred::Resolved(PlanSchema { attributes }),
+                    schema: Deferred::Resolved(QuerySchema { attributes }),
                 };
                 is_tables.push(true);
                 literals.push(None);
@@ -194,7 +194,7 @@ impl Resolver<'_, '_> {
                 // The checked evaluator refuses attribute references. Volatile expressions
                 // must remain unevaluated when invoking a dynamic analyze method.
                 let volatile = argument.expression.any(&|node| match node {
-                    ExpressionNode::ScalarFunction { function, .. } => {
+                    ExprKind::ScalarFunction { function, .. } => {
                         function.signature().volatility == datafusion_expr::Volatility::Volatile
                     }
                     _ => false,
@@ -286,7 +286,7 @@ impl Resolver<'_, '_> {
         )?;
         let mut attributes = passthrough.clone();
         for (attribute, field) in attributes.iter_mut().zip(function.output_schema().fields()) {
-            attribute.result_type = Deferred::Resolved(ExpressionType::from_field(field));
+            attribute.result_type = Deferred::Resolved(ExprType::from_field(field));
         }
         for field in function
             .output_schema()
@@ -294,15 +294,14 @@ impl Resolver<'_, '_> {
             .iter()
             .skip(passthrough.len())
         {
-            attributes
-                .push(self.attribute(field.name().clone(), ExpressionType::from_field(field)));
+            attributes.push(self.attribute(field.name().clone(), ExprType::from_field(field)));
         }
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::MapPartitions {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::MapPartitions {
                 input: Box::new(input),
                 function: Arc::new(function),
             }),
-            schema: Deferred::Resolved(PlanSchema { attributes }),
+            schema: Deferred::Resolved(QuerySchema { attributes }),
         })
     }
 }

@@ -13,13 +13,13 @@ use sail_common_datafusion::array::record_batch::{
 
 use super::{NamedExpression, Resolver};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::analysis::typing;
 use crate::error::{PlanError, PlanResult};
 
 impl Resolver<'_, '_> {
     #[async_recursion]
-    pub(super) async fn query(&mut self, request: spec::QueryPlan) -> PlanResult<LogicalPlan> {
+    pub(super) async fn query(&mut self, request: spec::QueryPlan) -> PlanResult<QueryNode> {
         let plan_id = request.plan_id;
         let mut plan = match request.node {
             node @ (spec::QueryNode::Empty { .. }
@@ -106,7 +106,7 @@ impl Resolver<'_, '_> {
         &mut self,
         node: spec::QueryNode,
         plan_id: Option<i64>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         Ok(match node {
             spec::QueryNode::Empty { produce_one_row } => Self::empty(produce_one_row),
             spec::QueryNode::Values(rows) => self.values(rows).await?,
@@ -117,16 +117,15 @@ impl Resolver<'_, '_> {
                         "range step must not be 0 and partition count must be positive",
                     ));
                 }
-                let attribute =
-                    self.attribute("id".into(), ExpressionType::new(DataType::Int64, false));
-                LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Range {
+                let attribute = self.attribute("id".into(), ExprType::new(DataType::Int64, false));
+                QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Range {
                         start: range.start.unwrap_or(0),
                         end: range.end,
                         step: range.step,
                         partitions,
                     }),
-                    schema: Deferred::Resolved(PlanSchema {
+                    schema: Deferred::Resolved(QuerySchema {
                         attributes: vec![attribute],
                     }),
                 }
@@ -194,9 +193,9 @@ impl Resolver<'_, '_> {
                         attribute.qualified_position = position;
                     }
                     plan.schema = Deferred::Resolved(schema);
-                    let plan = LogicalPlan {
+                    let plan = QueryNode {
                         schema: plan.schema.clone(),
-                        node: Deferred::Resolved(PlanNode::Scope {
+                        kind: Deferred::Resolved(QueryKind::Scope {
                             input: Box::new(plan),
                         }),
                     };
@@ -244,7 +243,7 @@ impl Resolver<'_, '_> {
                     let mut args = vec![];
                     for argument in function.arguments {
                         let value = self
-                            .expression(argument, &PlanSchema::default())
+                            .expression(argument, &QuerySchema::default())
                             .await?
                             .expression;
                         args.push(crate::analysis::lowering::evaluate_constant(&value)?);
@@ -313,11 +312,11 @@ impl Resolver<'_, '_> {
                     .logical_schema
                     .fields()
                     .iter()
-                    .map(|f| self.attribute(f.name().clone(), ExpressionType::from_field(f)))
+                    .map(|f| self.attribute(f.name().clone(), ExprType::from_field(f)))
                     .collect();
-                LogicalPlan {
-                    schema: Deferred::Resolved(PlanSchema { attributes }),
-                    node: Deferred::Resolved(PlanNode::RemoteCheckpoint { relation_id }),
+                QueryNode {
+                    schema: Deferred::Resolved(QuerySchema { attributes }),
+                    kind: Deferred::Resolved(QueryKind::RemoteCheckpoint { relation_id }),
                 }
             }
             node => {
@@ -329,7 +328,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion]
-    async fn query_projection(&mut self, node: spec::QueryNode) -> PlanResult<LogicalPlan> {
+    async fn query_projection(&mut self, node: spec::QueryNode) -> PlanResult<QueryNode> {
         Ok(match node {
             spec::QueryNode::Project { input, expressions } => {
                 let mut input = match input {
@@ -383,9 +382,9 @@ impl Resolver<'_, '_> {
                 let has_aggregate = resolved
                     .iter()
                     .map(|named| {
-                        Ok(named.expression.any(&|node| {
-                            matches!(node, ExpressionNode::AggregateFunction { .. })
-                        })?)
+                        Ok(named
+                            .expression
+                            .any(&|node| matches!(node, ExprKind::AggregateFunction { .. }))?)
                     })
                     .collect::<PlanResult<Vec<_>>>()?
                     .into_iter()
@@ -407,8 +406,8 @@ impl Resolver<'_, '_> {
                     &mut self.context.ids,
                 )?;
                 let schema = input.schema.clone();
-                let result = LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Filter {
+                let result = QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Filter {
                         input: Box::new(input),
                         condition: Box::new(condition),
                     }),
@@ -447,18 +446,16 @@ impl Resolver<'_, '_> {
                         input = next;
                         expression.expression
                     };
-                    let expression = if matches!(
-                        expression.node,
-                        Deferred::Resolved(ExpressionNode::Attribute(_))
-                    ) {
-                        expression
-                    } else {
-                        let (next, attribute) =
-                            self.append(input, expression, "sort_key".into())?;
-                        input = next;
-                        self.reference(&attribute)?
-                    };
-                    resolved.push(SortExpression {
+                    let expression =
+                        if matches!(expression.kind, Deferred::Resolved(ExprKind::Attribute(_))) {
+                            expression
+                        } else {
+                            let (next, attribute) =
+                                self.append(input, expression, "sort_key".into())?;
+                            input = next;
+                            self.reference(&attribute)?
+                        };
+                    resolved.push(SortKey {
                         expression,
                         ascending,
                         nulls_first: match sort.null_ordering {
@@ -469,8 +466,8 @@ impl Resolver<'_, '_> {
                     });
                 }
                 let schema = input.schema.clone();
-                let result = LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Sort {
+                let result = QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Sort {
                         input: Box::new(input),
                         order: resolved,
                         global: is_global,
@@ -485,8 +482,8 @@ impl Resolver<'_, '_> {
                 let schema = input.schema.resolved("limit input")?.clone();
                 let skip = self.limit_expression(skip).await?;
                 let fetch = self.limit_expression(limit).await?;
-                LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Limit {
+                QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Limit {
                         input: Box::new(input),
                         skip,
                         fetch,
@@ -503,7 +500,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion]
-    async fn query_scope(&mut self, node: spec::QueryNode) -> PlanResult<LogicalPlan> {
+    async fn query_scope(&mut self, node: spec::QueryNode) -> PlanResult<QueryNode> {
         Ok(match node {
             spec::QueryNode::SubqueryAlias {
                 input,
@@ -520,9 +517,9 @@ impl Resolver<'_, '_> {
                     attribute.qualified_position = position;
                 }
                 input.schema = Deferred::Resolved(schema);
-                LogicalPlan {
+                QueryNode {
                     schema: input.schema.clone(),
-                    node: Deferred::Resolved(PlanNode::Scope {
+                    kind: Deferred::Resolved(QueryKind::Scope {
                         input: Box::new(input),
                     }),
                 }
@@ -545,9 +542,9 @@ impl Resolver<'_, '_> {
                     attribute.qualified_position = position;
                 }
                 input.schema = Deferred::Resolved(schema);
-                LogicalPlan {
+                QueryNode {
                     schema: input.schema.clone(),
-                    node: Deferred::Resolved(PlanNode::Scope {
+                    kind: Deferred::Resolved(QueryKind::Scope {
                         input: Box::new(input),
                     }),
                 }
@@ -613,9 +610,9 @@ impl Resolver<'_, '_> {
                 }
                 self.ctes = previous;
                 input.schema = Deferred::Resolved(schema);
-                LogicalPlan {
+                QueryNode {
                     schema: input.schema.clone(),
-                    node: Deferred::Resolved(PlanNode::Scope {
+                    kind: Deferred::Resolved(QueryKind::Scope {
                         input: Box::new(input),
                     }),
                 }
@@ -637,7 +634,7 @@ impl Resolver<'_, '_> {
                     .map(|(i, argument)| (format!("${}", i + 1), argument))
                     .chain(named_arguments)
                 {
-                    let expression = self.expression(argument, &PlanSchema::default()).await?;
+                    let expression = self.expression(argument, &QuerySchema::default()).await?;
                     let value =
                         crate::analysis::lowering::evaluate_constant(&expression.expression)?;
                     bindings.push((name, value));
@@ -657,7 +654,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion]
-    async fn query_columns(&mut self, node: spec::QueryNode) -> PlanResult<LogicalPlan> {
+    async fn query_columns(&mut self, node: spec::QueryNode) -> PlanResult<QueryNode> {
         Ok(match node {
             spec::QueryNode::ToDf {
                 input,
@@ -695,12 +692,10 @@ impl Resolver<'_, '_> {
                     });
                     let mut expression = self.reference(attribute)?;
                     let name = if let Some((_, to)) = rename {
-                        expression = LogicalExpression {
+                        expression = ExprNode {
                             id: self.context.ids.expression(),
                             result_type: expression.result_type.clone(),
-                            node: Deferred::Resolved(ExpressionNode::WithMetadata(Box::new(
-                                expression,
-                            ))),
+                            kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(expression))),
                         };
                         to.as_ref().to_string()
                     } else {
@@ -734,7 +729,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion]
-    async fn query_relations(&mut self, node: spec::QueryNode) -> PlanResult<LogicalPlan> {
+    async fn query_relations(&mut self, node: spec::QueryNode) -> PlanResult<QueryNode> {
         Ok(match node {
             spec::QueryNode::LateralView {
                 input,
@@ -810,11 +805,11 @@ impl Resolver<'_, '_> {
                     }
                     projections.push(projection);
                 }
-                let schema = PlanSchema {
+                let schema = QuerySchema {
                     attributes: projections.iter().map(|p| p.attribute.clone()).collect(),
                 };
-                LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Project {
+                QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Project {
                         input: Box::new(input),
                         expressions: projections,
                     }),
@@ -831,8 +826,8 @@ impl Resolver<'_, '_> {
                 }
                 let input = self.query(*input).await?;
                 let schema = input.schema.clone();
-                LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Repartition {
+                QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Repartition {
                         input: Box::new(input),
                         partitioning: if shuffle {
                             Partitioning::RoundRobin(num_partitions)
@@ -864,9 +859,9 @@ impl Resolver<'_, '_> {
                 } else {
                     Partitioning::Distribute(expressions)
                 };
-                let partitioned = LogicalPlan {
+                let partitioned = QueryNode {
                     schema: input.schema.clone(),
-                    node: Deferred::Resolved(PlanNode::Repartition {
+                    kind: Deferred::Resolved(QueryKind::Repartition {
                         input: Box::new(input),
                         partitioning,
                     }),
@@ -913,7 +908,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion]
-    async fn query_other(&mut self, node: spec::QueryNode) -> PlanResult<LogicalPlan> {
+    async fn query_other(&mut self, node: spec::QueryNode) -> PlanResult<QueryNode> {
         Ok(match node {
             spec::QueryNode::CommonInlineUserDefinedTableFunction(function) => {
                 self.inline_python_table(function).await?
@@ -982,10 +977,10 @@ impl Resolver<'_, '_> {
         })
     }
 
-    pub(super) fn empty(produce_one_row: bool) -> LogicalPlan {
-        LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Empty { produce_one_row }),
-            schema: Deferred::Resolved(PlanSchema::default()),
+    pub(super) fn empty(produce_one_row: bool) -> QueryNode {
+        QueryNode {
+            kind: Deferred::Resolved(QueryKind::Empty { produce_one_row }),
+            schema: Deferred::Resolved(QuerySchema::default()),
         }
     }
 
@@ -994,7 +989,7 @@ impl Resolver<'_, '_> {
         name: String,
         source: Arc<dyn TableSource>,
         qualifier: Vec<String>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let attributes = source
             .schema()
             .fields()
@@ -1002,27 +997,27 @@ impl Resolver<'_, '_> {
             .enumerate()
             .map(|(position, field)| {
                 let mut attribute =
-                    self.attribute(field.name().clone(), ExpressionType::from_field(field));
+                    self.attribute(field.name().clone(), ExprType::from_field(field));
                 attribute.qualifier.clone_from(&qualifier);
                 attribute.qualified_position = position;
                 attribute
             })
             .collect();
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Scan {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Scan {
                 name,
                 source,
                 projection: None,
             }),
-            schema: Deferred::Resolved(PlanSchema { attributes }),
+            schema: Deferred::Resolved(QuerySchema { attributes }),
         })
     }
 
     pub(super) fn rename(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         names: Vec<spec::Identifier>,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         let schema = input.schema.resolved("rename input")?;
         if names.len() != schema.attributes.len() {
             return Err(PlanError::analysis(
@@ -1036,10 +1031,10 @@ impl Resolver<'_, '_> {
             .map(|(attribute, name)| {
                 Ok(NamedExpression {
                     name: name.into(),
-                    expression: LogicalExpression {
+                    expression: ExprNode {
                         id: self.context.ids.expression(),
                         result_type: attribute.result_type.clone(),
-                        node: Deferred::Resolved(ExpressionNode::WithMetadata(Box::new(
+                        kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(
                             self.reference(attribute)?,
                         ))),
                     },
@@ -1053,15 +1048,15 @@ impl Resolver<'_, '_> {
     async fn limit_expression(
         &mut self,
         expression: Option<spec::Expr>,
-    ) -> PlanResult<Option<Box<LogicalExpression>>> {
+    ) -> PlanResult<Option<Box<ExprNode>>> {
         let Some(expression) = expression else {
             return Ok(None);
         };
         let expression = self
-            .expression(expression, &PlanSchema::default())
+            .expression(expression, &QuerySchema::default())
             .await?
             .expression;
-        if let ExpressionNode::Literal(value) = expression.node.resolved("limit expression")? {
+        if let ExprKind::Literal(value) = expression.kind.resolved("limit expression")? {
             let value = value.cast_to(&DataType::Int64)?;
             if !matches!(value, ScalarValue::Int64(Some(value)) if value >= 0) {
                 return Err(PlanError::analysis("limit must be a nonnegative integer"));
@@ -1075,7 +1070,7 @@ impl Resolver<'_, '_> {
     }
 
     #[async_recursion::async_recursion]
-    async fn values(&mut self, rows: Vec<Vec<spec::Expr>>) -> PlanResult<LogicalPlan> {
+    async fn values(&mut self, rows: Vec<Vec<spec::Expr>>) -> PlanResult<QueryNode> {
         let width = rows
             .first()
             .map(Vec::len)
@@ -1088,7 +1083,7 @@ impl Resolver<'_, '_> {
             let mut values = vec![];
             for value in row {
                 values.push(
-                    self.expression(value, &PlanSchema::default())
+                    self.expression(value, &QuerySchema::default())
                         .await?
                         .expression,
                 );
@@ -1098,10 +1093,7 @@ impl Resolver<'_, '_> {
         self.typed_values(resolved)
     }
 
-    pub(super) fn typed_values(
-        &mut self,
-        resolved: Vec<Vec<LogicalExpression>>,
-    ) -> PlanResult<LogicalPlan> {
+    pub(super) fn typed_values(&mut self, resolved: Vec<Vec<ExprNode>>) -> PlanResult<QueryNode> {
         let width = resolved
             .first()
             .map(Vec::len)
@@ -1120,9 +1112,9 @@ impl Resolver<'_, '_> {
                     .collect::<Vec<_>>(),
             )?;
             let has_nan = resolved.iter().any(|row| row[index].any(&|node| matches!(node,
-                ExpressionNode::Literal(ScalarValue::Utf8(Some(value)) | ScalarValue::LargeUtf8(Some(value)) | ScalarValue::Utf8View(Some(value))) if value.eq_ignore_ascii_case("nan"))
-                || matches!(node, ExpressionNode::Literal(ScalarValue::Float32(Some(value))) if value.is_nan())
-                || matches!(node, ExpressionNode::Literal(ScalarValue::Float64(Some(value))) if value.is_nan())).unwrap_or(false));
+                ExprKind::Literal(ScalarValue::Utf8(Some(value)) | ScalarValue::LargeUtf8(Some(value)) | ScalarValue::Utf8View(Some(value))) if value.eq_ignore_ascii_case("nan"))
+                || matches!(node, ExprKind::Literal(ScalarValue::Float32(Some(value))) if value.is_nan())
+                || matches!(node, ExprKind::Literal(ScalarValue::Float64(Some(value))) if value.is_nan())).unwrap_or(false));
             if has_nan
                 && types
                     .iter()
@@ -1164,7 +1156,7 @@ impl Resolver<'_, '_> {
             }
             attributes.push(self.attribute(
                 format!("col{}", index + 1),
-                ExpressionType {
+                ExprType {
                     data_type: common,
                     nullable,
                     metadata,
@@ -1186,23 +1178,23 @@ impl Resolver<'_, '_> {
                             return Ok(value);
                         }
                         result_type.metadata.clone_from(&target.metadata);
-                        Ok(LogicalExpression {
+                        Ok(ExprNode {
                             id: self.context.ids.expression(),
-                            node: Deferred::Resolved(ExpressionNode::WithMetadata(Box::new(value))),
+                            kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(value))),
                             result_type: Deferred::Resolved(result_type),
                         })
                     })
                     .collect::<PlanResult<_>>()
             })
             .collect::<PlanResult<_>>()?;
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Values { rows }),
-            schema: Deferred::Resolved(PlanSchema { attributes }),
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Values { rows }),
+            schema: Deferred::Resolved(QuerySchema { attributes }),
         })
     }
 
     #[async_recursion::async_recursion]
-    async fn join(&mut self, join: spec::Join, lateral: bool) -> PlanResult<LogicalPlan> {
+    async fn join(&mut self, join: spec::Join, lateral: bool) -> PlanResult<QueryNode> {
         use datafusion_expr::JoinType as J;
         let explicit_cross = matches!(join.join_type, spec::JoinType::Cross);
         if explicit_cross && join.join_criteria.is_some() {
@@ -1244,7 +1236,7 @@ impl Resolver<'_, '_> {
         let right = right?;
         let left_schema = left.schema.resolved("join left")?;
         let right_schema = right.schema.resolved("join right")?;
-        let merged = PlanSchema {
+        let merged = QuerySchema {
             attributes: left_schema
                 .attributes
                 .iter()
@@ -1294,8 +1286,8 @@ impl Resolver<'_, '_> {
                     b,
                     &mut self.context.ids,
                 )?;
-                let common = if let ExpressionNode::Binary { left, .. } =
-                    comparison.node.resolved("join key comparison")?
+                let common = if let ExprKind::Binary { left, .. } =
+                    comparison.kind.resolved("join key comparison")?
                 {
                     left.result_type
                         .resolved("join key type")?
@@ -1349,15 +1341,15 @@ impl Resolver<'_, '_> {
                 )?);
             }
         }
-        let joined = LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Join {
+        let joined = QueryNode {
+            kind: Deferred::Resolved(QueryKind::Join {
                 lateral,
                 left: Box::new(left),
                 right: Box::new(right),
                 kind,
                 condition,
             }),
-            schema: Deferred::Resolved(PlanSchema { attributes }),
+            schema: Deferred::Resolved(QuerySchema { attributes }),
         };
         if keys.is_empty() {
             return Ok(joined);
@@ -1367,10 +1359,10 @@ impl Resolver<'_, '_> {
 
     fn project_using_join(
         &mut self,
-        input: LogicalPlan,
+        input: QueryNode,
         keys: Vec<(String, AttributeId, AttributeId, DataType)>,
         kind: datafusion_expr::JoinType,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<QueryNode> {
         use datafusion_expr::JoinType as J;
         let schema = input.schema.resolved("USING join input")?;
         let mut expressions = vec![];
@@ -1441,14 +1433,14 @@ impl Resolver<'_, '_> {
             projection.attribute.hidden = true;
             expressions.push(projection);
         }
-        let schema = PlanSchema {
+        let schema = QuerySchema {
             attributes: expressions
                 .iter()
                 .map(|projection| projection.attribute.clone())
                 .collect(),
         };
-        Ok(LogicalPlan {
-            node: Deferred::Resolved(PlanNode::Project {
+        Ok(QueryNode {
+            kind: Deferred::Resolved(QueryKind::Project {
                 input: Box::new(input),
                 expressions,
             }),
@@ -1476,17 +1468,13 @@ const IMPLICIT_CARTESIAN_PRODUCT_MSG: &str = "Detected implicit cartesian produc
 impl Resolver<'_, '_> {
     fn validate_join_condition(
         &self,
-        expression: &LogicalExpression,
+        expression: &ExprNode,
         kind: datafusion_expr::JoinType,
     ) -> PlanResult<()> {
-        fn conjuncts(
-            expression: &LogicalExpression,
-            python: &mut bool,
-            other: &mut bool,
-        ) -> PlanResult<()> {
-            match expression.node.resolved("join conjunct")? {
-                ExpressionNode::WithMetadata(inner) => conjuncts(inner, python, other)?,
-                ExpressionNode::Binary {
+        fn conjuncts(expression: &ExprNode, python: &mut bool, other: &mut bool) -> PlanResult<()> {
+            match expression.kind.resolved("join conjunct")? {
+                ExprKind::WithMetadata(inner) => conjuncts(inner, python, other)?,
+                ExprKind::Binary {
                     left,
                     operator: datafusion_expr::Operator::And,
                     right,
@@ -1494,7 +1482,7 @@ impl Resolver<'_, '_> {
                     conjuncts(left, python, other)?;
                     conjuncts(right, python, other)?;
                 }
-                ExpressionNode::ScalarFunction { function, .. }
+                ExprKind::ScalarFunction { function, .. }
                     if function
                         .inner()
                         .is::<sail_python_udf::udf::pyspark_udf::PySparkUDF>() =>

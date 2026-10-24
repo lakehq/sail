@@ -8,7 +8,7 @@ use sail_catalog::provider::{
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_query::deferred::Deferred;
-use sail_query::ir::{Attribute, ExpressionType, IdGenerator, LogicalPlan, PlanNode, PlanSchema};
+use sail_query::model::{Attribute, ExprType, IdGenerator, QueryKind, QueryNode, QuerySchema};
 use sail_system_store::catalog::{SystemCatalog, SystemDatabase, SystemTable};
 
 use crate::table_source::SystemTableSource;
@@ -57,13 +57,13 @@ impl SystemCatalogProvider {
             database: database.clone().into(),
             name: table.to_string(),
             kind: TableKind::TemporaryView {
-                plan: Arc::new(LogicalPlan {
-                    node: Deferred::Resolved(PlanNode::Scan {
+                plan: Arc::new(QueryNode {
+                    kind: Deferred::Resolved(QueryKind::Scan {
                         name: format!("{SYSTEM_CATALOG_NAME}.{}.{}", database.head, t.name()),
                         source: Arc::new(SystemTableSource::new(t)),
                         projection: None,
                     }),
-                    schema: Deferred::Resolved(PlanSchema {
+                    schema: Deferred::Resolved(QuerySchema {
                         attributes: {
                             let mut ids = IdGenerator::default();
                             t.schema()
@@ -80,9 +80,9 @@ impl SystemCatalogProvider {
                                         qualified_position: position,
                                         plan_ids: vec![],
                                         hidden: false,
-                                        result_type: Deferred::Resolved(
-                                            ExpressionType::from_field(field),
-                                        ),
+                                        result_type: Deferred::Resolved(ExprType::from_field(
+                                            field,
+                                        )),
                                     }
                                 })
                                 .collect()

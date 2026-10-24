@@ -11,44 +11,28 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use super::{CteDefinition, Resolver};
-use crate::analysis::command::{AnalyzedPlan, LogicalCommand};
 use crate::analysis::deferred::Deferred;
-use crate::analysis::ir::*;
+use crate::analysis::model::*;
 use crate::error::{PlanError, PlanResult};
 use crate::function::list_built_in_function_statuses;
 
 impl Resolver<'_, '_> {
-    #[async_recursion::async_recursion]
-    pub(super) async fn plan(&mut self, plan: spec::Plan) -> PlanResult<AnalyzedPlan> {
-        Ok(match plan {
-            spec::Plan::Query(request) => AnalyzedPlan::Query(LogicalQuery {
-                plan: self.command_query(request).await?,
-            }),
-            spec::Plan::Command(request) => AnalyzedPlan::Command(self.command(request).await?),
-        })
-    }
-
     pub(super) async fn command_query(
         &mut self,
         request: spec::QueryPlan,
-    ) -> PlanResult<LogicalPlan> {
-        let plan = self.query(request).await?;
-        let plan = crate::analysis::row_identity::materialize(plan, &mut self.context.ids)?;
-        crate::analysis::ordering::preserve(crate::analysis::scalar_iterator::materialize(
-            plan,
-            &mut self.context.ids,
-        )?)
+    ) -> PlanResult<QueryNode> {
+        self.complete_query(QueryNode::unresolved(request)).await
     }
 
     pub(super) fn resolve_catalog_command(
         &self,
         command: CatalogCommand,
-    ) -> PlanResult<LogicalCommand> {
-        Ok(LogicalCommand::Catalog(command))
+    ) -> PlanResult<CommandKind> {
+        Ok(CommandKind::Catalog(command))
     }
 
     #[async_recursion::async_recursion]
-    async fn command(&mut self, request: spec::CommandPlan) -> PlanResult<LogicalCommand> {
+    pub(super) async fn command(&mut self, request: spec::CommandPlan) -> PlanResult<CommandKind> {
         use spec::CommandNode;
         match request.node {
             CommandNode::CurrentDatabase => {
@@ -170,14 +154,20 @@ impl Resolver<'_, '_> {
                 options: DropTableOptions { if_exists, purge },
             }),
             CommandNode::RecoverPartitions { .. } => {
-                Err(PlanError::todo("PlanNode::RecoverPartitions"))
+                Err(PlanError::todo("spec::CommandNode::RecoverPartitions"))
             }
-            CommandNode::IsCached { .. } => Err(PlanError::todo("PlanNode::IsCached")),
-            CommandNode::CacheTable { .. } => Err(PlanError::todo("PlanNode::CacheTable")),
-            CommandNode::UncacheTable { .. } => Err(PlanError::todo("PlanNode::UncacheTable")),
-            CommandNode::ClearCache => Err(PlanError::todo("PlanNode::ClearCache")),
-            CommandNode::RefreshTable { .. } => Err(PlanError::todo("PlanNode::RefreshTable")),
-            CommandNode::RefreshByPath { .. } => Err(PlanError::todo("PlanNode::RefreshByPath")),
+            CommandNode::IsCached { .. } => Err(PlanError::todo("spec::CommandNode::IsCached")),
+            CommandNode::CacheTable { .. } => Err(PlanError::todo("spec::CommandNode::CacheTable")),
+            CommandNode::UncacheTable { .. } => {
+                Err(PlanError::todo("spec::CommandNode::UncacheTable"))
+            }
+            CommandNode::ClearCache => Err(PlanError::todo("spec::CommandNode::ClearCache")),
+            CommandNode::RefreshTable { .. } => {
+                Err(PlanError::todo("spec::CommandNode::RefreshTable"))
+            }
+            CommandNode::RefreshByPath { .. } => {
+                Err(PlanError::todo("spec::CommandNode::RefreshByPath"))
+            }
             CommandNode::CurrentCatalog => {
                 self.resolve_catalog_command(CatalogCommand::CurrentCatalog)
             }
@@ -276,24 +266,22 @@ impl Resolver<'_, '_> {
                 )
                 .await
             }
-            CommandNode::RemoteCheckpoint { relation_id, input } => {
-                Ok(LogicalCommand::Checkpoint {
-                    relation_id,
-                    input: self.command_query(*input).await?,
-                })
-            }
-            CommandNode::Explain { input, mode } => Ok(LogicalCommand::Explain {
-                input: Box::new(self.plan(*input).await?),
+            CommandNode::RemoteCheckpoint { relation_id, input } => Ok(CommandKind::Checkpoint {
+                relation_id,
+                input: self.command_query(*input).await?,
+            }),
+            CommandNode::Explain { input, mode } => Ok(CommandKind::Explain {
+                input: Box::new(self.native_plan((*input).into()).await?),
                 mode,
             }),
-            CommandNode::SetVariable { variable, value } => Ok(LogicalCommand::SetVariable {
+            CommandNode::SetVariable { variable, value } => Ok(CommandKind::SetVariable {
                 variable: variable_name(variable),
                 value: sail_sql_analyzer::parser::parse_native_config_value(&value)
                     .unwrap_or(value),
             }),
             CommandNode::ResetVariable {
                 variable: Some(variable),
-            } => Ok(LogicalCommand::ResetVariable {
+            } => Ok(CommandKind::ResetVariable {
                 variable: variable_name(variable),
             }),
             CommandNode::ResetVariable { variable: None } => {
@@ -424,7 +412,7 @@ impl Resolver<'_, '_> {
                     .map(|t| types.resolve_data_type(&t))
                     .transpose()?;
                 let name: String = function.function_name.into();
-                Ok(LogicalCommand::RegisterFunction(
+                Ok(CommandKind::RegisterFunction(
                     PySparkUnresolvedUDF::new(
                         name.to_ascii_lowercase(),
                         python_version,
@@ -442,7 +430,7 @@ impl Resolver<'_, '_> {
             CommandNode::RegisterFunction(function) => {
                 let definition = self.python_definition(function.function)?;
                 let name: String = function.function_name.into();
-                Ok(LogicalCommand::RegisterFunction(
+                Ok(CommandKind::RegisterFunction(
                     PySparkUnresolvedUDF::new(
                         name.to_ascii_lowercase(),
                         definition.python_version,
@@ -480,7 +468,7 @@ impl Resolver<'_, '_> {
         truncate: usize,
         style: ShowStringStyle,
         name: &str,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let input = self.command_query(input).await?;
         // Spark clients request the complete result with i32::MAX. Do not turn
         // that sentinel into a TopK allocation of billions of entries. Show's
@@ -493,8 +481,8 @@ impl Resolver<'_, '_> {
                 .ok()
                 .and_then(|n| n.checked_add(1))
                 .ok_or_else(|| PlanError::invalid("show row count is too large"))?;
-            LogicalPlan {
-                node: Deferred::Resolved(PlanNode::Limit {
+            QueryNode {
+                kind: Deferred::Resolved(QueryKind::Limit {
                     input: Box::new(input),
                     skip: Some(Box::new(self.literal(ScalarValue::Int64(Some(0))))),
                     fetch: Some(Box::new(self.literal(ScalarValue::Int64(Some(fetch))))),
@@ -502,7 +490,7 @@ impl Resolver<'_, '_> {
                 schema,
             }
         };
-        Ok(LogicalCommand::Show {
+        Ok(CommandKind::Show {
             input,
             rows,
             format: ShowStringFormat::new(style, truncate),
@@ -515,7 +503,7 @@ impl Resolver<'_, '_> {
         view: spec::Identifier,
         is_global: bool,
         definition: spec::TemporaryViewDefinition,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         use sail_catalog::provider::{
             CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions,
         };
@@ -544,7 +532,7 @@ impl Resolver<'_, '_> {
         } else {
             vec![]
         };
-        Ok(LogicalCommand::CreateTemporaryView {
+        Ok(CommandKind::CreateTemporaryView {
             view: view.into(),
             is_global,
             options: CreateTemporaryViewOptions {
@@ -563,7 +551,7 @@ impl Resolver<'_, '_> {
         &mut self,
         view: spec::ObjectName,
         definition: spec::ViewDefinition,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         let input = self.command_query(*definition.input).await?;
         let schema = input.schema.resolved("view schema")?;
         if definition
@@ -611,7 +599,7 @@ impl Resolver<'_, '_> {
         &mut self,
         root: spec::CommandPlan,
         references: Vec<spec::QueryPlan>,
-    ) -> PlanResult<LogicalCommand> {
+    ) -> PlanResult<CommandKind> {
         for reference in references {
             let id = reference
                 .plan_id

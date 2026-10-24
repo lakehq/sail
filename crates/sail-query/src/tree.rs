@@ -4,9 +4,9 @@
 use datafusion_common::{DataFusionError, Result as PlanResult};
 
 use super::deferred::Deferred;
-use super::ir::*;
+use super::model::*;
 
-impl LogicalExpression {
+impl ExprNode {
     pub fn transform_up<E: From<DataFusionError>>(
         self,
         transform: &mut impl FnMut(Self) -> Result<Self, E>,
@@ -19,63 +19,61 @@ impl LogicalExpression {
         mut self,
         map: &mut impl FnMut(Self) -> Result<Self, E>,
     ) -> Result<Self, E> {
-        let Deferred::Resolved(node) = self.node else {
+        let Deferred::Resolved(node) = self.kind else {
             return Ok(self);
         };
         fn boxed<E: From<DataFusionError>>(
-            value: Box<LogicalExpression>,
-            map: &mut impl FnMut(LogicalExpression) -> Result<LogicalExpression, E>,
-        ) -> Result<Box<LogicalExpression>, E> {
+            value: Box<ExprNode>,
+            map: &mut impl FnMut(ExprNode) -> Result<ExprNode, E>,
+        ) -> Result<Box<ExprNode>, E> {
             map(*value).map(Box::new)
         }
         fn sorts<E: From<DataFusionError>>(
-            values: Vec<SortExpression>,
-            map: &mut impl FnMut(LogicalExpression) -> Result<LogicalExpression, E>,
-        ) -> Result<Vec<SortExpression>, E> {
+            values: Vec<SortKey>,
+            map: &mut impl FnMut(ExprNode) -> Result<ExprNode, E>,
+        ) -> Result<Vec<SortKey>, E> {
             values
                 .into_iter()
                 .map(|sort| {
-                    Ok(SortExpression {
+                    Ok(SortKey {
                         expression: map(sort.expression)?,
                         ..sort
                     })
                 })
                 .collect()
         }
-        self.node = Deferred::Resolved(match node {
-            ExpressionNode::Literal(_)
-            | ExpressionNode::Attribute(_)
-            | ExpressionNode::OuterAttribute { .. }
-            | ExpressionNode::LambdaVariable(_)
-            | ExpressionNode::ScalarSubquery(_)
-            | ExpressionNode::Exists { .. } => node,
-            ExpressionNode::WithMetadata(expression) => {
-                ExpressionNode::WithMetadata(boxed(expression, map)?)
-            }
-            ExpressionNode::TruthTest {
+        self.kind = Deferred::Resolved(match node {
+            ExprKind::Literal(_)
+            | ExprKind::Attribute(_)
+            | ExprKind::OuterAttribute { .. }
+            | ExprKind::LambdaVariable(_)
+            | ExprKind::ScalarSubquery(_)
+            | ExprKind::Exists { .. } => node,
+            ExprKind::WithMetadata(expression) => ExprKind::WithMetadata(boxed(expression, map)?),
+            ExprKind::TruthTest {
                 expression,
                 value,
                 negated,
-            } => ExpressionNode::TruthTest {
+            } => ExprKind::TruthTest {
                 expression: boxed(expression, map)?,
                 value,
                 negated,
             },
-            ExpressionNode::ScalarFunction {
+            ExprKind::ScalarFunction {
                 function,
                 arguments,
-            } => ExpressionNode::ScalarFunction {
+            } => ExprKind::ScalarFunction {
                 function,
                 arguments: arguments.into_iter().map(map).collect::<Result<_, E>>()?,
             },
-            ExpressionNode::AggregateFunction {
+            ExprKind::AggregateFunction {
                 function,
                 arguments,
                 distinct,
                 filter,
                 order_by,
                 null_treatment,
-            } => ExpressionNode::AggregateFunction {
+            } => ExprKind::AggregateFunction {
                 function,
                 arguments: arguments
                     .into_iter()
@@ -86,7 +84,7 @@ impl LogicalExpression {
                 order_by: sorts(order_by, map)?,
                 null_treatment,
             },
-            ExpressionNode::WindowFunction {
+            ExprKind::WindowFunction {
                 function,
                 arguments,
                 partition_by,
@@ -95,7 +93,7 @@ impl LogicalExpression {
                 filter,
                 distinct,
                 null_treatment,
-            } => ExpressionNode::WindowFunction {
+            } => ExprKind::WindowFunction {
                 function,
                 arguments: arguments
                     .into_iter()
@@ -111,54 +109,48 @@ impl LogicalExpression {
                 distinct,
                 null_treatment,
             },
-            ExpressionNode::HigherOrderFunction {
+            ExprKind::HigherOrderFunction {
                 function,
                 arguments,
-            } => ExpressionNode::HigherOrderFunction {
+            } => ExprKind::HigherOrderFunction {
                 function,
                 arguments: arguments
                     .into_iter()
                     .map(|argument| {
                         Ok(match argument {
-                            FunctionArgument::Value(value) => {
-                                FunctionArgument::Value(boxed(value, map)?)
-                            }
-                            lambda @ FunctionArgument::Lambda { .. } => lambda,
+                            FunctionArg::Value(value) => FunctionArg::Value(boxed(value, map)?),
+                            lambda @ FunctionArg::Lambda { .. } => lambda,
                         })
                     })
                     .collect::<Result<_, E>>()?,
             },
-            ExpressionNode::Binary {
+            ExprKind::Binary {
                 left,
                 operator,
                 right,
-            } => ExpressionNode::Binary {
+            } => ExprKind::Binary {
                 left: boxed(left, map)?,
                 operator,
                 right: boxed(right, map)?,
             },
-            ExpressionNode::Cast {
+            ExprKind::Cast {
                 expression,
                 target,
                 safe,
-            } => ExpressionNode::Cast {
+            } => ExprKind::Cast {
                 expression: boxed(expression, map)?,
                 target,
                 safe,
             },
-            ExpressionNode::Not(expression) => ExpressionNode::Not(boxed(expression, map)?),
-            ExpressionNode::IsNull(expression) => ExpressionNode::IsNull(boxed(expression, map)?),
-            ExpressionNode::IsNotNull(expression) => {
-                ExpressionNode::IsNotNull(boxed(expression, map)?)
-            }
-            ExpressionNode::Negative(expression) => {
-                ExpressionNode::Negative(boxed(expression, map)?)
-            }
-            ExpressionNode::Case {
+            ExprKind::Not(expression) => ExprKind::Not(boxed(expression, map)?),
+            ExprKind::IsNull(expression) => ExprKind::IsNull(boxed(expression, map)?),
+            ExprKind::IsNotNull(expression) => ExprKind::IsNotNull(boxed(expression, map)?),
+            ExprKind::Negative(expression) => ExprKind::Negative(boxed(expression, map)?),
+            ExprKind::Case {
                 operand,
                 branches,
                 otherwise,
-            } => ExpressionNode::Case {
+            } => ExprKind::Case {
                 operand: operand.map(|value| boxed(value, map)).transpose()?,
                 branches: branches
                     .into_iter()
@@ -166,57 +158,57 @@ impl LogicalExpression {
                     .collect::<Result<_, E>>()?,
                 otherwise: otherwise.map(|value| boxed(value, map)).transpose()?,
             },
-            ExpressionNode::Between {
+            ExprKind::Between {
                 expression,
                 low,
                 high,
                 negated,
-            } => ExpressionNode::Between {
+            } => ExprKind::Between {
                 expression: boxed(expression, map)?,
                 low: boxed(low, map)?,
                 high: boxed(high, map)?,
                 negated,
             },
-            ExpressionNode::Like {
+            ExprKind::Like {
                 expression,
                 pattern,
                 negated,
                 escape_char,
                 case_insensitive,
-            } => ExpressionNode::Like {
+            } => ExprKind::Like {
                 expression: boxed(expression, map)?,
                 pattern: boxed(pattern, map)?,
                 negated,
                 escape_char,
                 case_insensitive,
             },
-            ExpressionNode::SimilarTo {
+            ExprKind::SimilarTo {
                 expression,
                 pattern,
                 negated,
                 escape_char,
                 case_insensitive,
-            } => ExpressionNode::SimilarTo {
+            } => ExprKind::SimilarTo {
                 expression: boxed(expression, map)?,
                 pattern: boxed(pattern, map)?,
                 negated,
                 escape_char,
                 case_insensitive,
             },
-            ExpressionNode::InList {
+            ExprKind::InList {
                 expression,
                 values,
                 negated,
-            } => ExpressionNode::InList {
+            } => ExprKind::InList {
                 expression: boxed(expression, map)?,
                 values: values.into_iter().map(map).collect::<Result<_, E>>()?,
                 negated,
             },
-            ExpressionNode::InSubquery {
+            ExprKind::InSubquery {
                 expression,
                 query,
                 negated,
-            } => ExpressionNode::InSubquery {
+            } => ExprKind::InSubquery {
                 expression: boxed(expression, map)?,
                 query,
                 negated,
@@ -225,8 +217,8 @@ impl LogicalExpression {
         Ok(self)
     }
 
-    pub fn any(&self, predicate: &impl Fn(&ExpressionNode) -> bool) -> PlanResult<bool> {
-        let node = self.node.resolved("expression traversal")?;
+    pub fn any(&self, predicate: &impl Fn(&ExprKind) -> bool) -> PlanResult<bool> {
+        let node = self.kind.resolved("expression traversal")?;
         if predicate(node) {
             return Ok(true);
         }
@@ -246,7 +238,7 @@ impl LogicalExpression {
         {
             return Ok(false);
         }
-        fn list(left: &[LogicalExpression], right: &[LogicalExpression]) -> PlanResult<bool> {
+        fn list(left: &[ExprNode], right: &[ExprNode]) -> PlanResult<bool> {
             if left.len() != right.len() {
                 return Ok(false);
             }
@@ -259,12 +251,12 @@ impl LogicalExpression {
         }
         Ok(
             match (
-                self.node.resolved("expression")?,
-                other.node.resolved("expression")?,
+                self.kind.resolved("expression")?,
+                other.kind.resolved("expression")?,
             ) {
-                (ExpressionNode::Literal(a), ExpressionNode::Literal(b)) => a == b,
-                (ExpressionNode::Attribute(a), ExpressionNode::Attribute(b)) => a == b,
-                (ExpressionNode::ScalarSubquery(a), ExpressionNode::ScalarSubquery(b)) => {
+                (ExprKind::Literal(a), ExprKind::Literal(b)) => a == b,
+                (ExprKind::Attribute(a), ExprKind::Attribute(b)) => a == b,
+                (ExprKind::ScalarSubquery(a), ExprKind::ScalarSubquery(b)) => {
                     // Copies of a bound subquery retain its output slot identities.
                     // Independently resolved queries always allocate distinct slots.
                     let a = &a.schema.resolved("subquery output")?.attributes;
@@ -272,76 +264,74 @@ impl LogicalExpression {
                     !a.is_empty() && a.iter().map(|a| a.id).eq(b.iter().map(|b| b.id))
                 }
                 (
-                    ExpressionNode::OuterAttribute {
+                    ExprKind::OuterAttribute {
                         depth: a,
                         attribute: x,
                     },
-                    ExpressionNode::OuterAttribute {
+                    ExprKind::OuterAttribute {
                         depth: b,
                         attribute: y,
                     },
                 ) => a == b && x == y,
                 (
-                    ExpressionNode::ScalarFunction {
+                    ExprKind::ScalarFunction {
                         function: a,
                         arguments: x,
                     },
-                    ExpressionNode::ScalarFunction {
+                    ExprKind::ScalarFunction {
                         function: b,
                         arguments: y,
                     },
                 ) => a == b && list(x, y)?,
                 (
-                    ExpressionNode::Binary {
+                    ExprKind::Binary {
                         left: a,
                         operator: x,
                         right: b,
                     },
-                    ExpressionNode::Binary {
+                    ExprKind::Binary {
                         left: c,
                         operator: y,
                         right: d,
                     },
                 ) => x == y && a.equivalent(c)? && b.equivalent(d)?,
                 (
-                    ExpressionNode::Cast {
+                    ExprKind::Cast {
                         expression: a,
                         target: x,
                         safe: s,
                     },
-                    ExpressionNode::Cast {
+                    ExprKind::Cast {
                         expression: b,
                         target: y,
                         safe: t,
                     },
                 ) => x == y && s == t && a.equivalent(b)?,
-                (ExpressionNode::Not(a), ExpressionNode::Not(b))
-                | (ExpressionNode::IsNull(a), ExpressionNode::IsNull(b))
-                | (ExpressionNode::IsNotNull(a), ExpressionNode::IsNotNull(b))
-                | (ExpressionNode::Negative(a), ExpressionNode::Negative(b))
-                | (ExpressionNode::WithMetadata(a), ExpressionNode::WithMetadata(b)) => {
-                    a.equivalent(b)?
-                }
+                (ExprKind::Not(a), ExprKind::Not(b))
+                | (ExprKind::IsNull(a), ExprKind::IsNull(b))
+                | (ExprKind::IsNotNull(a), ExprKind::IsNotNull(b))
+                | (ExprKind::Negative(a), ExprKind::Negative(b))
+                | (ExprKind::WithMetadata(a), ExprKind::WithMetadata(b)) => a.equivalent(b)?,
                 (
-                    ExpressionNode::TruthTest {
+                    ExprKind::TruthTest {
                         expression: a,
                         value: x,
                         negated: n,
                     },
-                    ExpressionNode::TruthTest {
+                    ExprKind::TruthTest {
                         expression: b,
                         value: y,
                         negated: m,
                     },
                 ) => x == y && n == m && a.equivalent(b)?,
                 (
-                    ExpressionNode::Between {
+                    ExprKind::Between {
                         expression: a,
                         low: l,
                         high: h,
                         negated: n,
                     },
-                    ExpressionNode::Between {
+                    ExprKind::Between {
                         expression: b,
                         low: k,
                         high: j,
@@ -349,14 +339,14 @@ impl LogicalExpression {
                     },
                 ) => n == m && a.equivalent(b)? && l.equivalent(k)? && h.equivalent(j)?,
                 (
-                    ExpressionNode::Like {
+                    ExprKind::Like {
                         expression: a,
                         pattern: x,
                         negated: n,
                         escape_char: e,
                         case_insensitive: i,
                     },
-                    ExpressionNode::Like {
+                    ExprKind::Like {
                         expression: b,
                         pattern: y,
                         negated: m,
@@ -365,14 +355,14 @@ impl LogicalExpression {
                     },
                 )
                 | (
-                    ExpressionNode::SimilarTo {
+                    ExprKind::SimilarTo {
                         expression: a,
                         pattern: x,
                         negated: n,
                         escape_char: e,
                         case_insensitive: i,
                     },
-                    ExpressionNode::SimilarTo {
+                    ExprKind::SimilarTo {
                         expression: b,
                         pattern: y,
                         negated: m,
@@ -381,24 +371,24 @@ impl LogicalExpression {
                     },
                 ) => n == m && e == f && i == j && a.equivalent(b)? && x.equivalent(y)?,
                 (
-                    ExpressionNode::InList {
+                    ExprKind::InList {
                         expression: a,
                         values: x,
                         negated: n,
                     },
-                    ExpressionNode::InList {
+                    ExprKind::InList {
                         expression: b,
                         values: y,
                         negated: m,
                     },
                 ) => n == m && a.equivalent(b)? && list(x, y)?,
                 (
-                    ExpressionNode::Case {
+                    ExprKind::Case {
                         operand: a,
                         branches: x,
                         otherwise: p,
                     },
-                    ExpressionNode::Case {
+                    ExprKind::Case {
                         operand: b,
                         branches: y,
                         otherwise: q,
@@ -421,7 +411,7 @@ impl LogicalExpression {
                     operand && otherwise && branches
                 }
                 (
-                    ExpressionNode::AggregateFunction {
+                    ExprKind::AggregateFunction {
                         function: a,
                         arguments: x,
                         distinct: d,
@@ -429,7 +419,7 @@ impl LogicalExpression {
                         order_by: o,
                         null_treatment: n,
                     },
-                    ExpressionNode::AggregateFunction {
+                    ExprKind::AggregateFunction {
                         function: b,
                         arguments: y,
                         distinct: e,
@@ -452,7 +442,7 @@ impl LogicalExpression {
                     a == b && d == e && n == m && filter && sorts && list(x, y)?
                 }
                 (
-                    ExpressionNode::WindowFunction {
+                    ExprKind::WindowFunction {
                         function: a,
                         arguments: x,
                         partition_by: p,
@@ -462,7 +452,7 @@ impl LogicalExpression {
                         distinct: d,
                         null_treatment: n,
                     },
-                    ExpressionNode::WindowFunction {
+                    ExprKind::WindowFunction {
                         function: b,
                         arguments: y,
                         partition_by: q,
