@@ -527,7 +527,7 @@ Feature: TRUNCATE TABLE
       | 2   |
 
   @sail-only
-  Scenario Outline: TRUNCATE TABLE refuses a managed table of a lakehouse format and keeps its rows
+  Scenario Outline: TRUNCATE TABLE transactionally empties a managed lakehouse table
     Given variable warehouse for temporary directory truncate_lakehouse_warehouse
     Given config spark.sql.warehouse.dir = {{ warehouse.string }}
     Given final statement
@@ -542,7 +542,7 @@ Feature: TRUNCATE TABLE
       """
       INSERT INTO truncate_lakehouse_t VALUES (1), (2)
       """
-    Given statement with error .*transaction logs.*
+    Given statement
       """
       TRUNCATE TABLE truncate_lakehouse_t
       """
@@ -552,7 +552,7 @@ Feature: TRUNCATE TABLE
       """
     Then query result
       | cnt |
-      | 2   |
+      | 0   |
 
     Examples:
       | format  |

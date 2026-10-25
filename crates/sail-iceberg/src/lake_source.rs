@@ -292,6 +292,24 @@ impl LakeSource for IcebergLakeSource {
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
         match operation {
+            RowLevelOperation::Truncate {
+                target_plan,
+                target,
+            } => {
+                let (mode, snapshot_id) = crate::logical::row_level::target_write_state(
+                    &target_plan,
+                    sail_common_datafusion::datasource::RowLevelCommand::Truncate,
+                )?;
+                let node = sail_logical_plan::row_level::RowLevelWriteNode::new_truncate(
+                    target_plan,
+                    mode,
+                    *target,
+                )?
+                .with_expected_snapshot_id(Some(snapshot_id));
+                Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+                    node: Arc::new(node),
+                }))
+            }
             RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
             RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
             RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),

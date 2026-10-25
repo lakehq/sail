@@ -63,6 +63,7 @@ impl std::str::FromStr for SaveMode {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    Truncate {},
     DynamicPartitionOverwrite {
         partition_by: Option<Vec<String>>,
     },
@@ -155,6 +156,7 @@ impl DeltaOperation {
             } => "CREATE OR REPLACE TABLE",
             Self::Create { .. } => "CREATE TABLE",
             Self::Write { .. } | Self::DynamicPartitionOverwrite { .. } => "WRITE",
+            Self::Truncate {} => "TRUNCATE",
             Self::Delete { .. } => "DELETE",
             Self::Update { .. } => "UPDATE",
             Self::Merge { .. } => "MERGE",
@@ -257,7 +259,7 @@ impl DeltaOperation {
                     not_matched_by_source_predicates,
                 )?;
             }
-            Self::FileSystemCheck {} => {}
+            Self::Truncate {} | Self::FileSystemCheck {} => {}
             Self::Restore { version, datetime } => {
                 insert_opt(&mut parameters, "version", *version);
                 insert_opt(&mut parameters, "datetime", *datetime);
@@ -330,7 +332,7 @@ impl DeltaOperation {
 
     pub fn read_whole_table(&self) -> bool {
         match self {
-            Self::DynamicPartitionOverwrite { .. } => true,
+            Self::Truncate {} | Self::DynamicPartitionOverwrite { .. } => true,
             // UPDATE predicates are not yet evaluated against concurrent file additions, so
             // conservatively retain the full read set until predicate conflict checks are wired.
             Self::Update { .. } => true,

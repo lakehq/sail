@@ -5082,6 +5082,7 @@ impl RemoteExecutionCodec {
             r#gen::IcebergSnapshotUpdateKind::RowLevelRewrite => {
                 Ok(SnapshotUpdateKind::RowLevelRewrite)
             }
+            r#gen::IcebergSnapshotUpdateKind::Truncate => Ok(SnapshotUpdateKind::Truncate),
             r#gen::IcebergSnapshotUpdateKind::Unspecified => {
                 plan_err!("Iceberg snapshot update kind is unspecified")
             }
@@ -5090,6 +5091,7 @@ impl RemoteExecutionCodec {
 
     fn try_encode_iceberg_snapshot_update_kind(kind: SnapshotUpdateKind) -> i32 {
         (match kind {
+            SnapshotUpdateKind::Truncate => r#gen::IcebergSnapshotUpdateKind::Truncate,
             SnapshotUpdateKind::FastAppend => r#gen::IcebergSnapshotUpdateKind::FastAppend,
             SnapshotUpdateKind::FullOverwrite => r#gen::IcebergSnapshotUpdateKind::FullOverwrite,
             SnapshotUpdateKind::RowDelta => r#gen::IcebergSnapshotUpdateKind::RowDelta,
@@ -6604,6 +6606,7 @@ mod tests {
             for (kind, dynamic) in [
                 (SnapshotUpdateKind::CopyOnWrite, true),
                 (SnapshotUpdateKind::RowLevelRewrite, false),
+                (SnapshotUpdateKind::Truncate, false),
                 (SnapshotUpdateKind::RewriteDataFiles, false),
             ] {
                 let input: Arc<dyn ExecutionPlan> =
