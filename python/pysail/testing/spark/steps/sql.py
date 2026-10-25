@@ -5,6 +5,7 @@ import json
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import pytest
 from jinja2 import Template
@@ -61,6 +62,30 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
     This step does not create the directory, it only stores its absolute path.
     """
     variables[name] = PathWrapper(tmp_path / directory)
+    return variables
+
+
+@given(parsers.parse("variable {name} for location of table {table}"), target_fixture="variables")
+def variable_for_table_location(name: str, table: str, spark, variables: dict) -> dict:
+    """Defines a variable for the directory of a table, taken from `DESCRIBE EXTENDED`.
+
+    A `file:` URI is percent-decoded, as Sail does when it reads and writes the table;
+    a bare path is used as is.
+    """
+    rows = spark.sql(f"DESCRIBE EXTENDED {table}").collect()
+    location = next(r.data_type for r in rows if r.col_name == "Location")
+    if location[:5].lower() == "file:":
+        location = unquote(urlparse(location).path)
+    variables[name] = PathWrapper(Path(location))
+    return variables
+
+
+@given(parsers.parse("variable {name} for subdirectory {subdir} of {location_var}"), target_fixture="variables")
+def variable_for_subdirectory(name: str, subdir: str, location_var: str, variables: dict) -> dict:
+    """Defines a variable pointing to a subdirectory of a location."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    variables[name] = PathWrapper(Path(location.path) / subdir)
     return variables
 
 

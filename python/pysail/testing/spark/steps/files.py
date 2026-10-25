@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+import stat
 import textwrap
 from pathlib import Path
 
@@ -285,6 +287,14 @@ def csv_files_first_line_is(location_var: str, expected_line: str, variables: di
     )
 
 
+@given(parsers.parse("subdirectory {dirname} in {location_var} exists"))
+def subdirectory_in_location_exists(dirname: str, location_var: str, variables: dict) -> None:
+    """Creates a subdirectory inside the given location directory."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    (Path(location.path) / dirname).mkdir(parents=True, exist_ok=True)
+
+
 @then(parsers.parse("subdirectories in {location_var} count is {n:d}"))
 def subdirectories_count_is(location_var: str, n: int, variables: dict) -> None:
     """Verify that the location has exactly n subdirectories."""
@@ -297,3 +307,99 @@ def subdirectories_count_is(location_var: str, n: int, variables: dict) -> None:
     assert len(subdirs) == n, (
         f"Expected {n} subdirectories under {real_path}, got {len(subdirs)}: {[d.name for d in subdirs]}"
     )
+
+
+@given(parsers.parse("file {filename} in {location_var} is created"))
+def file_in_location_is_created(filename: str, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    path = Path(location.path) / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("x")
+
+
+@then(parsers.parse("file {filename} in {location_var} exists"))
+def file_in_location_exists(filename: str, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    path = Path(location.path) / filename
+    assert path.exists(), f"{path} does not exist"
+
+
+@given(parsers.parse("{location_var} is removed"))
+def location_is_removed(location_var: str, variables: dict) -> None:
+    """Deletes the directory of the location variable, as if it was removed outside the engine."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    shutil.rmtree(location.path)
+
+
+@then(parsers.parse("{location_var} is an empty directory"))
+def location_is_empty_directory(location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    path = Path(location.path)
+    assert path.is_dir(), f"{path} is not a directory"
+    assert not path.is_symlink(), f"{path} is a symlink"
+    assert not any(path.iterdir()), f"{path} is not empty: {list(path.iterdir())}"
+
+
+@given(parsers.parse("symlink {link_var} to {target_var} exists"))
+def symlink_to_location_exists(link_var: str, target_var: str, variables: dict) -> None:
+    """Creates the target directory and a symlink at the link variable's path pointing to it."""
+    link = variables.get(link_var)
+    target = variables.get(target_var)
+    assert link is not None, f"Variable {link_var!r} not found"
+    assert target is not None, f"Variable {target_var!r} not found"
+    Path(target.path).mkdir(parents=True, exist_ok=True)
+    Path(link.path).symlink_to(Path(target.path), target_is_directory=True)
+
+
+@then(parsers.parse("{location_var} is a directory and not a symlink"))
+def location_is_plain_directory(location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    path = Path(location.path)
+    assert path.is_dir(), f"{path} is not a directory"
+    assert not path.is_symlink(), f"{path} is still a symlink"
+
+
+@given(parsers.parse("mode of {location_var} is set to {mode}"))
+def location_mode_is_set(location_var: str, mode: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    Path(location.path).chmod(int(mode, 8))
+
+
+@then(parsers.parse("mode of {location_var} is {mode}"))
+def location_mode_is(location_var: str, mode: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    actual = stat.S_IMODE(Path(location.path).stat().st_mode)
+    assert actual == int(mode, 8), f"Expected mode {mode} on {location.path}, got {oct(actual)}"
+
+
+@given(parsers.parse("directory {subdir} of {location_var} is moved to {target_var} and replaced by a symlink"))
+def subdirectory_is_moved_and_symlinked(subdir: str, location_var: str, target_var: str, variables: dict) -> None:
+    """Moves a subdirectory of the location to the target path and leaves a symlink in its place."""
+    location = variables.get(location_var)
+    target = variables.get(target_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    assert target is not None, f"Variable {target_var!r} not found"
+    source = Path(location.path) / subdir
+    assert source.is_dir(), f"Directory {source} does not exist"
+    Path(target.path).parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), str(target.path))
+    source.symlink_to(Path(target.path), target_is_directory=True)
+
+
+@then(parsers.parse("{location_var} is a symlink"))
+def location_is_symlink(location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    assert Path(location.path).is_symlink(), f"{location.path} is not a symlink"
+
+
+@then(parsers.parse("the working directory has no entry named {name}"))
+def working_directory_has_no_entry(name: str) -> None:
+    assert not (Path.cwd() / name).exists(), f"{name} was created in the working directory"
