@@ -35,7 +35,7 @@ from pysail.testing.spark.steps.iceberg import (
     _write_metadata_file,
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests.spark.iceberg.utils import WindowsLocalPyArrowFileIO, create_sql_catalog
+from pysail.tests.spark.iceberg.utils import WindowsLocalPyArrowFileIO, create_sql_catalog, pyiceberg_file_io_properties
 
 UNPARTITIONED_LAST_PARTITION_ID = 999
 
@@ -338,7 +338,9 @@ def test_iceberg_sql_delete_writes_position_delete_file_and_filters_rows(spark, 
         assert set(deleted) == {"file_path", "pos"}
         original_rows = pq.read_table(_local_table_path(deleted["file_path"])).to_pylist()
         assert original_rows[deleted["pos"]] == {"id": 2, "name": "drop-2", "flag": "drop"}
-        assert StaticTable.from_metadata(str(_latest_metadata_path(table_path))).scan().to_arrow().to_pylist() == [
+        assert StaticTable.from_metadata(
+            _latest_metadata_path(table_path).as_uri(), properties=pyiceberg_file_io_properties()
+        ).scan().to_arrow().to_pylist() == [
             {"id": 1, "name": "keep-1", "flag": "keep"},
             {"id": 3, "name": "keep-3", "flag": "keep"},
         ]
@@ -443,7 +445,14 @@ def test_iceberg_sql_delete_prunes_files_and_preserves_positions(spark, sql_cata
         assert [row.id for row in spark.table(name).orderBy("id").collect()] == expected
         if not existing_delete:
             assert (
-                sorted(StaticTable.from_metadata(str(_latest_metadata_path(path))).scan().to_arrow()["id"].to_pylist())
+                sorted(
+                    StaticTable.from_metadata(
+                        _latest_metadata_path(path).as_uri(), properties=pyiceberg_file_io_properties()
+                    )
+                    .scan()
+                    .to_arrow()["id"]
+                    .to_pylist()
+                )
                 == expected
             )
     finally:
@@ -493,7 +502,10 @@ def test_iceberg_sql_delete_nested_partition_source(spark, sql_catalog, transfor
         assert sorted(deleted_ids) == [2, 4, 6]
         assert [row.id for row in spark.table(name).orderBy("id").collect()] == [1, 3, 5]
         assert sorted(
-            StaticTable.from_metadata(str(_latest_metadata_path(path))).scan().to_arrow()["id"].to_pylist()
+            StaticTable.from_metadata(_latest_metadata_path(path).as_uri(), properties=pyiceberg_file_io_properties())
+            .scan()
+            .to_arrow()["id"]
+            .to_pylist()
         ) == [1, 3, 5]
     finally:
         _drop_table(spark, name)
@@ -756,7 +768,10 @@ def test_iceberg_sql_delete_duplicate_complex_rows_and_reinsert(spark, tmp_path)
         spark.sql(f"INSERT INTO {name} VALUES (1L, array(1D, NULL), map('a', 'b'))")  # noqa: S608
         assert sorted(row.id for row in spark.table(name).collect()) == [1, 3, 4]
         assert sorted(
-            StaticTable.from_metadata(str(_latest_metadata_path(path))).scan().to_arrow()["id"].to_pylist()
+            StaticTable.from_metadata(_latest_metadata_path(path).as_uri(), properties=pyiceberg_file_io_properties())
+            .scan()
+            .to_arrow()["id"]
+            .to_pylist()
         ) == [
             1,
             3,

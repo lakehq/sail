@@ -42,7 +42,7 @@ Feature: TRUNCATE TABLE
   @sail-only
   Scenario: TRUNCATE TABLE removes the data of a managed table whose warehouse path has a space
     Given variable warehouse for temporary directory truncate warehouse with space
-    Given config spark.sql.warehouse.dir = {{ warehouse.file_uri }}
+    Given config spark.sql.warehouse.dir = {{ warehouse.string }}
     Given final statement
       """
       DROP TABLE IF EXISTS truncate_space_managed_t
@@ -73,7 +73,7 @@ Feature: TRUNCATE TABLE
   @sail-only
   Scenario: TRUNCATE TABLE resolves a file URI with a localhost authority like the table I/O
     Given variable warehouse for temporary directory truncate_localhost_warehouse
-    Given config spark.sql.warehouse.dir = file://localhost{{ warehouse.string }}
+    Given config spark.sql.warehouse.dir = {{ warehouse.file_uri | replace('file://', 'file://localhost', 1) }}
     Given final statement
       """
       DROP TABLE IF EXISTS truncate_localhost_t
@@ -139,7 +139,7 @@ Feature: TRUNCATE TABLE
   @sail-only
   Scenario: TRUNCATE TABLE accepts an upper-case file scheme in the table location
     Given variable warehouse for temporary directory truncate_upper_scheme_warehouse
-    Given config spark.sql.warehouse.dir = FILE://{{ warehouse.string }}
+    Given config spark.sql.warehouse.dir = {{ warehouse.file_uri | replace('file:', 'FILE:', 1) }}
     Given final statement
       """
       DROP TABLE IF EXISTS truncate_upper_scheme_t

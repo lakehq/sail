@@ -5,7 +5,8 @@ import json
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 from jinja2 import Template
@@ -75,7 +76,8 @@ def variable_for_table_location(name: str, table: str, spark, variables: dict) -
     rows = spark.sql(f"DESCRIBE EXTENDED {table}").collect()
     location = next(r.data_type for r in rows if r.col_name == "Location")
     if location[:5].lower() == "file:":
-        location = unquote(urlparse(location).path)
+        uri = urlparse(location)
+        location = url2pathname(f"//{uri.netloc}{uri.path}" if uri.netloc and uri.netloc != "localhost" else uri.path)
     variables[name] = PathWrapper(Path(location))
     return variables
 
