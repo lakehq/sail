@@ -1149,3 +1149,216 @@ def test_float_to_double_correlation_keeps_signaling_nan_twins_in_one_row(spark)
         assert [tuple(row) for row in spark.sql(query).collect()] == [("x", 2)]
     finally:
         spark.catalog.dropTempView("scalar_snan_twin_values")
+
+
+@pytest.mark.skipif(
+    is_jvm_spark(),
+    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+)
+def test_cast_correlation_keeps_grouping_id_for_duplicate_grouping_sets(spark):
+    # A hidden key would shift the duplicate set's ordinal in the public GROUPING_ID.
+    query = """
+        SELECT o.id,
+          (SELECT sum(z) FROM (
+            SELECT grouping_id(k, x2, x1) AS z
+            FROM VALUES ('2', CAST(NULL AS INT), 2), ('2', CAST(NULL AS INT), 2),
+                        ('2', 1, CAST(NULL AS INT)) AS i(k, x1, x2)
+            WHERE CAST(i.k AS BIGINT) = o.id
+            GROUP BY GROUPING SETS ((k), (k), (x2, x1))
+          )) AS n
+        FROM VALUES (2L) AS o(id)
+    """
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 14)]
+
+
+def test_duplicate_grouping_sets_keep_public_grouping_id_literal_reference(spark):
+    row = spark.sql("""
+        SELECT sum(z) AS n FROM (
+          SELECT grouping_id(k, x2, x1) AS z
+          FROM VALUES ('2', CAST(NULL AS INT), 2), ('2', CAST(NULL AS INT), 2),
+                      ('2', 1, CAST(NULL AS INT)) AS i(k, x1, x2)
+          WHERE CAST(i.k AS BIGINT) = 2
+          GROUP BY GROUPING SETS ((k), (k), (x2, x1))
+        )
+    """).collect()[0]
+    assert row.n == 14  # noqa: PLR2004
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark rejects this correlated grouping-set shape")
+def test_correlated_duplicate_grouping_flags_equal_ordinary_flags(spark):
+    row = spark.sql("""
+        SELECT
+          (SELECT max(z) > 0 FROM (
+             SELECT grouping_id(k) AS z FROM VALUES ('2'), ('02') AS i(k)
+             WHERE CAST(i.k AS BIGINT) = o.id GROUP BY GROUPING SETS ((k), (k))
+          )) =
+          (SELECT max(z) > 0 FROM (
+             SELECT grouping_id(k) AS z FROM VALUES ('2'), ('02') AS i(k)
+             WHERE CAST(i.k AS BIGINT) = 2 GROUP BY GROUPING SETS ((k), (k))
+          )) AS same
+        FROM VALUES (2L) AS o(id)
+    """).collect()[0]
+    assert row.same is True
+
+
+@pytest.mark.skipif(
+    is_jvm_spark(),
+    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+)
+def test_direct_correlation_on_grouping_column_keeps_grouping_id_for_duplicate_grouping_sets(spark):
+    # Native pull-up would also group every set by k, including the set that omits it.
+    query = """
+        SELECT o.id,
+          (SELECT sum(z) FROM (
+            SELECT grouping_id(k, x2, x1) AS z
+            FROM VALUES ('2', CAST(NULL AS INT), 2), ('2', CAST(NULL AS INT), 2),
+                        ('2', 1, CAST(NULL AS INT)) AS i(k, x1, x2)
+            WHERE CAST(i.k AS BIGINT) = o.id AND i.k = o.k
+            GROUP BY GROUPING SETS ((k), (k), (x2, x1))
+          )) AS n
+        FROM VALUES (2L, '2') AS o(id, k)
+    """
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 14)]
+
+
+@pytest.mark.skipif(
+    is_jvm_spark(),
+    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+)
+def test_direct_correlation_on_grouping_column_keeps_grouping_of_subtotal(spark):
+    query = """
+        SELECT o.id,
+          (SELECT sum(z) FROM (
+            SELECT grouping(k) AS z
+            FROM VALUES (2, CAST(NULL AS INT), 2, 10), (2, CAST(NULL AS INT), 2, 20),
+                        (2, 1, CAST(NULL AS INT), 30), (3, 5, 5, 40) AS i(k, x1, x2, v)
+            WHERE i.k = o.id
+            GROUP BY GROUPING SETS ((k), ())
+          )) AS n
+        FROM VALUES (2), (3), (4) AS o(id)
+        ORDER BY 1
+    """
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 1), (3, 1), (4, None)]
+
+
+@pytest.mark.parametrize("function", ["grouping(c1)", "grouping_id()"])
+def test_grouping_functions_over_permuted_duplicate_sets_of_eight_columns(spark, function):
+    # The duplicate-set ordinal widens the grouping ID past eight bits.
+    query = f"""
+        SELECT {function} AS z, count(*) AS n
+        FROM VALUES (1, 2, 3, 4, 5, 6, 7, 8) AS t(c1, c2, c3, c4, c5, c6, c7, c8)
+        GROUP BY GROUPING SETS ((c1, c2, c3, c4, c5, c6, c7, c8), (c8, c7, c6, c5, c4, c3, c2, c1))
+        ORDER BY z
+    """  # noqa: S608
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(0, 1), (0, 1)]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark rejects this correlated grouping-set shape")
+def test_cast_correlation_with_grouping_id_and_outer_value_in_having_plans(spark):
+    # TODO: the values are not Spark's yet; the rule declines rather than mask a grouping
+    #  ID that native pull-up compares with the outer query, which it cannot decorrelate.
+    query = """
+        SELECT o.id, o.x,
+          (SELECT count(*) FROM (
+            SELECT grouping_id(k, v) AS z
+            FROM VALUES ('1', 1), ('1', 2), ('01', CAST(NULL AS INT)), ('2', 3) AS i(k, v)
+            GROUP BY GROUPING SETS ((k, v), (k, v), (k))
+            HAVING CAST(k AS BIGINT) = o.id AND grouping_id(k, v) = o.x
+          )) AS n
+        FROM VALUES (1L, 0L), (2L, 1L) AS o(id, x)
+    """
+    spark.sql(query).collect()
+
+
+@pytest.mark.skipif(
+    is_jvm_spark(),
+    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+)
+def test_cast_correlation_keeps_grouping_id_of_stacked_grouping_sets(spark):
+    # The upper grouping sets take the carried key first too, keeping both grouping IDs.
+    query = """
+        SELECT o.id,
+          (SELECT sum(z2 * 100 + z1) FROM (
+            SELECT grouping_id(a) AS z2, max(z1) AS z1 FROM (
+              SELECT k AS a, grouping_id(k, x2) AS z1
+              FROM VALUES ('2', CAST(NULL AS INT), 2, 10), ('02', CAST(NULL AS INT), 2, 20),
+                          ('2', 1, CAST(NULL AS INT), 30), ('3', 5, 5, 40) AS i(k, x1, x2, v)
+              WHERE CAST(i.k AS BIGINT) = o.id
+              GROUP BY GROUPING SETS ((k), (k), (k, x2))
+            )
+            GROUP BY GROUPING SETS ((a), (a), ())
+          )) AS n
+        FROM VALUES (2L), (3L), (4L) AS o(id)
+        ORDER BY 1
+    """
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 105), (3, 103), (4, None)]
+
+
+@pytest.mark.skipif(
+    is_jvm_spark(),
+    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+)
+def test_cast_correlation_keeps_stacked_grouping_set_totals(spark):
+    query = """
+        SELECT o.id,
+          (SELECT sum(s) * 100 + count(*) FROM (
+            SELECT a, sum(s) AS s FROM (
+              SELECT k AS a, x, sum(v) AS s
+              FROM VALUES ('2', 1, 10), ('2', 2, 20), ('3', 1, 30),
+                          ('3', CAST(NULL AS INT), 40) AS i(k, x, v)
+              WHERE CAST(i.k AS BIGINT) = o.id
+              GROUP BY GROUPING SETS ((k), (k, x))
+            )
+            GROUP BY GROUPING SETS ((a), ())
+          )) AS n
+        FROM VALUES (2L), (3L), (4L) AS o(id)
+        ORDER BY o.id
+    """
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 12002), (3, 28002), (4, None)]
+
+
+@pytest.mark.skipif(
+    is_jvm_spark(),
+    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+)
+def test_cast_correlation_keeps_grouping_id_through_a_grouped_aggregate_between_grouping_sets(spark):
+    query = """
+        SELECT o.id,
+          (SELECT sum(z2 * 100 + z1) FROM (
+            SELECT grouping_id(a) AS z2, max(z1) AS z1 FROM (
+              SELECT a, max(z1) AS z1 FROM (
+                SELECT k AS a, grouping_id(k, x2) AS z1
+                FROM VALUES ('2', CAST(NULL AS INT), 2, 10), ('02', CAST(NULL AS INT), 2, 20),
+                            ('2', 1, CAST(NULL AS INT), 30), ('3', 5, 5, 40) AS i(k, x1, x2, v)
+                WHERE CAST(i.k AS BIGINT) = o.id
+                GROUP BY GROUPING SETS ((k), (k), (k, x2))
+              )
+              GROUP BY a
+            )
+            GROUP BY GROUPING SETS ((a), (a), ())
+          )) AS n
+        FROM VALUES (2L), (3L), (4L) AS o(id)
+        ORDER BY 1
+    """
+    assert [tuple(row) for row in spark.sql(query).collect()] == [(2, 105), (3, 103), (4, None)]
+
+
+@pytest.mark.skipif(
+    is_jvm_spark(),
+    reason="Spark rejects this correlated grouping-set shape; per-outer references validate the expected value",
+)
+def test_direct_correlation_on_columns_of_every_set_keeps_grouping_id_for_duplicate_grouping_sets(spark):
+    # Native pull-up groups by columns every set already groups, so only the duplicate
+    # ordinal needs removing, as when the subquery is not correlated.
+    query = """
+        SELECT o.c4,
+          (SELECT max(gid) FROM (
+            SELECT grouping_id(c1, c2, c3, c4) AS gid
+            FROM VALUES ('2', '2', '2', '2'), ('2', '2', '2', '3') AS i(c1, c2, c3, c4)
+            WHERE i.c1 = o.c1 AND i.c2 = o.c2 AND i.c3 = o.c3 AND i.c4 = o.c4
+            GROUP BY GROUPING SETS ((c1, c2, c3, c4), (c1, c2, c3, c4))
+          )) AS z
+        FROM VALUES ('2', '2', '2', '2'), ('2', '2', '2', '3'), ('2', '2', '2', '9') AS o(c1, c2, c3, c4)
+        ORDER BY o.c4
+    """
+    assert [tuple(row) for row in spark.sql(query).collect()] == [("2", 0), ("3", 0), ("9", None)]

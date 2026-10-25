@@ -5,8 +5,8 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result};
-use datafusion_expr::expr::{Cast, GroupingSet};
+use datafusion_common::{Column, DFSchema, Result, ScalarValue};
+use datafusion_expr::expr::{BinaryExpr, Cast, GroupingSet};
 use datafusion_expr::expr_rewriter::{NamePreserver, strip_outer_reference};
 use datafusion_expr::logical_plan::{Aggregate, Filter, Projection};
 use datafusion_expr::utils::{
@@ -14,7 +14,7 @@ use datafusion_expr::utils::{
     split_conjunction,
 };
 use datafusion_expr::{
-    Expr, ExprSchemable, JoinType, LogicalPlan, Operator, ScalarUDF, Volatility,
+    Expr, ExprSchemable, JoinType, LogicalPlan, Operator, ScalarUDF, Volatility, bitwise_and,
 };
 use projection::project_with_keys;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
@@ -201,23 +201,26 @@ fn normalize_keys(
     let mut has_aggregate = false;
     let mut has_cast = false;
     let mut has_window = false;
+    let mut has_grouping_sets = false;
+    let mut has_column = false;
     // Most correlated subqueries need no key; find out before the full scan below.
     plan.apply(|node| {
         reserve_key_names(reserved, node.schema());
         has_aggregate |= matches!(node, LogicalPlan::Aggregate(_));
         has_window |= matches!(node, LogicalPlan::Window(_));
+        has_grouping_sets |= matches!(node, LogicalPlan::Aggregate(aggregate) if has_grouping_set(&aggregate.group_expr));
         if let LogicalPlan::Filter(filter) = node {
-            has_cast |= split_conjunction(&filter.predicate)
-                .into_iter()
-                .any(|expression| {
-                    expression.contains_outer()
-                        && native_equality(expression)
-                            .is_some_and(|(key, _)| !matches!(key, Expr::Column(_)))
-                });
+            for expression in split_conjunction(&filter.predicate) {
+                match native_equality(expression).filter(|_| expression.contains_outer()) {
+                    Some((Expr::Column(_), _)) => has_column = true,
+                    Some(_) => has_cast = true,
+                    None => {}
+                }
+            }
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    if !has_aggregate || !(has_cast || has_window) {
+    if !has_aggregate || !(has_cast || has_window || (has_grouping_sets && has_column)) {
         return Ok(Transformed::no(plan.clone()));
     }
     let mut eligible = true;
@@ -225,10 +228,22 @@ fn normalize_keys(
     // An inner column compared to an outer value already selects one group per
     // outer row, so casts of that column need no separate key.
     let mut pinned = HashSet::new();
+    let (mut grouping_columns, mut compared) = (HashSet::new(), HashSet::new());
+    let mut always_grouped: Option<HashSet<Column>> = None;
     plan.apply(|node| {
-        reads_grouping_id |= expressions_exist(node, |expression| {
-            matches!(expression, Expr::Column(column) if column.name == Aggregate::INTERNAL_GROUPING_ID)
-        })?;
+        reads_grouping_id |= expressions_exist(node, is_grouping_id)?;
+        if let LogicalPlan::Aggregate(aggregate) = node
+            && has_grouping_set(&aggregate.group_expr)
+        {
+            // Native pull-up adds no grouping for a column that every set of every
+            // grouping-set aggregate already groups.
+            let (columns, always) = grouping_set_columns(&aggregate.group_expr)?;
+            grouping_columns.extend(columns);
+            always_grouped = Some(match always_grouped.take() {
+                Some(previous) => previous.intersection(&always).cloned().collect(),
+                None => always,
+            });
+        }
         if matches!(node, LogicalPlan::Subquery(_))
             || (!matches!(node, LogicalPlan::Filter(_)) && node.contains_outer_reference())
             || (matches!(
@@ -284,6 +299,7 @@ fn normalize_keys(
             {
                 match native_equality(expression) {
                     Some((Expr::Column(column), _)) => {
+                        compared.insert(column.clone());
                         // Floating equality merges values whose casts differ, including
                         // floating leaves of arrays and structs.
                         let floating = filter
@@ -307,6 +323,26 @@ fn normalize_keys(
     if !eligible {
         return Ok(Transformed::no(plan.clone()));
     }
+    // Native pull-up would also group every grouping set by a grouping column compared
+    // with the outer query, including sets that omit it, which GROUPING reads. Give it
+    // a prefixed key instead, as for a window domain.
+    let regrouped = if reads_grouping_id {
+        compared
+            .iter()
+            .filter(|column| {
+                grouping_columns.contains(*column)
+                    && !always_grouped
+                        .as_ref()
+                        .is_some_and(|always| always.contains(*column))
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
+    for column in &regrouped {
+        pinned.remove(&column.name);
+    }
 
     // Preserve grouped producers when replacing a cast would violate native's
     // requirement that every original grouping column occurs in a correlation.
@@ -317,6 +353,7 @@ fn normalize_keys(
     // Discover the complete set before validating retained predicates: a deeper
     // window may require lifting the same column from an earlier filter too.
     let windowed_correlation = collect_window_domains(plan, false, false, &mut domains);
+    domains.extend(regrouped.iter().cloned());
     if !lifted_scope(
         plan,
         &mut Vec::new(),
@@ -329,7 +366,9 @@ fn normalize_keys(
     }
     // Without a cast, carry correlations only to windows over non-floating keys: Sail's
     // equality keeps NaN payloads apart, so floating partitions or peers would split them.
-    if !has_cast && (!windowed_correlation || !domains.is_empty() || has_floating_window_key(plan)?)
+    if !has_cast
+        && regrouped.is_empty()
+        && (!windowed_correlation || !domains.is_empty() || has_floating_window_key(plan)?)
     {
         return Ok(Transformed::no(plan.clone()));
     }
@@ -353,13 +392,23 @@ fn normalize_keys(
         hidden: HashSet::new(),
         reads_grouping_id,
         grouping_ids_fit: true,
+        open_mask: None,
+        masked: false,
+        grouping_set_ancestors: 0,
     };
     // Even without a lifted key, carrying the correlated columns partitions windows
     // and refreshes cached schemas for native pull-up.
     let (carried, pending, _) = lift.carry(plan.clone(), false)?;
     // Every lifted equality has an aggregate above it, which consumes its key.
     debug_assert!(pending.is_empty());
-    if carried == *plan || !lift.grouping_ids_fit {
+    // Native pull-up cannot decorrelate a masked grouping ID compared with the outer query.
+    if carried == *plan
+        || !lift.grouping_ids_fit
+        || (lift.masked
+            && carried.exists(|node| {
+                Ok(node.contains_outer_reference() && expressions_exist(node, is_grouping_id)?)
+            })?)
+    {
         return Ok(Transformed::no(plan.clone()));
     }
     let schema = Arc::clone(plan.schema());
@@ -514,11 +563,21 @@ fn lifted_scope<'a>(
             // Native pull-up adds the key to the nearest aggregate, but above
             // it rebuilds only projections, filters and aggregates; any other
             // node would keep a cached schema without the key.
-            supported &= ancestors[..nearest].iter().all(|node| match node {
+            // A grouping set there is given the carried key first, as below, so native
+            // pull-up need not append it and shift its grouping-ID bits. An ungrouped
+            // aggregate between them leaves the key for native pull-up to append.
+            let mut plain = matches!(
+                ancestors[nearest],
+                LogicalPlan::Aggregate(aggregate) if aggregate.group_expr.is_empty()
+            );
+            supported &= ancestors[..nearest].iter().rev().all(|node| match node {
                 LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => true,
-                // It appends the key to every grouping set there, which can shift
-                // the grouping-ID bits that GROUPING was resolved to read.
-                LogicalPlan::Aggregate(aggregate) => !has_grouping_set(&aggregate.group_expr),
+                LogicalPlan::Aggregate(aggregate) => {
+                    let grouping = has_grouping_set(&aggregate.group_expr);
+                    let carried = !(grouping && plain);
+                    plain |= aggregate.group_expr.is_empty();
+                    carried
+                }
                 _ => false,
             });
             keyed.extend(ancestors.iter().find_map(|node| match *node {
@@ -554,6 +613,13 @@ struct Lift<'a> {
     reads_grouping_id: bool,
     /// Whether the grouping ID of every grouping set given a key still fits.
     grouping_ids_fit: bool,
+    /// The user's grouping-bit count and grouping-ID type of the aggregate below the
+    /// current node whose duplicate sets were given a key, until another aggregate.
+    open_mask: Option<(usize, DataType)>,
+    /// Whether any grouping-ID read was masked.
+    masked: bool,
+    /// How many grouping-set aggregates are above the current node.
+    grouping_set_ancestors: usize,
 }
 
 impl Lift<'_> {
@@ -568,6 +634,9 @@ impl Lift<'_> {
         // the nodes whose inputs or expressions change.
         let mut changed = false;
         let below = aggregated || matches!(plan, LogicalPlan::Aggregate(_));
+        let grouping = matches!(&plan, LogicalPlan::Aggregate(aggregate) if has_grouping_set(&aggregate.group_expr));
+        self.grouping_set_ancestors += usize::from(grouping);
+        let mut masks = Vec::new();
         let plan = plan
             .map_children(|input| {
                 let schema = Arc::clone(input.schema());
@@ -575,9 +644,26 @@ impl Lift<'_> {
                 changed |= &schema != input.schema();
                 pending.extend(input_pending);
                 keys.extend(input_keys);
+                masks.extend(self.open_mask.take());
                 Ok(Transformed::yes(input))
             })?
             .data;
+        self.grouping_set_ancestors -= usize::from(grouping);
+        // Spark's GROUPING_ID holds only the user's grouping bits. A read above the
+        // aggregate that was given keys, up to the next aggregate, sees its grouping ID.
+        let open = match masks.len() {
+            0 => None,
+            1 => masks.pop(),
+            _ => {
+                self.grouping_ids_fit = false;
+                None
+            }
+        };
+        let plan = match &open {
+            Some((bits, data_type)) => mask_grouping_id(plan, *bits, data_type)?,
+            None => plan,
+        };
+        let mut opened = None;
         let names = NamePreserver::new(&plan);
         let plan = match plan {
             LogicalPlan::Filter(filter) => {
@@ -689,22 +775,74 @@ impl Lift<'_> {
                         .map(|key| Expr::Column(key.clone()))
                         .filter(|key| !grouped.contains(&key))
                         .collect::<Vec<_>>();
+                    let bits = grouped.len();
                     if !group_expr.is_empty() {
                         // Native pull-up also groups by correlated columns from below an
                         // inner aggregate, which `keys` no longer holds there.
-                        self.grouping_ids_fit &= !correlated_below_aggregate(&aggregate.input)?
-                            && grouping_id_fits(&aggregate, &keys, self.reads_grouping_id);
+                        let carried = keys
+                            .iter()
+                            .filter(|key| self.hidden.contains(&key.name))
+                            .map(|key| key.name.as_str())
+                            .collect::<HashSet<_>>();
+                        let ordinal = if correlated_below_aggregate(&aggregate.input, &carried)? {
+                            None
+                        } else {
+                            grouping_id_fits(&aggregate, &keys, self.reads_grouping_id)
+                        };
+                        self.grouping_ids_fit &= ordinal.is_some();
+                        // Keys add grouping bits below the ordinal of the user's duplicate
+                        // sets, which a whole grouping-ID read would then see. Native pull-up
+                        // also regroups by raw correlated columns, so those keep its layout.
+                        if self.reads_grouping_id
+                            && ordinal.is_some()
+                            && keys.iter().all(|key| self.hidden.contains(&key.name))
+                            && grouping_id_fits(&aggregate, &BTreeSet::new(), false)
+                                .is_some_and(|ordinal| ordinal > 0)
+                        {
+                            if let Ok(field) = aggregate
+                                .schema
+                                .field_with_unqualified_name(Aggregate::INTERNAL_GROUPING_ID)
+                            {
+                                opened = Some((bits, field.data_type().clone()));
+                                self.masked = true;
+                            }
+                        }
                         group_expr.append(&mut aggregate.group_expr);
                         aggregate.group_expr = group_expr;
                         changed = true;
                     }
                 }
                 // Leave the original grouping intact: native pull-up must still see
-                // an ungrouped aggregate to compensate COUNT on an empty input.
-                keys.clear();
+                // an ungrouped aggregate to compensate COUNT on an empty input. Below
+                // a grouping set, a grouped aggregate keeps its keys for that one to
+                // prefix; a plain one groups by them too, as native pull-up would.
+                let carries = self.grouping_set_ancestors > 0
+                    && (grouping || !aggregate.group_expr.is_empty());
+                if carries && !grouping {
+                    let missing = keys
+                        .iter()
+                        .filter(|key| self.hidden.contains(&key.name))
+                        .map(|key| Expr::Column(key.clone()))
+                        .filter(|key| !aggregate.group_expr.contains(key))
+                        .collect::<Vec<_>>();
+                    if !missing.is_empty() {
+                        aggregate.group_expr.splice(0..0, missing);
+                        changed = true;
+                    }
+                }
+                if carries {
+                    keys.retain(|key| self.hidden.contains(&key.name));
+                } else {
+                    keys.clear();
+                }
                 LogicalPlan::Aggregate(aggregate)
             }
             plan => plan,
+        };
+        self.open_mask = if matches!(plan, LogicalPlan::Aggregate(_)) {
+            opened
+        } else {
+            open
         };
         // Window, Unnest, joins and aliases cache their output schema. Native
         // pull-up otherwise retains the old schema after adding a hidden key below.
@@ -748,7 +886,7 @@ impl Lift<'_> {
             // Window partitions, aggregate groups and the outer join must use the
             // same floating equality classes; keep raw payloads in their own fields.
             let canonical =
-                cast.is_none() || (windowed && NormalizeFloatKeys::has_float(&data_type));
+                (cast.is_none() || windowed) && NormalizeFloatKeys::has_float(&data_type);
             let outer = if canonical {
                 ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![outer])
             } else {
@@ -810,17 +948,50 @@ impl Lift<'_> {
     }
 }
 
+/// The columns that grouping expressions read, and the grouping columns of every set.
+fn grouping_set_columns(group_expr: &[Expr]) -> Result<(Vec<Column>, HashSet<Column>)> {
+    let expanded = enumerate_grouping_sets(group_expr.to_vec())?;
+    let groups = grouping_set_to_exprlist(&expanded)?;
+    let columns = groups
+        .iter()
+        .flat_map(|group| group.column_refs())
+        .cloned()
+        .collect();
+    // Some rollup or cube set omits every expression.
+    let always = match expanded.as_slice() {
+        [Expr::GroupingSet(GroupingSet::GroupingSets(sets))] => groups
+            .iter()
+            .filter(|group| sets.iter().all(|set| set.contains(group)))
+            .filter_map(|group| match group {
+                Expr::Column(column) => Some(column.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => HashSet::new(),
+    };
+    Ok((columns, always))
+}
+
 fn has_grouping_set(group_expr: &[Expr]) -> bool {
     group_expr
         .iter()
         .any(|expr| matches!(expr, Expr::GroupingSet(_)))
 }
 
-fn correlated_below_aggregate(plan: &LogicalPlan) -> Result<bool> {
+/// Whether native pull-up would group by a correlated column from below an inner
+/// aggregate other than the carried keys, which the aggregate already groups by.
+fn correlated_below_aggregate(plan: &LogicalPlan, carried: &HashSet<&str>) -> Result<bool> {
     plan.exists(|node| match node {
-        LogicalPlan::Aggregate(aggregate) => aggregate
-            .input
-            .exists(|node| Ok(node.contains_outer_reference())),
+        LogicalPlan::Aggregate(aggregate) => aggregate.input.exists(|node| {
+            Ok(match node {
+                LogicalPlan::Filter(filter) => split_conjunction(&filter.predicate)
+                    .into_iter()
+                    .filter(|expression| expression.contains_outer())
+                    .flat_map(Expr::column_refs)
+                    .any(|column| !carried.contains(column.name.as_str())),
+                node => node.contains_outer_reference(),
+            })
+        }),
         _ => Ok(false),
     })
 }
@@ -829,16 +1000,17 @@ fn correlated_below_aggregate(plan: &LogicalPlan) -> Result<bool> {
 /// within the 64 bits DataFusion supports for its grouping ID. An ID that GROUPING
 /// or GROUPING_ID reads must also keep its type, which GROUPING literals were
 /// resolved with, and a clear top bit, since GROUPING_ID casts it to BIGINT.
-fn grouping_id_fits(aggregate: &Aggregate, keys: &BTreeSet<Column>, read: bool) -> bool {
+/// Returns the largest duplicate-set ordinal if it fits.
+fn grouping_id_fits(aggregate: &Aggregate, keys: &BTreeSet<Column>, read: bool) -> Option<usize> {
     let mut prospective = aggregate.group_expr.clone();
     prospective.extend(keys.iter().cloned().map(Expr::Column));
     let Ok(expanded) = enumerate_grouping_sets(prospective) else {
-        return false;
+        return None;
     };
     let (Ok(groups), [Expr::GroupingSet(GroupingSet::GroupingSets(sets))]) =
         (grouping_set_to_exprlist(&expanded), expanded.as_slice())
     else {
-        return false;
+        return None;
     };
     // The physical plan numbers duplicate sets by which expressions they group,
     // regardless of order, and packs that ordinal above the grouping bits.
@@ -855,13 +1027,54 @@ fn grouping_id_fits(aggregate: &Aggregate, keys: &BTreeSet<Column>, read: bool) 
     if !read {
         // DataFusion shifts the ordinal past the grouping bits, which overflows in
         // debug builds when there are exactly 64 of them.
-        return groups.len() < 64 && bits <= 64;
+        return (groups.len() < 64 && bits <= 64).then_some(ordinal);
     }
-    bits < 64
+    (bits < 64
         && aggregate
             .schema
             .field_with_unqualified_name(Aggregate::INTERNAL_GROUPING_ID)
             .is_ok_and(|field| {
                 Aggregate::grouping_id_type(groups.len(), ordinal) == *field.data_type()
-            })
+            }))
+    .then_some(ordinal)
+}
+
+fn is_grouping_id(expression: &Expr) -> bool {
+    matches!(expression, Expr::Column(column) if column.name == Aggregate::INTERNAL_GROUPING_ID)
+}
+
+/// Keep only the user's grouping bits of every whole grouping-ID read in a node, dropping
+/// the key bits and the duplicate-set ordinal above them. GROUPING already reads one bit.
+fn mask_grouping_id(plan: LogicalPlan, bits: usize, data_type: &DataType) -> Result<LogicalPlan> {
+    let mask = Expr::Literal(
+        ScalarValue::UInt64(Some((1_u64 << bits) - 1)).cast_to(data_type)?,
+        None,
+    );
+    let names = NamePreserver::new(&plan);
+    Ok(plan
+        .map_expressions(|expression| {
+            let name = names.save(&expression);
+            Ok(expression
+                .transform_down(|expression| {
+                    Ok(match expression {
+                        Expr::BinaryExpr(BinaryExpr {
+                            ref left,
+                            op: Operator::BitwiseAnd,
+                            ref right,
+                        }) if is_grouping_id(left)
+                            && matches!(right.as_ref(), Expr::Literal(..)) =>
+                        {
+                            Transformed::new(expression, false, TreeNodeRecursion::Jump)
+                        }
+                        expression if is_grouping_id(&expression) => Transformed::new(
+                            bitwise_and(expression, mask.clone()),
+                            true,
+                            TreeNodeRecursion::Jump,
+                        ),
+                        expression => Transformed::no(expression),
+                    })
+                })?
+                .update_data(|expression| name.restore(expression)))
+        })?
+        .data)
 }
