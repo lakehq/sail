@@ -412,6 +412,62 @@ def test_exact_cast_keys_keep_duplicates_nulls_and_boundary_values(spark, ansi, 
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
 
+@pytest.mark.parametrize("ansi", [True, False])
+@pytest.mark.parametrize("comparison", ["CAST(i.k AS DOUBLE) = o.id", "i.k = o.id"])
+def test_float_to_double_cast_keys_keep_duplicates_nulls_and_special_values(spark, ansi, comparison):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        # FLOAT to DOUBLE is exact, so grouping by the FLOAT input finds the same groups.
+        # A DOUBLE that no FLOAT widens to, such as 1.1, must not match.
+        source_rows = """VALUES
+            (CAST('-3.4028235E38' AS FLOAT), 10),
+            (CAST('-3.4028235E38' AS FLOAT), 100),
+            (CAST('3.4028235E38' AS FLOAT), 7),
+            (CAST('1.1' AS FLOAT), 5),
+            (CAST('NaN' AS FLOAT), 3),
+            (CAST('Infinity' AS FLOAT), 2),
+            (CAST(NULL AS FLOAT), 999)
+        """
+        query = f"""
+            SELECT o.ix,
+              (SELECT count(*) FROM {source_rows} AS i(k, v) WHERE {comparison}) AS n,
+              (SELECT sum(v) FROM {source_rows} AS i(k, v) WHERE {comparison}) AS total
+            FROM VALUES
+              (0, CAST(CAST('-3.4028235E38' AS FLOAT) AS DOUBLE)),
+              (1, CAST(CAST('3.4028235E38' AS FLOAT) AS DOUBLE)),
+              (2, CAST(CAST('1.1' AS FLOAT) AS DOUBLE)),
+              (3, CAST('1.1' AS DOUBLE)),
+              (4, CAST('NaN' AS DOUBLE)),
+              (5, CAST('Infinity' AS DOUBLE)),
+              (6, CAST(NULL AS DOUBLE)),
+              (7, CAST(CAST('-3.4028235E38' AS FLOAT) AS DOUBLE)) AS o(ix, id)
+            ORDER BY o.ix
+        """  # noqa: S608
+        assert [tuple(row) for row in spark.sql(query).collect()] == [
+            (0, 2, 110),
+            (1, 1, 7),
+            (2, 1, 5),
+            (3, 0, None),
+            (4, 1, 3),
+            (5, 1, 2),
+            (6, 0, None),
+            (7, 2, 110),
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific plan shape")
+def test_float_to_double_correlation_groups_by_raw_key(spark):
+    plan = spark.sql(
+        "EXPLAIN SELECT o.id, (SELECT count(*) FROM VALUES (CAST(1 AS FLOAT)) AS i(k) WHERE i.k = o.id) AS n"
+        " FROM VALUES (CAST(1 AS DOUBLE)) AS o(id)"
+    ).first()[0]
+    assert "__sail_correlation_key" in plan
+    assert re.search(r"CAST\([^)]*\) as __sail_correlation_key", plan) is None
+
+
 @pytest.mark.parametrize("data_type", ["FLOAT", "DOUBLE"])
 @pytest.mark.parametrize("key", ["k", "array(k)", "array(array(k))", "named_struct('x', k)"])
 @pytest.mark.parametrize("role", ["partition", "order"])
