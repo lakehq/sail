@@ -798,13 +798,12 @@ impl Lift<'_> {
                             && keys.iter().all(|key| self.hidden.contains(&key.name))
                             && grouping_id_fits(&aggregate, &BTreeSet::new(), false)
                                 .is_some_and(|ordinal| ordinal > 0)
-                            if let Ok(field) = aggregate
+                            && let Ok(field) = aggregate
                                 .schema
                                 .field_with_unqualified_name(Aggregate::INTERNAL_GROUPING_ID)
-                            {
-                                opened = Some((bits, field.data_type().clone()));
-                                self.masked = true;
-                            }
+                        {
+                            opened = Some((bits, field.data_type().clone()));
+                            self.masked = true;
                         }
                         group_expr.append(&mut aggregate.group_expr);
                         aggregate.group_expr = group_expr;
