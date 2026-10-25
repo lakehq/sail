@@ -458,16 +458,6 @@ def test_float_to_double_cast_keys_keep_duplicates_nulls_and_special_values(spar
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific plan shape")
-def test_float_to_double_correlation_groups_by_raw_key(spark):
-    plan = spark.sql(
-        "EXPLAIN SELECT o.id, (SELECT count(*) FROM VALUES (CAST(1 AS FLOAT)) AS i(k) WHERE i.k = o.id) AS n"
-        " FROM VALUES (CAST(1 AS DOUBLE)) AS o(id)"
-    ).first()[0]
-    assert "__sail_correlation_key" in plan
-    assert re.search(r"CAST\([^)]*\) as __sail_correlation_key", plan) is None
-
-
 @pytest.mark.parametrize("data_type", ["FLOAT", "DOUBLE"])
 @pytest.mark.parametrize("key", ["k", "array(k)", "array(array(k))", "named_struct('x', k)"])
 @pytest.mark.parametrize("role", ["partition", "order"])

@@ -187,10 +187,6 @@ fn injective_cast(from: &DataType, to: &DataType) -> bool {
         }
         (DataType::Int8 | DataType::Int16, DataType::Float32)
         | (DataType::Int8 | DataType::Int16 | DataType::Int32, DataType::Float64) => true,
-        // Exact except for a signaling NaN, which widening quiets: stored bits can then form
-        // two FLOAT groups that both match one DOUBLE, as at the merge base.
-        (DataType::Float16 | DataType::Float32, DataType::Float64)
-        | (DataType::Float16, DataType::Float32) => true,
         _ => digits(from)
             .zip(digits(to))
             .is_some_and(|(needed, wider)| wider > needed),
