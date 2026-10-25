@@ -798,7 +798,6 @@ impl Lift<'_> {
                             && keys.iter().all(|key| self.hidden.contains(&key.name))
                             && grouping_id_fits(&aggregate, &BTreeSet::new(), false)
                                 .is_some_and(|ordinal| ordinal > 0)
-                        {
                             if let Ok(field) = aggregate
                                 .schema
                                 .field_with_unqualified_name(Aggregate::INTERNAL_GROUPING_ID)
