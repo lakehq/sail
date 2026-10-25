@@ -129,9 +129,6 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
-    logical_plan after normalize_window_keys:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
@@ -617,9 +614,6 @@ data:
               TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
-    SAME TEXT AS ABOVE
-
-    logical_plan after normalize_window_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -1110,9 +1104,6 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
-    logical_plan after normalize_window_keys:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
@@ -1601,9 +1592,6 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
-    logical_plan after normalize_window_keys:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
@@ -2089,9 +2077,6 @@ data:
               TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
-    SAME TEXT AS ABOVE
-
-    logical_plan after normalize_window_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -2582,9 +2567,6 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
-    logical_plan after normalize_window_keys:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
@@ -3071,9 +3053,6 @@ data:
               TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
-    SAME TEXT AS ABOVE
-
-    logical_plan after normalize_window_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -3563,9 +3542,6 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
-    logical_plan after normalize_window_keys:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
@@ -4052,9 +4028,6 @@ data:
               TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
-    SAME TEXT AS ABOVE
-
-    logical_plan after normalize_window_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:

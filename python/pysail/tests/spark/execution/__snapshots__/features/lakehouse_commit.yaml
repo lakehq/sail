@@ -28,9 +28,6 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
-    logical_plan after normalize_window_keys:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
@@ -413,9 +410,6 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_scalar_iterator_udf:
-    SAME TEXT AS ABOVE
-
-    logical_plan after normalize_window_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -814,9 +808,6 @@ data:
                   TableScan: distributed_iceberg_commit projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_file_metadata]
 
     logical_plan after extract_scalar_iterator_udf:
-    SAME TEXT AS ABOVE
-
-    logical_plan after normalize_window_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -1322,9 +1313,6 @@ data:
                               TableScan: range
 
     logical_plan after extract_scalar_iterator_udf:
-    SAME TEXT AS ABOVE
-
-    logical_plan after normalize_window_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:
@@ -2034,9 +2022,6 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
-    logical_plan after normalize_window_keys:
-    SAME TEXT AS ABOVE
-
     logical_plan after resolve_input_file_metadata:
     SAME TEXT AS ABOVE
 
@@ -2536,9 +2521,6 @@ data:
                   TableScan: distributed_iceberg_commit projection=[id, __sail_file_path, __sail_iceberg_partition_spec_id, __sail_iceberg_file_metadata]
 
     logical_plan after extract_scalar_iterator_udf:
-    SAME TEXT AS ABOVE
-
-    logical_plan after normalize_window_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_input_file_metadata:

@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::expr::{Cast, GroupingSet};
 use datafusion_expr::expr_rewriter::{NamePreserver, strip_outer_reference};
 use datafusion_expr::logical_plan::{Aggregate, Filter, Projection};
@@ -13,7 +13,9 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, enumerate_grouping_sets, grouping_set_to_exprlist,
     split_conjunction,
 };
-use datafusion_expr::{Expr, JoinType, LogicalPlan, Operator, ScalarUDF, Volatility};
+use datafusion_expr::{
+    Expr, ExprSchemable, JoinType, LogicalPlan, Operator, ScalarUDF, Volatility,
+};
 use projection::project_with_keys;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
@@ -212,9 +214,22 @@ fn normalize_keys(
         for expression in node.expressions() {
             eligible &= !expression.exists(|part| {
                 Ok(match part {
-                    // An uncorrelated scalar producer is opaque and stays in place.
-                    Expr::ScalarSubquery(query) => !query.outer_ref_columns.is_empty(),
-                    Expr::Exists(_) | Expr::InSubquery(_) | Expr::SetComparison(_) => true,
+                    Expr::ScalarSubquery(_)
+                    | Expr::Exists(_)
+                    | Expr::InSubquery(_)
+                    | Expr::SetComparison(_) => true,
+                    Expr::ScalarFunction(function) => {
+                        function.func.signature().volatility == Volatility::Volatile
+                    }
+                    Expr::HigherOrderFunction(function) => {
+                        function.func.signature().volatility == Volatility::Volatile
+                    }
+                    Expr::AggregateFunction(function) => {
+                        function.func.signature().volatility == Volatility::Volatile
+                    }
+                    Expr::WindowFunction(function) => {
+                        function.fun.signature().volatility == Volatility::Volatile
+                    }
                     _ => false,
                 })
             })?;
@@ -235,7 +250,7 @@ fn normalize_keys(
                             .is_ok_and(|(_, field)| {
                                 NormalizeFloatKeys::has_float(field.data_type())
                             });
-                        if !floating && stable_comparison(expression) {
+                        if !floating {
                             pinned.insert(column.name.clone());
                         }
                     }
@@ -269,7 +284,10 @@ fn normalize_keys(
     ) {
         return Ok(Transformed::no(plan.clone()));
     }
-    if !has_cast && !windowed_correlation {
+    // Without a cast, carry correlations only to windows over non-floating keys: Sail's
+    // equality keeps NaN payloads apart, so floating partitions or peers would split them.
+    if !has_cast && (!windowed_correlation || !domains.is_empty() || has_floating_window_key(plan)?)
+    {
         return Ok(Transformed::no(plan.clone()));
     }
     for aggregate in keyed {
@@ -298,10 +316,7 @@ fn normalize_keys(
     let (carried, pending, _) = lift.carry(plan.clone(), false)?;
     // Every lifted equality has an aggregate above it, which consumes its key.
     debug_assert!(pending.is_empty());
-    if !lift.grouping_ids_fit {
-        return Ok(Transformed::no(plan.clone()));
-    }
-    if carried == *plan {
+    if carried == *plan || !lift.grouping_ids_fit {
         return Ok(Transformed::no(plan.clone()));
     }
     let schema = Arc::clone(plan.schema());
@@ -312,39 +327,6 @@ fn normalize_keys(
         // its correlation keys as join inputs.
         LogicalPlan::Projection(Projection::new_from_schema(Arc::new(carried), schema))
     }))
-}
-
-/// Carrying an existing key is safe even when its outer value varies; using that
-/// comparison to prove that a group is pinned requires stability.
-fn stable_comparison(expression: &Expr) -> bool {
-    let mut stable = true;
-    let _ = expression.apply(|part| {
-        stable = match part {
-            Expr::ScalarSubquery(_)
-            | Expr::Exists(_)
-            | Expr::InSubquery(_)
-            | Expr::SetComparison(_) => false,
-            Expr::ScalarFunction(function) => {
-                function.func.signature().volatility != Volatility::Volatile
-            }
-            Expr::HigherOrderFunction(function) => {
-                function.func.signature().volatility != Volatility::Volatile
-            }
-            Expr::AggregateFunction(function) => {
-                function.func.signature().volatility != Volatility::Volatile
-            }
-            Expr::WindowFunction(function) => {
-                function.fun.signature().volatility != Volatility::Volatile
-            }
-            _ => true,
-        };
-        Ok(if stable {
-            TreeNodeRecursion::Continue
-        } else {
-            TreeNodeRecursion::Stop
-        })
-    });
-    stable
 }
 
 /// The optional cast, inner column and outer comparison value.
@@ -392,6 +374,16 @@ fn split_lifted<'a>(
     (lifted, retained, correlations)
 }
 
+/// Merge -0.0 and 0.0 in a floating window key, including floating leaves of arrays and structs.
+fn normalize_window_key(key: &mut Expr, schema: &DFSchema) -> Result<()> {
+    if NormalizeFloatKeys::has_float(&key.get_type(schema)?)
+        && !matches!(key, Expr::ScalarFunction(function) if function.func.inner().is::<NormalizeFloatKeys>())
+    {
+        *key = ScalarUDF::from(NormalizeFloatKeys::new()).call(vec![key.clone()]);
+    }
+    Ok(())
+}
+
 /// Find the floating domains whose filters reach a window before an aggregate.
 fn collect_window_domains(
     plan: &LogicalPlan,
@@ -423,6 +415,37 @@ fn collect_window_domains(
         found |= collect_window_domains(input, aggregated, windowed, domains);
     }
     found
+}
+
+/// Whether a window partitions or orders by a floating value.
+fn has_floating_window_key(plan: &LogicalPlan) -> Result<bool> {
+    plan.exists(|node| {
+        let LogicalPlan::Window(window) = node else {
+            return Ok(false);
+        };
+        let schema = window.input.schema();
+        window
+            .window_expr
+            .iter()
+            .try_fold(false, |found, expression| {
+                Ok(found
+                    || expression.exists(|part| {
+                        let Expr::WindowFunction(function) = part else {
+                            return Ok(false);
+                        };
+                        Ok(function
+                            .params
+                            .partition_by
+                            .iter()
+                            .chain(function.params.order_by.iter().map(|sort| &sort.expr))
+                            .any(|key| {
+                                key.get_type(schema).map_or(true, |data_type| {
+                                    NormalizeFloatKeys::has_float(&data_type)
+                                })
+                            }))
+                    })?)
+            })
+    })
 }
 
 /// Collect the correlations that stay in their filters after cast equalities are
@@ -555,6 +578,7 @@ impl Lift<'_> {
                     window.input = self.materialize(window.input, &mut pending, &mut keys, true)?;
                 }
                 changed |= !keys.is_empty();
+                let schema = Arc::clone(window.input.schema());
                 // Removing the filter makes the window see all correlation groups.
                 // Add their compared keys without replacing the user's partitions.
                 window.window_expr = window
@@ -567,6 +591,19 @@ impl Lift<'_> {
                                 let Expr::WindowFunction(mut function) = expression else {
                                     return Ok(Transformed::no(expression));
                                 };
+                                // Like the appended keys, the user's floating partitions and
+                                // ordering peers merge -0.0 and 0.0.
+                                if !keys.is_empty() {
+                                    for key in function.params.partition_by.iter_mut().chain(
+                                        function
+                                            .params
+                                            .order_by
+                                            .iter_mut()
+                                            .map(|sort| &mut sort.expr),
+                                    ) {
+                                        normalize_window_key(key, &schema)?;
+                                    }
+                                }
                                 for key in &keys {
                                     let key = Expr::Column(key.clone());
                                     if !function.params.partition_by.contains(&key) {

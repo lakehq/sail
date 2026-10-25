@@ -8,7 +8,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-/// Canonical comparison keys; selected raw values retain their original bits.
+/// Normalize signed-zero comparison keys without changing selected raw values.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NormalizeFloatKeys {
     signature: Signature,
@@ -95,35 +95,6 @@ fn normalize(array: &ArrayRef) -> Result<ArrayRef> {
         return Ok(Arc::clone(array));
     }
     if array.data_type().is_floating() {
-        {
-            use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
-            macro_rules! normalize_leaf {
-                ($ty:ty, $nan:expr, $zero:expr) => {{
-                    let values = array.as_primitive::<$ty>();
-                    if values
-                        .values()
-                        .iter()
-                        .any(|value| value.is_nan() && value.to_bits() != $nan.to_bits())
-                    {
-                        return Ok(Arc::new(values.unary::<_, $ty>(|value| {
-                            if value.is_nan() {
-                                $nan
-                            } else if value == $zero {
-                                $zero
-                            } else {
-                                value
-                            }
-                        })));
-                    }
-                }};
-            }
-            match array.data_type() {
-                DataType::Float16 => normalize_leaf!(Float16Type, half::f16::NAN, half::f16::ZERO),
-                DataType::Float32 => normalize_leaf!(Float32Type, f32::NAN, 0.0_f32),
-                DataType::Float64 => normalize_leaf!(Float64Type, f64::NAN, 0.0_f64),
-                _ => {}
-            }
-        }
         return Ok(normalize_float_zero(array));
     }
     if let DataType::Map(field, sorted) = array.data_type() {
@@ -180,7 +151,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_zero_and_nan_keys_without_changing_nulls() -> Result<()> {
+    fn normalizes_zeros_without_changing_nan_bits_or_nulls() -> Result<()> {
         let values: ArrayRef = Arc::new(Float64Array::from(vec![
             Some(-0.0),
             Some(0.0),
@@ -192,8 +163,8 @@ mod tests {
         let result = result.as_primitive::<Float64Type>();
         assert_eq!(result.value(0).to_bits(), 0);
         assert_eq!(result.value(1).to_bits(), 0);
-        assert_eq!(result.value(2).to_bits(), f64::NAN.to_bits());
-        assert_eq!(result.value(3).to_bits(), f64::NAN.to_bits());
+        assert_eq!(result.value(2).to_bits(), 0x7ff0_0000_0000_0001);
+        assert_eq!(result.value(3).to_bits(), 0xfff8_0000_0000_0042);
         assert!(result.is_null(4));
         let single: ArrayRef =
             Arc::new(Float32Array::from(vec![-0.0, f32::from_bits(0x7f80_0001)]));
@@ -201,7 +172,7 @@ mod tests {
         assert_eq!(result.as_primitive::<Float32Type>().value(0).to_bits(), 0);
         assert_eq!(
             result.as_primitive::<Float32Type>().value(1).to_bits(),
-            f32::NAN.to_bits()
+            0x7f80_0001
         );
         Ok(())
     }
@@ -218,8 +189,8 @@ mod tests {
         ));
         let canonical = normalize(&raw)?;
         let canonical = canonical.as_primitive::<Float64Type>();
-        assert_eq!(canonical.value(0).to_bits(), f64::NAN.to_bits());
-        assert_eq!(canonical.value(1).to_bits(), f64::NAN.to_bits());
+        assert_eq!(canonical.value(0).to_bits(), bits[0]);
+        assert_eq!(canonical.value(1).to_bits(), bits[1]);
         assert_eq!(canonical.value(2).to_bits(), 0);
         for (index, bits) in bits.into_iter().enumerate() {
             assert_eq!(
@@ -262,7 +233,7 @@ mod tests {
         let first = first.as_primitive::<Float64Type>();
         assert_eq!(first.value(0).to_bits(), 0);
         assert!(first.is_null(1));
-        assert_eq!(first.value(2).to_bits(), f64::NAN.to_bits());
+        assert_eq!(first.value(2).to_bits(), 0x7ff0_0000_0000_0001);
         assert!(list.is_null(1));
         assert!(list.value(2).is_empty());
         Ok(())
