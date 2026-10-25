@@ -275,6 +275,7 @@ async fn populate_retained_manifest_counts(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SnapshotUpdateKind {
+    Truncate,
     FastAppend,
     FullOverwrite,
     RowDelta,
@@ -302,6 +303,8 @@ struct RewriteStats {
 
 #[derive(Debug, Default)]
 struct RemovedPositionDeletes {
+    equality_delete_files: u64,
+    equality_deletes: u64,
     position_delete_files: u64,
     deletion_vectors: u64,
     positions: u64,
@@ -334,6 +337,7 @@ impl SnapshotChanges {
 impl SnapshotUpdateKind {
     fn summary_operation(self, changes: SnapshotChanges) -> Operation {
         match self {
+            Self::Truncate => Operation::Delete,
             Self::FastAppend => Operation::Append,
             Self::FullOverwrite => Operation::Overwrite,
             Self::RowDelta if changes.adds_data_files() && !changes.adds_delete_files() => {
@@ -364,7 +368,7 @@ impl SnapshotUpdateKind {
     pub(crate) fn is_targeted_rewrite(self) -> bool {
         matches!(
             self,
-            Self::CopyOnWrite | Self::RowLevelRewrite | Self::RewriteDataFiles
+            Self::Truncate | Self::CopyOnWrite | Self::RowLevelRewrite | Self::RewriteDataFiles
         )
     }
 
@@ -629,6 +633,7 @@ impl<'a> SnapshotProducer<'a> {
         store_ctx: &StoreContext,
         parent_manifests: Vec<ManifestFile>,
         removed_data_file_paths: &HashSet<String>,
+        remove_all: bool,
         sequence_number: i64,
         snapshot_id: i64,
         created_paths: &mut Vec<ObjectPath>,
@@ -643,7 +648,7 @@ impl<'a> SnapshotProducer<'a> {
         let mut removed = RemovedPositionDeletes::default();
         for parent in parent_manifests {
             if parent.content != ManifestContentType::Deletes
-                || (replaced.is_empty() && removed_data_file_paths.is_empty())
+                || (!remove_all && replaced.is_empty() && removed_data_file_paths.is_empty())
             {
                 output.push(parent);
                 continue;
@@ -652,10 +657,11 @@ impl<'a> SnapshotProducer<'a> {
                 .await
                 .map_err(|error| error.to_string())?;
             let removes = |file: &DataFile| {
-                file.content == crate::spec::DataContentType::PositionDeletes
-                    && file.referenced_data_file.as_ref().is_some_and(|path| {
-                        replaced.contains(path) || removed_data_file_paths.contains(path)
-                    })
+                remove_all
+                    || (file.content == crate::spec::DataContentType::PositionDeletes
+                        && file.referenced_data_file.as_ref().is_some_and(|path| {
+                            replaced.contains(path) || removed_data_file_paths.contains(path)
+                        }))
             };
             if !manifest
                 .entries()
@@ -678,17 +684,22 @@ impl<'a> SnapshotProducer<'a> {
                     Self::materialize_inherited_entry(entry.as_ref().clone(), &parent, &mut None)?;
                 entry.data_file.partition_spec_id = parent.partition_spec_id;
                 if removes(&entry.data_file) {
-                    if entry.data_file.is_deletion_vector() {
-                        removed.deletion_vectors += 1;
+                    let rows = if entry.data_file.content
+                        == crate::spec::DataContentType::EqualityDeletes
+                    {
+                        removed.equality_delete_files += 1;
+                        &mut removed.equality_deletes
                     } else {
-                        removed.position_delete_files += 1;
-                    }
-                    removed.positions = removed
-                        .positions
+                        if entry.data_file.is_deletion_vector() {
+                            removed.deletion_vectors += 1;
+                        } else {
+                            removed.position_delete_files += 1;
+                        }
+                        &mut removed.positions
+                    };
+                    *rows = rows
                         .checked_add(entry.data_file.record_count)
-                        .ok_or_else(|| {
-                            "Iceberg removed position delete count overflow".to_string()
-                        })?;
+                        .ok_or_else(|| "Iceberg removed delete count overflow".to_string())?;
                     writer.add_deleted_entry(entry)?;
                 } else {
                     writer.add_existing_entry(entry)?;
@@ -1085,6 +1096,7 @@ impl<'a> SnapshotProducer<'a> {
                 store_ctx,
                 parent_manifest_entries,
                 &removed_data_file_paths,
+                update_kind == SnapshotUpdateKind::Truncate,
                 new_sequence_number,
                 new_snapshot_id,
                 created_paths,
@@ -1092,13 +1104,25 @@ impl<'a> SnapshotProducer<'a> {
             .await?;
         parent_manifest_entries = rewritten_deletes;
         let removed_delete_files = removed_position_deletes.position_delete_files
-            + removed_position_deletes.deletion_vectors;
+            + removed_position_deletes.deletion_vectors
+            + removed_position_deletes.equality_delete_files;
         if removed_delete_files > 0 {
             summary = summary
                 .with_property("removed-delete-files", removed_delete_files.to_string())
                 .with_property(
                     "removed-position-deletes",
                     removed_position_deletes.positions.to_string(),
+                );
+        }
+        if removed_position_deletes.equality_delete_files > 0 {
+            summary = summary
+                .with_property(
+                    "removed-equality-delete-files",
+                    removed_position_deletes.equality_delete_files.to_string(),
+                )
+                .with_property(
+                    "removed-equality-deletes",
+                    removed_position_deletes.equality_deletes.to_string(),
                 );
         }
         if removed_position_deletes.position_delete_files > 0 {
@@ -1250,6 +1274,12 @@ impl<'a> SnapshotProducer<'a> {
                     "Iceberg removed position deletes exceed the snapshot total".to_string()
                 })?;
             summary = summary.with_property("total-position-deletes", remaining.to_string());
+        }
+
+        if update_kind == SnapshotUpdateKind::Truncate {
+            summary = summary
+                .with_property("total-position-deletes", "0")
+                .with_property("total-equality-deletes", "0");
         }
 
         let mut list_writer = ManifestListWriter::new();
