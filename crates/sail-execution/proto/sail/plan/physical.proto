@@ -77,7 +77,13 @@ message ExtendedPhysicalPlanNode {
     IcebergFileTasksExecNode iceberg_file_tasks = 62;
     IcebergRewriteExecNode iceberg_rewrite = 63;
     InputFileMetadataExecNode input_file_metadata = 64;
+    PartitionedFileWriteExecNode partitioned_file_write = 65;
   }
+}
+
+message PartitionedFileWriteExecNode {
+  // Ordinary DataSinkExec, including its input, format options, and ordering.
+  bytes sink_plan = 1;
 }
 
 message InputFileMetadataExecNode {

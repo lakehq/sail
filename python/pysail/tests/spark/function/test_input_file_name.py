@@ -49,6 +49,26 @@ def test_input_file_metadata_survives_projection_boundaries(spark, parquet_metad
         assert {row.id: row.arr for row in rows} == {value: [2 * value, 2 * value + 1] for value in expected}
 
 
+@pytest.mark.parametrize("file_format", ["json", "parquet"])
+@pytest.mark.parametrize("use_udf", [False, True])
+@pytest.mark.parametrize("action", ["first", "limit"])
+def test_input_file_name_with_limit(spark, tmp_path, file_format, use_udf, action):
+    path = tmp_path / f"data.{file_format}"
+    if file_format == "json":
+        path.write_text('{"id": 1}\n{"id": 2}\n')
+    else:
+        pq.write_table(pa.table({"id": [1, 2]}), path)
+    name = F.input_file_name()
+    if use_udf:
+        name = F.udf(lambda value: value, "string")(name)
+    dataframe = spark.read.format(file_format).load(str(path)).select(name.alias("file_name"))
+
+    rows = [dataframe.first()] if action == "first" else dataframe.limit(1).collect()
+
+    assert len(rows) == 1
+    assert rows[0].file_name == path.as_uri()
+
+
 def test_input_file_metadata_inside_lambda(parquet_metadata):
     dataframe, expected = parquet_metadata
     rows = dataframe.selectExpr(

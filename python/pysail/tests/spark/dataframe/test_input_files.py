@@ -1,5 +1,11 @@
 """Tests for the DataFrame ``inputFiles`` snapshot of constituent files."""
 
+import json
+from collections import defaultdict
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+import pyarrow.parquet as pq
 import pytest
 from pyspark.sql.utils import AnalysisException
 
@@ -17,13 +23,91 @@ def test_input_files_single_file(spark, tmp_path):
     assert files[0].endswith(".json")
 
 
-def test_input_files_multiple_files(spark, tmp_path):
-    """Return one entry per file when the dataset spans multiple partitions."""
-    partitions = 3
-    spark.range(0, 10, 1, partitions).write.json(str(tmp_path), mode="overwrite")
-    df = spark.read.format("json").load(str(tmp_path))
+@pytest.mark.parametrize("partitions", [1, 3, 10])
+@pytest.mark.parametrize("file_format", ["json", "parquet"])
+def test_input_files_multiple_files(spark, tmp_path, partitions, file_format):
+    """Preserve explicit partitions even above the default write parallelism."""
+    spark.range(1, 100, 1, partitions).write.format(file_format).save(str(tmp_path), mode="overwrite")
+    df = spark.read.format(file_format).load(str(tmp_path))
 
     assert len(df.inputFiles()) == partitions
+    assert sorted(row.id for row in df.collect()) == list(range(1, 100))
+
+
+def _physical_file_rows(path, file_format):
+    if file_format == "parquet":
+        return pq.read_table(path).column("id").to_pylist()
+    return [json.loads(line)["id"] for line in path.read_text().splitlines()]
+
+
+@pytest.mark.parametrize("file_format", ["json", "parquet"])
+@pytest.mark.parametrize("partitioning", ["range", "coalesce", "repartition", "multi_batch"])
+def test_input_files_preserves_write_partitions(spark, tmp_path, file_format, partitioning):
+    """File contents retain partition identity, rather than merely matching the file count."""
+    if partitioning == "multi_batch":
+        count = 100_000
+        dataframe = spark.range(0, count, 1, 1)
+        expected = [list(range(count))]
+    else:
+        count = 20
+        dataframe = spark.range(0, count, 1, 10)
+        if partitioning == "coalesce":
+            dataframe = dataframe.coalesce(2)
+            expected = [list(range(10)), list(range(10, count))]
+        elif partitioning == "repartition":
+            dataframe = dataframe.selectExpr("id", "cast(id / 2 as int) AS key").repartition(10, "key")
+            # Record the input partition membership independently of the writer.
+            groups = defaultdict(list)
+            for row in dataframe.selectExpr("id", "spark_partition_id() AS partition_id").collect():
+                groups[row.partition_id].append(row.id)
+            expected = sorted(sorted(values) for values in groups.values())
+        else:
+            expected = [list(range(start, start + 2)) for start in range(0, count, 2)]
+
+    dataframe.write.format(file_format).save(str(tmp_path), mode="overwrite")
+    result = spark.read.format(file_format).load(str(tmp_path))
+    paths = {Path(unquote(urlparse(uri).path)) for uri in result.inputFiles()}
+    physical = {path for path in tmp_path.iterdir() if not path.name.startswith(("_", "."))}
+    assert paths == physical
+    parts = sorted(sorted(_physical_file_rows(path, file_format)) for path in paths)
+    assert sorted(value for part in parts for value in part) == list(range(count))
+    # Spark may also write an empty file for an empty first partition.
+    assert [part for part in parts if part] == expected
+
+
+@pytest.mark.parametrize("file_format", ["json", "parquet"])
+@pytest.mark.parametrize("partition_by", [False, True])
+def test_input_files_append_and_overwrite(spark, tmp_path, file_format, partition_by):
+    """An overwrite deletes old files once; append retains all prior partition files."""
+
+    def write(start, end, mode):
+        dataframe = spark.range(start, end, 1, 3).selectExpr("id", "id % 2 AS key")
+        writer = dataframe.write.format(file_format).mode(mode)
+        if partition_by:
+            writer = writer.partitionBy("key")
+        writer.save(str(tmp_path))
+
+    def read():
+        dataframe = spark.read.schema("id long, key long").format(file_format).load(str(tmp_path))
+        files = set(dataframe.inputFiles())
+        physical = {path for path in tmp_path.rglob("*") if path.is_file() and not path.name.startswith(("_", "."))}
+        assert {Path(unquote(urlparse(uri).path)) for uri in files} == physical
+        rows = dataframe.collect()
+        assert all(row.key == row.id % 2 for row in rows)
+        return files, sorted(row.id for row in rows)
+
+    write(0, 12, "overwrite")
+    original, ids = read()
+    assert ids == list(range(12))
+    write(12, 24, "append")
+    appended, ids = read()
+    assert original < appended
+    assert ids == list(range(24))
+    write(24, 36, "overwrite")
+    replaced, ids = read()
+    assert replaced.isdisjoint(appended)
+    assert ids == list(range(24, 36))
+    assert len(replaced) == (6 if partition_by else 3)
 
 
 def test_input_files_union_is_deduplicated(spark, tmp_path):

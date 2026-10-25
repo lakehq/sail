@@ -124,6 +124,7 @@ use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::listing::delete::FileDeleteExec;
+use sail_data_source::listing::partitioned_write::PartitionedFileWriteExec;
 use sail_data_source::options::r#gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowOperationMode, DeletionVectorRowsWriterConfig, DeletionVectorRowsWriterExec,
@@ -1400,6 +1401,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(data_sink),
                     sort_order,
                 )))
+            }
+            NodeKind::PartitionedFileWrite(r#gen::PartitionedFileWriteExecNode { sink_plan }) => {
+                let template = try_decode_physical_plan_with_converter(
+                    ctx,
+                    self,
+                    proto_converter,
+                    &sink_plan,
+                )?;
+                Ok(Arc::new(PartitionedFileWriteExec::try_new(template)?))
             }
             NodeKind::FileDelete(r#gen::FileDeleteExecNode {
                 object_store_url,
@@ -2755,6 +2765,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             })
+        } else if let Some(writer) = node.downcast_ref::<PartitionedFileWriteExec>() {
+            let sink_plan = try_encode_physical_plan_with_converter(
+                self,
+                proto_converter,
+                Arc::new(writer.template().clone()),
+            )?;
+            NodeKind::PartitionedFileWrite(r#gen::PartitionedFileWriteExecNode { sink_plan })
         } else if let Some(data_sink) = node.downcast_ref::<DataSinkExec>() {
             let input = try_encode_physical_plan_with_converter(
                 self,
@@ -6339,6 +6356,87 @@ mod tests {
         assert_eq!(recursive_query.schema(), output_schema);
         assert_eq!(recursive_query.static_term().schema(), output_schema);
         assert_eq!(recursive_query.recursive_term().schema(), output_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_partitioned_file_writer() -> Result<()> {
+        use datafusion::common::file_options::json_writer::JsonWriterOptions;
+        use datafusion::common::parsers::CompressionTypeVariant;
+        use datafusion::datasource::file_format::json::JsonSink;
+        use datafusion::datasource::listing::ListingTableUrl;
+        use datafusion::datasource::physical_plan::FileOutputMode;
+        use datafusion::datasource::physical_plan::parquet::ParquetSink;
+        use datafusion::datasource::sink::DataSink;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::logical_expr::dml::InsertOp;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(10));
+        let config = FileSinkConfig {
+            original_url: "file:///tmp/partitioned-writer/".into(),
+            object_store_url: ObjectStoreUrl::local_filesystem(),
+            file_group: Default::default(),
+            table_paths: vec![ListingTableUrl::try_new(
+                url::Url::parse("file:///tmp/partitioned-writer/")
+                    .map_err(|e| plan_datafusion_err!("invalid test URL: {e}"))?,
+                None,
+            )?],
+            output_schema: schema,
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Append,
+            keep_partition_by_columns: false,
+            file_extension: "json.gz".into(),
+            file_output_mode: FileOutputMode::Directory,
+        };
+        for parquet in [false, true] {
+            let sink: Arc<dyn DataSink> = if parquet {
+                Arc::new(ParquetSink::new(config.clone(), Default::default()))
+            } else {
+                Arc::new(JsonSink::new(
+                    config.clone(),
+                    JsonWriterOptions::new(CompressionTypeVariant::GZIP),
+                ))
+            };
+            let order = LexRequirement::new([PhysicalSortExpr::new_default(Arc::new(
+                Column::new("id", 0),
+            ))
+            .into()]);
+            let template = Arc::new(DataSinkExec::new(Arc::clone(&input), sink, order));
+            let writer = Arc::new(PartitionedFileWriteExec::try_new(template)?);
+            let expected_schema = writer.schema();
+            let expected_order = writer.required_input_ordering();
+            let codec = RemoteExecutionCodec;
+            let bytes = try_encode_physical_plan(&codec, writer)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            let decoded = decoded
+                .downcast_ref::<PartitionedFileWriteExec>()
+                .ok_or_else(|| {
+                    plan_datafusion_err!("decoded plan is not a partitioned file writer")
+                })?;
+            assert_eq!(decoded.schema(), expected_schema);
+            assert_eq!(
+                decoded.properties().output_partitioning().partition_count(),
+                10
+            );
+            assert_eq!(decoded.required_input_ordering(), expected_order);
+            if parquet {
+                assert!(decoded.template().sink().is::<ParquetSink>());
+            } else {
+                let sink = decoded
+                    .template()
+                    .sink()
+                    .downcast_ref::<JsonSink>()
+                    .ok_or_else(|| plan_datafusion_err!("decoded sink is not JSON"))?;
+                assert_eq!(
+                    sink.writer_options().compression,
+                    CompressionTypeVariant::GZIP
+                );
+                assert_eq!(sink.config().file_extension, "json.gz");
+            }
+        }
         Ok(())
     }
 
