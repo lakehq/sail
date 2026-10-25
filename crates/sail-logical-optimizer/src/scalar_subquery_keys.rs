@@ -21,6 +21,8 @@ use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
 mod projection;
 
+const CORRELATION_KEY_PREFIX: &str = "__sail_correlation_key";
+
 /// Group native correlated scalar aggregates by the value used in cast equality.
 #[derive(Debug)]
 pub struct NormalizeScalarSubqueryKeys;
@@ -39,11 +41,17 @@ impl OptimizerRule for NormalizeScalarSubqueryKeys {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        if !matches!(plan, LogicalPlan::Projection(_) | LogicalPlan::Filter(_)) {
+        if !matches!(plan, LogicalPlan::Projection(_) | LogicalPlan::Filter(_))
+            || !expressions_exist(&plan, |expression| match expression {
+                Expr::ScalarSubquery(query) => !query.outer_ref_columns.is_empty(),
+                _ => false,
+            })?
+        {
             return Ok(Transformed::no(plan));
         }
         let names = NamePreserver::new(&plan);
-        let mut reserved = plan.schema().field_names().into_iter().collect();
+        let mut reserved = BTreeSet::new();
+        reserve_key_names(&mut reserved, plan.schema());
         plan.map_expressions(|expression| {
             let name = names.save(&expression);
             expression
@@ -107,6 +115,32 @@ fn strip_identity_cast(expression: &Expr) -> &Expr {
     }
 }
 
+/// Whether any expression of the node, at any depth, matches, without cloning them.
+fn expressions_exist(plan: &LogicalPlan, mut matches: impl FnMut(&Expr) -> bool) -> Result<bool> {
+    let mut found = false;
+    plan.apply_expressions(|expression| {
+        found = expression.exists(|expression| Ok(matches(expression)))?;
+        Ok(if found {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(found)
+}
+
+/// Reserve the field names that a generated key name could collide with.
+fn reserve_key_names(reserved: &mut BTreeSet<String>, schema: &DFSchema) {
+    reserved.extend(
+        schema
+            .fields()
+            .iter()
+            .map(|field| field.name())
+            .filter(|name| name.starts_with(CORRELATION_KEY_PREFIX))
+            .cloned(),
+    );
+}
+
 /// Whether grouping the input is equivalent to grouping the cast result.
 /// Spark's up-casts include lossy integer-to-float conversions, so they are not
 /// sufficient here: distinct inputs must not collide, nor equal inputs split.
@@ -168,24 +202,37 @@ fn normalize_keys(
     aliases: &AliasGenerator,
     reserved: &mut BTreeSet<String>,
 ) -> Result<Transformed<LogicalPlan>> {
-    let mut eligible = true;
     let mut has_aggregate = false;
     let mut has_cast = false;
     let mut has_window = false;
+    // Most correlated subqueries need no key; find out before the full scan below.
+    plan.apply(|node| {
+        reserve_key_names(reserved, node.schema());
+        has_aggregate |= matches!(node, LogicalPlan::Aggregate(_));
+        has_window |= matches!(node, LogicalPlan::Window(_));
+        if let LogicalPlan::Filter(filter) = node {
+            has_cast |= split_conjunction(&filter.predicate)
+                .into_iter()
+                .any(|expression| {
+                    expression.contains_outer()
+                        && native_equality(expression)
+                            .is_some_and(|(key, _)| !matches!(key, Expr::Column(_)))
+                });
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    if !has_aggregate || !(has_cast || has_window) {
+        return Ok(Transformed::no(plan.clone()));
+    }
+    let mut eligible = true;
     let mut reads_grouping_id = false;
     // An inner column compared to an outer value already selects one group per
     // outer row, so casts of that column need no separate key.
     let mut pinned = HashSet::new();
     plan.apply(|node| {
-        reserved.extend(node.schema().field_names());
-        has_aggregate |= matches!(node, LogicalPlan::Aggregate(_));
-        has_window |= matches!(node, LogicalPlan::Window(_));
-        reads_grouping_id |= node.expressions().iter().any(|expression| {
-            expression
-                .column_refs()
-                .iter()
-                .any(|column| column.name == Aggregate::INTERNAL_GROUPING_ID)
-        });
+        reads_grouping_id |= expressions_exist(node, |expression| {
+            matches!(expression, Expr::Column(column) if column.name == Aggregate::INTERNAL_GROUPING_ID)
+        })?;
         if matches!(node, LogicalPlan::Subquery(_))
             || (!matches!(node, LogicalPlan::Filter(_)) && node.contains_outer_reference())
             || (matches!(
@@ -215,29 +262,25 @@ fn normalize_keys(
                             | JoinType::RightAnti
                     ));
         }
-        for expression in node.expressions() {
-            eligible &= !expression.exists(|part| {
-                Ok(match part {
-                    Expr::ScalarSubquery(_)
-                    | Expr::Exists(_)
-                    | Expr::InSubquery(_)
-                    | Expr::SetComparison(_) => true,
-                    Expr::ScalarFunction(function) => {
-                        function.func.signature().volatility == Volatility::Volatile
-                    }
-                    Expr::HigherOrderFunction(function) => {
-                        function.func.signature().volatility == Volatility::Volatile
-                    }
-                    Expr::AggregateFunction(function) => {
-                        function.func.signature().volatility == Volatility::Volatile
-                    }
-                    Expr::WindowFunction(function) => {
-                        function.fun.signature().volatility == Volatility::Volatile
-                    }
-                    _ => false,
-                })
-            })?;
-        }
+        eligible &= !expressions_exist(node, |part| match part {
+            Expr::ScalarSubquery(_)
+            | Expr::Exists(_)
+            | Expr::InSubquery(_)
+            | Expr::SetComparison(_) => true,
+            Expr::ScalarFunction(function) => {
+                function.func.signature().volatility == Volatility::Volatile
+            }
+            Expr::HigherOrderFunction(function) => {
+                function.func.signature().volatility == Volatility::Volatile
+            }
+            Expr::AggregateFunction(function) => {
+                function.func.signature().volatility == Volatility::Volatile
+            }
+            Expr::WindowFunction(function) => {
+                function.fun.signature().volatility == Volatility::Volatile
+            }
+            _ => false,
+        })?;
         if let LogicalPlan::Filter(filter) = node {
             for expression in split_conjunction(&filter.predicate)
                 .into_iter()
@@ -258,14 +301,14 @@ fn normalize_keys(
                             pinned.insert(column.name.clone());
                         }
                     }
-                    Some(_) => has_cast = true,
+                    Some(_) => {}
                     None => eligible = false,
                 }
             }
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    if !eligible || !has_aggregate || !(has_cast || has_window) {
+    if !eligible {
         return Ok(Transformed::no(plan.clone()));
     }
 
@@ -742,7 +785,7 @@ impl Lift<'_> {
                 column.clone()
             } else {
                 let name = loop {
-                    let name = self.aliases.next("__sail_correlation_key");
+                    let name = self.aliases.next(CORRELATION_KEY_PREFIX);
                     if self.reserved.insert(name.clone()) {
                         break name;
                     }
