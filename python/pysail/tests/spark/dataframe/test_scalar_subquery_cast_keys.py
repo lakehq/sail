@@ -1132,3 +1132,20 @@ def test_ansi_arithmetic_on_grouping_id_resolves(spark):
         assert [tuple(row) for row in rows.collect()] == [(1, 2), (2, 1), (None, 13)]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
+def test_float_to_double_correlation_keeps_signaling_nan_twins_in_one_row(spark):
+    # Widening quiets the signaling NaN into its twin's DOUBLE, so both rows form one group.
+    raw = b"".join(value.to_bytes(4, "little") for value in [0x7F800001, 0x7FC00001])
+    values = pa.Array.from_buffers(pa.float32(), 2, [None, pa.py_buffer(raw)])
+    table = pa.Table.from_arrays([values, pa.array([0, 1], type=pa.int32())], names=["k", "seq"])
+    spark.createDataFrame(table).createOrReplaceTempView("scalar_snan_twin_values")
+    try:
+        query = """
+                SELECT o.tag, (SELECT count(*) FROM scalar_snan_twin_values AS i WHERE CAST(i.k AS DOUBLE) = o.id) AS n
+                FROM (SELECT 'x' AS tag, CAST(k AS DOUBLE) AS id FROM scalar_snan_twin_values WHERE seq = 1) AS o
+                """
+        assert [tuple(row) for row in spark.sql(query).collect()] == [("x", 2)]
+    finally:
+        spark.catalog.dropTempView("scalar_snan_twin_values")
