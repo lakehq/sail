@@ -2,7 +2,7 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
+use datafusion_common::{DFSchemaRef, Result as DataFusionResult, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
@@ -370,10 +370,18 @@ pub(super) fn coerce_comparison_predicate(
             data_types.push(expr_type.clone());
             data_types.extend(list_types.iter().cloned());
 
+            let mut widened = false;
+            let column = matches!(expr.as_ref(), expr::Expr::Column(_));
             if config.ansi_mode
+                && widens_float_comparison(
+                    &std::iter::once((expr.as_ref(), &expr_type))
+                        .chain(list.iter().zip(&list_types))
+                        .collect::<Vec<_>>(),
+                )
                 && let Some(targets) =
                     ansi_float_comparison_types(&data_types, config.case_sensitive)
             {
+                widened = true;
                 expr = Box::new(cast_comparison_operand(*expr, &expr_type, &targets[0]));
                 list = list
                     .into_iter()
@@ -392,6 +400,15 @@ pub(super) fn coerce_comparison_predicate(
                 config.ansi_mode,
                 config.case_sensitive,
             ) else {
+                // DataFusion rewrites a short IN list on a column into equalities, which merge
+                // -0.0 and 0.0; its IN set does not. Keep that rewrite for the cast column.
+                if widened
+                    && column
+                    && (1..=3).contains(&list.len())
+                    && !list.iter().any(is_null_literal_expression)
+                {
+                    return Ok(recursive_list_in_as_comparisons(*expr, list, negated));
+                }
                 return Ok(expr::Expr::InList(InList::new(expr, list, negated)));
             };
             let has_null_list_value = list.iter().any(is_null_literal_expression);
@@ -473,6 +490,35 @@ fn recursive_list_in_as_comparisons(
     } else {
         combined
     }
+}
+
+/// Whether to compare FLOAT and integral operands as DOUBLE, like Spark ANSI. Integral
+/// literals that FLOAT represents exactly compare the same either way, without casting
+/// every FLOAT value.
+// TODO: Spark ANSI also computes arithmetic and conditionals over integral and FLOAT
+//  operands as DOUBLE, while Sail keeps FLOAT, so comparing such a result with an integral
+//  value near 2^24 can round differently from both Spark and the FLOAT comparison.
+fn widens_float_comparison(operands: &[(&expr::Expr, &DataType)]) -> bool {
+    const FLOAT_EXACT: i128 = 1 << 24;
+    let exact_literal = |expression: &expr::Expr| match expression {
+        expr::Expr::Literal(value, _) => match value {
+            ScalarValue::Int8(Some(v)) => i128::from(*v).abs() <= FLOAT_EXACT,
+            ScalarValue::Int16(Some(v)) => i128::from(*v).abs() <= FLOAT_EXACT,
+            ScalarValue::Int32(Some(v)) => i128::from(*v).abs() <= FLOAT_EXACT,
+            ScalarValue::Int64(Some(v)) => i128::from(*v).abs() <= FLOAT_EXACT,
+            _ => false,
+        },
+        _ => false,
+    };
+    !operands
+        .iter()
+        .all(|(expression, data_type)| match data_type {
+            DataType::Float32 | DataType::Null => true,
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                exact_literal(expression)
+            }
+            _ => false,
+        })
 }
 
 /// Spark ANSI compares FLOAT with integral values as DOUBLE, including nested leaves.
@@ -601,6 +647,7 @@ fn coerce_comparison_pair(
     let right_type = right.get_type(schema.as_ref())?;
 
     if config.ansi_mode
+        && widens_float_comparison(&[(&left, &left_type), (&right, &right_type)])
         && let Some(targets) = ansi_float_comparison_types(
             &[left_type.clone(), right_type.clone()],
             config.case_sensitive,
@@ -748,15 +795,15 @@ pub(super) fn coerce_in_subquery_pair(
     right_schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> DataFusionResult<(expr::Expr, expr::Expr, bool, bool)> {
-    let targets = config
-        .ansi_mode
-        .then(|| {
-            ansi_float_comparison_types(
-                &[left_type.clone(), right_type.clone()],
-                config.case_sensitive,
-            )
-        })
-        .flatten();
+    let targets = (config.ansi_mode
+        && widens_float_comparison(&[(&left, left_type), (&right, right_type)]))
+    .then(|| {
+        ansi_float_comparison_types(
+            &[left_type.clone(), right_type.clone()],
+            config.case_sensitive,
+        )
+    })
+    .flatten();
     let (left, right, left_type, right_type, left_numeric, right_numeric) =
         if let Some(targets) = targets {
             (

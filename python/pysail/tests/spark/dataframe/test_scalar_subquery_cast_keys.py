@@ -1004,3 +1004,52 @@ def test_numeric_array_comparison_keeps_nullable_children(spark):
         assert [tuple(row) for row in rows.collect()] == [(0, True, True), (1, False, False)]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("ansi", [True, False])
+@pytest.mark.parametrize(
+    ("predicate", "expected"),
+    [("f IN (0, 5)", [1]), ("f NOT IN (0, 5)", [2]), ("f IN (i, l)", [1]), ("f NOT IN (i, l)", [2])],
+)
+def test_short_float_in_lists_merge_signed_zeros(spark, ansi, predicate, expected):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        # One predicate per query, so that no shared subexpression hides the IN list's operand.
+        rows = spark.sql(f"""
+            SELECT id FROM (SELECT * FROM VALUES (1, -CAST('0.0' AS FLOAT), 0, 5L),
+                                                 (2, CAST('1.0' AS FLOAT), 0, 5L) AS t(id, f, i, l))
+            WHERE {predicate}
+            ORDER BY id
+        """)  # noqa: S608
+        assert [row.id for row in rows.collect()] == expected
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+# TODO: Spark ANSI computes integral and FLOAT arithmetic as DOUBLE, while Sail keeps FLOAT,
+#  so comparing the FLOAT result as DOUBLE rounds differently from Spark near 2^24.
+@pytest.mark.parametrize(
+    "ansi",
+    [
+        pytest.param(
+            True,
+            marks=pytest.mark.xfail(
+                not is_jvm_spark(), reason="ANSI integral and FLOAT arithmetic is FLOAT", strict=True
+            ),
+        ),
+        False,
+    ],
+)
+def test_integral_float_comparison_with_float_arithmetic(spark, ansi):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        rows = spark.sql("""
+            SELECT i = f + 1, i IN (f + 1)
+            FROM (SELECT * FROM VALUES (16777217, CAST(16777216 AS FLOAT)), (1, CAST(0 AS FLOAT)) AS t(i, f))
+            ORDER BY i
+        """)
+        assert [tuple(row) for row in rows.collect()] == [(True, True), (True, True)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
