@@ -27,6 +27,8 @@ pub(super) fn project_with_keys(input: Arc<LogicalPlan>, keys: Vec<Expr>) -> Res
 /// inherits functional dependencies from by display name, which is quadratic in the width.
 /// When no two fields share a name and a table, or a display name, each column resolves to
 /// its own field, so only the keys need deriving.
+// The key schema follows DataFusion's `projection_schema` and `calc_func_dependencies_for_project`.
+// [CREDIT]: https://github.com/apache/datafusion/blob/55.2.0/datafusion/expr/src/logical_plan/plan.rs
 fn key_schema(input: &LogicalPlan, expressions: &[Expr]) -> Result<Option<DFSchema>> {
     let schema = input.schema();
     let names = schema.field_names();
