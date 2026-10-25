@@ -535,7 +535,7 @@ def test_mixed_nan_and_cast_correlation_uses_one_window_domain(spark, data_type,
            )) AS largest
         FROM VALUES ({positive}, 1L, 0), ({negative}, 1L, 1) o(k,t,ix)
         ORDER BY o.ix
-    """)
+    """)  # noqa: S608
     assert [tuple(row) for row in rows.collect()] == [(0, 1, 2), (1, 1, 2)]
 
 
@@ -558,7 +558,7 @@ def test_nan_correlation_keeps_window_partitions_and_order_peers_consistent(spar
            ) WHERE rn=1) AS partitions
         FROM VALUES (CAST('NaN' AS {data_type}), 0), (-CAST('NaN' AS {data_type}), 1) o(id,ix)
         ORDER BY o.ix
-    """)
+    """)  # noqa: S608
     assert [tuple(row) for row in rows.collect()] == [(0, 2, 1), (1, 2, 1)]
 
 
@@ -589,12 +589,12 @@ def test_correlated_window_normalizes_keys_without_changing_nan_values(spark, da
     partition = "CASE WHEN seq < 0 THEN NULL ELSE k END" if computed_partition else "k"
     try:
         result = spark.sql(
-            "SELECT (SELECT array_sort(collect_list(named_struct('seq', seq, 'k', k, 'w', w))) "
-            "FROM (SELECT seq, k, row_number() OVER (PARTITION BY "
-            f"{partition} ORDER BY seq) AS w FROM scalar_window_payload_values "
-            "WHERE CAST(tag AS BIGINT) = o.id)) AS events FROM VALUES (1L) AS o(id)"
+            f"""SELECT (SELECT array_sort(collect_list(named_struct('seq', seq, 'k', k, 'w', w)))
+            FROM (SELECT seq, k, row_number() OVER (PARTITION BY
+            {partition} ORDER BY seq) AS w FROM scalar_window_payload_values
+            WHERE CAST(tag AS BIGINT) = o.id)) AS events FROM VALUES (1L) AS o(id)"""  # noqa: S608
         )
-        arrow = result._to_table()[0] if hasattr(result, "_to_table") else result.toArrow()
+        arrow = result._to_table()[0] if hasattr(result, "_to_table") else result.toArrow()  # noqa: SLF001
         events = arrow.column("events").combine_chunks()
         assert events.to_pylist()[0] is not None
         assert events.values.field("w").to_pylist() == [1, 2]
@@ -636,7 +636,7 @@ def test_correlated_window_keeps_nan_payloads_like_grouping(spark, data_type, bi
             "FROM scalar_window_nan_payloads WHERE CAST(tag AS BIGINT) = o.id)) AS events "
             "FROM VALUES (1L) AS o(id)"
         )
-        arrow = result._to_table()[0] if hasattr(result, "_to_table") else result.toArrow()
+        arrow = result._to_table()[0] if hasattr(result, "_to_table") else result.toArrow()  # noqa: SLF001
         events = arrow.column("events").combine_chunks()
         assert events.values.field("w").to_pylist() == [1, 1]
         actual = events.values.field("k")
@@ -706,7 +706,7 @@ def test_floating_window_keys_share_completed_volatile_values(spark, correlated,
         F.lit("1").alias("tag"),
         F.col("id").alias("seq"),
         F.when((F.col("id") % 7) == 0, F.lit(None).cast("double"))
-        .when(F.expr("pmod(xxhash64(uuid()), 1000)") < 500, F.lit(float("nan")))
+        .when(F.expr("pmod(xxhash64(uuid()), 1000)") < 500, F.lit(float("nan")))  # noqa: PLR2004
         .otherwise(F.lit(-0.0))
         .alias("p"),
         F.expr("CAST(pmod(xxhash64(uuid()), 1000) AS DOUBLE) / 1000.0").alias("r"),
@@ -719,24 +719,22 @@ def test_floating_window_keys_share_completed_volatile_values(spark, correlated,
     window = f"PARTITION BY {partition} ORDER BY {ordering} ASC NULLS FIRST, seq"
     try:
         if correlated:
-            inner = (
-                f"SELECT row_number() OVER ({window}) AS w, "
-                f"count(*) OVER (PARTITION BY {partition}) AS n, "
-                f"lag(r) OVER ({window}) AS previous, r "
-                "FROM scalar_window_volatile_keys WHERE CAST(tag AS BIGINT) = o.id"
-            )
+            inner = f"""SELECT row_number() OVER ({window}) AS w,
+                count(*) OVER (PARTITION BY {partition}) AS n,
+                lag(r) OVER ({window}) AS previous, r
+                FROM scalar_window_volatile_keys WHERE CAST(tag AS BIGINT) = o.id"""  # noqa: S608
             result = spark.sql(
-                f"SELECT o.id, (SELECT sum(2 * w - n - 1) FROM ({inner})) AS rank_check, "
-                f"(SELECT sum(CASE WHEN previous > r THEN 1 ELSE 0 END) FROM ({inner})) AS order_check "
-                "FROM VALUES (1L) AS o(id)"
+                f"""SELECT o.id, (SELECT sum(2 * w - n - 1) FROM ({inner})) AS rank_check,
+                (SELECT sum(CASE WHEN previous > r THEN 1 ELSE 0 END) FROM ({inner})) AS order_check
+                FROM VALUES (1L) AS o(id)"""  # noqa: S608
             )
             assert [tuple(row) for row in result.collect()] == [(1, 0, 0)]
         else:
             rows = spark.sql(
-                f"SELECT seq, p, r, row_number() OVER ({window}) AS w FROM scalar_window_volatile_keys"
+                f"SELECT seq, p, r, row_number() OVER ({window}) AS w FROM scalar_window_volatile_keys"  # noqa: S608
             ).collect()
-            assert len(rows) == 64
-            assert len({row.seq for row in rows}) == 64
+            assert len(rows) == 64  # noqa: PLR2004
+            assert len({row.seq for row in rows}) == 64  # noqa: PLR2004
             groups = {}
             for row in rows:
                 key = None if row.p is None else ("NaN" if math.isnan(row.p) else row.p)
