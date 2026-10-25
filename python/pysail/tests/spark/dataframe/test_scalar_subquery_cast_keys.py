@@ -1027,20 +1027,7 @@ def test_short_float_in_lists_merge_signed_zeros(spark, ansi, predicate, expecte
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
 
 
-# TODO: Spark ANSI computes integral and FLOAT arithmetic as DOUBLE, while Sail keeps FLOAT,
-#  so comparing the FLOAT result as DOUBLE rounds differently from Spark near 2^24.
-@pytest.mark.parametrize(
-    "ansi",
-    [
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                not is_jvm_spark(), reason="ANSI integral and FLOAT arithmetic is FLOAT", strict=True
-            ),
-        ),
-        False,
-    ],
-)
+@pytest.mark.parametrize("ansi", [True, False])
 def test_integral_float_comparison_with_float_arithmetic(spark, ansi):
     previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
     spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
@@ -1051,5 +1038,53 @@ def test_integral_float_comparison_with_float_arithmetic(spark, ansi):
             ORDER BY i
         """)
         assert [tuple(row) for row in rows.collect()] == [(True, True), (True, True)]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("ansi", [True, False])
+def test_integral_float_arithmetic_and_conditionals_widen_like_spark(spark, ansi):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        # Spark ANSI computes integral and FLOAT values as DOUBLE; otherwise as FLOAT.
+        row = spark.sql("""
+            SELECT typeof(i + f), i + f, i - f, i * CAST(1 AS FLOAT),
+                   coalesce(CAST(NULL AS FLOAT), i), greatest(f, i), array(i, f)[0]
+            FROM (SELECT * FROM VALUES (16777217, CAST(16777216 AS FLOAT)) AS t(i, f))
+        """).collect()[0]
+        if ansi:
+            expected = ("double", 33554433.0, 1.0, 16777217.0, 16777217.0, 16777217.0, 16777217.0)
+        else:
+            expected = ("float", 33554432.0, 0.0, 16777216.0, 16777216.0, 16777216.0, 16777216.0)
+        assert tuple(row) == expected
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+def test_ansi_integral_float_case_branches_widen_like_spark(spark):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        row = spark.sql("""
+            SELECT CASE WHEN i > 0 THEN i ELSE f END, if(i > 0, i, f), nvl(CAST(NULL AS FLOAT), i)
+            FROM (SELECT * FROM VALUES (16777217, CAST(16777216 AS FLOAT)) AS t(i, f))
+        """).collect()[0]
+        assert tuple(row) == (16777217.0, 16777217.0, 16777217.0)
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+def test_ansi_arithmetic_on_grouping_id_resolves(spark):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        rows = spark.sql("""
+            SELECT a, grouping_id() * 10 + count(*) AS n
+            FROM VALUES (1), (1), (2) AS t(a)
+            GROUP BY ROLLUP(a)
+            ORDER BY a NULLS LAST
+        """)
+        assert [tuple(row) for row in rows.collect()] == [(1, 2), (2, 1), (None, 13)]
     finally:
         spark.conf.set("spark.sql.ansi.enabled", previous_ansi)

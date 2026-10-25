@@ -492,12 +492,98 @@ fn recursive_list_in_as_comparisons(
     }
 }
 
+/// Spark ANSI computes arithmetic and conditionals over integral and FLOAT values as DOUBLE,
+/// where native coercion keeps FLOAT.
+// TODO: Spark also widens map(), map_concat(), concat() of arrays, set operations, nested
+//  array and struct leaves, and FLOAT with DECIMAL to DOUBLE.
+pub(super) fn coerce_ansi_float_widening(
+    expression: expr::Expr,
+    schema: &DFSchemaRef,
+    config: &PlanConfig,
+) -> DataFusionResult<expr::Expr> {
+    if !config.ansi_mode {
+        return Ok(expression);
+    }
+    let widen = |values: Vec<expr::Expr>| -> DataFusionResult<Vec<expr::Expr>> {
+        // Leave operands that are not typed yet, such as `grouping_id()`, to native coercion.
+        let Ok(types) = values
+            .iter()
+            .map(|value| value.get_type(schema.as_ref()))
+            .collect::<DataFusionResult<Vec<_>>>()
+        else {
+            return Ok(values);
+        };
+        let integral = |t: &DataType| {
+            matches!(
+                t,
+                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+            )
+        };
+        let widened = types.iter().any(|t| matches!(t, DataType::Float32))
+            && types.iter().any(integral)
+            && types.iter().all(|t| {
+                t.is_null() || integral(t) || matches!(t, DataType::Float32 | DataType::Float64)
+            });
+        Ok(if widened {
+            values
+                .into_iter()
+                .zip(&types)
+                .map(|(value, from)| cast_comparison_operand(value, from, &DataType::Float64))
+                .collect()
+        } else {
+            values
+        })
+    };
+    Ok(match expression {
+        expr::Expr::BinaryExpr(BinaryExpr { left, op, right })
+            if matches!(
+                op,
+                Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Modulo
+            ) =>
+        {
+            let mut operands = widen(vec![*left, *right])?.into_iter();
+            match (operands.next(), operands.next()) {
+                (Some(left), Some(right)) => {
+                    expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+                }
+                _ => unreachable!("two operands"),
+            }
+        }
+        expr::Expr::ScalarFunction(mut function)
+            if matches!(
+                function.name(),
+                "coalesce" | "greatest" | "least" | "pmod" | "spark_array"
+            ) =>
+        {
+            function.args = widen(function.args)?;
+            expr::Expr::ScalarFunction(function)
+        }
+        expr::Expr::Case(mut case) => {
+            let mut values = case
+                .when_then_expr
+                .iter()
+                .map(|(_, then)| then.as_ref().clone())
+                .chain(case.else_expr.as_deref().cloned())
+                .collect::<Vec<_>>();
+            values = widen(values)?;
+            let mut values = values.into_iter();
+            for (_, then) in &mut case.when_then_expr {
+                if let Some(value) = values.next() {
+                    **then = value;
+                }
+            }
+            if let (Some(else_expr), Some(value)) = (case.else_expr.as_mut(), values.next()) {
+                **else_expr = value;
+            }
+            expr::Expr::Case(case)
+        }
+        expression => expression,
+    })
+}
+
 /// Whether to compare FLOAT and integral operands as DOUBLE, like Spark ANSI. Integral
 /// literals that FLOAT represents exactly compare the same either way, without casting
 /// every FLOAT value.
-// TODO: Spark ANSI also computes arithmetic and conditionals over integral and FLOAT
-//  operands as DOUBLE, while Sail keeps FLOAT, so comparing such a result with an integral
-//  value near 2^24 can round differently from both Spark and the FLOAT comparison.
 fn widens_float_comparison(operands: &[(&expr::Expr, &DataType)]) -> bool {
     const FLOAT_EXACT: i128 = 1 << 24;
     let exact_literal = |expression: &expr::Expr| match expression {
