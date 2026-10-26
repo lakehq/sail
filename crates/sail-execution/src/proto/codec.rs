@@ -155,6 +155,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
@@ -4219,6 +4220,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 }
                 "theta_union_agg" => Ok(Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
+                "vector_sum" => Ok(Arc::new(AggregateUDF::from(VectorSum::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
@@ -4342,6 +4344,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<ThetaSketchAggFunction>()
             || node.inner().is::<ThetaUnionAggFunction>()
             || node.inner().is::<TryAvgFunction>()
+            || node.inner().is::<VectorSum>()
             || node.inner().is::<SparkTrySum>()
         {
             UdafKind::Standard(r#gen::StandardUdaf {})
@@ -6004,6 +6007,17 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
         codec.try_decode_udf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_vector_sum_udaf() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        let udaf = AggregateUDF::from(VectorSum::new());
+        let mut buf = vec![];
+        codec.try_encode_udaf(&udaf, &mut buf)?;
+        let decoded = codec.try_decode_udaf(udaf.name(), &buf)?;
+        assert!(decoded.inner().downcast_ref::<VectorSum>().is_some());
+        Ok(())
     }
 
     #[test]
