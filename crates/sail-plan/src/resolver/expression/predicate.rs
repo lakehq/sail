@@ -608,8 +608,7 @@ impl PlanResolver<'_> {
         schema: &QuerySchema,
     ) -> PlanResult<NamedExpr> {
         let inner = self.resolve_named_expression(expression, schema).await?;
-        let expression =
-            typing::coerce(inner.expression, &DataType::Boolean, &mut self.context.ids)?;
+        let expression = typing::coerce(inner.expression, &DataType::Boolean, &mut self.state.ids)?;
         Ok(NamedExpr {
             name: format!(
                 "({} IS {}{})",

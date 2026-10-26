@@ -9,7 +9,7 @@ use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 
-use crate::analyzer::{NamedPlan, QueryAnalyzer};
+use crate::analyzer::{NamedPlan, PlanAnalyzer};
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
@@ -38,7 +38,7 @@ pub async fn resolve_and_execute_plan(
     plan: spec::Plan,
 ) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
     let mut info = vec![];
-    let mut resolver = QueryAnalyzer::new(ctx, config);
+    let mut resolver = PlanAnalyzer::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.plan(plan).await?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;

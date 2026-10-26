@@ -113,7 +113,7 @@ impl PlanResolver<'_> {
                     .resolve_named_expression(value, &QuerySchema::default())
                     .await?
                     .expression;
-                let value = typing::coerce(value, &DataType::Float64, &mut self.context.ids)?;
+                let value = typing::coerce(value, &DataType::Float64, &mut self.state.ids)?;
                 let ScalarValue::Float64(Some(value)) =
                     crate::analyzer::lowering::evaluate_constant(&value)?
                 else {
@@ -190,55 +190,62 @@ impl PlanResolver<'_> {
         let original = input.schema.resolved("sample input")?.attributes.clone();
         let seed = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int64(Some(seed)));
         let random = if replacement {
             let fraction = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Float64(Some(fraction.max(0.0))));
-            self.context.function_context().scalar_udf(
-                Arc::new(ScalarUDF::from(RandPoisson::new())),
-                vec![fraction, seed],
-            )?
+            self.context
+                .function_context(&mut self.state.ids)
+                .scalar_udf(
+                    Arc::new(ScalarUDF::from(RandPoisson::new())),
+                    vec![fraction, seed],
+                )?
         } else {
             self.context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .scalar_udf(Arc::new(ScalarUDF::from(Random::new())), vec![seed])?
         };
         let (input, random) = self.append(input, random, "sample_random".into())?;
         let input = if replacement {
             let one = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Int64(Some(1)));
             let count = self.reference(&random)?;
-            let repeat = self.context.function_context().scalar_udf(
-                functions_nested::repeat::array_repeat_udf(),
-                vec![one, count],
-            )?;
+            let repeat = self
+                .context
+                .function_context(&mut self.state.ids)
+                .scalar_udf(
+                    functions_nested::repeat::array_repeat_udf(),
+                    vec![one, count],
+                )?;
             let (input, repeat) = self.append(input, repeat, "sample_repetitions".into())?;
             self.unnest(input, &repeat, false)?.0
         } else {
             let value = self.reference(&random)?;
             let bound = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Float64(Some(upper)));
-            let condition = self
-                .context
-                .function_context()
-                .binary(value, Operator::Lt, bound)?;
+            let condition = self.context.function_context(&mut self.state.ids).binary(
+                value,
+                Operator::Lt,
+                bound,
+            )?;
             let input = Self::filter(input, condition)?;
             let value = self.reference(&random)?;
             let bound = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Float64(Some(lower)));
-            let condition = self
-                .context
-                .function_context()
-                .binary(value, Operator::GtEq, bound)?;
+            let condition = self.context.function_context(&mut self.state.ids).binary(
+                value,
+                Operator::GtEq,
+                bound,
+            )?;
             Self::filter(input, condition)?
         };
         self.select_attributes(input, original)

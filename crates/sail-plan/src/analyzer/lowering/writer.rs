@@ -1,4 +1,4 @@
-//! A fully analyzed write. Data source planning runs only after native inputs,
+//! A fully analyzed write. Data source planning runs only after query inputs,
 //! sort expressions, and overwrite predicates have been checked and lowered.
 use std::sync::Arc;
 

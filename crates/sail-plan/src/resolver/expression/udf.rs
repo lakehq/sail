@@ -232,7 +232,7 @@ impl PlanResolver<'_> {
                 id,
                 Arc::new(ScalarUDF::from(function)),
                 arguments,
-                &mut self.context.ids,
+                &mut self.state.ids,
             );
         }
         let kind = match definition.eval_type {
@@ -259,7 +259,7 @@ impl PlanResolver<'_> {
         if arguments.is_empty() {
             arguments.push(
                 self.context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .literal(ScalarValue::Int64(Some(0))),
             );
             input_types.push(DataType::Int64);
@@ -278,7 +278,7 @@ impl PlanResolver<'_> {
         );
         let mut expression = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .aggregate_call(Arc::new(AggregateUDF::from(function)), arguments)?;
         expression.id = id;
         if let Deferred::Resolved(ExprKind::AggregateFunction {
@@ -383,7 +383,7 @@ impl PlanResolver<'_> {
             .iter()
             .map(|field| {
                 self.context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .attribute(field.name().clone(), ExprType::from_field(field))
             })
             .collect();

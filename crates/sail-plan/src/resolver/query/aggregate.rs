@@ -38,7 +38,7 @@ impl PlanResolver<'_> {
             let kind = datafusion_expr::Aggregate::grouping_id_type(grouping.len(), duplicates);
             let mut attribute = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .attribute("grouping_id".into(), ExprType::new(kind, false));
             attribute.hidden = true;
             for key in &mut grouping {
@@ -101,7 +101,7 @@ impl PlanResolver<'_> {
             let condition = typing::coerce(
                 having,
                 &arrow_schema::DataType::Boolean,
-                &mut self.context.ids,
+                &mut self.state.ids,
             )?;
             aggregate = Query {
                 kind: Deferred::Resolved(QueryKind::Filter {
@@ -171,13 +171,16 @@ impl PlanResolver<'_> {
                         ));
                     }
                 }
-                let attribute = self.context.function_context().attribute(
-                    format!("aggregate_{}", aggregates.len()),
-                    expression
-                        .result_type
-                        .resolved("aggregate result type")?
-                        .clone(),
-                );
+                let attribute = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .attribute(
+                        format!("aggregate_{}", aggregates.len()),
+                        expression
+                            .result_type
+                            .resolved("aggregate result type")?
+                            .clone(),
+                    );
                 let reference = self.reference(&attribute)?;
                 aggregates.push(Projection {
                     expression,

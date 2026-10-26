@@ -11,7 +11,7 @@ use crate::resolver::{NamedExpr, PlanResolver};
 enum FunctionResolution {
     Python(super::udf::PythonFunction, bool),
     HigherOrder(std::sync::Arc<datafusion_expr::HigherOrderUDF>),
-    Native,
+    Regular,
 }
 
 impl PlanResolver<'_> {
@@ -58,7 +58,7 @@ impl PlanResolver<'_> {
                 FunctionResolution::Python(definition, deterministic)
             })
             .or_else(|| higher_order.map(FunctionResolution::HigherOrder))
-            .unwrap_or(FunctionResolution::Native);
+            .unwrap_or(FunctionResolution::Regular);
         match resolution {
             FunctionResolution::Python(definition, deterministic) => {
                 if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
@@ -84,7 +84,7 @@ impl PlanResolver<'_> {
             }
             FunctionResolution::HigherOrder(function) => {
                 if !named_arguments.is_empty() {
-                    return Err(PlanError::unsupported("native named function arguments"));
+                    return Err(PlanError::unsupported("named function arguments"));
                 }
                 if matches!(name.as_str(), "aggregate" | "reduce") && arguments.len() == 3 {
                     let parameter = spec::UnresolvedNamedLambdaVariable {
@@ -103,13 +103,13 @@ impl PlanResolver<'_> {
                 self.higher_order(id, name, function, arguments, schema)
                     .await
             }
-            FunctionResolution::Native => {
+            FunctionResolution::Regular => {
                 // Unsupported higher-order functions cannot resolve their lambda arguments.
                 if registered.is_none() && matches!(name.as_str(), "map_zip_with" | "zip_with") {
                     return Err(PlanError::todo(format!("function: {name}")));
                 }
                 if !named_arguments.is_empty() {
-                    return Err(PlanError::unsupported("native named function arguments"));
+                    return Err(PlanError::unsupported("named function arguments"));
                 }
                 match (name.as_str(), order_by.take()) {
                     ("mode", Some(sorts)) => {
@@ -159,7 +159,7 @@ impl PlanResolver<'_> {
                         spec::Expr::UnresolvedStar { .. } if name == "count" && !is_distinct => {
                             names.push("1".into());
                             values.push(Expr::literal(
-                                self.context.ids.expression(),
+                                self.state.ids.expression(),
                                 ScalarValue::Int64(Some(1)),
                             ));
                         }
@@ -212,7 +212,7 @@ impl PlanResolver<'_> {
                 let function = crate::function::resolve_function(
                     &name,
                     registered,
-                    &self.context.function_context(),
+                    &self.context.function_context(&mut self.state.ids),
                 )?;
                 let expression = match function {
                     crate::function::Function::Scalar(function) => {
@@ -220,7 +220,7 @@ impl PlanResolver<'_> {
                         function(crate::function::common::ScalarFunctionInput {
                             arguments: values,
                             argument_display_names: &names,
-                            context: self.context.function_context(),
+                            context: self.context.function_context(&mut self.state.ids),
                         })?
                     }
                     crate::function::Function::Aggregate(function) => {
@@ -239,7 +239,7 @@ impl PlanResolver<'_> {
                         }
                         function.call(crate::function::aggregate::AggregateFunctionInput {
                             arguments: values,
-                            context: self.context.function_context(),
+                            context: self.context.function_context(&mut self.state.ids),
                             options: crate::function::aggregate::AggregateOptions {
                                 window: false,
                                 distinct: is_distinct,

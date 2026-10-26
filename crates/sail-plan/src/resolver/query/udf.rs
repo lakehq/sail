@@ -117,11 +117,11 @@ impl PlanResolver<'_> {
             let element = self.reference(&element)?;
             let name = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Utf8(Some(field.name().clone())));
             let expression = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .scalar_udf(core::get_field(), vec![element, name])?;
             output.push(NamedExpr {
                 name: field.name().clone(),
@@ -226,7 +226,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         let mut expression = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .aggregate_call(Arc::new(AggregateUDF::from(function)), arguments)?;
         if let Deferred::Resolved(ExprKind::AggregateFunction { distinct, .. }) =
             &mut expression.kind
@@ -257,6 +257,7 @@ impl PlanResolver<'_> {
         Ok(Query {
             schema: input.schema.clone(),
             kind: Deferred::Resolved(QueryKind::Scope {
+                scope: None,
                 input: Box::new(input),
             }),
         })
@@ -313,31 +314,40 @@ impl PlanResolver<'_> {
             .iter()
             .map(|a| self.reference(a))
             .collect::<PlanResult<Vec<_>>>()?;
-        let expression = self.context.function_context().aggregate_call(
-            Arc::new(AggregateUDF::from(PySparkBatchCollectorUDF::new(
-                types.clone(),
-                names.clone(),
-            ))),
-            arguments,
-        )?;
+        let expression = self
+            .context
+            .function_context(&mut self.state.ids)
+            .aggregate_call(
+                Arc::new(AggregateUDF::from(PySparkBatchCollectorUDF::new(
+                    types.clone(),
+                    names.clone(),
+                ))),
+                arguments,
+            )?;
         let mut grouping = vec![];
         for index in keys {
             let source = &values[index];
             grouping.push(Projection {
                 expression: self.reference(source)?,
-                attribute: self.context.function_context().attribute(
-                    source.name.clone(),
-                    source.result_type.resolved("co-group key")?.clone(),
-                ),
+                attribute: self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .attribute(
+                        source.name.clone(),
+                        source.result_type.resolved("co-group key")?.clone(),
+                    ),
             });
         }
-        let value = self.context.function_context().attribute(
-            "collected_group".into(),
-            expression
-                .result_type
-                .resolved("co-group collector")?
-                .clone(),
-        );
+        let value = self
+            .context
+            .function_context(&mut self.state.ids)
+            .attribute(
+                "collected_group".into(),
+                expression
+                    .result_type
+                    .resolved("co-group collector")?
+                    .clone(),
+            );
         let keys = grouping
             .iter()
             .map(|p| p.attribute.clone())
@@ -460,11 +470,16 @@ impl PlanResolver<'_> {
         for (left, right) in left.keys.iter().zip(&right.keys) {
             let l = self.reference(left)?;
             let r = self.reference(right)?;
-            let equality = self.context.function_context().binary(l, Operator::Eq, r)?;
-            condition = Some(if let Some(previous) = condition {
+            let equality =
                 self.context
-                    .function_context()
-                    .binary(previous, Operator::And, equality)?
+                    .function_context(&mut self.state.ids)
+                    .binary(l, Operator::Eq, r)?;
+            condition = Some(if let Some(previous) = condition {
+                self.context.function_context(&mut self.state.ids).binary(
+                    previous,
+                    Operator::And,
+                    equality,
+                )?
             } else {
                 equality
             });
@@ -495,7 +510,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         let expression = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .scalar_udf(Arc::new(ScalarUDF::from(function)), args)?;
         let plan = Query {
             schema: Deferred::Resolved(schema),
@@ -523,6 +538,7 @@ impl PlanResolver<'_> {
         Ok(Query {
             schema: input.schema.clone(),
             kind: Deferred::Resolved(QueryKind::Scope {
+                scope: None,
                 input: Box::new(input),
             }),
         })

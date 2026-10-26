@@ -1,11 +1,13 @@
 //! Instantiating a stored relation allocates identities, never display names.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use datafusion_common::Result;
 
 use crate::deferred::Deferred;
 use crate::model::*;
+use crate::scope::{CteDefinition, PlanScope};
 
 impl Query {
     /// Copy an analyzed relation into a query-local ID domain. The same mapping
@@ -14,6 +16,7 @@ impl Query {
         Instance {
             ids,
             attributes: HashMap::new(),
+            definitions: HashMap::new(),
             preserve_origins: false,
             preserve_bindings: false,
         }
@@ -30,6 +33,7 @@ impl Query {
         Instance {
             ids,
             attributes: HashMap::new(),
+            definitions: HashMap::new(),
             preserve_origins: !renew,
             preserve_bindings,
         }
@@ -40,11 +44,37 @@ impl Query {
 struct Instance<'a> {
     ids: &'a mut IdGenerator,
     attributes: HashMap<AttributeId, AttributeId>,
+    definitions: HashMap<*const CteDefinition, Arc<CteDefinition>>,
     preserve_origins: bool,
     preserve_bindings: bool,
 }
 
 impl Instance<'_> {
+    fn scope(&mut self, scope: &PlanScope) -> Result<Arc<PlanScope>> {
+        let mut scope = scope.clone();
+        // Captured environments share definitions. Instantiate each template once
+        // so nested WITH scopes do not repeatedly copy the same definition graph.
+        scope.ctes = scope
+            .ctes
+            .into_iter()
+            .map(|(name, definition)| {
+                let key = Arc::as_ptr(&definition);
+                let definition = if let Some(existing) = self.definitions.get(&key) {
+                    Arc::clone(existing)
+                } else {
+                    let value = Arc::new(CteDefinition {
+                        plan: self.plan(definition.plan.clone())?,
+                        parameter: definition.parameter,
+                    });
+                    self.definitions.insert(key, Arc::clone(&value));
+                    value
+                };
+                Ok((name, definition))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Arc::new(scope))
+    }
+
     fn id(&mut self, id: AttributeId) -> AttributeId {
         *self
             .attributes
@@ -161,7 +191,8 @@ impl Instance<'_> {
             | QueryKind::Range { .. }
             | QueryKind::Scan { .. }
             | QueryKind::RemoteCheckpoint { .. }) => node,
-            QueryKind::Scope { input } => QueryKind::Scope {
+            QueryKind::Scope { input, scope } => QueryKind::Scope {
+                scope: scope.map(|scope| self.scope(&scope)).transpose()?,
                 input: Box::new(self.plan(*input)?),
             },
             QueryKind::Values { rows } => QueryKind::Values {

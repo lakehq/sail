@@ -11,7 +11,6 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
-use crate::analyzer::writer::WriteOperation;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::command::write::{TableInfo, WriteColumnMatch};
@@ -255,7 +254,7 @@ impl PlanResolver<'_> {
         }
         let mut validation = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int8(Some(1)));
         for (constraint, expression) in predicates.into_iter().rev() {
             let message = match constraint.violation {
@@ -273,7 +272,7 @@ impl PlanResolver<'_> {
             };
             let error = self.write_error(message)?;
             let condition = Expr {
-                id: self.context.ids.expression(),
+                id: self.state.ids.expression(),
                 result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
                 kind: Deferred::Resolved(ExprKind::TruthTest {
                     expression: Box::new(expression),
@@ -283,17 +282,18 @@ impl PlanResolver<'_> {
             };
             validation = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .case(vec![(condition, validation)], Some(error))?;
         }
         let valid = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int8(Some(1)));
-        let condition = self
-            .context
-            .function_context()
-            .binary(validation, Operator::Eq, valid)?;
+        let condition = self.context.function_context(&mut self.state.ids).binary(
+            validation,
+            Operator::Eq,
+            valid,
+        )?;
         Ok(Query {
             kind: Deferred::Resolved(QueryKind::Filter {
                 input: Box::new(input),
@@ -499,3 +499,5 @@ impl PlanResolver<'_> {
         Ok(result)
     }
 }
+
+use crate::analyzer::writer::WriteOperation;

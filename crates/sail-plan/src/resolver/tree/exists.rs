@@ -26,7 +26,9 @@ impl PlanResolver<'_> {
             };
             let value = self.exists_value(input, *query.clone())?;
             let mut value = if *negated {
-                self.context.function_context().not(value)?
+                self.context
+                    .function_context(&mut self.state.ids)
+                    .not(value)?
             } else {
                 value
             };
@@ -42,19 +44,19 @@ impl PlanResolver<'_> {
         loop {
             query = match query.kind.into_resolved("EXISTS input")? {
                 QueryKind::Project { input, .. }
-                | QueryKind::Scope { input }
+                | QueryKind::Scope { input, .. }
                 | QueryKind::Sort { input, .. } => *input,
                 QueryKind::Aggregate { ref grouping, .. } if grouping.is_empty() => {
                     return Ok(self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Boolean(Some(true))));
                 }
                 QueryKind::Limit { input, skip, fetch } => {
                     if fetch.as_deref().map(bound).transpose()? == Some(0) {
                         return Ok(self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Boolean(Some(false))));
                     }
                     let skip = skip.as_deref().map(bound).transpose()?.unwrap_or(0);
@@ -62,7 +64,7 @@ impl PlanResolver<'_> {
                         if scalar_aggregate(&input)? {
                             return Ok(self
                                 .context
-                                .function_context()
+                                .function_context(&mut self.state.ids)
                                 .literal(ScalarValue::Boolean(Some(false))));
                         }
                         validate_correlated(&input, true)?;
@@ -102,16 +104,16 @@ impl PlanResolver<'_> {
             })?;
             condition = Some(match condition {
                 None => predicate,
-                Some(previous) => {
-                    self.context
-                        .function_context()
-                        .binary(previous, Operator::And, predicate)?
-                }
+                Some(previous) => self.context.function_context(&mut self.state.ids).binary(
+                    previous,
+                    Operator::And,
+                    predicate,
+                )?,
             });
         }
         let mark = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .attribute("exists".into(), ExprType::new(DataType::Boolean, false));
         let mut schema = input.schema.resolved("EXISTS left")?.clone();
         schema.attributes.push(mark.clone());
@@ -132,20 +134,20 @@ impl PlanResolver<'_> {
     fn exists_count(&mut self, query: Query, skip: i64) -> PlanResult<Expr> {
         let one = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int64(Some(1)));
         let count = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .aggregate("count", vec![one])?;
         let skip = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int64(Some(skip)));
-        let expression = self
-            .context
-            .function_context()
-            .binary(count, Operator::Gt, skip)?;
+        let expression =
+            self.context
+                .function_context(&mut self.state.ids)
+                .binary(count, Operator::Gt, skip)?;
         let query = self.aggregate(
             query,
             vec![],
@@ -156,16 +158,16 @@ impl PlanResolver<'_> {
             None,
         )?;
         let value = Expr {
-            id: self.context.ids.expression(),
+            id: self.state.ids.expression(),
             kind: Deferred::Resolved(ExprKind::ScalarSubquery(Box::new(query))),
             result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, true)),
         };
         let no = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Boolean(Some(false)));
         self.context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .scalar_udf(core::coalesce(), vec![value, no])
     }
 }
@@ -183,7 +185,7 @@ fn bound(value: &Expr) -> PlanResult<i64> {
 fn scalar_aggregate(plan: &Query) -> PlanResult<bool> {
     Ok(match plan.kind.resolved("EXISTS scalar input")? {
         QueryKind::Project { input, .. }
-        | QueryKind::Scope { input }
+        | QueryKind::Scope { input, .. }
         | QueryKind::Sort { input, .. } => scalar_aggregate(input)?,
         QueryKind::Aggregate { grouping, .. } => grouping.is_empty(),
         _ => false,
@@ -321,11 +323,11 @@ impl QueryRewriter for PullCorrelation<'_, '_> {
                     } else {
                         local = Some(match local {
                             None => value,
-                            Some(previous) => self.resolver.context.function_context().binary(
-                                previous,
-                                Operator::And,
-                                value,
-                            )?,
+                            Some(previous) => self
+                                .resolver
+                                .context
+                                .function_context(&mut self.resolver.state.ids)
+                                .binary(previous, Operator::And, value)?,
                         });
                     }
                 }
@@ -371,10 +373,14 @@ impl QueryRewriter for PullCorrelation<'_, '_> {
                     let attribute = if let Some(existing) = existing {
                         existing.attribute.clone()
                     } else {
-                        let attribute = self.resolver.context.function_context().attribute(
-                            source.name.clone(),
-                            source.result_type.resolved("correlation key")?.clone(),
-                        );
+                        let attribute = self
+                            .resolver
+                            .context
+                            .function_context(&mut self.resolver.state.ids)
+                            .attribute(
+                                source.name.clone(),
+                                source.result_type.resolved("correlation key")?.clone(),
+                            );
                         if let Some(sets) = &mut grouping_sets {
                             for set in sets {
                                 set.push(grouping.len());
@@ -412,9 +418,9 @@ impl QueryRewriter for PullCorrelation<'_, '_> {
                     aggregates,
                 }
             }
-            QueryKind::Scope { input } => {
+            QueryKind::Scope { input, scope } => {
                 schema = input.schema.resolved("correlated scope")?.clone();
-                QueryKind::Scope { input }
+                QueryKind::Scope { input, scope }
             }
             QueryKind::Join { kind, .. }
                 if self.predicates.len() > before && kind != JoinType::Inner =>

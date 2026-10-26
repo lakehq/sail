@@ -6,7 +6,7 @@ use datafusion_common::Result;
 use educe::Educe;
 use pyo3::Python;
 use sail_common_datafusion::rename::record_batch::rename_record_batch_stream;
-use sail_common_datafusion::udf::StreamUDF;
+use sail_common_plan::udf::StreamUDF;
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;

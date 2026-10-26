@@ -16,7 +16,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use sail_common_datafusion::session::job::JobService;
 
-use crate::analyzer::{NamedPlan, QueryAnalyzer};
+use crate::analyzer::{NamedPlan, PlanAnalyzer};
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
 
@@ -455,7 +455,7 @@ pub async fn explain_string(
     options: ExplainOptions,
 ) -> PlanResult<ExplainString> {
     let collected = collect_plan_with(ctx, async {
-        let mut resolver = QueryAnalyzer::new(ctx, Arc::clone(&config));
+        let mut resolver = PlanAnalyzer::new(ctx, Arc::clone(&config));
         let NamedPlan { plan, fields } = resolver.plan(plan).await?;
         Ok((plan, fields))
     })

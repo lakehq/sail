@@ -7395,6 +7395,7 @@ dependencies = [
  "sail-celeborn",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-plan",
  "sail-data-source",
  "sail-delta-lake",
  "sail-function",
@@ -7585,6 +7586,7 @@ dependencies = [
  "log",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-plan",
  "sail-function",
 ]
 
@@ -7657,6 +7659,7 @@ dependencies = [
  "sail-cache",
  "sail-catalog",
  "sail-common-datafusion",
+ "sail-common-plan",
  "sail-logical-plan",
  "serde",
  "serde_json",
@@ -7757,6 +7760,7 @@ dependencies = [
  "pyo3",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-plan",
  "thiserror",
  "tokio",
  "tokio-stream",

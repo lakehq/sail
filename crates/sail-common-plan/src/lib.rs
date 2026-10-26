@@ -9,3 +9,5 @@ pub mod tree;
 pub mod udf;
 
 pub mod rewrite;
+
+pub mod scope;

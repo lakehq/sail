@@ -12,7 +12,7 @@ impl PlanResolver<'_> {
         windows: Vec<(spec::Identifier, spec::Window)>,
     ) -> PlanResult<Query> {
         Ok({
-            let previous = self.windows.clone();
+            let previous = self.state.scope.windows.clone();
             let mut names = std::collections::HashSet::new();
             for (name, window) in windows {
                 let name = name.as_ref().to_ascii_lowercase();
@@ -21,10 +21,13 @@ impl PlanResolver<'_> {
                         "Name {name} is used more than once in WINDOW clause"
                     )));
                 }
-                self.windows.insert(name, window);
+                self.state.scope.windows.insert(name, window);
             }
-            let result = self.resolve_query_plan(input).await;
-            self.windows = previous;
+            let result = self
+                .resolve_query_plan(input)
+                .await
+                .map(|input| self.scoped_query(input));
+            self.state.scope.windows = previous;
             result?
         })
     }

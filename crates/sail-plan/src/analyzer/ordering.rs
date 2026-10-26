@@ -55,7 +55,7 @@ fn require_sort(plan: &mut Query) {
     match &mut plan.kind {
         Deferred::Resolved(QueryKind::Sort { required, .. }) => *required = true,
         Deferred::Resolved(
-            QueryKind::Scope { input }
+            QueryKind::Scope { input, .. }
             | QueryKind::Project { input, .. }
             | QueryKind::Filter { input, .. }
             | QueryKind::Window { input, .. }

@@ -12,7 +12,7 @@ use sail_common_datafusion::session::plan::PlanService;
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::lowering::lower_query;
 use crate::analyzer::model::{
-    AnalyzerPlan, Command, CommandKind, ExprKind, IdGenerator, Query, QueryKind,
+    Command, CommandKind, ExprKind, IdGenerator, Plan, PlanKind, Query, QueryKind,
 };
 use crate::analyzer::{AnalyzerContext, AnalyzerPipeline};
 use crate::catalog::SparkCatalogObjectDisplay;
@@ -31,37 +31,41 @@ fn session() -> SessionContext {
     SessionContext::new_with_state(state)
 }
 
-fn into_query(plan: AnalyzerPlan) -> PlanResult<Query> {
-    match plan {
-        AnalyzerPlan::Query(query) => Ok(query),
-        AnalyzerPlan::Command(_) => Err(PlanError::internal("expected query")),
+fn into_query(plan: Plan) -> PlanResult<Query> {
+    match plan.kind {
+        PlanKind::Query(query) => Ok(query),
+        PlanKind::Command(_) => Err(PlanError::internal("expected query")),
     }
 }
 
-async fn analyze(sql: &str) -> PlanResult<Query> {
+async fn analyze_plan(sql: &str) -> PlanResult<Plan> {
     let plan = sail_sql_analyzer::statement::from_ast_statement(
         sail_sql_analyzer::parser::parse_one_statement(sql)?,
     )?;
-    let spec::Plan::Query(query) = plan else {
-        return Err(PlanError::internal("expected query"));
-    };
-    analyze_request(query).await
+    let session = session();
+    crate::analyzer::PlanAnalyzer::new(&session, Arc::new(PlanConfig::new()?))
+        .analyze(plan)
+        .await
+}
+
+async fn analyze(sql: &str) -> PlanResult<Query> {
+    into_query(analyze_plan(sql).await?)
 }
 
 async fn analyze_request(query: spec::QueryPlan) -> PlanResult<Query> {
     let session = session();
-    let plan = AnalyzerPipeline::new(PlanResolver::with_context(AnalyzerContext {
-        session: &session,
-        config: Arc::new(PlanConfig::new()?),
-        ids: IdGenerator::default(),
-    }))
-    .analyze(query.into())
-    .await?;
+    let plan = AnalyzerPipeline::new()
+        .with_layer(PlanResolver::with_context(AnalyzerContext {
+            session: &session,
+            config: Arc::new(PlanConfig::new()?),
+        }))
+        .analyze(query.into())
+        .await?;
     into_query(plan)
 }
 
 #[tokio::test]
-async fn native_resolution_inserts_casts_and_preserves_output_types() -> PlanResult<()> {
+async fn resolution_inserts_casts_and_preserves_output_types() -> PlanResult<()> {
     let query =
         analyze("SELECT abs(value) AS magnitude, array(1, CAST(2 AS BIGINT)) AS items FROM VALUES ('-2') t(value)").await?;
     let schema = query.schema.resolved("test output")?;
@@ -99,7 +103,7 @@ async fn native_resolution_inserts_casts_and_preserves_output_types() -> PlanRes
 }
 
 #[tokio::test]
-async fn native_attributes_survive_aliases_joins_and_duplicate_output_names() -> PlanResult<()> {
+async fn attributes_survive_aliases_joins_and_duplicate_output_names() -> PlanResult<()> {
     let query = analyze("SELECT a.x AS same, b.x AS same FROM (VALUES (1)) a(x) JOIN (VALUES (1)) b(x) ON a.x = b.x").await?;
     let fields = &query.schema.resolved("test output")?.attributes;
     assert_ne!(fields[0].id, fields[1].id);
@@ -114,7 +118,7 @@ async fn native_attributes_survive_aliases_joins_and_duplicate_output_names() ->
 }
 
 #[tokio::test]
-async fn native_aggregate_extracts_calls_before_projecting() -> PlanResult<()> {
+async fn aggregate_extracts_calls_before_projecting() -> PlanResult<()> {
     let query =
         analyze("SELECT x, sum(y) + 1 AS total FROM (VALUES (1, 2), (1, 3)) t(x, y) GROUP BY x")
             .await?;
@@ -135,14 +139,14 @@ async fn native_aggregate_extracts_calls_before_projecting() -> PlanResult<()> {
 }
 
 #[tokio::test]
-async fn native_correlated_subquery_binds_outer_attribute_ids() -> PlanResult<()> {
+async fn correlated_subquery_binds_outer_attribute_ids() -> PlanResult<()> {
     let query = analyze("SELECT x, (SELECT max(b.y) FROM (VALUES (1), (2)) b(y) WHERE b.y = a.x) AS m FROM (VALUES (1), (2)) a(x)").await?;
     lower_query(query)?;
     Ok(())
 }
 
 #[tokio::test]
-async fn native_union_and_case_resolve_common_types() -> PlanResult<()> {
+async fn union_and_case_resolve_common_types() -> PlanResult<()> {
     let query = analyze("SELECT CASE WHEN x IS NOT NULL THEN CAST(x AS BIGINT) ELSE 0 END AS value FROM (VALUES (1), (NULL)) t(x) UNION ALL SELECT CAST(2 AS BIGINT)").await?;
     let schema = query.schema.resolved("test output")?;
     assert_eq!(
@@ -157,7 +161,7 @@ async fn native_union_and_case_resolve_common_types() -> PlanResult<()> {
 }
 
 #[tokio::test]
-async fn native_lambda_bodies_are_typed_before_lowering() -> PlanResult<()> {
+async fn lambda_bodies_are_typed_before_lowering() -> PlanResult<()> {
     for sql in [
         "SELECT transform(array('-2', '-1'), x -> abs(x)) AS items",
         "SELECT transform(array(10, 20), (x, i) -> i + 1) AS positions",
@@ -178,7 +182,7 @@ async fn native_lambda_bodies_are_typed_before_lowering() -> PlanResult<()> {
 }
 
 #[tokio::test]
-async fn native_using_join_keeps_qualified_key_bindings() -> PlanResult<()> {
+async fn using_join_keeps_qualified_key_bindings() -> PlanResult<()> {
     for kind in ["JOIN", "LEFT JOIN", "FULL JOIN"] {
         let query = analyze(&format!("SELECT x, a.x AS left_key, b.x AS right_key FROM (VALUES (1)) a(x) {kind} (VALUES (CAST(1 AS BIGINT))) b(x) USING (x)")).await?;
         lower_query(query)?;
@@ -187,7 +191,7 @@ async fn native_using_join_keeps_qualified_key_bindings() -> PlanResult<()> {
 }
 
 #[tokio::test]
-async fn native_window_calls_are_materialized_before_projection() -> PlanResult<()> {
+async fn window_calls_are_materialized_before_projection() -> PlanResult<()> {
     let query =
         analyze("SELECT x, row_number() OVER (ORDER BY x) AS n FROM (VALUES (1), (2)) t(x)")
             .await?;
@@ -196,7 +200,7 @@ async fn native_window_calls_are_materialized_before_projection() -> PlanResult<
 }
 
 #[tokio::test]
-async fn native_predicates_and_scalar_subqueries_have_resolved_types() -> PlanResult<()> {
+async fn predicates_and_scalar_subqueries_have_resolved_types() -> PlanResult<()> {
     for sql in [
         "SELECT 1 BETWEEN 0 AND CAST(2 AS BIGINT)",
         "SELECT NULL IS DISTINCT FROM 1, NULL <=> NULL",
@@ -210,7 +214,7 @@ async fn native_predicates_and_scalar_subqueries_have_resolved_types() -> PlanRe
 }
 
 #[tokio::test]
-async fn native_ctes_capture_declaration_scope_and_fresh_instances() -> PlanResult<()> {
+async fn ctes_capture_declaration_scope_and_fresh_instances() -> PlanResult<()> {
     for sql in [
         "WITH a AS (SELECT 1 AS x), b AS (SELECT * FROM a) SELECT * FROM (WITH a AS (SELECT 2 AS y) SELECT * FROM b)",
         "WITH a AS (SELECT 1 AS x) SELECT l.x, r.x FROM a l JOIN a r ON l.x = r.x",
@@ -226,7 +230,7 @@ async fn native_ctes_capture_declaration_scope_and_fresh_instances() -> PlanResu
 }
 
 #[tokio::test]
-async fn native_set_operations_resolve_each_input_before_combining() -> PlanResult<()> {
+async fn set_operations_resolve_each_input_before_combining() -> PlanResult<()> {
     for op in ["INTERSECT", "INTERSECT ALL", "EXCEPT", "EXCEPT ALL"] {
         let sql = format!(
             "SELECT x FROM (VALUES (1), (NULL)) a(x) {op} SELECT CAST(y AS BIGINT) FROM (VALUES (1), (1)) b(y)"
@@ -237,7 +241,7 @@ async fn native_set_operations_resolve_each_input_before_combining() -> PlanResu
 }
 
 #[tokio::test]
-async fn native_range_window_offsets_match_ordering_type() -> PlanResult<()> {
+async fn range_window_offsets_match_ordering_type() -> PlanResult<()> {
     let query = analyze("SELECT sum(x) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM (VALUES (1), (2)) a(x)").await?;
     lower_query(query)?;
     assert!(analyze("SELECT sum(x) OVER (ORDER BY x, y RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM (VALUES (1, 2)) a(x,y)").await.is_err());
@@ -245,7 +249,7 @@ async fn native_range_window_offsets_match_ordering_type() -> PlanResult<()> {
 }
 
 #[tokio::test]
-async fn native_struct_fields_and_wildcards_preserve_bindings() -> PlanResult<()> {
+async fn struct_fields_and_wildcards_preserve_bindings() -> PlanResult<()> {
     for sql in [
         "SELECT s.x FROM (SELECT struct(1 AS x, 2 AS y) AS s)",
         "SELECT a.* FROM (VALUES (1, 2)) a(x,y) JOIN (VALUES (1, 3)) b(x,z) USING (x)",
@@ -275,7 +279,7 @@ async fn native_struct_fields_and_wildcards_preserve_bindings() -> PlanResult<()
 }
 
 #[tokio::test]
-async fn native_instances_refresh_ids_across_correlations_and_lambdas() -> PlanResult<()> {
+async fn instances_refresh_ids_across_correlations_and_lambdas() -> PlanResult<()> {
     let query = analyze("SELECT x, transform(array(1), y -> x + y), (SELECT max(z) FROM (VALUES (2)) b(z) WHERE z = a.x) FROM (VALUES (1)) a(x)").await?;
     let mut ids = IdGenerator::default();
     let first = query.instantiate(&mut ids)?;
@@ -292,7 +296,7 @@ async fn native_instances_refresh_ids_across_correlations_and_lambdas() -> PlanR
 }
 
 #[tokio::test]
-async fn native_compound_functions_lower_with_resolved_fields() -> PlanResult<()> {
+async fn compound_functions_lower_with_resolved_fields() -> PlanResult<()> {
     for sql in [
         "SELECT id, sum(id), grouping(id), grouping_id() FROM range(3) GROUP BY ROLLUP(id)",
         "SELECT id + 1, count(*) FROM range(3) GROUP BY CUBE(id)",
@@ -339,7 +343,7 @@ async fn native_compound_functions_lower_with_resolved_fields() -> PlanResult<()
 }
 
 #[tokio::test]
-async fn native_parameters_are_values_before_function_analysis() -> PlanResult<()> {
+async fn parameters_are_values_before_function_analysis() -> PlanResult<()> {
     let plan = sail_sql_analyzer::statement::from_ast_statement(
         sail_sql_analyzer::parser::parse_one_statement("SELECT round(:value)")?,
     )?;
@@ -388,7 +392,7 @@ async fn native_parameters_are_values_before_function_analysis() -> PlanResult<(
 }
 
 #[tokio::test]
-async fn native_row_identities_are_materialized_in_their_row_scope() -> PlanResult<()> {
+async fn row_identities_are_materialized_in_their_row_scope() -> PlanResult<()> {
     for sql in [
         "SELECT monotonically_increasing_id(), spark_partition_id() FROM range(3)",
         "SELECT monotonically_increasing_id() + monotonically_increasing_id() FROM range(3)",
@@ -409,7 +413,7 @@ async fn native_row_identities_are_materialized_in_their_row_scope() -> PlanResu
 }
 
 #[tokio::test]
-async fn native_scalar_iterators_materialize_nested_calls_and_join_predicates() -> PlanResult<()> {
+async fn scalar_iterators_materialize_nested_calls_and_join_predicates() -> PlanResult<()> {
     use datafusion_expr::ScalarUDF;
     use sail_python_udf::config::PySparkUdfConfig;
     use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
@@ -440,13 +444,13 @@ async fn native_scalar_iterators_materialize_nested_calls_and_join_predicates() 
         else {
             return Err(PlanError::internal("expected query"));
         };
-        let query = AnalyzerPipeline::new(PlanResolver::with_context(AnalyzerContext {
-            session: &session,
-            config: Arc::new(PlanConfig::new()?),
-            ids: IdGenerator::default(),
-        }))
-        .analyze(request.into())
-        .await?;
+        let query = AnalyzerPipeline::new()
+            .with_layer(PlanResolver::with_context(AnalyzerContext {
+                session: &session,
+                config: Arc::new(PlanConfig::new()?),
+            }))
+            .analyze(request.into())
+            .await?;
         let query = into_query(query)?;
         let plan = lower_query(query)?.plan;
         assert!(
@@ -458,12 +462,12 @@ async fn native_scalar_iterators_materialize_nested_calls_and_join_predicates() 
 }
 
 #[tokio::test]
-async fn native_commands_keep_inputs_native_until_lowering() -> PlanResult<()> {
+async fn commands_keep_intermediate_inputs_until_lowering() -> PlanResult<()> {
     let session = session();
     for sql in [
         "CREATE VIEW v AS SELECT abs('-2') AS x",
-        "CREATE TABLE t (x BIGINT, y STRING) USING parquet LOCATION '/tmp/sail-native-analysis-only'",
-        "INSERT OVERWRITE DIRECTORY '/tmp/sail-native-analysis-only' USING parquet SELECT abs('-2') AS x",
+        "CREATE TABLE t (x BIGINT, y STRING) USING parquet LOCATION '/tmp/sail-analysis-only'",
+        "INSERT OVERWRITE DIRECTORY '/tmp/sail-analysis-only' USING parquet SELECT abs('-2') AS x",
         "SET TIMEZONE = 'UTC'",
         "RESET TIMEZONE",
     ] {
@@ -473,19 +477,19 @@ async fn native_commands_keep_inputs_native_until_lowering() -> PlanResult<()> {
         let context = AnalyzerContext {
             session: &session,
             config: Arc::new(PlanConfig::new()?),
-            ids: IdGenerator::default(),
         };
-        let plan = AnalyzerPipeline::new(PlanResolver::with_context(context))
+        let plan = AnalyzerPipeline::new()
+            .with_layer(PlanResolver::with_context(context))
             .analyze(request.into())
             .await?;
-        match plan {
-            AnalyzerPlan::Command(Command {
+        match plan.kind {
+            PlanKind::Command(Command {
                 kind: Deferred::Resolved(CommandKind::Write(write)),
             }) => {
                 crate::analyzer::lowering::lower_query(write.input)?;
             }
-            AnalyzerPlan::Command(_) => {}
-            _ => return Err(PlanError::internal("expected native command")),
+            PlanKind::Command(_) => {}
+            _ => return Err(PlanError::internal("expected analyzed command")),
         }
     }
     let spec::Plan::Query(input) = sail_sql_analyzer::statement::from_ast_statement(
@@ -505,9 +509,9 @@ async fn native_commands_keep_inputs_native_until_lowering() -> PlanResult<()> {
     let context = AnalyzerContext {
         session: &session,
         config: Arc::new(PlanConfig::new()?),
-        ids: IdGenerator::default(),
     };
-    let plan = AnalyzerPipeline::new(PlanResolver::with_context(context))
+    let plan = AnalyzerPipeline::new()
+        .with_layer(PlanResolver::with_context(context))
         .analyze(request.into())
         .await?
         .lower(&session)
@@ -517,7 +521,7 @@ async fn native_commands_keep_inputs_native_until_lowering() -> PlanResult<()> {
 }
 
 #[tokio::test]
-async fn native_write_columns_resolve_defaults_generation_and_identity() -> PlanResult<()> {
+async fn write_columns_resolve_defaults_generation_and_identity() -> PlanResult<()> {
     use sail_common_datafusion::catalog::{CatalogTableColumnIdentity, TableColumnStatus};
 
     use crate::resolver::command::write::{TableInfo, WriteColumnMatch};
@@ -525,7 +529,6 @@ async fn native_write_columns_resolve_defaults_generation_and_identity() -> Plan
     let context = AnalyzerContext {
         session: &session,
         config: Arc::new(PlanConfig::new()?),
-        ids: IdGenerator::default(),
     };
     let mut resolver = crate::resolver::PlanResolver::with_context(context);
     let column = |name: &str| TableColumnStatus {
@@ -586,8 +589,7 @@ async fn native_write_columns_resolve_defaults_generation_and_identity() -> Plan
 }
 
 #[tokio::test]
-async fn native_insert_defaults_are_bound_before_values_type_inference_finishes() -> PlanResult<()>
-{
+async fn insert_defaults_are_bound_before_values_type_inference_finishes() -> PlanResult<()> {
     use sail_common_datafusion::catalog::TableColumnStatus;
 
     use crate::resolver::command::write::{TableInfo, WriteColumnMatch};
@@ -595,7 +597,6 @@ async fn native_insert_defaults_are_bound_before_values_type_inference_finishes(
     let context = AnalyzerContext {
         session: &session,
         config: Arc::new(PlanConfig::new()?),
-        ids: IdGenerator::default(),
     };
     let mut resolver = crate::resolver::PlanResolver::with_context(context);
     let info = TableInfo {
@@ -642,7 +643,7 @@ async fn native_insert_defaults_are_bound_before_values_type_inference_finishes(
 }
 
 #[tokio::test]
-async fn deferred_native_fields_are_inferred_without_changing_identities() -> PlanResult<()> {
+async fn deferred_fields_are_inferred_without_changing_identities() -> PlanResult<()> {
     use sail_common_plan::rewrite::{QueryRewriter, walk_expression, walk_query};
 
     use crate::analyzer::model::Infer;
@@ -677,23 +678,26 @@ async fn deferred_native_fields_are_inferred_without_changing_identities() -> Pl
         "SELECT aggregate(array(1, 2), 0, (acc, x) -> acc + x, acc -> acc * 2) AS a",
         "SELECT a.id, EXISTS(SELECT * FROM range(1) b WHERE a.id = b.id) AS found FROM range(2) a",
     ] {
-        let original = analyze(sql).await?;
-        let ids = original
+        let mut original = analyze_plan(sql).await?;
+        let PlanKind::Query(query) = original.kind else {
+            return Err(PlanError::internal("expected query"));
+        };
+        let ids = query
             .schema
             .resolved("original")?
             .attributes
             .iter()
             .map(|a| a.id)
             .collect::<Vec<_>>();
-        let plan = Defer.rewrite_query(original)?;
+        original.kind = PlanKind::Query(Defer.rewrite_query(query)?);
         let session = session();
-        let query = AnalyzerPipeline::new(PlanResolver::with_context(AnalyzerContext {
-            session: &session,
-            config: Arc::new(PlanConfig::new()?),
-            ids: IdGenerator::default(),
-        }))
-        .analyze(AnalyzerPlan::Query(plan))
-        .await?;
+        let query = AnalyzerPipeline::new()
+            .with_layer(PlanResolver::with_context(AnalyzerContext {
+                session: &session,
+                config: Arc::new(PlanConfig::new()?),
+            }))
+            .analyze(original)
+            .await?;
         let query = into_query(query)?;
         assert_eq!(
             query
@@ -731,10 +735,10 @@ async fn additional_layers_receive_resolved_model_and_cannot_bypass_lowering() -
     }
     #[async_trait::async_trait]
     impl crate::analyzer::AnalyzerLayer for Observe {
-        async fn analyze(&mut self, mut plan: AnalyzerPlan) -> PlanResult<AnalyzerPlan> {
-            let query = match &mut plan {
-                AnalyzerPlan::Query(query) => query,
-                AnalyzerPlan::Command(Command {
+        async fn analyze(&mut self, mut plan: Plan) -> PlanResult<Plan> {
+            let query = match &mut plan.kind {
+                PlanKind::Query(query) => query,
+                PlanKind::Command(Command {
                     kind: Deferred::Resolved(CommandKind::Show { input, .. }),
                 }) => input,
                 _ => {
@@ -780,29 +784,29 @@ async fn additional_layers_receive_resolved_model_and_cannot_bypass_lowering() -
             },
         ))),
     ] {
-        let unresolved: AnalyzerPlan = request.clone().into();
+        let unresolved: Plan = request.clone().into();
         assert!(unresolved.lower(&session).await.is_err());
         visits
             .lock()
             .map_err(|_| PlanError::internal("poisoned test state"))?
             .clear();
-        let query = AnalyzerPipeline::new(PlanResolver::with_context(AnalyzerContext {
-            session: &session,
-            config: Arc::new(PlanConfig::new()?),
-            ids: IdGenerator::default(),
-        }))
-        .with_layer(Observe {
-            name: "first",
-            visits: Arc::clone(&visits),
-            invalidate: false,
-        })
-        .with_layer(Observe {
-            name: "second",
-            visits: Arc::clone(&visits),
-            invalidate: true,
-        })
-        .analyze(request.into())
-        .await?;
+        let query = AnalyzerPipeline::new()
+            .with_layer(PlanResolver::with_context(AnalyzerContext {
+                session: &session,
+                config: Arc::new(PlanConfig::new()?),
+            }))
+            .with_layer(Observe {
+                name: "first",
+                visits: Arc::clone(&visits),
+                invalidate: false,
+            })
+            .with_layer(Observe {
+                name: "second",
+                visits: Arc::clone(&visits),
+                invalidate: true,
+            })
+            .analyze(request.into())
+            .await?;
         assert_eq!(
             *visits
                 .lock()
@@ -831,9 +835,12 @@ async fn collection_and_string_functions_receive_normalized_arguments() -> PlanR
 }
 
 #[tokio::test]
-async fn resolving_native_literals_preserves_semantic_metadata() -> PlanResult<()> {
+async fn resolving_literals_preserves_semantic_metadata() -> PlanResult<()> {
     use crate::analyzer::model::*;
-    let mut query = analyze("SELECT 1").await?;
+    let mut plan = analyze_plan("SELECT 1").await?;
+    let PlanKind::Query(query) = &mut plan.kind else {
+        return Err(PlanError::internal("expected query"));
+    };
     let Deferred::Resolved(QueryKind::Project { expressions, .. }) = &mut query.kind else {
         return Err(PlanError::internal("expected projection"));
     };
@@ -844,16 +851,16 @@ async fn resolving_native_literals_preserves_semantic_metadata() -> PlanResult<(
         .clone();
     field
         .metadata
-        .insert("source".into(), "native-layer".into());
+        .insert("source".into(), "analysis-layer".into());
     expressions[0].expression.result_type = Deferred::Resolved(field);
     let session = session();
-    let query = AnalyzerPipeline::new(PlanResolver::with_context(AnalyzerContext {
-        session: &session,
-        config: Arc::new(PlanConfig::new()?),
-        ids: IdGenerator::default(),
-    }))
-    .analyze(AnalyzerPlan::Query(query))
-    .await?;
+    let query = AnalyzerPipeline::new()
+        .with_layer(PlanResolver::with_context(AnalyzerContext {
+            session: &session,
+            config: Arc::new(PlanConfig::new()?),
+        }))
+        .analyze(plan)
+        .await?;
     let query = into_query(query)?;
     assert_eq!(
         query.schema.resolved("output")?.attributes[0]
@@ -862,7 +869,7 @@ async fn resolving_native_literals_preserves_semantic_metadata() -> PlanResult<(
             .metadata
             .get("source")
             .map(String::as_str),
-        Some("native-layer")
+        Some("analysis-layer")
     );
     lower_query(query)?;
     Ok(())
@@ -870,7 +877,10 @@ async fn resolving_native_literals_preserves_semantic_metadata() -> PlanResult<(
 
 #[tokio::test]
 async fn nested_commands_resolve_deferred_inputs_in_one_identity_domain() -> PlanResult<()> {
-    let original = analyze("SELECT 1 AS value").await?;
+    let Plan { kind, state } = analyze_plan("SELECT 1 AS value").await?;
+    let PlanKind::Query(original) = kind else {
+        return Err(PlanError::internal("expected query"));
+    };
     let original_id = original.schema.resolved("original")?.attributes[0].id;
     let request = spec::CommandPlan::new(spec::CommandNode::ShowString(spec::ShowString {
         input: Box::new(spec::QueryPlan::new(spec::QueryNode::Range(spec::Range {
@@ -883,9 +893,9 @@ async fn nested_commands_resolve_deferred_inputs_in_one_identity_domain() -> Pla
         truncate: 20,
         vertical: false,
     }));
-    let plan = AnalyzerPlan::Command(
+    let plan = PlanKind::Command(
         CommandKind::Explain {
-            input: Box::new(AnalyzerPlan::Command(
+            input: Box::new(PlanKind::Command(
                 CommandKind::Barrier {
                     preconditions: vec![Command::unresolved(request)],
                     command: Box::new(CommandKind::Query(original).into()),
@@ -900,18 +910,18 @@ async fn nested_commands_resolve_deferred_inputs_in_one_identity_domain() -> Pla
     let context = AnalyzerContext {
         session: &session,
         config: Arc::new(PlanConfig::new()?),
-        ids: IdGenerator::default(),
     };
-    let plan = AnalyzerPipeline::new(PlanResolver::with_context(context))
-        .analyze(plan)
+    let plan = AnalyzerPipeline::new()
+        .with_layer(PlanResolver::with_context(context))
+        .analyze(Plan { kind: plan, state })
         .await?;
-    let AnalyzerPlan::Command(Command {
+    let PlanKind::Command(Command {
         kind: Deferred::Resolved(CommandKind::Explain { input, .. }),
-    }) = &plan
+    }) = &plan.kind
     else {
         return Err(PlanError::internal("expected resolved explain"));
     };
-    let AnalyzerPlan::Command(Command {
+    let PlanKind::Command(Command {
         kind:
             Deferred::Resolved(CommandKind::Barrier {
                 preconditions,
@@ -927,7 +937,7 @@ async fn nested_commands_resolve_deferred_inputs_in_one_identity_domain() -> Pla
     let new_id = input.schema.resolved("new query")?.attributes[0].id;
     assert_ne!(new_id, original_id);
     let CommandKind::Query(input) = command.kind.resolved("command")? else {
-        return Err(PlanError::internal("expected native query command"));
+        return Err(PlanError::internal("expected query command"));
     };
     assert_eq!(
         input.schema.resolved("original query")?.attributes[0].id,
@@ -938,21 +948,23 @@ async fn nested_commands_resolve_deferred_inputs_in_one_identity_domain() -> Pla
 }
 
 #[tokio::test]
-async fn native_write_resolves_deferred_fields_and_reserves_predicate_bindings() -> PlanResult<()> {
+async fn write_resolution_preserves_allocator_and_predicate_bindings() -> PlanResult<()> {
     use datafusion_common::ScalarValue;
 
-    use crate::analyzer::model::{AttributeId, Expr, ExprId, Infer, QuerySchema, SortKey};
+    use crate::analyzer::model::{Expr, Infer, QuerySchema, SortKey};
     use crate::analyzer::writer::{WriteDisposition, WriteOperation};
-
-    let input = analyze("SELECT 1 AS value").await?;
+    let Plan { kind, mut state } = analyze_plan("SELECT 1 AS value").await?;
+    let PlanKind::Query(input) = kind else {
+        return Err(PlanError::internal("expected query"));
+    };
     let mut attribute = input.schema.resolved("input")?.attributes[0].clone();
-    attribute.id = AttributeId(500);
+    attribute.id = state.ids.attribute();
     attribute.origin = attribute.id;
-    let mut condition = Expr::literal(ExprId(100), ScalarValue::Boolean(Some(true)));
+    let mut condition = Expr::literal(state.ids.expression(), ScalarValue::Boolean(Some(true)));
     condition.result_type = Deferred::unresolved(Infer);
-    let mut sort = Expr::literal(ExprId(101), ScalarValue::Int32(Some(1)));
+    let mut sort = Expr::literal(state.ids.expression(), ScalarValue::Int32(Some(1)));
     sort.result_type = Deferred::unresolved(Infer);
-    let plan = AnalyzerPlan::Command(
+    let plan = PlanKind::Command(
         CommandKind::Write(Box::new(WriteOperation {
             input,
             format: "parquet".into(),
@@ -980,16 +992,19 @@ async fn native_write_resolves_deferred_fields_and_reserves_predicate_bindings()
     let context = AnalyzerContext {
         session: &session,
         config: Arc::new(PlanConfig::new()?),
-        ids: IdGenerator::default(),
     };
     let mut resolver = PlanResolver::with_context(context);
-    let plan = crate::analyzer::AnalyzerLayer::analyze(&mut resolver, plan).await?;
-    assert!(resolver.context.ids.attribute().0 > 500);
-    assert!(resolver.context.ids.expression().0 > 101);
+    // Even allocated IDs no longer present in the tree must never be reused.
+    let last_attribute = state.ids.attribute();
+    let last_expression = state.ids.expression();
+    let mut plan =
+        crate::analyzer::AnalyzerLayer::analyze(&mut resolver, Plan { kind: plan, state }).await?;
+    assert!(plan.state.ids.attribute().0 > last_attribute.0);
+    assert!(plan.state.ids.expression().0 > last_expression.0);
 
-    let AnalyzerPlan::Command(Command {
+    let PlanKind::Command(Command {
         kind: Deferred::Resolved(CommandKind::Write(operation)),
-    }) = plan
+    }) = plan.kind
     else {
         return Err(PlanError::internal("expected resolved write"));
     };
@@ -1008,5 +1023,95 @@ async fn native_write_resolves_deferred_fields_and_reserves_predicate_bindings()
         condition.result_type.resolved("condition")?.data_type,
         DataType::Boolean
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn resolution_layers_share_state_and_restore_lexical_scopes() -> PlanResult<()> {
+    use crate::analyzer::model::Infer;
+    use crate::analyzer::{AnalyzerLayer, PlanAnalyzer};
+
+    fn request(sql: &str) -> PlanResult<spec::QueryPlan> {
+        match sail_sql_analyzer::statement::from_ast_statement(
+            sail_sql_analyzer::parser::parse_one_statement(sql)?,
+        )? {
+            spec::Plan::Query(query) => Ok(query),
+            _ => Err(PlanError::internal("expected query request")),
+        }
+    }
+
+    struct DeferScope(spec::QueryPlan);
+    #[async_trait::async_trait]
+    impl AnalyzerLayer for DeferScope {
+        async fn analyze(&mut self, mut plan: Plan) -> PlanResult<Plan> {
+            let PlanKind::Query(query) = &mut plan.kind else {
+                return Err(PlanError::internal("expected query"));
+            };
+            let Deferred::Resolved(QueryKind::Scope {
+                input,
+                scope: Some(_),
+                ..
+            }) = &mut query.kind
+            else {
+                return Err(PlanError::internal("expected captured lexical scope"));
+            };
+            **input = Query::unresolved(self.0.clone());
+            query.schema = Deferred::unresolved(Infer);
+            Ok(plan)
+        }
+    }
+
+    let requests = [
+        request("WITH t AS (SELECT 1 AS x) SELECT * FROM t")?,
+        request("SELECT sum(id) OVER w FROM range(2) WINDOW w AS (ORDER BY id)")?,
+        spec::QueryPlan::new(spec::QueryNode::WithParameters {
+            input: Box::new(request("SELECT round(:value)")?),
+            positional_arguments: vec![],
+            named_arguments: vec![(
+                "value".into(),
+                spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some("1.2".into()),
+                }),
+            )],
+        }),
+    ];
+    let session = session();
+    let config = Arc::new(PlanConfig::new()?);
+    for mut request in requests {
+        let input = match &request.node {
+            spec::QueryNode::WithCtes { input, .. }
+            | spec::QueryNode::NamedWindows { input, .. }
+            | spec::QueryNode::WithParameters { input, .. } => *input.clone(),
+            _ => return Err(PlanError::internal("expected scoped request")),
+        };
+        request.plan_id = Some(77);
+        let mut pipeline = AnalyzerPipeline::new()
+            .with_layer(PlanResolver::new(&session, Arc::clone(&config)))
+            .with_layer(DeferScope(input))
+            .with_layer(PlanResolver::new(&session, Arc::new(PlanConfig::default())));
+        let mut plan = pipeline.analyze(request.into()).await?;
+        assert!(
+            plan.state
+                .config
+                .as_ref()
+                .is_some_and(|saved| Arc::ptr_eq(saved, &config))
+        );
+        assert!(plan.state.bindings.contains_key(&77));
+        // These IDs are intentionally absent from the tree: a scan cannot recover them.
+        let previous_expression = plan.state.ids.expression();
+        let previous_attribute = plan.state.ids.attribute();
+        plan = pipeline.analyze(plan).await?;
+        assert!(plan.state.ids.expression().0 > previous_expression.0);
+        assert!(plan.state.ids.attribute().0 > previous_attribute.0);
+        assert!(plan.state.bindings.contains_key(&77));
+        plan.lower(&session).await?;
+    }
+
+    // A resolver reused for unrelated plans must not leak lexical bindings between them.
+    let mut analyzer = PlanAnalyzer::new(&session, config);
+    analyzer
+        .analyze(request("WITH t AS (SELECT 1 AS x) SELECT * FROM t")?)
+        .await?;
+    assert!(analyzer.analyze(request("SELECT * FROM t")?).await.is_err());
     Ok(())
 }

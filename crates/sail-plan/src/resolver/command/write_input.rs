@@ -106,7 +106,7 @@ impl PlanResolver<'_> {
             );
             let resolved = crate::analyzer::typing::aggregate::resolve_window(&function, &[])?;
             let expression = Expr {
-                id: self.context.ids.expression(),
+                id: self.state.ids.expression(),
                 result_type: Deferred::Resolved(ExprType::from_field(&resolved.result)),
                 kind: Deferred::Resolved(ExprKind::WindowFunction {
                     function,
@@ -120,13 +120,16 @@ impl PlanResolver<'_> {
                 }),
             };
             let mut schema = input.schema.resolved("identity input")?.clone();
-            let mut attribute = self.context.function_context().attribute(
-                "identity_row_number".into(),
-                expression
-                    .result_type
-                    .resolved("identity row number")?
-                    .clone(),
-            );
+            let mut attribute = self
+                .context
+                .function_context(&mut self.state.ids)
+                .attribute(
+                    "identity_row_number".into(),
+                    expression
+                        .result_type
+                        .resolved("identity row number")?
+                        .clone(),
+                );
             attribute.hidden = true;
             schema.attributes.push(attribute.clone());
             input = Query {
@@ -154,32 +157,36 @@ impl PlanResolver<'_> {
                     .expression;
                 if let Some(slot) = slots[index] {
                     let user = self.reference(&schema.attributes[slot])?;
-                    let null = self.context.function_context().is_null(user);
+                    let null = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .is_null(user);
                     let user = self.reference(&schema.attributes[slot])?;
                     let copy = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .copy_expression(&generated)?;
                     let cast = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .cast(copy, column.data_type.clone())?;
-                    let equal = self.context.function_context().binary(
+                    let equal = self.context.function_context(&mut self.state.ids).binary(
                         user,
                         Operator::IsNotDistinctFrom,
                         cast,
                     )?;
-                    let valid =
-                        self.context
-                            .function_context()
-                            .binary(null, Operator::Or, equal)?;
+                    let valid = self.context.function_context(&mut self.state.ids).binary(
+                        null,
+                        Operator::Or,
+                        equal,
+                    )?;
                     let message = format!(
                         "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] CHECK constraint for generated column `{}` (expression: {source}) violated: user-provided value does not match.",
                         column.name
                     );
                     let error = self.write_error(message)?;
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .case(vec![(valid, generated)], Some(error))?
                 } else {
                     generated
@@ -196,7 +203,7 @@ impl PlanResolver<'_> {
             };
             let value = self.align_store_value(value, &column.data_type, false)?;
             let value = crate::function::scalar::datetime::declare_nullable_result(
-                &mut self.context.function_context(),
+                &mut self.context.function_context(&mut self.state.ids),
                 value,
                 column.nullable,
             )?;
@@ -220,7 +227,7 @@ impl PlanResolver<'_> {
                 column.nullable.to_string(),
             );
             let expression = Expr {
-                id: self.context.ids.expression(),
+                id: self.state.ids.expression(),
                 kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(value))),
                 result_type: Deferred::Resolved(result_type),
             };
@@ -238,14 +245,17 @@ impl PlanResolver<'_> {
         info: &TableInfo,
     ) -> PlanResult<Expr> {
         if let Some(value) = info.default_values.get(&column.name) {
-            return Ok(self.context.function_context().literal(value.clone()));
+            return Ok(self
+                .context
+                .function_context(&mut self.state.ids)
+                .literal(value.clone()));
         }
         if let Some(source) = &column.default {
             return self.resolve_column_default_expression(source).await;
         }
         Ok(self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::try_from(&column.data_type)?))
     }
 
@@ -270,10 +280,10 @@ impl PlanResolver<'_> {
     pub(in crate::resolver) fn write_error(&mut self, message: String) -> PlanResult<Expr> {
         let message = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Utf8(Some(message)));
         self.context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .scalar_udf(Arc::new(ScalarUDF::from(RaiseError::new())), vec![message])
     }
 
@@ -286,42 +296,64 @@ impl PlanResolver<'_> {
         let base = identity.high_water_mark.map(|n| n.checked_add(identity.step)).unwrap_or(Some(identity.start))
             .ok_or_else(|| PlanError::invalid(format!("identity column `{name}` cannot generate a next value without overflowing BIGINT")))?;
         let row = self.reference(row)?;
-        let row = self.context.function_context().cast(row, DataType::Int64)?;
+        let row = self
+            .context
+            .function_context(&mut self.state.ids)
+            .cast(row, DataType::Int64)?;
         let one = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int64(Some(1)));
-        let offset = self
-            .context
-            .function_context()
-            .binary(row, Operator::Minus, one)?;
+        let offset =
+            self.context
+                .function_context(&mut self.state.ids)
+                .binary(row, Operator::Minus, one)?;
         let step = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int64(Some(identity.step)));
-        let product = self.context.function_context().scalar_udf(
-            Arc::new(ScalarUDF::from(SparkTryMult::new())),
-            vec![offset, step],
-        )?;
-        let copy = self.context.function_context().copy_expression(&product)?;
+        let product = self
+            .context
+            .function_context(&mut self.state.ids)
+            .scalar_udf(
+                Arc::new(ScalarUDF::from(SparkTryMult::new())),
+                vec![offset, step],
+            )?;
+        let copy = self
+            .context
+            .function_context(&mut self.state.ids)
+            .copy_expression(&product)?;
         let base = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int64(Some(base)));
-        let value = self.context.function_context().scalar_udf(
-            Arc::new(ScalarUDF::from(SparkTryAdd::new())),
-            vec![base, copy],
+        let value = self
+            .context
+            .function_context(&mut self.state.ids)
+            .scalar_udf(
+                Arc::new(ScalarUDF::from(SparkTryAdd::new())),
+                vec![base, copy],
+            )?;
+        let product_null = self
+            .context
+            .function_context(&mut self.state.ids)
+            .is_null(product);
+        let copy = self
+            .context
+            .function_context(&mut self.state.ids)
+            .copy_expression(&value)?;
+        let value_null = self
+            .context
+            .function_context(&mut self.state.ids)
+            .is_null(copy);
+        let invalid = self.context.function_context(&mut self.state.ids).binary(
+            product_null,
+            Operator::Or,
+            value_null,
         )?;
-        let product_null = self.context.function_context().is_null(product);
-        let copy = self.context.function_context().copy_expression(&value)?;
-        let value_null = self.context.function_context().is_null(copy);
-        let invalid =
-            self.context
-                .function_context()
-                .binary(product_null, Operator::Or, value_null)?;
         let error = self.write_error(format!("[DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW] identity column `{name}` overflowed BIGINT while generating values"))?;
         self.context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .case(vec![(invalid, error)], Some(value))
     }
 }

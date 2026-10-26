@@ -124,7 +124,8 @@ pub fn walk_query<R: QueryRewriter>(rewriter: &mut R, plan: Query) -> Result<Que
         | QueryKind::Range { .. }
         | QueryKind::Scan { .. }
         | QueryKind::RemoteCheckpoint { .. }) => node,
-        QueryKind::Scope { input } => QueryKind::Scope {
+        QueryKind::Scope { input, scope } => QueryKind::Scope {
+            scope,
             input: Box::new(rewriter.rewrite_query(*input)?),
         },
         QueryKind::Values { rows } => QueryKind::Values {

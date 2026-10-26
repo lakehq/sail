@@ -25,7 +25,7 @@ mod tests {
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::datasource::DataSourceRegistry;
     use sail_common_datafusion::session::plan::PlanService;
-    use sail_plan::analyzer::QueryAnalyzer;
+    use sail_plan::analyzer::PlanAnalyzer;
     use sail_plan::catalog::SparkCatalogObjectDisplay;
     use sail_plan::config::PlanConfig;
     use sail_plan::formatter::SparkPlanFormatter;
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn test_system_table_schema_validity() -> Result<(), Box<dyn std::error::Error>> {
         let session = create_session()?;
-        let resolver = QueryAnalyzer::new(&session, Arc::new(PlanConfig::default()));
+        let resolver = PlanAnalyzer::new(&session, Arc::new(PlanConfig::default()));
         for db in SystemCatalog::databases() {
             for t in db.tables() {
                 let columns = t.columns();
@@ -100,7 +100,7 @@ mod tests {
         }
 
         let session = create_session()?;
-        let mut resolver = QueryAnalyzer::new(&session, Arc::new(PlanConfig::default()));
+        let mut resolver = PlanAnalyzer::new(&session, Arc::new(PlanConfig::default()));
 
         for (predicate, values) in [
             (

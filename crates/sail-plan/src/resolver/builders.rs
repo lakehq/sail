@@ -15,12 +15,12 @@ impl PlanResolver<'_> {
                 input: Box::new(input),
                 skip: Some(Box::new(
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Int64(Some(skip))),
                 )),
                 fetch: Some(Box::new(
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Int64(Some(fetch))),
                 )),
             }),
@@ -78,7 +78,7 @@ impl PlanResolver<'_> {
             }
             attributes.push(
                 self.context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .attribute(column.name.clone(), result_type),
             );
         }
@@ -96,7 +96,7 @@ impl PlanResolver<'_> {
                 let expression = typing::coerce(
                     expression,
                     &target.result_type.resolved("UNION target")?.data_type,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
                 expressions.push(crate::resolver::NamedExpr {
                     name: source.name.clone(),
@@ -147,13 +147,16 @@ impl PlanResolver<'_> {
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
-        let mut attribute = self.context.function_context().attribute(
-            name,
-            expression
-                .result_type
-                .resolved("append expression")?
-                .clone(),
-        );
+        let mut attribute = self
+            .context
+            .function_context(&mut self.state.ids)
+            .attribute(
+                name,
+                expression
+                    .result_type
+                    .resolved("append expression")?
+                    .clone(),
+            );
         attribute.hidden = true;
         expressions.push(Projection {
             expression,
@@ -217,7 +220,7 @@ impl PlanResolver<'_> {
         result_type.nullable = true;
         let attribute = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .attribute(column.name.clone(), result_type);
         let mut schema = input.schema.resolved("unnest input")?.clone();
         let position = schema

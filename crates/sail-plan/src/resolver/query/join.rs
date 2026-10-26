@@ -101,11 +101,11 @@ impl PlanResolver<'_> {
                 let a = self.reference(left_schema.attribute(left_key.id)?)?;
                 let b = self.reference(right_schema.attribute(right_key.id)?)?;
                 let comparison = typing::resolve_binary(
-                    self.context.ids.expression(),
+                    self.state.ids.expression(),
                     a,
                     datafusion_expr::Operator::Eq,
                     b,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
                 let common = if let ExprKind::Binary { left, .. } =
                     comparison.kind.resolved("join key comparison")?
@@ -120,11 +120,11 @@ impl PlanResolver<'_> {
                 condition = Some(match condition {
                     None => comparison,
                     Some(previous) => typing::resolve_binary(
-                        self.context.ids.expression(),
+                        self.state.ids.expression(),
                         previous,
                         datafusion_expr::Operator::And,
                         comparison,
-                        &mut self.context.ids,
+                        &mut self.state.ids,
                     )?,
                 });
                 keys.push((name, left_key.id, right_key.id, common));
@@ -142,7 +142,7 @@ impl PlanResolver<'_> {
                     Some(Box::new(typing::coerce(
                         condition,
                         &DataType::Boolean,
-                        &mut self.context.ids,
+                        &mut self.state.ids,
                     )?))
                 }
                 _ => return Err(PlanError::internal("join criteria dispatched twice")),
@@ -201,14 +201,14 @@ impl PlanResolver<'_> {
                 let left = self.reference(schema.attribute(left)?)?;
                 let right = self.reference(schema.attribute(right)?)?;
                 let arguments = crate::function::scalar::conditional::temporal_branches(
-                    &mut self.context.function_context(),
+                    &mut self.context.function_context(&mut self.state.ids),
                     vec![left, right],
                 )?;
                 typing::resolve_scalar_call(
-                    self.context.ids.expression(),
+                    self.state.ids.expression(),
                     core::coalesce(),
                     arguments,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?
             } else {
                 let source = if matches!(kind, J::Right | J::RightSemi | J::RightAnti) {
@@ -218,13 +218,16 @@ impl PlanResolver<'_> {
                 };
                 self.reference(schema.attribute(source)?)?
             };
-            let attribute = self.context.function_context().attribute(
-                name,
-                expression
-                    .result_type
-                    .resolved("USING output type")?
-                    .clone(),
-            );
+            let attribute = self
+                .context
+                .function_context(&mut self.state.ids)
+                .attribute(
+                    name,
+                    expression
+                        .result_type
+                        .resolved("USING output type")?
+                        .clone(),
+                );
             expressions.push(Projection {
                 expression,
                 attribute,

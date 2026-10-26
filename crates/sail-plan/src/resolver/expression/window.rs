@@ -112,10 +112,14 @@ impl PlanResolver<'_> {
                 .unwrap_or_else(|| {
                     let function = match name.as_str() {
                         "median" => Ok(datafusion::functions_aggregate::median::median_udaf()),
-                        "array_join" => {
-                            self.context.function_context().get_aggregate_udf("listagg")
-                        }
-                        _ => self.context.function_context().get_aggregate_udf(&name),
+                        "array_join" => self
+                            .context
+                            .function_context(&mut self.state.ids)
+                            .get_aggregate_udf("listagg"),
+                        _ => self
+                            .context
+                            .function_context(&mut self.state.ids)
+                            .get_aggregate_udf(&name),
                     }?;
                     Ok::<_, PlanError>(WindowFunctionDefinition::AggregateUDF(function))
                 })?;
@@ -129,7 +133,7 @@ impl PlanResolver<'_> {
                     names.push("1".into());
                     arguments.push(
                         self.context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Int64(Some(1))),
                     );
                 } else {
@@ -142,6 +146,8 @@ impl PlanResolver<'_> {
         };
         let window = match window {
             spec::Window::Named(name) => self
+                .state
+                .scope
                 .windows
                 .get(&name.as_ref().to_ascii_lowercase())
                 .cloned()
@@ -162,7 +168,7 @@ impl PlanResolver<'_> {
             ));
         };
         if !cluster_by.is_empty() {
-            return Err(PlanError::unsupported("native window CLUSTER BY"));
+            return Err(PlanError::unsupported("window CLUSTER BY"));
         }
         let mut partition = vec![];
         for expression in partition_by {
@@ -209,7 +215,7 @@ impl PlanResolver<'_> {
             Some(Box::new(typing::coerce(
                 filter,
                 &DataType::Boolean,
-                &mut self.context.ids,
+                &mut self.state.ids,
             )?))
         } else {
             None
@@ -234,11 +240,11 @@ impl PlanResolver<'_> {
                 builtin.call(crate::function::window::WindowFunctionInput {
                     arguments,
                     options,
-                    context: self.context.function_context(),
+                    context: self.context.function_context(&mut self.state.ids),
                 })?
             }
             _ => crate::function::window::spark_window(
-                &mut self.context.function_context(),
+                &mut self.context.function_context(&mut self.state.ids),
                 &name,
                 function,
                 arguments,

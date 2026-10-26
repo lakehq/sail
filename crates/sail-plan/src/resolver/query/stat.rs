@@ -33,7 +33,7 @@ impl PlanResolver<'_> {
             .attribute(scope.resolve(&[right.into()], None)?.id)?
             .clone();
         let reference = self.reference(&right)?;
-        let expression = typing::coerce(reference, &DataType::Utf8, &mut self.context.ids)?;
+        let expression = typing::coerce(reference, &DataType::Utf8, &mut self.state.ids)?;
         let distinct = self.project(
             input.clone(),
             vec![NamedExpr {
@@ -69,32 +69,33 @@ impl PlanResolver<'_> {
             let reference = self.reference(&right)?;
             let literal = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Utf8(Some(value.clone())));
-            let condition =
-                self.context
-                    .function_context()
-                    .binary(literal, Operator::Eq, reference)?;
+            let condition = self.context.function_context(&mut self.state.ids).binary(
+                literal,
+                Operator::Eq,
+                reference,
+            )?;
             let one = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Int32(Some(1)));
             let zero = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Int32(Some(0)));
             let expression = typing::resolve_case(
-                self.context.ids.expression(),
+                self.state.ids.expression(),
                 None,
                 vec![(condition, one)],
                 Some(zero),
-                &mut self.context.ids,
+                &mut self.state.ids,
             )?;
             output.push(NamedExpr {
                 name: value,
                 expression: self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .aggregate("sum", vec![expression])?,
             });
         }
@@ -104,7 +105,7 @@ impl PlanResolver<'_> {
         for (index, attribute) in attributes.iter().enumerate() {
             let mut expression = self.reference(attribute)?;
             if index == 0 {
-                expression = typing::coerce(expression, &DataType::Utf8, &mut self.context.ids)?;
+                expression = typing::coerce(expression, &DataType::Utf8, &mut self.state.ids)?;
             }
             output.push(NamedExpr {
                 name: attribute.name.clone(),
@@ -137,11 +138,11 @@ impl PlanResolver<'_> {
         }
         let one = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int64(Some(1)));
         let count = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .aggregate("count", vec![one])?;
         let count = self.aggregate(
             input.clone(),
@@ -184,7 +185,7 @@ impl PlanResolver<'_> {
         }
         let expression = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .aggregate(function, arguments)?;
         self.aggregate(
             input,
@@ -222,16 +223,16 @@ impl PlanResolver<'_> {
         }
         let seed = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Int64(seed));
         let random = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .scalar_udf(Arc::new(ScalarUDF::from(Random::new())), vec![seed])?;
         let (input, random) = self.append(input, random, "sample_random".into())?;
         let mut predicate = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::Boolean(Some(false)));
         for fraction in fractions {
             let column = self
@@ -242,28 +243,35 @@ impl PlanResolver<'_> {
                 .await?
                 .expression;
             let value = self.types().resolve_literal(fraction.stratum)?;
-            let value = self.context.function_context().literal(value);
-            let equal = self
+            let value = self
                 .context
-                .function_context()
-                .binary(column, Operator::Eq, value)?;
+                .function_context(&mut self.state.ids)
+                .literal(value);
+            let equal = self.context.function_context(&mut self.state.ids).binary(
+                column,
+                Operator::Eq,
+                value,
+            )?;
             let value = self.reference(&random)?;
             let fraction = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Float64(Some(fraction.fraction)));
-            let sampled =
-                self.context
-                    .function_context()
-                    .binary(value, Operator::LtEq, fraction)?;
-            let condition =
-                self.context
-                    .function_context()
-                    .binary(equal, Operator::And, sampled)?;
-            predicate =
-                self.context
-                    .function_context()
-                    .binary(predicate, Operator::Or, condition)?;
+            let sampled = self.context.function_context(&mut self.state.ids).binary(
+                value,
+                Operator::LtEq,
+                fraction,
+            )?;
+            let condition = self.context.function_context(&mut self.state.ids).binary(
+                equal,
+                Operator::And,
+                sampled,
+            )?;
+            predicate = self.context.function_context(&mut self.state.ids).binary(
+                predicate,
+                Operator::Or,
+                condition,
+            )?;
         }
         let input = Self::filter(input, predicate)?;
         self.select_attributes(input, original)
@@ -323,11 +331,11 @@ impl PlanResolver<'_> {
             {
                 continue;
             }
-            let input = input.instantiate(&mut self.context.ids)?;
+            let input = input.instantiate(&mut self.state.ids)?;
             let schema = input.schema.resolved("summary instance")?;
             let label = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Utf8(Some(statistic.clone())));
             let mut output = vec![NamedExpr {
                 name: "summary".into(),
@@ -347,20 +355,20 @@ impl PlanResolver<'_> {
                 {
                     value = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .try_cast(value, DataType::Float64)?;
                 }
                 let (function, arguments) = match statistic.as_str() {
                     "mean" => ("avg", vec![value]),
                     "25%" | "75%" => {
-                        let percentile =
-                            self.context
-                                .function_context()
-                                .literal(ScalarValue::Float64(Some(if statistic == "25%" {
-                                    0.25
-                                } else {
-                                    0.75
-                                })));
+                        let percentile = self
+                            .context
+                            .function_context(&mut self.state.ids)
+                            .literal(ScalarValue::Float64(Some(if statistic == "25%" {
+                                0.25
+                            } else {
+                                0.75
+                            })));
                         ("approx_percentile_cont", vec![value, percentile])
                     }
                     "50%" => ("approx_median", vec![value]),
@@ -368,12 +376,12 @@ impl PlanResolver<'_> {
                 };
                 let mut value = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .aggregate(function, arguments)?;
                 if statistic.ends_with('%') && original.is_integer() {
-                    value = typing::coerce(value, original, &mut self.context.ids)?;
+                    value = typing::coerce(value, original, &mut self.state.ids)?;
                 }
-                value = typing::coerce(value, &DataType::Utf8, &mut self.context.ids)?;
+                value = typing::coerce(value, &DataType::Utf8, &mut self.state.ids)?;
                 output.push(NamedExpr {
                     name: attribute.name.clone(),
                     expression: value,

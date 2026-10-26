@@ -19,7 +19,7 @@ impl PlanResolver<'_> {
         parts: &[String],
         plan_id: Option<i64>,
     ) -> PlanResult<()> {
-        if let Some(schemas) = plan_id.and_then(|id| self.bindings.get(&id)) {
+        if let Some(schemas) = plan_id.and_then(|id| self.state.bindings.get(&id)) {
             for schema in schemas {
                 // A DataFrame reference binds at its source, before projections
                 // remove one of the ambiguous candidates.
@@ -66,7 +66,7 @@ impl PlanResolver<'_> {
                     id: if length == parts.len() {
                         id
                     } else {
-                        self.context.ids.expression()
+                        self.state.ids.expression()
                     },
                     kind: Deferred::Resolved(if bound.depth == 0 {
                         ExprKind::Attribute(bound.id)
@@ -83,14 +83,14 @@ impl PlanResolver<'_> {
                 let extraction = NamedExpr {
                     name: field.clone(),
                     expression: Expr::literal(
-                        self.context.ids.expression(),
+                        self.state.ids.expression(),
                         ScalarValue::Utf8(Some(field.clone())),
                     ),
                 };
                 let selected_id = if i + length + 1 == parts.len() {
                     id
                 } else {
-                    self.context.ids.expression()
+                    self.state.ids.expression()
                 };
                 value = self.extract_value(selected_id, value, extraction)?;
                 value.name.clone_from(field);
@@ -121,7 +121,7 @@ impl PlanResolver<'_> {
                     name: name.clone(),
                     expression: self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .copy_expression(&expression)?,
                 };
                 for field in fields {
@@ -129,10 +129,10 @@ impl PlanResolver<'_> {
                         name: field.clone(),
                         expression: self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Utf8(Some(field.clone()))),
                     };
-                    let id = self.context.ids.expression();
+                    let id = self.state.ids.expression();
                     value = self.extract_value(id, value, extraction)?;
                 }
                 return Ok(value);
@@ -238,20 +238,19 @@ impl PlanResolver<'_> {
             }
             DataType::Map(_, _) => {
                 let extracted = typing::resolve_scalar_call(
-                    self.context.ids.expression(),
+                    self.state.ids.expression(),
                     functions_nested::map_extract::map_extract_udf(),
                     vec![child.expression, extraction.expression],
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
-                let first =
-                    Expr::literal(self.context.ids.expression(), ScalarValue::Int64(Some(1)));
+                let first = Expr::literal(self.state.ids.expression(), ScalarValue::Int64(Some(1)));
                 return Ok(NamedExpr {
                     name,
                     expression: typing::resolve_scalar_call(
                         id,
                         functions_nested::extract::array_element_udf(),
                         vec![extracted, first],
-                        &mut self.context.ids,
+                        &mut self.state.ids,
                     )?,
                 });
             }
@@ -287,7 +286,7 @@ impl PlanResolver<'_> {
                 }
                 extraction.expression = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .literal(ScalarValue::Utf8(Some(field.name().clone())));
                 Arc::new(ScalarUDF::from(
                     sail_function::scalar::array_struct_field::ArrayStructField::new(),
@@ -301,93 +300,120 @@ impl PlanResolver<'_> {
                 let array = child.expression;
                 let index = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(extraction.expression, DataType::Int64)?;
-                let index_copy = self.context.function_context().copy_expression(&index)?;
+                let index_copy = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .copy_expression(&index)?;
                 let one = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .literal(ScalarValue::Int64(Some(1)));
-                let position = self.context.function_context().binary(
+                let position = self.context.function_context(&mut self.state.ids).binary(
                     index_copy,
                     datafusion_expr::Operator::Plus,
                     one,
                 )?;
-                let array_copy = self.context.function_context().copy_expression(&array)?;
-                let element = self.context.function_context().scalar_udf(
-                    functions_nested::extract::array_element_udf(),
-                    vec![array_copy, position],
-                )?;
-                let expression = if self.context.config.ansi_mode {
-                    let array_copy = self.context.function_context().copy_expression(&array)?;
-                    let length = self.context.function_context().scalar_udf(
-                        functions_nested::length::array_length_udf(),
-                        vec![array_copy],
+                let array_copy = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .copy_expression(&array)?;
+                let element = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .scalar_udf(
+                        functions_nested::extract::array_element_udf(),
+                        vec![array_copy, position],
                     )?;
+                let expression = if self.context.config.ansi_mode {
+                    let array_copy = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .copy_expression(&array)?;
                     let length = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
+                        .scalar_udf(
+                            functions_nested::length::array_length_udf(),
+                            vec![array_copy],
+                        )?;
+                    let length = self
+                        .context
+                        .function_context(&mut self.state.ids)
                         .cast(length, DataType::Int64)?;
-                    let index_copy = self.context.function_context().copy_expression(&index)?;
-                    let length_copy = self.context.function_context().copy_expression(&length)?;
-                    let high = self.context.function_context().binary(
+                    let index_copy = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .copy_expression(&index)?;
+                    let length_copy = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .copy_expression(&length)?;
+                    let high = self.context.function_context(&mut self.state.ids).binary(
                         index_copy,
                         datafusion_expr::Operator::GtEq,
                         length_copy,
                     )?;
-                    let index_copy = self.context.function_context().copy_expression(&index)?;
+                    let index_copy = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .copy_expression(&index)?;
                     let zero = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Int64(Some(0)));
-                    let negative = self.context.function_context().binary(
+                    let negative = self.context.function_context(&mut self.state.ids).binary(
                         index_copy,
                         datafusion_expr::Operator::Lt,
                         zero,
                     )?;
-                    let invalid = self.context.function_context().binary(
+                    let invalid = self.context.function_context(&mut self.state.ids).binary(
                         high,
                         datafusion_expr::Operator::Or,
                         negative,
                     )?;
-                    let present = self.context.function_context().is_not_null(array);
-                    let invalid = self.context.function_context().binary(
+                    let present = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .is_not_null(array);
+                    let invalid = self.context.function_context(&mut self.state.ids).binary(
                         present,
                         datafusion_expr::Operator::And,
                         invalid,
                     )?;
-                    let prefix = self
-                        .context
-                        .function_context()
-                        .literal(ScalarValue::Utf8(Some(
-                            "[INVALID_ARRAY_INDEX] The index ".into(),
-                        )));
+                    let prefix = self.context.function_context(&mut self.state.ids).literal(
+                        ScalarValue::Utf8(Some("[INVALID_ARRAY_INDEX] The index ".into())),
+                    );
                     let index = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .cast(index, DataType::Utf8)?;
-                    let middle = self
-                        .context
-                        .function_context()
-                        .literal(ScalarValue::Utf8(Some(
-                            " is out of bounds. The array has ".into(),
-                        )));
+                    let middle = self.context.function_context(&mut self.state.ids).literal(
+                        ScalarValue::Utf8(Some(" is out of bounds. The array has ".into())),
+                    );
                     let length = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .cast(length, DataType::Utf8)?;
-                    let suffix = self.context.function_context().literal(ScalarValue::Utf8(Some(" elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead.".into())));
-                    let message = self.context.function_context().scalar_udf(
-                        string::concat(),
-                        vec![prefix, index, middle, length, suffix],
-                    )?;
-                    let error = self.context.function_context().scalar_udf(
-                        Arc::new(ScalarUDF::from(
-                            sail_function::scalar::misc::raise_error::RaiseError::new(),
-                        )),
-                        vec![message],
-                    )?;
-                    let error = self.context.function_context().cast(
+                    let suffix = self.context.function_context(&mut self.state.ids).literal(ScalarValue::Utf8(Some(" elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead.".into())));
+                    let message = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .scalar_udf(
+                            string::concat(),
+                            vec![prefix, index, middle, length, suffix],
+                        )?;
+                    let error = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .scalar_udf(
+                            Arc::new(ScalarUDF::from(
+                                sail_function::scalar::misc::raise_error::RaiseError::new(),
+                            )),
+                            vec![message],
+                        )?;
+                    let error = self.context.function_context(&mut self.state.ids).cast(
                         error,
                         element
                             .result_type
@@ -396,7 +422,7 @@ impl PlanResolver<'_> {
                             .clone(),
                     )?;
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .case(vec![(invalid, error)], Some(element))?
                 } else {
                     element
@@ -415,7 +441,7 @@ impl PlanResolver<'_> {
                 id,
                 function,
                 vec![child.expression, extraction.expression],
-                &mut self.context.ids,
+                &mut self.state.ids,
             )?,
         })
     }

@@ -144,7 +144,7 @@ impl PlanResolver<'_> {
                     name: projection.name.clone(),
                     expression: self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .copy_expression(&projection.expression)?,
                 }
             } else {
@@ -224,12 +224,19 @@ impl PlanResolver<'_> {
             } else {
                 (1u64 << grouping.len()) - 1
             };
-            let mask = self.context.function_context().literal(literal(bits)?);
-            let value =
-                self.context
-                    .function_context()
-                    .binary(value, Operator::BitwiseAnd, mask)?;
-            return self.context.function_context().cast(value, DataType::Int64);
+            let mask = self
+                .context
+                .function_context(&mut self.state.ids)
+                .literal(literal(bits)?);
+            let value = self.context.function_context(&mut self.state.ids).binary(
+                value,
+                Operator::BitwiseAnd,
+                mask,
+            )?;
+            return self
+                .context
+                .function_context(&mut self.state.ids)
+                .cast(value, DataType::Int64);
         }
         let [argument] = arguments else {
             return Err(PlanError::invalid("grouping requires exactly one argument"));
@@ -249,20 +256,24 @@ impl PlanResolver<'_> {
         let shift = grouping.len() - 1 - position;
         let mask = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(literal(1u64 << shift)?);
-        let value = self
-            .context
-            .function_context()
-            .binary(value, Operator::BitwiseAnd, mask)?;
+        let value = self.context.function_context(&mut self.state.ids).binary(
+            value,
+            Operator::BitwiseAnd,
+            mask,
+        )?;
         let shift = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(literal(shift as u64)?);
-        let value =
-            self.context
-                .function_context()
-                .binary(value, Operator::BitwiseShiftRight, shift)?;
-        self.context.function_context().cast(value, DataType::Int8)
+        let value = self.context.function_context(&mut self.state.ids).binary(
+            value,
+            Operator::BitwiseShiftRight,
+            shift,
+        )?;
+        self.context
+            .function_context(&mut self.state.ids)
+            .cast(value, DataType::Int8)
     }
 }

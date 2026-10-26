@@ -30,7 +30,7 @@ impl PlanResolver<'_> {
         Ok(Some(Box::new(typing::coerce(
             expression,
             &DataType::Int64,
-            &mut self.context.ids,
+            &mut self.state.ids,
         )?)))
     }
 }

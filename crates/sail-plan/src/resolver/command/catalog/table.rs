@@ -92,7 +92,7 @@ impl PlanResolver<'_> {
             })
             .map(|field| {
                 self.context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .attribute(field.name().clone(), ExprType::from_field(field))
             })
             .collect();
@@ -196,7 +196,7 @@ impl PlanResolver<'_> {
             )));
         }
         let condition = Expr {
-            id: self.context.ids.expression(),
+            id: self.state.ids.expression(),
             kind: Deferred::Resolved(ExprKind::TruthTest {
                 expression: Box::new(expression),
                 value: Some(true),

@@ -100,7 +100,7 @@ impl PlanResolver<'_> {
             for attribute in [&a, &b] {
                 values.push(match attribute {
                     Some(attribute) => self.reference(attribute)?,
-                    None => Expr::literal(self.context.ids.expression(), ScalarValue::Null),
+                    None => Expr::literal(self.state.ids.expression(), ScalarValue::Null),
                 });
             }
             let fields = typing::argument_fields(&values)?;
@@ -112,7 +112,7 @@ impl PlanResolver<'_> {
             )?;
             let mut values = values
                 .into_iter()
-                .map(|value| typing::coerce(value, &common, &mut self.context.ids))
+                .map(|value| typing::coerce(value, &common, &mut self.state.ids))
                 .collect::<PlanResult<Vec<_>>>()?
                 .into_iter();
             let mut left_value = values
@@ -140,7 +140,7 @@ impl PlanResolver<'_> {
                 if field.metadata != result_type.metadata {
                     field.metadata.clone_from(&result_type.metadata);
                     *value = Expr {
-                        id: self.context.ids.expression(),
+                        id: self.state.ids.expression(),
                         result_type: Deferred::Resolved(field),
                         kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(value.clone()))),
                     };
@@ -148,7 +148,7 @@ impl PlanResolver<'_> {
             }
             let mut output = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .attribute(name.clone(), result_type);
             if let Some(source) = &a {
                 output.origin = source.origin;
@@ -198,20 +198,20 @@ impl PlanResolver<'_> {
             let a = self.reference(a)?;
             let b = self.reference(b)?;
             let equals = typing::resolve_binary(
-                self.context.ids.expression(),
+                self.state.ids.expression(),
                 a,
                 Operator::IsNotDistinctFrom,
                 b,
-                &mut self.context.ids,
+                &mut self.state.ids,
             )?;
             condition = Some(match condition {
                 None => equals,
                 Some(previous) => typing::resolve_binary(
-                    self.context.ids.expression(),
+                    self.state.ids.expression(),
                     previous,
                     Operator::And,
                     equals,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?,
             });
         }
@@ -269,7 +269,7 @@ impl PlanResolver<'_> {
         let field = crate::analyzer::typing::aggregate::resolve_window(&function, &[])?.result;
         let result_type = ExprType::from_field(&field);
         let expression = Expr {
-            id: self.context.ids.expression(),
+            id: self.state.ids.expression(),
             kind: Deferred::Resolved(ExprKind::WindowFunction {
                 function,
                 arguments: vec![],
@@ -284,7 +284,7 @@ impl PlanResolver<'_> {
         };
         let attribute = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .attribute("duplicate_number".into(), result_type);
         schema.attributes.push(attribute.clone());
         Ok(Query {

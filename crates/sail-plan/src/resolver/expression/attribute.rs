@@ -25,19 +25,22 @@ impl PlanResolver<'_> {
                             .iter()
                             .any(|p| p.expression.equivalent(&expression).unwrap_or(false))
                     {
-                        let mut attribute = self.context.function_context().attribute(
-                            function.name().to_string(),
-                            expression
-                                .result_type
-                                .resolved("input metadata type")?
-                                .clone(),
-                        );
+                        let mut attribute = self
+                            .context
+                            .function_context(&mut self.state.ids)
+                            .attribute(
+                                function.name().to_string(),
+                                expression
+                                    .result_type
+                                    .resolved("input metadata type")?
+                                    .clone(),
+                            );
                         attribute.hidden = true;
                         materialized.push(Projection {
                             attribute,
                             expression: self
                                 .context
-                                .function_context()
+                                .function_context(&mut self.state.ids)
                                 .copy_expression(&expression)?,
                         });
                     }

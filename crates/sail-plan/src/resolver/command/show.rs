@@ -33,12 +33,12 @@ impl PlanResolver<'_> {
                     input: Box::new(input),
                     skip: Some(Box::new(
                         self.context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Int64(Some(0))),
                     )),
                     fetch: Some(Box::new(
                         self.context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Int64(Some(fetch))),
                     )),
                 }),

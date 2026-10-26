@@ -130,7 +130,11 @@ impl PlanResolver<'_> {
                     attribute.plan_ids.push(id);
                 }
             }
-            self.bindings.entry(id).or_default().push(schema.clone());
+            self.state
+                .bindings
+                .entry(id)
+                .or_default()
+                .push(schema.clone());
             plan.schema = Deferred::Resolved(schema);
         }
         Ok(plan)

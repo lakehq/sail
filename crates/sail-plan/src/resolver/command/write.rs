@@ -23,7 +23,6 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
-use crate::analyzer::writer::{WriteDisposition, WriteOperation};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
@@ -524,9 +523,9 @@ impl PlanResolver<'_> {
                 );
             }
         }
-        let input = crate::analyzer::row_identity::materialize(input, &mut self.context.ids)?;
+        let input = crate::analyzer::row_identity::materialize(input, &mut self.state.ids)?;
         sink_info.input =
-            crate::analyzer::scalar_iterator::materialize(input, &mut self.context.ids)?;
+            crate::analyzer::scalar_iterator::materialize(input, &mut self.state.ids)?;
         sink_info.format = write_format;
         sink_info.preconditions = preconditions;
         Ok(CommandKind::Write(Box::new(sink_info)))
@@ -1026,7 +1025,7 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|field| {
                             self.context
-                                .function_context()
+                                .function_context(&mut self.state.ids)
                                 .attribute(field.name().clone(), ExprType::from_field(field))
                         })
                         .collect(),
@@ -1037,7 +1036,7 @@ impl PlanResolver<'_> {
                     .expression;
                 let expression = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(expression, arrow_schema::DataType::Boolean)?;
                 WriteDisposition::OverwriteIf {
                     condition: Box::new(expression),
@@ -1048,3 +1047,5 @@ impl PlanResolver<'_> {
         })
     }
 }
+
+use crate::analyzer::writer::{WriteDisposition, WriteOperation};

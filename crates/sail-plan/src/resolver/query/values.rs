@@ -102,14 +102,18 @@ impl PlanResolver<'_> {
                     interval.to_json()?,
                 );
             }
-            attributes.push(self.context.function_context().attribute(
-                format!("col{}", index + 1),
-                ExprType {
-                    data_type: common,
-                    nullable,
-                    metadata,
-                },
-            ));
+            attributes.push(
+                self.context
+                    .function_context(&mut self.state.ids)
+                    .attribute(
+                        format!("col{}", index + 1),
+                        ExprType {
+                            data_type: common,
+                            nullable,
+                            metadata,
+                        },
+                    ),
+            );
         }
         let rows = resolved
             .into_iter()
@@ -118,8 +122,7 @@ impl PlanResolver<'_> {
                     .zip(&attributes)
                     .map(|(value, attribute)| {
                         let target = attribute.result_type.resolved("VALUES target type")?;
-                        let value =
-                            typing::coerce(value, &target.data_type, &mut self.context.ids)?;
+                        let value = typing::coerce(value, &target.data_type, &mut self.state.ids)?;
                         let mut result_type =
                             value.result_type.resolved("VALUES coerced value")?.clone();
                         if result_type.metadata == target.metadata {
@@ -127,7 +130,7 @@ impl PlanResolver<'_> {
                         }
                         result_type.metadata.clone_from(&target.metadata);
                         Ok(Expr {
-                            id: self.context.ids.expression(),
+                            id: self.state.ids.expression(),
                             kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(value))),
                             result_type: Deferred::Resolved(result_type),
                         })

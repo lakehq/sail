@@ -23,21 +23,21 @@ impl PlanResolver<'_> {
             {
                 return Err(PlanError::unsupported("recursive CTE resolution"));
             }
-            let previous = self.ctes.clone();
+            let previous = self.state.scope.ctes.clone();
             for (name, plan) in ctes {
                 let key = self.name_key(name.as_ref());
                 let plan = self.resolve_query_plan(plan).await?;
                 let definition = crate::resolver::CteDefinition {
-                    plan,
+                    plan: self.scoped_query(plan),
                     parameter: false,
                 };
-                self.ctes.insert(key, Arc::new(definition));
+                self.state.scope.ctes.insert(key, Arc::new(definition));
             }
             let result = self.resolve_query_plan(input).await;
             let mut input = result?;
             let mut schema = input.schema.into_resolved("CTE output")?;
             for attribute in &mut schema.attributes {
-                for definition in self.ctes.values().filter(|d| !d.parameter) {
+                for definition in self.state.scope.ctes.values().filter(|d| !d.parameter) {
                     for source in &definition
                         .plan
                         .schema
@@ -54,11 +54,13 @@ impl PlanResolver<'_> {
                     }
                 }
             }
-            self.ctes = previous;
+            let scope = Some(Arc::new(self.state.scope.clone()));
+            self.state.scope.ctes = previous;
             input.schema = Deferred::Resolved(schema);
             Query {
                 schema: input.schema.clone(),
                 kind: Deferred::Resolved(QueryKind::Scope {
+                    scope,
                     input: Box::new(input),
                 }),
             }

@@ -1,4 +1,4 @@
-//! Resolution works on native nodes and typed attributes. Only the lowering
+//! Resolution works on intermediate nodes and typed attributes. Only the lowering
 //! module is allowed to construct backend plans or expressions.
 
 use std::collections::HashMap;
@@ -11,41 +11,41 @@ use sail_common::spec;
 
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
-use crate::analyzer::{AnalyzerContext, AnalyzerLayer};
+use crate::analyzer::state::CteDefinition;
+use crate::analyzer::{AnalyzerContext, AnalyzerLayer, PlanState};
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
 
 #[async_trait]
 impl AnalyzerLayer for PlanResolver<'_> {
-    async fn analyze(&mut self, mut plan: AnalyzerPlan) -> PlanResult<AnalyzerPlan> {
-        *self = Self::new(self.context.session, Arc::clone(&self.context.config));
-        plan.reserve_ids(&mut self.context.ids)?;
-        self.resolve_plan(plan).await
+    async fn analyze(&mut self, plan: Plan) -> PlanResult<Plan> {
+        // Each pass gets fresh traversal stacks, while semantic state stays with the plan.
+        let config = plan
+            .state
+            .config
+            .clone()
+            .unwrap_or_else(|| Arc::clone(&self.context.config));
+        *self = Self::new(self.context.session, Arc::clone(&config));
+        self.state = plan.state;
+        self.state.config = Some(config);
+        let kind = self.resolve_plan(plan.kind).await?;
+        Ok(Plan {
+            kind,
+            state: std::mem::take(&mut self.state),
+        })
     }
 }
 
 pub struct PlanResolver<'a> {
     context: AnalyzerContext<'a>,
+    state: PlanState,
     expression_aliases: Vec<NamedExpr>,
     expression_replacements: Vec<(spec::Expr, NamedExpr)>,
     outer: Vec<QuerySchema>,
     lambdas: Vec<QuerySchema>,
-    // Definitions retain semantic origins; references allocate occurrence IDs.
-    ctes: HashMap<String, Arc<CteDefinition>>,
-    parameters: HashMap<String, datafusion_common::ScalarValue>,
-    windows: HashMap<String, spec::Window>,
-    relations: HashMap<i64, spec::QueryPlan>,
     recovery: Option<query::missing_input::RecoveryScope>,
     outer_recovery: HashMap<usize, query::missing_input::RecoveryScope>,
     discarded_predicate: bool,
-    cte_origins: std::collections::HashSet<AttributeId>,
-    parameter_origins: std::collections::HashSet<AttributeId>,
-    bindings: HashMap<i64, Vec<QuerySchema>>,
-}
-
-struct CteDefinition {
-    plan: Query,
-    parameter: bool,
 }
 
 #[derive(Debug)]
@@ -56,28 +56,18 @@ struct NamedExpr {
 
 impl<'a> PlanResolver<'a> {
     pub fn new(session: &'a SessionContext, config: Arc<PlanConfig>) -> Self {
-        Self::with_context(AnalyzerContext {
-            session,
-            config,
-            ids: IdGenerator::default(),
-        })
+        Self::with_context(AnalyzerContext { session, config })
     }
 
     pub(crate) fn with_context(context: AnalyzerContext<'a>) -> Self {
         Self {
             context,
+            state: PlanState::default(),
             outer: vec![],
             lambdas: vec![],
-            ctes: HashMap::new(),
-            parameters: HashMap::new(),
-            windows: HashMap::new(),
-            relations: HashMap::new(),
             recovery: None,
             outer_recovery: Default::default(),
             discarded_predicate: false,
-            cte_origins: Default::default(),
-            parameter_origins: Default::default(),
-            bindings: Default::default(),
             expression_aliases: vec![],
             expression_replacements: vec![],
         }
@@ -85,6 +75,16 @@ impl<'a> PlanResolver<'a> {
 }
 
 impl PlanResolver<'_> {
+    fn scoped_query(&self, input: Query) -> Query {
+        Query {
+            schema: input.schema.clone(),
+            kind: Deferred::Resolved(QueryKind::Scope {
+                input: Box::new(input),
+                scope: Some(Arc::new(self.state.scope.clone())),
+            }),
+        }
+    }
+
     fn name_key(&self, name: &str) -> String {
         if self.context.config.case_sensitive {
             name.to_string()
@@ -95,7 +95,7 @@ impl PlanResolver<'_> {
 
     fn reference(&mut self, attribute: &Attribute) -> PlanResult<Expr> {
         Ok(Expr {
-            id: self.context.ids.expression(),
+            id: self.state.ids.expression(),
             kind: Deferred::Resolved(ExprKind::Attribute(attribute.id)),
             result_type: Deferred::Resolved(
                 attribute.result_type.resolved("attribute type")?.clone(),
@@ -111,7 +111,7 @@ impl PlanResolver<'_> {
             .clone();
         let mut attribute = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .attribute(named.name, result_type);
         if let ExprKind::Attribute(id) = named.expression.kind.resolved("projection expression")? {
             let source = input.attribute(*id)?;
@@ -143,10 +143,13 @@ impl PlanResolver<'_> {
                                     return self.reference(&window.attribute);
                                 }
                             }
-                            let attribute = self.context.function_context().attribute(
-                                format!("window_{}", windows.len()),
-                                expression.result_type.resolved("window type")?.clone(),
-                            );
+                            let attribute = self
+                                .context
+                                .function_context(&mut self.state.ids)
+                                .attribute(
+                                    format!("window_{}", windows.len()),
+                                    expression.result_type.resolved("window type")?.clone(),
+                                );
                             let reference = self.reference(&attribute)?;
                             windows.push(Projection {
                                 expression,
@@ -210,9 +213,9 @@ pub(in crate::resolver) mod builders;
 pub(in crate::resolver) mod command;
 pub mod data_type;
 pub(in crate::resolver) mod expression;
+pub(in crate::resolver) mod intermediate;
 pub(in crate::resolver) mod lakehouse;
 pub(in crate::resolver) mod literal;
-pub(in crate::resolver) mod native;
 pub(in crate::resolver) mod plan;
 pub(in crate::resolver) mod query;
 pub(in crate::resolver) mod retype;

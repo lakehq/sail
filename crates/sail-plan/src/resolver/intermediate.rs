@@ -1,4 +1,4 @@
-//! Complete deferred fields in an already assembled native tree.
+//! Complete deferred fields in an existing intermediate plan.
 use std::collections::VecDeque;
 
 use arrow_schema::DataType;
@@ -53,6 +53,35 @@ impl PlanResolver<'_> {
         if let Deferred::Unresolved(request) = plan.kind {
             return self.resolve_query_plan(*request).await;
         }
+        if let Deferred::Resolved(QueryKind::Scope { input, scope }) = plan.kind {
+            let previous = scope
+                .as_ref()
+                .map(|scope| std::mem::replace(&mut self.state.scope, scope.as_ref().clone()));
+            let isolated = scope.as_ref().is_some_and(|scope| scope.isolated);
+            self.state.scope.isolated = false;
+            let outer = isolated.then(|| std::mem::take(&mut self.outer));
+            let lambdas = isolated.then(|| std::mem::take(&mut self.lambdas));
+            let result = self.resolve_query(*input).await;
+            if let Some(outer) = outer {
+                self.outer = outer;
+            }
+            if let Some(lambdas) = lambdas {
+                self.lambdas = lambdas;
+            }
+            if let Some(previous) = previous {
+                self.state.scope = previous;
+            }
+            let input = result?;
+            let mut plan = Query {
+                schema: plan.schema,
+                kind: Deferred::Resolved(QueryKind::Scope {
+                    input: Box::new(input),
+                    scope,
+                }),
+            };
+            self.resolve_query_schema(&mut plan)?;
+            return Ok(plan);
+        }
         let lateral = matches!(
             &plan.kind,
             Deferred::Resolved(QueryKind::Join { lateral: true, .. })
@@ -75,7 +104,7 @@ impl PlanResolver<'_> {
         for input in &plans {
             scope
                 .attributes
-                .extend(input.schema.resolved("native input")?.attributes.clone());
+                .extend(input.schema.resolved("query input")?.attributes.clone());
         }
         let mut expressions = VecDeque::new();
         for expression in children.expressions {
@@ -88,7 +117,7 @@ impl PlanResolver<'_> {
             },
             plan,
         )?;
-        self.native_schema(&mut plan)?;
+        self.resolve_query_schema(&mut plan)?;
         Ok(plan)
     }
 
@@ -121,7 +150,7 @@ impl PlanResolver<'_> {
                 .pop_front()
                 .ok_or_else(|| PlanError::internal("missing expression child"))
         })?;
-        let mut node = expression.kind.into_resolved("native expression")?;
+        let mut node = expression.kind.into_resolved("expression")?;
         match &mut node {
             ExprKind::ScalarSubquery(query)
             | ExprKind::Exists { query, .. }
@@ -162,7 +191,7 @@ impl PlanResolver<'_> {
                         {
                             **value = self
                                 .context
-                                .function_context()
+                                .function_context(&mut self.state.ids)
                                 .cast(*value.clone(), target.data_type().clone())?;
                         }
                     }
@@ -202,9 +231,7 @@ impl PlanResolver<'_> {
                     }
                 }
                 if !complete {
-                    return Err(PlanError::analysis(
-                        "native lambda inference did not converge",
-                    ));
+                    return Err(PlanError::analysis("lambda inference did not converge"));
                 }
             }
             _ => {}
@@ -254,7 +281,7 @@ impl PlanResolver<'_> {
                     id,
                     function.clone(),
                     std::mem::take(arguments),
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 );
             }
             ExprKind::Binary {
@@ -262,7 +289,7 @@ impl PlanResolver<'_> {
                 operator,
                 right,
             } => {
-                let mut result = self.context.function_context().binary(
+                let mut result = self.context.function_context(&mut self.state.ids).binary(
                     *left.clone(),
                     *operator,
                     *right.clone(),
@@ -280,7 +307,7 @@ impl PlanResolver<'_> {
                     operand.take().map(|v| *v),
                     std::mem::take(branches),
                     otherwise.take().map(|v| *v),
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 );
             }
             ExprKind::InList {
@@ -289,7 +316,7 @@ impl PlanResolver<'_> {
                 negated,
             } => {
                 let mut result = crate::resolver::in_list(
-                    &mut self.context.function_context(),
+                    &mut self.context.function_context(&mut self.state.ids),
                     *expression.clone(),
                     std::mem::take(values),
                     *negated,
@@ -309,7 +336,7 @@ impl PlanResolver<'_> {
                 *arguments = typing::coerce_arguments(
                     std::mem::take(arguments),
                     &result.arguments,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
                 ExprType::from_field(&result.result)
             }
@@ -327,7 +354,7 @@ impl PlanResolver<'_> {
                 *arguments = typing::coerce_arguments(
                     std::mem::take(arguments),
                     &result.arguments,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
                 let types = order_by
                     .iter()
@@ -377,7 +404,7 @@ impl PlanResolver<'_> {
                     {
                         **v = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .cast(*v.clone(), target.data_type().clone())?;
                     }
                 }
@@ -402,7 +429,7 @@ impl PlanResolver<'_> {
             ExprKind::Not(child) => {
                 **child = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(*child.clone(), DataType::Boolean)?;
                 child.result_type.resolved("NOT input")?.clone()
             }
@@ -427,15 +454,15 @@ impl PlanResolver<'_> {
                 ])?;
                 **expression = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(*expression.clone(), target.clone())?;
                 **low = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(*low.clone(), target.clone())?;
                 **high = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(*high.clone(), target)?;
                 ExprType::new(
                     DataType::Boolean,
@@ -456,11 +483,11 @@ impl PlanResolver<'_> {
             } => {
                 **expression = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(*expression.clone(), DataType::Utf8)?;
                 **pattern = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(*pattern.clone(), DataType::Utf8)?;
                 ExprType::new(
                     DataType::Boolean,
@@ -492,7 +519,7 @@ impl PlanResolver<'_> {
                 };
                 let right = self.reference(attribute)?;
                 let mut values = crate::resolver::in_arguments(
-                    &mut self.context.function_context(),
+                    &mut self.context.function_context(&mut self.state.ids),
                     vec![*expression.clone(), right],
                 )?
                 .into_iter();
@@ -506,8 +533,14 @@ impl PlanResolver<'_> {
                     left.result_type.resolved("IN left")?.data_type.clone(),
                     right.result_type.resolved("IN right")?.data_type.clone(),
                 ])?;
-                **expression = self.context.function_context().cast(left, target.clone())?;
-                let right = self.context.function_context().cast(right, target)?;
+                **expression = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .cast(left, target.clone())?;
+                let right = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .cast(right, target)?;
                 let nullable = expression.result_type.resolved("IN left")?.nullable
                     || right.result_type.resolved("IN right")?.nullable;
                 let name = attribute.name.clone();
@@ -528,10 +561,10 @@ impl PlanResolver<'_> {
         })
     }
 
-    fn native_schema(&mut self, plan: &mut Query) -> PlanResult<()> {
+    fn resolve_query_schema(&mut self, plan: &mut Query) -> PlanResult<()> {
         let node = match &mut plan.kind {
             Deferred::Resolved(node) => node,
-            _ => return Err(PlanError::internal("unresolved native node")),
+            _ => return Err(PlanError::internal("unresolved query node")),
         };
         let projection = |p: &mut Projection| -> PlanResult<Attribute> {
             p.attribute.result_type = p.expression.result_type.clone();
@@ -588,18 +621,16 @@ impl PlanResolver<'_> {
                 );
                 QuerySchema { attributes }
             }
-            QueryKind::Scope { input }
+            QueryKind::Scope { input, .. }
             | QueryKind::Sort { input, .. }
             | QueryKind::Limit { input, .. }
             | QueryKind::Distinct { input }
             | QueryKind::DistinctOn { input, .. }
-            | QueryKind::Repartition { input, .. } => {
-                input.schema.resolved("native input")?.clone()
-            }
+            | QueryKind::Repartition { input, .. } => input.schema.resolved("query input")?.clone(),
             QueryKind::Filter { input, condition } => {
                 **condition = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .cast(*condition.clone(), DataType::Boolean)?;
                 input.schema.resolved("filter input")?.clone()
             }
@@ -621,7 +652,7 @@ impl PlanResolver<'_> {
                 if let Some(value) = condition {
                     **value = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .cast(*value.clone(), DataType::Boolean)?;
                 }
                 let mut a = left.schema.resolved("join left")?.attributes.clone();
@@ -649,10 +680,13 @@ impl PlanResolver<'_> {
                             {
                                 schema.attributes[attributes.len()].clone()
                             }
-                            _ => self.context.function_context().attribute(
-                                "exists".into(),
-                                ExprType::new(DataType::Boolean, false),
-                            ),
+                            _ => self
+                                .context
+                                .function_context(&mut self.state.ids)
+                                .attribute(
+                                    "exists".into(),
+                                    ExprType::new(DataType::Boolean, false),
+                                ),
                         };
                         mark.result_type =
                             Deferred::Resolved(ExprType::new(DataType::Boolean, false));
@@ -670,7 +704,7 @@ impl PlanResolver<'_> {
             QueryKind::Range { .. } => QuerySchema {
                 attributes: vec![
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .attribute("id".into(), ExprType::new(DataType::Int64, false)),
                 ],
             },
@@ -690,7 +724,7 @@ impl PlanResolver<'_> {
                             })?;
                             Ok(self
                                 .context
-                                .function_context()
+                                .function_context(&mut self.state.ids)
                                 .attribute(field.name().clone(), ExprType::from_field(field)))
                         })
                         .collect::<PlanResult<_>>()?,
@@ -703,7 +737,7 @@ impl PlanResolver<'_> {
                     .iter()
                     .map(|field| {
                         self.context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .attribute(field.name().clone(), ExprType::from_field(field))
                     })
                     .collect(),
@@ -729,14 +763,16 @@ impl PlanResolver<'_> {
                     for row in rows.iter_mut() {
                         row[index] = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .cast(row[index].clone(), target.clone())?;
                     }
                     attributes.push(
-                        self.context.function_context().attribute(
-                            format!("col{}", index + 1),
-                            ExprType::new(target, nullable),
-                        ),
+                        self.context
+                            .function_context(&mut self.state.ids)
+                            .attribute(
+                                format!("col{}", index + 1),
+                                ExprType::new(target, nullable),
+                            ),
                     );
                 }
                 QuerySchema { attributes }
@@ -771,9 +807,7 @@ impl PlanResolver<'_> {
         };
         if let Deferred::Resolved(existing) = &plan.schema {
             if existing.attributes.len() != schema.attributes.len() {
-                return Err(PlanError::analysis(
-                    "native output schema has an incorrect width",
-                ));
+                return Err(PlanError::analysis("output schema has an incorrect width"));
             }
             for (attribute, existing) in schema.attributes.iter_mut().zip(&existing.attributes) {
                 let result_type = attribute.result_type.clone();

@@ -5,7 +5,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_common::{Result, plan_err};
 use educe::Educe;
 use pyo3::Python;
-use sail_common_datafusion::udf::{StreamUDF, StreamUDFProjection};
+use sail_common_plan::udf::{StreamUDF, StreamUDFProjection};
 
 use crate::buffer::PyPassthroughBuffer;
 use crate::cereal::pyspark_udf::PySparkUdfPayload;

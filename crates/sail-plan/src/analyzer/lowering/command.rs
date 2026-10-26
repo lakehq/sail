@@ -1,4 +1,4 @@
-//! Analyzed commands retain native query inputs until the lowering boundary.
+//! Analyzed commands retain intermediate query inputs until the lowering boundary.
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
@@ -13,7 +13,7 @@ use super::lower_query;
 use crate::analyzer::{NamedPlan, model};
 use crate::error::PlanResult;
 
-impl model::AnalyzerPlan {
+impl model::PlanKind {
     #[async_recursion]
     pub async fn lower(self, session: &SessionContext) -> PlanResult<NamedPlan> {
         match self {
@@ -30,6 +30,7 @@ impl model::Command {
     #[async_recursion]
     pub(crate) async fn lower(self, session: &SessionContext) -> PlanResult<LogicalPlan> {
         Ok(match self.kind.into_resolved("command kind")? {
+            model::CommandKind::Scope { input, .. } => input.lower(session).await?,
             model::CommandKind::Catalog(command) => catalog(session, command)?,
             model::CommandKind::Barrier {
                 preconditions,
@@ -181,4 +182,10 @@ fn catalog(session: &SessionContext, command: CatalogCommand) -> PlanResult<Logi
             session, command,
         )?),
     }))
+}
+
+impl model::Plan {
+    pub async fn lower(self, session: &SessionContext) -> PlanResult<NamedPlan> {
+        self.kind.lower(session).await
+    }
 }

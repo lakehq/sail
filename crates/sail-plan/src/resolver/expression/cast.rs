@@ -121,10 +121,12 @@ impl PlanResolver<'_> {
         );
         let expression = inner.expression;
         let mut expression = if matches!(target, spec::DataType::Variant) {
-            self.context.function_context().scalar_udf(
-                Arc::new(ScalarUDF::from(SparkCastToVariant::new())),
-                vec![expression],
-            )?
+            self.context
+                .function_context(&mut self.state.ids)
+                .scalar_udf(
+                    Arc::new(ScalarUDF::from(SparkCastToVariant::new())),
+                    vec![expression],
+                )?
         } else {
             match (source_type, target_type.clone()) {
                 (
@@ -136,36 +138,46 @@ impl PlanResolver<'_> {
                     } else {
                         let ntz = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None))?;
                         let timezone = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Utf8(Some(timezone.to_string())));
                         let utc = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Utf8(Some("UTC".into())));
-                        let value = self.context.function_context().scalar_udf(
-                            Arc::new(ScalarUDF::from(ConvertTz::new(false))),
-                            vec![timezone, utc, ntz],
-                        )?;
                         let value = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
+                            .scalar_udf(
+                                Arc::new(ScalarUDF::from(ConvertTz::new(false))),
+                                vec![timezone, utc, ntz],
+                            )?;
+                        let value = self
+                            .context
+                            .function_context(&mut self.state.ids)
                             .cast(value, DataType::Int64)?;
-                        self.context.function_context().cast(value, target_type)?
+                        self.context
+                            .function_context(&mut self.state.ids)
+                            .cast(value, target_type)?
                     }
                 }
                 (_, to) if variant && to.is_string() => {
-                    let value = self.context.function_context().scalar_udf(
-                        Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new())),
-                        vec![expression],
-                    )?;
+                    let value = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .scalar_udf(
+                            Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new())),
+                            vec![expression],
+                        )?;
                     if to == DataType::Utf8View {
                         value
                     } else {
-                        self.context.function_context().cast(value, to)?
+                        self.context
+                            .function_context(&mut self.state.ids)
+                            .cast(value, to)?
                     }
                 }
                 (_, to) if variant => {
@@ -177,24 +189,28 @@ impl PlanResolver<'_> {
                         .data_type_to_simple_string(&to)?;
                     let root = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Utf8(Some("$".into())));
                     let target = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Utf8(Some(target)));
-                    self.context.function_context().scalar_udf(
-                        Arc::new(ScalarUDF::from(SparkVariantGet::new(is_try))),
-                        vec![expression, root, target],
-                    )?
+                    self.context
+                        .function_context(&mut self.state.ids)
+                        .scalar_udf(
+                            Arc::new(ScalarUDF::from(SparkVariantGet::new(is_try))),
+                            vec![expression, root, target],
+                        )?
                 }
                 (from, DataType::Int32)
                     if from.is_string() && !is_try && !self.context.config.ansi_mode =>
                 {
-                    self.context.function_context().scalar_udf(
-                        Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())),
-                        vec![expression],
-                    )?
+                    self.context
+                        .function_context(&mut self.state.ids)
+                        .scalar_udf(
+                            Arc::new(ScalarUDF::from(SparkCastStringToInt32::new())),
+                            vec![expression],
+                        )?
                 }
                 (from, DataType::Timestamp(unit, _) | DataType::Duration(unit))
                     if from.is_numeric() =>
@@ -207,40 +223,45 @@ impl PlanResolver<'_> {
                     };
                     let multiplier = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Int64(Some(multiplier)));
-                    let value = self.context.function_context().binary(
+                    let value = self.context.function_context(&mut self.state.ids).binary(
                         expression,
                         Operator::Multiply,
                         multiplier,
                     )?;
-                    self.context.function_context().cast(value, target_type)?
+                    self.context
+                        .function_context(&mut self.state.ids)
+                        .cast(value, target_type)?
                 }
                 (DataType::Timestamp(unit, _) | DataType::Duration(unit), to)
                     if to.is_numeric() =>
                 {
                     let one = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Float64(Some(1.0)));
                     let multiplier = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Int64(Some(time_unit_to_multiplier(&unit))));
-                    let scale = self.context.function_context().binary(
+                    let scale = self.context.function_context(&mut self.state.ids).binary(
                         one,
                         Operator::Divide,
                         multiplier,
                     )?;
                     let value = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .cast(expression, DataType::Int64)?;
-                    let value =
-                        self.context
-                            .function_context()
-                            .binary(scale, Operator::Multiply, value)?;
-                    self.context.function_context().cast(value, to)?
+                    let value = self.context.function_context(&mut self.state.ids).binary(
+                        scale,
+                        Operator::Multiply,
+                        value,
+                    )?;
+                    self.context
+                        .function_context(&mut self.state.ids)
+                        .cast(value, to)?
                 }
                 (DataType::Interval(IntervalUnit::YearMonth), to) if to.is_integer() => {
                     let interval = source_field
@@ -248,10 +269,13 @@ impl PlanResolver<'_> {
                         .get(spec::SAIL_SPARK_INTERVAL_METADATA_KEY)
                         .map(|v| spec::SparkIntervalMetadata::from_json(v))
                         .transpose()?;
-                    let mut value = self.context.function_context().scalar_udf(
-                        Arc::new(ScalarUDF::from(YearMonthIntervalMonths::new())),
-                        vec![expression],
-                    )?;
+                    let mut value = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .scalar_udf(
+                            Arc::new(ScalarUDF::from(YearMonthIntervalMonths::new())),
+                            vec![expression],
+                        )?;
                     if matches!(
                         interval,
                         Some(spec::SparkIntervalMetadata::YearMonth {
@@ -261,9 +285,9 @@ impl PlanResolver<'_> {
                     ) {
                         let months = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Int32(Some(12)));
-                        value = self.context.function_context().binary(
+                        value = self.context.function_context(&mut self.state.ids).binary(
                             value,
                             Operator::Divide,
                             months,
@@ -271,30 +295,33 @@ impl PlanResolver<'_> {
                     }
                     self.cast_mode(value, to, is_try)?
                 }
-                (from, DataType::Interval(IntervalUnit::YearMonth)) if from.is_string() => {
-                    self.context.function_context().scalar_udf(
+                (from, DataType::Interval(IntervalUnit::YearMonth)) if from.is_string() => self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .scalar_udf(
                         Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())),
                         vec![expression],
-                    )?
-                }
-                (from, DataType::Duration(TimeUnit::Microsecond)) if from.is_string() => {
-                    self.context.function_context().scalar_udf(
+                    )?,
+                (from, DataType::Duration(TimeUnit::Microsecond)) if from.is_string() => self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .scalar_udf(
                         Arc::new(ScalarUDF::from(SparkDayTimeInterval::new())),
                         vec![expression],
-                    )?
-                }
-                (from, DataType::Interval(IntervalUnit::MonthDayNano)) if from.is_string() => {
-                    self.context.function_context().scalar_udf(
+                    )?,
+                (from, DataType::Interval(IntervalUnit::MonthDayNano)) if from.is_string() => self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .scalar_udf(
                         Arc::new(ScalarUDF::from(SparkCalendarInterval::new())),
                         vec![expression],
-                    )?
-                }
+                    )?,
                 (from, DataType::Date32) if from.is_string() => {
                     let function = Arc::new(ScalarUDF::from(SparkDate::new(
                         is_try || !self.context.config.ansi_mode,
                     )));
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .scalar_udf(function, vec![expression])?
                 }
                 (from, DataType::Timestamp(TimeUnit::Microsecond, timezone))
@@ -306,7 +333,7 @@ impl PlanResolver<'_> {
                         is_try,
                     )?);
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .scalar_udf(Arc::new(function), vec![expression])?
                 }
                 (_, to) if to.is_string() && override_string => {
@@ -317,7 +344,7 @@ impl PlanResolver<'_> {
                     {
                         arguments.push(
                             self.context
-                                .function_context()
+                                .function_context(&mut self.state.ids)
                                 .literal(ScalarValue::Utf8(Some(interval.clone()))),
                         );
                     }
@@ -327,7 +354,7 @@ impl PlanResolver<'_> {
                         _ => ScalarUDF::from(SparkToUtf8::new()),
                     };
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .scalar_udf(Arc::new(function), arguments)?
                 }
                 (DataType::Date32 | DataType::Date64, to)
@@ -337,15 +364,18 @@ impl PlanResolver<'_> {
                         return Err(PlanError::invalid(format!("cannot cast date to {to}")));
                     }
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::try_from(&to)?)
                 }
                 (from, to) if needs_struct_field_rename(&from, &to) => {
                     let target = build_rename_target_type(&from, &to);
-                    let value = self.context.function_context().scalar_udf(
-                        Arc::new(ScalarUDF::from(SparkStructRename::new(target.clone()))),
-                        vec![expression],
-                    )?;
+                    let value = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .scalar_udf(
+                            Arc::new(ScalarUDF::from(SparkStructRename::new(target.clone()))),
+                            vec![expression],
+                        )?;
                     if target == to {
                         value
                     } else {
@@ -360,7 +390,7 @@ impl PlanResolver<'_> {
                     && (is_try || decimal_cast_can_overflow(&from, precision, scale)) =>
                 {
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .try_cast(expression, target_type)?
                 }
                 (_, to) => self.cast_mode(expression, to, is_try)?,
@@ -370,7 +400,7 @@ impl PlanResolver<'_> {
             let mut result_type = expression.result_type.resolved("cast result")?.clone();
             result_type.metadata.extend(target_field.metadata().clone());
             expression = Expr {
-                id: self.context.ids.expression(),
+                id: self.state.ids.expression(),
                 result_type: Deferred::Resolved(result_type),
                 kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(expression))),
             };
@@ -380,9 +410,13 @@ impl PlanResolver<'_> {
 
     fn cast_mode(&mut self, value: Expr, target: DataType, safe: bool) -> PlanResult<Expr> {
         if safe {
-            self.context.function_context().try_cast(value, target)
+            self.context
+                .function_context(&mut self.state.ids)
+                .try_cast(value, target)
         } else {
-            self.context.function_context().cast(value, target)
+            self.context
+                .function_context(&mut self.state.ids)
+                .cast(value, target)
         }
     }
 }

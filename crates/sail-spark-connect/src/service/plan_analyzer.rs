@@ -3,7 +3,7 @@ use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_plan::analyzer::{NamedPlan, QueryAnalyzer};
+use sail_plan::analyzer::{NamedPlan, PlanAnalyzer};
 use sail_plan::explain::{ExplainOptions, explain_string};
 
 use crate::config::get_pyspark_version;
@@ -34,7 +34,7 @@ use crate::spark::connect::{StorageLevel, plan};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
-    let mut resolver = QueryAnalyzer::new(ctx, spark.plan_config()?);
+    let mut resolver = PlanAnalyzer::new(ctx, spark.plan_config()?);
     let NamedPlan { plan, fields } = resolver.plan(spec::Plan::Query(plan.try_into()?)).await?;
     let schema = if let Some(fields) = fields {
         rename_schema(plan.schema().inner(), fields.as_slice())?
@@ -117,7 +117,7 @@ pub(crate) async fn handle_analyze_input_files(
     let InputFilesRequest { plan } = request;
     let plan = plan.required("plan")?;
     let spark = ctx.extension::<SparkSession>()?;
-    let mut resolver = QueryAnalyzer::new(ctx, spark.plan_config()?);
+    let mut resolver = PlanAnalyzer::new(ctx, spark.plan_config()?);
     let NamedPlan { plan, .. } = resolver.plan(spec::Plan::Query(plan.try_into()?)).await?;
     let files = sail_data_source::listing::input_files::input_files(ctx, plan).await?;
     Ok(InputFilesResponse { files })
@@ -137,7 +137,7 @@ pub(crate) async fn handle_analyze_ddl_parse(
 ) -> SparkResult<DdlParseResponse> {
     let data_type = parse_spark_data_type(request.ddl_string.as_str())?;
     let spark = ctx.extension::<SparkSession>()?;
-    let resolver = QueryAnalyzer::new(ctx, spark.plan_config()?);
+    let resolver = PlanAnalyzer::new(ctx, spark.plan_config()?);
     let data_type = resolver.data_type(&data_type)?;
     Ok(DdlParseResponse {
         parsed: Some(data_type.try_into()?),

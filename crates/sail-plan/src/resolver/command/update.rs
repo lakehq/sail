@@ -11,7 +11,6 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::analyzer::model::*;
-use crate::analyzer::row_level::{RowAction, RowOperation};
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -126,7 +125,9 @@ impl PlanResolver<'_> {
             let value = match request {
                 UpdateAssignmentValue::Expression(spec::Expr::DefaultColumnValue) => {
                     if let Some(value) = features.current_default_value()? {
-                        self.context.function_context().literal(value)
+                        self.context
+                            .function_context(&mut self.state.ids)
+                            .literal(value)
                     } else if let Some(source) = features.current_default() {
                         self.resolve_column_default_expression(&source).await?
                     } else if !field.is_nullable() || features.is_not_null_constraint() {
@@ -135,7 +136,7 @@ impl PlanResolver<'_> {
                         )));
                     } else {
                         self.context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::try_from(field.data_type())?)
                     }
                 }
@@ -209,10 +210,12 @@ impl PlanResolver<'_> {
                     names.push(name);
                     values.push(self.resolve_update_assignment_value(value, schema).await?);
                 }
-                self.context.function_context().scalar_udf(
-                    Arc::new(ScalarUDF::from(StructFunction::new(names))),
-                    values,
-                )
+                self.context
+                    .function_context(&mut self.state.ids)
+                    .scalar_udf(
+                        Arc::new(ScalarUDF::from(StructFunction::new(names))),
+                        values,
+                    )
             }
         }
     }
@@ -253,7 +256,10 @@ impl PlanResolver<'_> {
         }
         let (DataType::Struct(source_fields), DataType::Struct(target_fields)) = (&source, target)
         else {
-            return self.context.function_context().cast(value, target.clone());
+            return self
+                .context
+                .function_context(&mut self.state.ids)
+                .cast(value, target.clone());
         };
         let mut children = vec![];
         for target_field in target_fields {
@@ -269,20 +275,23 @@ impl PlanResolver<'_> {
             }
             let child = match source_field {
                 Some(field) => {
-                    let child = self.context.function_context().copy_expression(&value)?;
+                    let child = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .copy_expression(&value)?;
                     let name = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Utf8(Some(field.name().clone())));
                     let child = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .scalar_udf(core::get_field(), vec![child, name])?;
                     self.align_store_value(child, target_field.data_type(), fill_missing)?
                 }
                 None if fill_missing => self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .literal(ScalarValue::try_from(target_field.data_type())?),
                 None => {
                     return Err(PlanError::invalid(format!(
@@ -297,21 +306,27 @@ impl PlanResolver<'_> {
             .iter()
             .map(|field| field.name().clone())
             .collect();
-        let rebuilt = self.context.function_context().scalar_udf(
-            Arc::new(ScalarUDF::from(StructFunction::new(names))),
-            children,
-        )?;
         let rebuilt = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
+            .scalar_udf(
+                Arc::new(ScalarUDF::from(StructFunction::new(names))),
+                children,
+            )?;
+        let rebuilt = self
+            .context
+            .function_context(&mut self.state.ids)
             .cast(rebuilt, target.clone())?;
-        let is_null = self.context.function_context().is_null(value);
+        let is_null = self
+            .context
+            .function_context(&mut self.state.ids)
+            .is_null(value);
         let null = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .literal(ScalarValue::try_from(target)?);
         self.context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .case(vec![(is_null, null)], Some(rebuilt))
     }
     fn normalize_update_assignment_targets(
@@ -436,3 +451,5 @@ impl PlanResolver<'_> {
             .collect()
     }
 }
+
+use crate::analyzer::row_level::{RowAction, RowOperation};

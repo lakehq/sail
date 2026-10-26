@@ -10,7 +10,7 @@ use super::coercion::cast_field;
 use super::scalar::ScalarTyping;
 
 pub fn resolve(function: &AggregateUDF, arguments: &[FieldRef]) -> Result<ScalarTyping> {
-    // GROUPING_ID() binds to all grouping keys in the native resolver. Its
+    // GROUPING_ID() binds to all grouping keys during resolution. Its
     // empty argument list is meaningful before that binding takes place.
     let targets = if function.name() == "grouping_id" && arguments.is_empty() {
         vec![]

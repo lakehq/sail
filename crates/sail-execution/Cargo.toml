@@ -8,6 +8,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-common-plan = { path = "../sail-common-plan" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-catalog = { path = "../sail-catalog" }

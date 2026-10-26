@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::provider::{
     CreateDatabaseOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
@@ -455,11 +457,17 @@ impl PlanResolver<'_> {
                 ))
             }
             spec::CommandNode::WithRelations { root, references } => {
-                let relations = self.relations.clone();
-                let ctes = self.ctes.clone();
-                let result = self.resolve_command_with_relations(*root, references).await;
-                self.relations = relations;
-                self.ctes = ctes;
+                let relations = self.state.scope.relations.clone();
+                let ctes = self.state.scope.ctes.clone();
+                let result = self
+                    .resolve_command_with_relations(*root, references)
+                    .await
+                    .map(|kind| CommandKind::Scope {
+                        input: Box::new(kind.into()),
+                        scope: Arc::new(self.state.scope.clone()),
+                    });
+                self.state.scope.relations = relations;
+                self.state.scope.ctes = ctes;
                 result
             }
             spec::CommandNode::CreateTemporaryView {

@@ -19,7 +19,7 @@ impl PlanResolver<'_> {
                 .ok_or_else(|| PlanError::invalid("subquery reference missing plan_id"))?;
             if let spec::QueryNode::SubqueryAlias { alias, .. } = &reference.node {
                 let plan = self.resolve_query_plan(reference.clone()).await?;
-                self.ctes.insert(
+                self.state.scope.ctes.insert(
                     self.name_key(alias.as_ref()),
                     Arc::new(CteDefinition {
                         plan,
@@ -27,7 +27,7 @@ impl PlanResolver<'_> {
                     }),
                 );
             }
-            if self.relations.insert(id, reference).is_some() {
+            if self.state.scope.relations.insert(id, reference).is_some() {
                 return Err(PlanError::invalid(format!(
                     "duplicate subquery reference for plan_id {id}"
                 )));

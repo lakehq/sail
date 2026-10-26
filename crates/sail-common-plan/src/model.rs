@@ -14,7 +14,6 @@ use educe::Educe;
 use sail_common::spec;
 
 use super::deferred::{Deferred, Resolvable};
-use crate::rewrite::{QueryRewriter, walk_expression};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExprId(pub u64);
@@ -31,63 +30,7 @@ pub struct IdGenerator {
     next_attribute: u64,
 }
 
-struct Reserve<'a>(&'a mut IdGenerator);
-impl QueryRewriter for Reserve<'_> {
-    type Error = datafusion_common::DataFusionError;
-    fn rewrite_attribute(&mut self, attribute: Attribute) -> PlanResult<Attribute> {
-        for id in [attribute.id, attribute.origin] {
-            self.0.next_attribute = self.0.next_attribute.max(
-                id.0.checked_add(1)
-                    .ok_or_else(|| plan_datafusion_err!("attribute identity space exhausted"))?,
-            );
-        }
-        Ok(attribute)
-    }
-    fn rewrite_expression(&mut self, expression: Expr) -> PlanResult<Expr> {
-        self.0.next_expression = self.0.next_expression.max(
-            expression
-                .id
-                .0
-                .checked_add(1)
-                .ok_or_else(|| plan_datafusion_err!("expression identity space exhausted"))?,
-        );
-        if let Deferred::Resolved(ExprKind::HigherOrderFunction { arguments, .. }) =
-            &expression.kind
-        {
-            for argument in arguments {
-                if let FunctionArg::Lambda { id, .. } = argument {
-                    self.0.next_expression =
-                        self.0
-                            .next_expression
-                            .max(id.0.checked_add(1).ok_or_else(|| {
-                                plan_datafusion_err!("lambda identity space exhausted")
-                            })?);
-                }
-            }
-        }
-        walk_expression(self, expression)
-    }
-}
-
 impl IdGenerator {
-    /// Reserve identities supplied by a previous pass before allocating new nodes.
-    pub fn reserve_query(&mut self, plan: &Query) -> PlanResult<()> {
-        Reserve(self).rewrite_query(plan.clone())?;
-        Ok(())
-    }
-
-    /// Reserve identities in expressions stored outside a query tree.
-    pub fn reserve_expression(&mut self, expression: &Expr) -> PlanResult<()> {
-        Reserve(self).rewrite_expression(expression.clone())?;
-        Ok(())
-    }
-
-    /// Reserve binding attributes stored outside a query tree.
-    pub fn reserve_schema(&mut self, schema: &QuerySchema) -> PlanResult<()> {
-        Reserve(self).rewrite_schema(schema.clone())?;
-        Ok(())
-    }
-
     pub fn expression(&mut self) -> ExprId {
         let id = ExprId(self.next_expression);
         self.next_expression += 1;
@@ -363,6 +306,7 @@ impl Query {
 pub enum QueryKind {
     Scope {
         input: Box<Query>,
+        scope: Option<Arc<crate::scope::PlanScope>>,
     },
     Empty {
         produce_one_row: bool,

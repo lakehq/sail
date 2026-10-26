@@ -1,4 +1,4 @@
-//! Native expression typing and coercion.
+//! Expression typing and coercion.
 
 pub(crate) mod aggregate;
 pub(crate) mod cast;
@@ -12,7 +12,7 @@ use datafusion_common::arrow::compute::can_cast_types;
 
 use crate::error::PlanResult;
 
-/// Resolve a native scalar call before constructing any DataFusion expression.
+/// Resolve a scalar call before constructing any DataFusion expression.
 /// Each inserted cast receives a fresh occurrence ID; the call retains its ID.
 pub fn resolve_scalar_call(
     id: super::model::ExprId,

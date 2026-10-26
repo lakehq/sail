@@ -25,7 +25,7 @@ impl PlanResolver<'_> {
                 Ok(NamedExpr {
                     name: name.into(),
                     expression: Expr {
-                        id: self.context.ids.expression(),
+                        id: self.state.ids.expression(),
                         result_type: attribute.result_type.clone(),
                         kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(
                             self.reference(attribute)?,
@@ -60,6 +60,7 @@ impl PlanResolver<'_> {
             Query {
                 schema: input.schema.clone(),
                 kind: Deferred::Resolved(QueryKind::Scope {
+                    scope: None,
                     input: Box::new(input),
                 }),
             }
@@ -92,6 +93,7 @@ impl PlanResolver<'_> {
             Query {
                 schema: input.schema.clone(),
                 kind: Deferred::Resolved(QueryKind::Scope {
+                    scope: None,
                     input: Box::new(input),
                 }),
             }

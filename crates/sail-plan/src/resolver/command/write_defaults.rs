@@ -48,7 +48,9 @@ impl PlanResolver<'_> {
                             let value = defaults.get(*index).ok_or_else(|| {
                                 PlanError::internal("DEFAULT target column missing")
                             })?;
-                            self.context.function_context().copy_expression(value)?
+                            self.context
+                                .function_context(&mut self.state.ids)
+                                .copy_expression(value)?
                         } else {
                             expression
                         });
@@ -70,7 +72,7 @@ impl PlanResolver<'_> {
                 });
                 Ok(result)
             }
-            QueryKind::Scope { input } => {
+            QueryKind::Scope { input, scope } => {
                 let input = self.replace_write_defaults(*input, bindings, defaults)?;
                 let inferred = input.schema.resolved("DEFAULT scope input")?;
                 let mut schema = original;
@@ -79,6 +81,7 @@ impl PlanResolver<'_> {
                 }
                 Ok(Query {
                     kind: Deferred::Resolved(QueryKind::Scope {
+                        scope,
                         input: Box::new(input),
                     }),
                     schema: Deferred::Resolved(schema),

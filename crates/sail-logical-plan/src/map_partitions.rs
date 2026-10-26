@@ -6,8 +6,8 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_plan::udf::StreamUDF;
 
 #[derive(Clone, Debug, Eq, Educe)]
 #[educe(PartialOrd)]

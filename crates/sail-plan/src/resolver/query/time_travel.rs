@@ -43,7 +43,7 @@ impl PlanResolver<'_> {
             })?
             .expression;
         let mut validator = TimeTravelExpression {
-            ids: &mut self.context.ids,
+            ids: &mut self.state.ids,
             kind,
             plan_depth: 0,
         };
@@ -54,7 +54,7 @@ impl PlanResolver<'_> {
                 self.types()
                     .resolve_timezone(&spec::TimestampType::Configured)?,
             );
-            expression = typing::coerce(expression, &target, &mut self.context.ids)?;
+            expression = typing::coerce(expression, &target, &mut self.state.ids)?;
         }
         let plan = self.project(
             Self::empty(true),

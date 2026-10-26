@@ -7,9 +7,7 @@ use sail_common::spec;
 use sail_common_datafusion::column_features::ColumnFeatures;
 
 use crate::analyzer::deferred::Deferred;
-use crate::analyzer::merge::{MergeAction, MergeClause, MergeOperation};
 use crate::analyzer::model::*;
-use crate::analyzer::row_level::Condition;
 use crate::config::StoreAssignmentPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -196,13 +194,17 @@ impl PlanResolver<'_> {
                 generated.push((attribute.name.clone(), expression));
             }
             let default = if let Some(value) = features.current_default_value()? {
-                Some(self.context.function_context().literal(value))
+                Some(
+                    self.context
+                        .function_context(&mut self.state.ids)
+                        .literal(value),
+                )
             } else if let Some(source) = features.current_default() {
                 Some(self.resolve_column_default_expression(&source).await?)
             } else {
                 Some(
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::try_from(field.data_type())?),
                 )
             };
@@ -263,7 +265,7 @@ impl PlanResolver<'_> {
                 .unwrap_or_else(|| field.as_ref().clone());
             let expression = self.reference(attribute)?;
             let expression = self.align_store_value(expression, evolved.data_type(), true)?;
-            output.id = self.context.ids.attribute();
+            output.id = self.state.ids.attribute();
             output.origin = output.id;
             output.result_type = Deferred::Resolved(ExprType::from_field(&evolved));
             expressions.push(Projection {
@@ -305,11 +307,11 @@ impl PlanResolver<'_> {
             result_type.nullable = true;
             let expression = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::try_from(&result_type.data_type)?);
             let mut output = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .attribute(attribute.name.clone(), result_type);
             output.qualifier = schema
                 .attributes
@@ -409,7 +411,7 @@ impl PlanResolver<'_> {
         let mut result = vec![];
         for (name, request) in requests {
             let parts = Vec::<String>::from(name);
-            let expression_id = self.context.ids.expression();
+            let expression_id = self.state.ids.expression();
             let column = self.resolve_attribute(expression_id, &parts, None, target)?;
             let ExprKind::Attribute(id) = column
                 .expression
@@ -434,7 +436,9 @@ impl PlanResolver<'_> {
             let value = if matches!(request, spec::Expr::DefaultColumnValue) {
                 let features = ColumnFeatures::from_field(&field);
                 if let Some(value) = features.current_default_value()? {
-                    self.context.function_context().literal(value)
+                    self.context
+                        .function_context(&mut self.state.ids)
+                        .literal(value)
                 } else if let Some(source) = features.current_default() {
                     self.resolve_column_default_expression(&source).await?
                 } else if !field.is_nullable() || features.is_not_null_constraint() {
@@ -444,7 +448,7 @@ impl PlanResolver<'_> {
                     )));
                 } else {
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::try_from(field.data_type())?)
                 }
             } else {
@@ -535,23 +539,39 @@ impl PlanResolver<'_> {
                 let right_domain = domain(right, target, source)?;
                 if left_domain == 1 && right_domain == 2 {
                     keys.push((
-                        self.context.function_context().copy_expression(left)?,
-                        self.context.function_context().copy_expression(right)?,
+                        self.context
+                            .function_context(&mut self.state.ids)
+                            .copy_expression(left)?,
+                        self.context
+                            .function_context(&mut self.state.ids)
+                            .copy_expression(right)?,
                     ));
                     continue;
                 }
                 if left_domain == 2 && right_domain == 1 {
                     keys.push((
-                        self.context.function_context().copy_expression(right)?,
-                        self.context.function_context().copy_expression(left)?,
+                        self.context
+                            .function_context(&mut self.state.ids)
+                            .copy_expression(right)?,
+                        self.context
+                            .function_context(&mut self.state.ids)
+                            .copy_expression(left)?,
                     ));
                     continue;
                 }
             }
             if domain(predicate, target, source)? == 1 {
-                target_predicates.push(self.context.function_context().copy_expression(predicate)?);
+                target_predicates.push(
+                    self.context
+                        .function_context(&mut self.state.ids)
+                        .copy_expression(predicate)?,
+                );
             }
-            residual.push(self.context.function_context().copy_expression(predicate)?);
+            residual.push(
+                self.context
+                    .function_context(&mut self.state.ids)
+                    .copy_expression(predicate)?,
+            );
         }
         Ok((keys, residual, target_predicates))
     }
@@ -985,3 +1005,6 @@ pub(in crate::resolver) fn evolve_row_level_field(
         case_sensitive,
     ))
 }
+
+use crate::analyzer::merge::{MergeAction, MergeClause, MergeOperation};
+use crate::analyzer::row_level::Condition;

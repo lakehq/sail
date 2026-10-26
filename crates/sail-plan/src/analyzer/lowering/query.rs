@@ -85,7 +85,7 @@ impl LoweringContext {
         let output = plan.schema.resolved("plan schema")?;
         let expected_schema = backend_schema(output)?;
         let lowered = match plan.kind.resolved("plan node")? {
-            model::QueryKind::Scope { input } => self.plan(input)?,
+            model::QueryKind::Scope { input, .. } => self.plan(input)?,
             model::QueryKind::Empty { produce_one_row } => LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: *produce_one_row,
                 schema: Arc::new(DFSchema::empty()),

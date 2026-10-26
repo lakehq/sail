@@ -93,7 +93,7 @@ impl PlanResolver<'_> {
             candidates.sort_by_key(|a| a.qualified_position);
         }
         if candidates.is_empty() && !qualifier.is_empty() {
-            let id = self.context.ids.expression();
+            let id = self.state.ids.expression();
             let root = self.resolve_attribute(id, &qualifier, plan_id, schema)?;
             let arrow_schema::DataType::Struct(fields) = root
                 .expression
@@ -109,22 +109,22 @@ impl PlanResolver<'_> {
             for field in fields.iter() {
                 let source = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .copy_expression(&root.expression)?;
-                let key =
-                    self.context
-                        .function_context()
-                        .literal(datafusion_common::ScalarValue::Utf8(Some(
-                            field.name().clone(),
-                        )));
+                let key = self.context.function_context(&mut self.state.ids).literal(
+                    datafusion_common::ScalarValue::Utf8(Some(field.name().clone())),
+                );
                 let value = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .scalar_udf(core::get_field(), vec![source, key])?;
-                let attribute = self.context.function_context().attribute(
-                    field.name().clone(),
-                    value.result_type.resolved("wildcard field")?.clone(),
-                );
+                let attribute = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .attribute(
+                        field.name().clone(),
+                        value.result_type.resolved("wildcard field")?.clone(),
+                    );
                 values.insert(attribute.id, value);
                 expanded.attributes.push(attribute);
             }
@@ -140,7 +140,10 @@ impl PlanResolver<'_> {
                             ) = expression.kind
                                 && let Some(value) = values.get(&id)
                             {
-                                return self.context.function_context().copy_expression(value);
+                                return self
+                                    .context
+                                    .function_context(&mut self.state.ids)
+                                    .copy_expression(value);
                             }
                             Ok(expression)
                         })?;
@@ -389,7 +392,7 @@ impl PlanResolver<'_> {
             let value = self.reference(schema.attribute(bound.id)?)?;
             expressions.push(NamedExpr {
                 name: field.name().clone(),
-                expression: typing::coerce(value, field.data_type(), &mut self.context.ids)?,
+                expression: typing::coerce(value, field.data_type(), &mut self.state.ids)?,
             });
         }
         self.project(input, expressions)
@@ -440,7 +443,7 @@ impl PlanResolver<'_> {
                     let mut expression = self.reference(attribute)?;
                     let name = if let Some((_, to)) = rename {
                         expression = Expr {
-                            id: self.context.ids.expression(),
+                            id: self.state.ids.expression(),
                             result_type: expression.result_type.clone(),
                             kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(expression))),
                         };
@@ -475,7 +478,7 @@ impl PlanResolver<'_> {
             }
             node => {
                 return Err(PlanError::unsupported(format!(
-                    "native query resolution: {node:?}"
+                    "query resolution: {node:?}"
                 )));
             }
         })

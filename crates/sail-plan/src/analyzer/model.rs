@@ -1,4 +1,4 @@
-//! Native query and command model for analysis and lowering.
+//! Intermediate query and command model for analysis and lowering.
 use std::sync::Arc;
 
 use datafusion_expr::ScalarUDF;
@@ -10,13 +10,17 @@ use sail_logical_plan::show_string::ShowStringFormat;
 use super::deferred::{Deferred, Resolvable};
 
 #[derive(Debug)]
-pub enum AnalyzerPlan {
+pub enum PlanKind {
     Query(Query),
     Command(Command),
 }
 
 #[derive(Debug)]
 pub enum CommandKind {
+    Scope {
+        input: Box<Command>,
+        scope: Arc<sail_common_plan::scope::PlanScope>,
+    },
     Catalog(CatalogCommand),
     Barrier {
         preconditions: Vec<Command>,
@@ -54,7 +58,7 @@ pub enum CommandKind {
         variable: String,
     },
     Explain {
-        input: Box<AnalyzerPlan>,
+        input: Box<PlanKind>,
         mode: spec::ExplainMode,
     },
 }
@@ -84,7 +88,7 @@ impl Resolvable for CommandKind {
     type Request = spec::CommandPlan;
 }
 
-impl From<spec::Plan> for AnalyzerPlan {
+impl From<spec::Plan> for PlanKind {
     fn from(plan: spec::Plan) -> Self {
         match plan {
             spec::Plan::Query(query) => Self::Query(Query::unresolved(query)),
@@ -93,51 +97,15 @@ impl From<spec::Plan> for AnalyzerPlan {
     }
 }
 
-impl From<spec::QueryPlan> for AnalyzerPlan {
+impl From<spec::QueryPlan> for PlanKind {
     fn from(query: spec::QueryPlan) -> Self {
         Self::Query(Query::unresolved(query))
     }
 }
 
-impl From<Query> for AnalyzerPlan {
+impl From<Query> for PlanKind {
     fn from(query: Query) -> Self {
         Self::Query(query)
-    }
-}
-
-impl AnalyzerPlan {
-    /// Reserve the entire identity domain before resolving any sibling input.
-    pub(crate) fn reserve_ids(&mut self, ids: &mut IdGenerator) -> crate::error::PlanResult<()> {
-        match self {
-            Self::Query(query) => ids.reserve_query(query)?,
-            Self::Command(command) => command.reserve_ids(ids)?,
-        }
-        Ok(())
-    }
-}
-
-impl Command {
-    fn reserve_ids(&mut self, ids: &mut IdGenerator) -> crate::error::PlanResult<()> {
-        if let Deferred::Resolved(kind) = &mut self.kind {
-            for query in kind.queries_mut() {
-                ids.reserve_query(query)?;
-            }
-            if let CommandKind::Write(operation) = kind
-                && let super::writer::WriteDisposition::OverwriteIf { schema, .. } = &operation.mode
-            {
-                ids.reserve_schema(schema)?;
-            }
-            for expression in kind.expressions_mut() {
-                ids.reserve_expression(expression)?;
-            }
-            for command in kind.commands_mut() {
-                command.reserve_ids(ids)?;
-            }
-            if let CommandKind::Explain { input, .. } = kind {
-                input.reserve_ids(ids)?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -152,7 +120,8 @@ impl CommandKind {
             Self::Write(operation) => vec![&mut operation.input],
             Self::RowOperation(operation) => vec![&mut operation.input],
             Self::Merge(operation) => vec![&mut operation.target, &mut operation.source],
-            Self::Barrier { .. }
+            Self::Scope { .. }
+            | Self::Barrier { .. }
             | Self::Explain { .. }
             | Self::Catalog(_)
             | Self::Procedure { .. }
@@ -164,6 +133,7 @@ impl CommandKind {
 
     pub(crate) fn commands_mut(&mut self) -> Vec<&mut Command> {
         match self {
+            Self::Scope { input, .. } => vec![input],
             Self::Barrier {
                 preconditions,
                 command,
@@ -187,7 +157,7 @@ impl CommandKind {
         }
     }
 
-    pub(crate) fn expressions_mut(&mut self) -> Vec<&mut Expr> {
+    pub fn expressions_mut(&mut self) -> Vec<&mut Expr> {
         use super::row_level::RowAction;
         use super::writer::WriteDisposition;
         let mut expressions = vec![];
@@ -231,6 +201,7 @@ impl CommandKind {
             | Self::Show { .. }
             | Self::Checkpoint { .. }
             | Self::CreateTemporaryView { .. }
+            | Self::Scope { .. }
             | Self::Barrier { .. }
             | Self::Explain { .. }
             | Self::Catalog(_)
@@ -284,14 +255,40 @@ pub(crate) fn merge_expressions(operation: &mut super::merge::MergeOperation) ->
     expressions
 }
 
-impl From<spec::CommandPlan> for AnalyzerPlan {
+impl From<spec::CommandPlan> for PlanKind {
     fn from(command: spec::CommandPlan) -> Self {
         Self::Command(Command::unresolved(command))
     }
 }
 
-impl From<Command> for AnalyzerPlan {
+impl From<Command> for PlanKind {
     fn from(command: Command) -> Self {
         Self::Command(command)
+    }
+}
+
+/// A plan and the persistent state shared by every analysis pass.
+#[derive(Debug)]
+pub struct Plan {
+    pub kind: PlanKind,
+    pub state: super::state::PlanState,
+}
+
+impl From<spec::Plan> for Plan {
+    fn from(plan: spec::Plan) -> Self {
+        Self {
+            kind: plan.into(),
+            state: super::state::PlanState::default(),
+        }
+    }
+}
+impl From<spec::QueryPlan> for Plan {
+    fn from(plan: spec::QueryPlan) -> Self {
+        Self::from(spec::Plan::Query(plan))
+    }
+}
+impl From<spec::CommandPlan> for Plan {
+    fn from(plan: spec::CommandPlan) -> Self {
+        Self::from(spec::Plan::Command(plan))
     }
 }

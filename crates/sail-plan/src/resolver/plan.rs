@@ -1,4 +1,4 @@
-//! Resolve query and command requests through the same native model.
+//! Resolve query and command requests through the same intermediate representation.
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::PlanResult;
@@ -8,20 +8,18 @@ impl PlanResolver<'_> {
     #[async_recursion::async_recursion]
     pub(in crate::resolver) async fn resolve_plan(
         &mut self,
-        plan: AnalyzerPlan,
-    ) -> PlanResult<AnalyzerPlan> {
+        plan: PlanKind,
+    ) -> PlanResult<PlanKind> {
         Ok(match plan {
-            AnalyzerPlan::Query(query) => AnalyzerPlan::Query(self.complete_query(query).await?),
-            AnalyzerPlan::Command(command) => {
-                AnalyzerPlan::Command(self.resolve_command(command).await?)
-            }
+            PlanKind::Query(query) => PlanKind::Query(self.complete_query(query).await?),
+            PlanKind::Command(command) => PlanKind::Command(self.resolve_command(command).await?),
         })
     }
 
     pub(in crate::resolver) async fn complete_query(&mut self, query: Query) -> PlanResult<Query> {
         let query = self.resolve_query(query).await?;
-        let query = crate::analyzer::row_identity::materialize(query, &mut self.context.ids)?;
-        let query = crate::analyzer::scalar_iterator::materialize(query, &mut self.context.ids)?;
+        let query = crate::analyzer::row_identity::materialize(query, &mut self.state.ids)?;
+        let query = crate::analyzer::scalar_iterator::materialize(query, &mut self.state.ids)?;
         crate::analyzer::ordering::preserve(query)
     }
 
@@ -33,6 +31,16 @@ impl PlanResolver<'_> {
             }
             Deferred::Resolved(kind) => kind,
         };
+        if let CommandKind::Scope { input, scope } = kind {
+            let previous = std::mem::replace(&mut self.state.scope, scope.as_ref().clone());
+            let result = self.resolve_command(*input).await;
+            self.state.scope = previous;
+            return Ok(CommandKind::Scope {
+                input: Box::new(result?),
+                scope,
+            }
+            .into());
+        }
         for query in kind.queries_mut() {
             *query = self.complete_query(query.clone()).await?;
         }
@@ -97,11 +105,11 @@ impl PlanResolver<'_> {
                 }
             }
             CommandKind::Explain { input, .. } => {
-                let plan =
-                    std::mem::replace(input.as_mut(), AnalyzerPlan::Query(Self::empty(false)));
+                let plan = std::mem::replace(input.as_mut(), PlanKind::Query(Self::empty(false)));
                 **input = self.resolve_plan(plan).await?;
             }
-            CommandKind::Query(_)
+            CommandKind::Scope { .. }
+            | CommandKind::Query(_)
             | CommandKind::Show { .. }
             | CommandKind::Checkpoint { .. }
             | CommandKind::CreateTemporaryView { .. }

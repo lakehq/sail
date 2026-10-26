@@ -9,7 +9,6 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
-use crate::analyzer::row_level::{Condition, RowAction, RowOperation};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 impl PlanResolver<'_> {
@@ -69,7 +68,7 @@ impl PlanResolver<'_> {
         }
         let expression = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .cast(expression, arrow_schema::DataType::Boolean)?;
         Ok(Some(Condition {
             expression,
@@ -185,3 +184,5 @@ impl PlanResolver<'_> {
         }
     }
 }
+
+use crate::analyzer::row_level::{Condition, RowAction, RowOperation};

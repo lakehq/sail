@@ -97,7 +97,7 @@ impl PlanResolver<'_> {
                     name: value.name.clone(),
                     expression: self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .copy_expression(&value.expression)?,
                 });
             }
@@ -137,7 +137,7 @@ impl PlanResolver<'_> {
 
     fn validate_aggregate_functions(&self, output: &[NamedExpr]) -> PlanResult<()> {
         let mut python = false;
-        let mut native = false;
+        let mut regular = false;
         for named in output {
             named
                 .expression
@@ -152,13 +152,13 @@ impl PlanResolver<'_> {
                         {
                             python = true;
                         } else {
-                            native = true;
+                            regular = true;
                         }
                     }
                     Ok(value)
                 })?;
         }
-        if python && native {
+        if python && regular {
             return Err(PlanError::analysis(
                 "Grouped aggregate Python UDFs cannot be mixed with regular aggregate functions",
             ));

@@ -40,11 +40,11 @@ impl PlanResolver<'_> {
                 name,
                 expression: self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .copy_expression(&expression)?,
             });
         }
-        let id = self.context.ids.expression();
+        let id = self.state.ids.expression();
         if matches!(request, spec::Expr::DefaultColumnValue) {
             return Ok(NamedExpr {
                 name: "DEFAULT".into(),
@@ -114,7 +114,7 @@ impl PlanResolver<'_> {
                 is_metadata_column,
             } => {
                 if is_metadata_column {
-                    return Err(PlanError::unsupported("native metadata column binding"));
+                    return Err(PlanError::unsupported("metadata column binding"));
                 }
                 let parts: Vec<String> = name.into();
                 if plan_id.is_none()
@@ -236,7 +236,7 @@ impl PlanResolver<'_> {
                         id,
                         Arc::new(function),
                         arguments,
-                        &mut self.context.ids,
+                        &mut self.state.ids,
                     )?,
                 });
             }
@@ -317,13 +317,13 @@ impl PlanResolver<'_> {
                 let low_name = low.name;
                 let high_name = high.name;
                 let (value_expression, low_expression) = crate::resolver::coerce_timestamp_pair(
-                    &mut self.context.function_context(),
+                    &mut self.context.function_context(&mut self.state.ids),
                     value.expression,
                     Operator::GtEq,
                     low.expression,
                 )?;
                 let (value_expression, high_expression) = crate::resolver::coerce_timestamp_pair(
-                    &mut self.context.function_context(),
+                    &mut self.context.function_context(&mut self.state.ids),
                     value_expression,
                     Operator::LtEq,
                     high.expression,
@@ -364,17 +364,17 @@ impl PlanResolver<'_> {
                         expression: Box::new(typing::coerce(
                             value.expression,
                             &common,
-                            &mut self.context.ids,
+                            &mut self.state.ids,
                         )?),
                         low: Box::new(typing::coerce(
                             low.expression,
                             &common,
-                            &mut self.context.ids,
+                            &mut self.state.ids,
                         )?),
                         high: Box::new(typing::coerce(
                             high.expression,
                             &common,
-                            &mut self.context.ids,
+                            &mut self.state.ids,
                         )?),
                         negated,
                     },
@@ -392,7 +392,7 @@ impl PlanResolver<'_> {
                 };
                 return Ok(NamedExpr {
                     name: format!("({} {} {})", left.name, operator, right.name),
-                    expression: self.context.function_context().binary(
+                    expression: self.context.function_context(&mut self.state.ids).binary(
                         left.expression,
                         operator,
                         right.expression,
@@ -424,12 +424,12 @@ impl PlanResolver<'_> {
                         expression: Box::new(typing::coerce(
                             value.expression,
                             &DataType::Utf8,
-                            &mut self.context.ids,
+                            &mut self.state.ids,
                         )?),
                         pattern: Box::new(typing::coerce(
                             pattern.expression,
                             &DataType::Utf8,
-                            &mut self.context.ids,
+                            &mut self.state.ids,
                         )?),
                         negated,
                         escape_char,
@@ -465,7 +465,7 @@ impl PlanResolver<'_> {
                 let right_name = attribute.name.clone();
                 let right = self.reference(attribute)?;
                 let (left, right) = crate::resolver::in_arguments(
-                    &mut self.context.function_context(),
+                    &mut self.context.function_context(&mut self.state.ids),
                     vec![value.expression, right],
                 )?
                 .two()?;
@@ -476,8 +476,14 @@ impl PlanResolver<'_> {
                     left_field.data_type.clone(),
                     right_field.data_type.clone(),
                 ])?;
-                let left = self.context.function_context().cast(left, common.clone())?;
-                let right = self.context.function_context().cast(right, common)?;
+                let left = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .cast(left, common.clone())?;
+                let right = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .cast(right, common)?;
                 let query = self.project(
                     query,
                     vec![NamedExpr {
@@ -520,7 +526,7 @@ impl PlanResolver<'_> {
                         names.join(", ")
                     ),
                     expression: crate::resolver::in_list(
-                        &mut self.context.function_context(),
+                        &mut self.context.function_context(&mut self.state.ids),
                         value.expression,
                         values,
                         negated,
@@ -613,12 +619,14 @@ impl PlanResolver<'_> {
                     .await;
             }
             spec::Expr::Placeholder(name) => {
-                let key = if self.parameters.contains_key(&name) {
+                let key = if self.state.scope.parameters.contains_key(&name) {
                     name.clone()
                 } else {
                     name.strip_prefix([':', '$']).unwrap_or(&name).to_string()
                 };
                 let value = self
+                    .state
+                    .scope
                     .parameters
                     .get(&key)
                     .cloned()
@@ -628,7 +636,7 @@ impl PlanResolver<'_> {
             }
             expression => {
                 return Err(PlanError::unsupported(format!(
-                    "native expression resolution: {expression:?}"
+                    "expression resolution: {expression:?}"
                 )));
             }
         };

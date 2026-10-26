@@ -72,7 +72,7 @@ impl PlanResolver<'_> {
                 id: if fields.is_empty() {
                     id
                 } else {
-                    self.context.ids.expression()
+                    self.state.ids.expression()
                 },
                 kind: Deferred::Resolved(ExprKind::LambdaVariable(attribute.id)),
                 result_type: attribute.result_type,
@@ -82,12 +82,12 @@ impl PlanResolver<'_> {
             let selected_id = if i + 1 == fields.len() {
                 id
             } else {
-                self.context.ids.expression()
+                self.state.ids.expression()
             };
             let extraction = NamedExpr {
                 name: field.clone(),
                 expression: Expr::literal(
-                    self.context.ids.expression(),
+                    self.state.ids.expression(),
                     datafusion_common::ScalarValue::Utf8(Some(field.clone())),
                 ),
             };
@@ -175,7 +175,7 @@ impl PlanResolver<'_> {
             );
             value.expression = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(datafusion_common::ScalarValue::try_from(&kind)?);
         }
         for (index, slot) in slots.iter().enumerate() {
@@ -206,7 +206,7 @@ impl PlanResolver<'_> {
                 value.expression = typing::coerce(
                     value.expression.clone(),
                     target.data_type(),
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
             }
         }
@@ -267,7 +267,7 @@ impl PlanResolver<'_> {
                         .zip(fields)
                         .map(|(name, field)| {
                             self.context
-                                .function_context()
+                                .function_context(&mut self.state.ids)
                                 .attribute(name.clone(), ExprType::from_field(&field))
                         })
                         .collect(),
@@ -278,7 +278,7 @@ impl PlanResolver<'_> {
                 self.discarded_predicate |= name == "map_filter" && null_result(request);
                 let result = if let Some(captured) = captured {
                     self.context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .copy_expression(&captured.expression)
                         .map(|expression| NamedExpr {
                             name: captured.name.clone(),
@@ -297,7 +297,7 @@ impl PlanResolver<'_> {
                 if discarded && name == "map_filter" {
                     resolved.expression = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(datafusion_common::ScalarValue::Boolean(None));
                 }
                 if matches!(name.as_str(), "filter" | "exists" | "forall" | "map_filter") {
@@ -322,13 +322,13 @@ impl PlanResolver<'_> {
                             == DataType::Null
                     {
                         self.context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(datafusion_common::ScalarValue::Boolean(None))
                     } else {
                         typing::coerce(
                             resolved.expression,
                             &DataType::Boolean,
-                            &mut self.context.ids,
+                            &mut self.state.ids,
                         )?
                     };
                 }
@@ -374,7 +374,7 @@ impl PlanResolver<'_> {
                         value.expression = typing::coerce(
                             value.expression.clone(),
                             target.data_type(),
-                            &mut self.context.ids,
+                            &mut self.state.ids,
                         )?;
                     }
                 }
@@ -424,7 +424,7 @@ impl PlanResolver<'_> {
                             }
                         }
                         arguments.push(FunctionArg::Lambda {
-                            id: self.context.ids.expression(),
+                            id: self.state.ids.expression(),
                             parameters,
                             body: Box::new(body.expression),
                         });

@@ -110,7 +110,7 @@ use sail_common_datafusion::schema_evolution::{
     SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, SchemaEvolutionTimezoneMode,
     StructFieldMatching,
 };
-use sail_common_datafusion::udf::StreamUDF;
+use sail_common_plan::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::csv::CsvSource;

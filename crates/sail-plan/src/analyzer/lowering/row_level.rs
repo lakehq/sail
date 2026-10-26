@@ -1,4 +1,4 @@
-//! Native row-level operations; format-specific planning is a lowering step.
+//! Analyzed row-level operations; format-specific planning is a lowering step.
 use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;

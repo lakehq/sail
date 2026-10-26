@@ -17,8 +17,8 @@ impl PlanResolver<'_> {
         root: spec::QueryPlan,
         references: Vec<spec::QueryPlan>,
     ) -> PlanResult<Query> {
-        let previous_references = self.relations.clone();
-        let previous_ctes = self.ctes.clone();
+        let previous_references = self.state.scope.relations.clone();
+        let previous_ctes = self.state.scope.ctes.clone();
         let result = async {
             let mut seen = HashSet::new();
             for reference in references {
@@ -41,7 +41,7 @@ impl PlanResolver<'_> {
                         .collect::<Vec<_>>()
                         .join(".");
                     let plan = self.resolve_query_plan(reference.clone()).await?;
-                    self.ctes.insert(
+                    self.state.scope.ctes.insert(
                         self.name_key(&key),
                         Arc::new(CteDefinition {
                             plan,
@@ -49,13 +49,15 @@ impl PlanResolver<'_> {
                         }),
                     );
                 }
-                self.relations.insert(id, reference);
+                self.state.scope.relations.insert(id, reference);
             }
-            self.resolve_query_plan(root).await
+            self.resolve_query_plan(root)
+                .await
+                .map(|input| self.scoped_query(input))
         }
         .await;
-        self.relations = previous_references;
-        self.ctes = previous_ctes;
+        self.state.scope.relations = previous_references;
+        self.state.scope.ctes = previous_ctes;
         result
     }
 
@@ -68,11 +70,17 @@ impl PlanResolver<'_> {
         negated: bool,
         schema: &QuerySchema,
     ) -> PlanResult<NamedExpr> {
-        let query = self.relations.get(&plan_id).cloned().ok_or_else(|| {
-            PlanError::analysis(format!(
-                "subquery plan_id {plan_id} not found in WithRelations references"
-            ))
-        })?;
+        let query = self
+            .state
+            .scope
+            .relations
+            .get(&plan_id)
+            .cloned()
+            .ok_or_else(|| {
+                PlanError::analysis(format!(
+                    "subquery plan_id {plan_id} not found in WithRelations references"
+                ))
+            })?;
         let request = match kind {
             spec::SubqueryType::Scalar => spec::Expr::ScalarSubquery {
                 subquery: Box::new(query),
@@ -145,21 +153,22 @@ impl PlanResolver<'_> {
         for (outer, inner) in outer.into_iter().zip(&output.attributes) {
             let inner = self.reference(inner)?;
             let (inner, outer) = crate::resolver::in_arguments(
-                &mut self.context.function_context(),
+                &mut self.context.function_context(&mut self.state.ids),
                 vec![inner, outer],
             )?
             .two()?;
-            let comparison = self
-                .context
-                .function_context()
-                .binary(inner, Operator::Eq, outer)?;
+            let comparison = self.context.function_context(&mut self.state.ids).binary(
+                inner,
+                Operator::Eq,
+                outer,
+            )?;
             condition = Some(match condition {
                 None => comparison,
-                Some(condition) => {
-                    self.context
-                        .function_context()
-                        .binary(condition, Operator::And, comparison)?
-                }
+                Some(condition) => self.context.function_context(&mut self.state.ids).binary(
+                    condition,
+                    Operator::And,
+                    comparison,
+                )?,
             });
         }
         let query = Self::filter(
@@ -169,7 +178,7 @@ impl PlanResolver<'_> {
         Ok(NamedExpr {
             name: "in_subquery".into(),
             expression: Expr {
-                id: self.context.ids.expression(),
+                id: self.state.ids.expression(),
                 kind: Deferred::Resolved(ExprKind::Exists {
                     query: Box::new(query),
                     negated,
@@ -378,7 +387,7 @@ impl PlanResolver<'_> {
             spec::QueryNode::Join(join) => self.resolve_query_join(join, false).await?,
             node => {
                 return Err(PlanError::unsupported(format!(
-                    "native query resolution: {node:?}"
+                    "query resolution: {node:?}"
                 )));
             }
         })

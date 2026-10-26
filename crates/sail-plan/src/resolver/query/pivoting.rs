@@ -22,10 +22,12 @@ impl PlanResolver<'_> {
             return Ok(values.remove(0));
         }
         let names = (1..=values.len()).map(|i| format!("col{i}")).collect();
-        self.context.function_context().scalar_udf(
-            Arc::new(ScalarUDF::from(StructFunction::new(names))),
-            values,
-        )
+        self.context
+            .function_context(&mut self.state.ids)
+            .scalar_udf(
+                Arc::new(ScalarUDF::from(StructFunction::new(names))),
+                values,
+            )
     }
 
     fn pivot_predicate(
@@ -37,7 +39,7 @@ impl PlanResolver<'_> {
         let reference = self.reference(column)?;
         if value.is_null() {
             return Ok(Expr {
-                id: self.context.ids.expression(),
+                id: self.state.ids.expression(),
                 kind: Deferred::Resolved(ExprKind::IsNull(Box::new(reference))),
                 result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
             });
@@ -46,12 +48,15 @@ impl PlanResolver<'_> {
         if fast && scalar_is_nan(&value) {
             return Ok(self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Boolean(Some(false))));
         }
-        let value = self.context.function_context().literal(value);
+        let value = self
+            .context
+            .function_context(&mut self.state.ids)
+            .literal(value);
         self.context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .binary(reference, Operator::Eq, value)
     }
 
@@ -219,11 +224,10 @@ impl PlanResolver<'_> {
                             {
                                 let predicate = self.pivot_predicate(&column, &value, fast)?;
                                 *filter = Some(Box::new(match filter.take() {
-                                    Some(existing) => self.context.function_context().binary(
-                                        *existing,
-                                        Operator::And,
-                                        predicate,
-                                    )?,
+                                    Some(existing) => self
+                                        .context
+                                        .function_context(&mut self.state.ids)
+                                        .binary(*existing, Operator::And, predicate)?,
                                     None => predicate,
                                 }));
                                 if !fast && matches!(function.name(), "first_value" | "last_value")
@@ -237,11 +241,11 @@ impl PlanResolver<'_> {
                 if fast {
                     let one = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Int64(Some(1)));
                     let mut count = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .aggregate("count", vec![one])?;
                     let predicate = self.pivot_predicate(&column, &value, fast)?;
                     if let Deferred::Resolved(ExprKind::AggregateFunction { filter, .. }) =
@@ -251,19 +255,23 @@ impl PlanResolver<'_> {
                     }
                     let zero = self
                         .context
-                        .function_context()
+                        .function_context(&mut self.state.ids)
                         .literal(ScalarValue::Int64(Some(0)));
-                    let condition =
-                        self.context
-                            .function_context()
-                            .binary(count, Operator::Gt, zero)?;
-                    let null = self.context.function_context().literal(ScalarValue::Null);
+                    let condition = self.context.function_context(&mut self.state.ids).binary(
+                        count,
+                        Operator::Gt,
+                        zero,
+                    )?;
+                    let null = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .literal(ScalarValue::Null);
                     expression = typing::resolve_case(
-                        self.context.ids.expression(),
+                        self.state.ids.expression(),
                         None,
                         vec![(condition, expression)],
                         Some(null),
-                        &mut self.context.ids,
+                        &mut self.state.ids,
                     )?;
                 }
                 output.push(NamedExpr {
@@ -382,51 +390,56 @@ impl PlanResolver<'_> {
         for (name, values) in values {
             let mut fields = vec![
                 self.context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .literal(ScalarValue::Utf8(Some(name))),
             ];
             for (value, target) in values.into_iter().zip(&types) {
                 fields.push(typing::coerce(
                     value.expression,
                     target,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?);
             }
-            records.push(self.context.function_context().scalar_udf(
-                Arc::new(ScalarUDF::from(StructFunction::new(names.clone()))),
-                fields,
-            )?);
+            records.push(
+                self.context
+                    .function_context(&mut self.state.ids)
+                    .scalar_udf(
+                        Arc::new(ScalarUDF::from(StructFunction::new(names.clone()))),
+                        fields,
+                    )?,
+            );
         }
         let array = self
             .context
-            .function_context()
+            .function_context(&mut self.state.ids)
             .scalar_udf(functions_nested::make_array::make_array_udf(), records)?;
         let (input, array) = self.append(input, array, "unpivot_values".into())?;
         let (mut input, element) = self.unnest(input, &array, false)?;
         if !unpivot.include_nulls {
             let mut condition = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Boolean(Some(false)));
             for name in &names[1..] {
                 let reference = self.reference(&element)?;
                 let selector = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .literal(ScalarValue::Utf8(Some(name.clone())));
                 let value = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .scalar_udf(core::get_field(), vec![reference, selector])?;
                 let present = Expr {
-                    id: self.context.ids.expression(),
+                    id: self.state.ids.expression(),
                     kind: Deferred::Resolved(ExprKind::IsNotNull(Box::new(value))),
                     result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
                 };
-                condition =
-                    self.context
-                        .function_context()
-                        .binary(condition, Operator::Or, present)?;
+                condition = self.context.function_context(&mut self.state.ids).binary(
+                    condition,
+                    Operator::Or,
+                    present,
+                )?;
             }
             input = Self::filter(input, condition)?;
         }
@@ -434,11 +447,11 @@ impl PlanResolver<'_> {
             let reference = self.reference(&element)?;
             let selector = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::Utf8(Some(name.clone())));
             let expression = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .scalar_udf(core::get_field(), vec![reference, selector])?;
             ids.push(NamedExpr { name, expression });
         }
@@ -446,6 +459,7 @@ impl PlanResolver<'_> {
         Ok(Query {
             schema: input.schema.clone(),
             kind: Deferred::Resolved(QueryKind::Scope {
+                scope: None,
                 input: Box::new(input),
             }),
         })

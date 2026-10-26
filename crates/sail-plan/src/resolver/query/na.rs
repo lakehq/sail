@@ -31,7 +31,7 @@ impl PlanResolver<'_> {
     fn missing(&mut self, attribute: &Attribute) -> PlanResult<Expr> {
         let reference = self.reference(attribute)?;
         let null = Expr {
-            id: self.context.ids.expression(),
+            id: self.state.ids.expression(),
             kind: Deferred::Resolved(ExprKind::IsNull(Box::new(reference))),
             result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, false)),
         };
@@ -45,16 +45,16 @@ impl PlanResolver<'_> {
         ) {
             let reference = self.reference(attribute)?;
             let reference = if *data_type == DataType::Float16 {
-                typing::coerce(reference, &DataType::Float32, &mut self.context.ids)?
+                typing::coerce(reference, &DataType::Float32, &mut self.state.ids)?
             } else {
                 reference
             };
             let nan = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .scalar_udf(math::isnan(), vec![reference])?;
             self.context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .binary(null, Operator::Or, nan)
         } else {
             Ok(null)
@@ -105,7 +105,7 @@ impl PlanResolver<'_> {
                     let mut target = target.clone();
                     target.nullable = true;
                     let value = Expr {
-                        id: self.context.ids.expression(),
+                        id: self.state.ids.expression(),
                         kind: Deferred::Resolved(ExprKind::Cast {
                             expression: Box::new(value),
                             target: target.clone(),
@@ -115,11 +115,11 @@ impl PlanResolver<'_> {
                     };
                     let condition = self.missing(attribute)?;
                     expression = typing::resolve_case(
-                        self.context.ids.expression(),
+                        self.state.ids.expression(),
                         None,
                         vec![(condition, value)],
                         Some(expression),
-                        &mut self.context.ids,
+                        &mut self.state.ids,
                     )?;
                 }
             }
@@ -147,7 +147,7 @@ impl PlanResolver<'_> {
             }
             let missing = self.missing(attribute)?;
             predicates.push(Expr {
-                id: self.context.ids.expression(),
+                id: self.state.ids.expression(),
                 kind: Deferred::Resolved(ExprKind::TruthTest {
                     expression: Box::new(missing),
                     value: Some(false),
@@ -159,35 +159,36 @@ impl PlanResolver<'_> {
         let condition = if let Some(count) = min_non_nulls.filter(|n| *n > 0) {
             let mut sum = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::UInt64(Some(0)));
             for condition in predicates {
                 let one = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .literal(ScalarValue::UInt64(Some(1)));
                 let zero = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .literal(ScalarValue::UInt64(Some(0)));
                 let value = typing::resolve_case(
-                    self.context.ids.expression(),
+                    self.state.ids.expression(),
                     None,
                     vec![(condition, one)],
                     Some(zero),
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
-                sum = self
-                    .context
-                    .function_context()
-                    .binary(sum, Operator::Plus, value)?;
+                sum = self.context.function_context(&mut self.state.ids).binary(
+                    sum,
+                    Operator::Plus,
+                    value,
+                )?;
             }
             let count = self
                 .context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .literal(ScalarValue::UInt64(Some(count as u64)));
             self.context
-                .function_context()
+                .function_context(&mut self.state.ids)
                 .binary(sum, Operator::GtEq, count)?
         } else {
             let mut predicates = predicates.into_iter();
@@ -195,9 +196,11 @@ impl PlanResolver<'_> {
                 .next()
                 .ok_or_else(|| PlanError::invalid("No columns specified for drop na."))?;
             predicates.try_fold(first, |left, right| {
-                self.context
-                    .function_context()
-                    .binary(left, Operator::And, right)
+                self.context.function_context(&mut self.state.ids).binary(
+                    left,
+                    Operator::And,
+                    right,
+                )
             })?
         };
         Self::filter(input, condition)
@@ -238,27 +241,34 @@ impl PlanResolver<'_> {
                     if !compatible(&old.data_type(), target) {
                         continue;
                     }
-                    let old = self.context.function_context().literal(old);
-                    let old = typing::coerce(old, target, &mut self.context.ids)?;
+                    let old = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .literal(old);
+                    let old = typing::coerce(old, target, &mut self.state.ids)?;
                     let new = self
                         .types()
                         .resolve_literal(replacement.new_value.clone())?;
-                    let new = self.context.function_context().literal(new);
-                    let new = typing::coerce(new, target, &mut self.context.ids)?;
+                    let new = self
+                        .context
+                        .function_context(&mut self.state.ids)
+                        .literal(new);
+                    let new = typing::coerce(new, target, &mut self.state.ids)?;
                     let reference = self.reference(attribute)?;
-                    let condition =
-                        self.context
-                            .function_context()
-                            .binary(reference, Operator::Eq, old)?;
+                    let condition = self.context.function_context(&mut self.state.ids).binary(
+                        reference,
+                        Operator::Eq,
+                        old,
+                    )?;
                     branches.push((condition, new));
                 }
                 if !branches.is_empty() {
                     expression = typing::resolve_case(
-                        self.context.ids.expression(),
+                        self.state.ids.expression(),
                         None,
                         branches,
                         Some(expression),
-                        &mut self.context.ids,
+                        &mut self.state.ids,
                     )?;
                 }
             }

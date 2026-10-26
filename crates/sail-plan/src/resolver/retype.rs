@@ -23,7 +23,7 @@ impl PlanResolver<'_> {
                     expression.id,
                     function,
                     arguments,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 );
             }
             ExprKind::Binary {
@@ -36,7 +36,7 @@ impl PlanResolver<'_> {
                     *left,
                     operator,
                     *right,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 );
             }
             ExprKind::Case {
@@ -49,7 +49,7 @@ impl PlanResolver<'_> {
                     operand.map(|e| *e),
                     branches,
                     otherwise.map(|e| *e),
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 );
             }
             ExprKind::InList {
@@ -62,7 +62,7 @@ impl PlanResolver<'_> {
                     *value,
                     values,
                     negated,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 );
             }
             ExprKind::Cast {
@@ -140,7 +140,7 @@ impl PlanResolver<'_> {
                 *arguments = typing::coerce_arguments(
                     std::mem::take(arguments),
                     &resolved.arguments,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
                 result = ExprType::from_field(&resolved.result);
                 node
@@ -161,7 +161,7 @@ impl PlanResolver<'_> {
                 *arguments = typing::coerce_arguments(
                     std::mem::take(arguments),
                     &resolved.arguments,
-                    &mut self.context.ids,
+                    &mut self.state.ids,
                 )?;
                 result = ExprType::from_field(&resolved.result);
                 node
@@ -207,11 +207,8 @@ impl PlanResolver<'_> {
                     if let (FunctionArg::Value(value), ValueOrLambda::Value(field)) =
                         (argument, target)
                     {
-                        **value = typing::coerce(
-                            *value.clone(),
-                            field.data_type(),
-                            &mut self.context.ids,
-                        )?;
+                        **value =
+                            typing::coerce(*value.clone(), field.data_type(), &mut self.state.ids)?;
                     }
                 }
                 result = ExprType::from_field(&resolved.result);

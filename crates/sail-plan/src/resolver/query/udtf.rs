@@ -157,12 +157,15 @@ impl PlanResolver<'_> {
                     .iter()
                     .map(|a| self.reference(a))
                     .collect::<PlanResult<Vec<_>>>()?;
-                let expression = self.context.function_context().scalar_udf(
-                    Arc::new(ScalarUDF::from(
-                        sail_function::scalar::struct_function::StructFunction::new(names),
-                    )),
-                    values,
-                )?;
+                let expression = self
+                    .context
+                    .function_context(&mut self.state.ids)
+                    .scalar_udf(
+                        Arc::new(ScalarUDF::from(
+                            sail_function::scalar::struct_function::StructFunction::new(names),
+                        )),
+                        values,
+                    )?;
                 let attributes = input
                     .schema
                     .resolved("UDTF input")?
@@ -299,7 +302,7 @@ impl PlanResolver<'_> {
         {
             attributes.push(
                 self.context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .attribute(field.name().clone(), ExprType::from_field(field)),
             );
         }

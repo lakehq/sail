@@ -21,7 +21,7 @@ impl PlanResolver<'_> {
             let condition = typing::coerce(
                 condition.expression,
                 &DataType::Boolean,
-                &mut self.context.ids,
+                &mut self.state.ids,
             )?;
             let schema = input.schema.clone();
             let result = Query {

@@ -9,7 +9,7 @@ use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::Expr;
 use educe::Educe;
 use pyo3::Python;
-use sail_common_datafusion::udf::StreamUDF;
+use sail_common_plan::udf::StreamUDF;
 
 use crate::cereal::pyspark_udtf::PySparkUdtfPayload;
 use crate::config::PySparkUdfConfig;

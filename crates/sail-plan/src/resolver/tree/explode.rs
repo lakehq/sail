@@ -98,9 +98,7 @@ impl PlanResolver<'_> {
                                 }
                                 "inline" | "inline_outer" => "input",
                                 _ => {
-                                    return Err(PlanError::unsupported(
-                                        "native named function arguments",
-                                    ));
+                                    return Err(PlanError::unsupported("named function arguments"));
                                 }
                             };
                             if !key.eq_ignore_ascii_case(parameter) {
@@ -145,7 +143,7 @@ impl PlanResolver<'_> {
                 let argument = function(crate::function::common::ScalarFunctionInput {
                     arguments,
                     argument_display_names: &[],
-                    context: self.context.function_context(),
+                    context: self.context.function_context(&mut self.state.ids),
                 })?;
                 let (input, array) = self.append(input, argument, "generator".into())?;
                 let (input, element) = self.unnest(input, &array, outer)?;
@@ -200,25 +198,27 @@ impl PlanResolver<'_> {
                     for field in path {
                         let selector = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .literal(ScalarValue::Utf8(Some(field)));
                         expression = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .scalar_udf(core::get_field(), vec![expression, selector])?;
                     }
                     if inline {
                         let parent = self.reference(&element)?;
-                        let is_null = self.context.function_context().is_null(parent);
-                        let null = self
+                        let is_null = self
                             .context
-                            .function_context()
-                            .literal(ScalarValue::try_from(
+                            .function_context(&mut self.state.ids)
+                            .is_null(parent);
+                        let null = self.context.function_context(&mut self.state.ids).literal(
+                            ScalarValue::try_from(
                                 &expression.result_type.resolved("inline field")?.data_type,
-                            )?);
+                            )?,
+                        );
                         expression = self
                             .context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .case(vec![(is_null, null)], Some(expression))?;
                     }
                     expressions.push(NamedExpr { name, expression });

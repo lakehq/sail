@@ -24,6 +24,5 @@ pub mod schema_evolution;
 pub mod session;
 pub mod statistics;
 pub mod streaming;
-pub mod udf;
 pub mod utils;
 pub mod variant;

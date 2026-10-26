@@ -260,10 +260,14 @@ impl PlanResolver<'_> {
                 };
                 // A persisted view's names bind in its definition, never in a
                 // CTE or correlated scope introduced by its reader.
-                let ctes = std::mem::take(&mut self.ctes);
+                let ctes = std::mem::take(&mut self.state.scope.ctes);
                 let outer = std::mem::take(&mut self.outer);
                 let result = self.resolve_query_plan(request).await;
-                self.ctes = ctes;
+                let scope = Arc::new(sail_common_plan::scope::PlanScope {
+                    isolated: true,
+                    ..self.state.scope.clone()
+                });
+                self.state.scope.ctes = ctes;
                 self.outer = outer;
                 let input = self.visible_output(result?)?;
                 let input = if columns.is_empty() {
@@ -274,6 +278,7 @@ impl PlanResolver<'_> {
                 Query {
                     schema: input.schema.clone(),
                     kind: Deferred::Resolved(QueryKind::Scope {
+                        scope: Some(scope),
                         input: Box::new(input),
                     }),
                 }
@@ -284,10 +289,14 @@ impl PlanResolver<'_> {
                         "SQL time travel is not supported for temporary views",
                     ));
                 }
-                let input = plan.instantiate(&mut self.context.ids)?;
+                let input = plan.instantiate(&mut self.state.ids)?;
                 Query {
                     schema: input.schema.clone(),
                     kind: Deferred::Resolved(QueryKind::Scope {
+                        scope: Some(Arc::new(sail_common_plan::scope::PlanScope {
+                            isolated: true,
+                            ..Default::default()
+                        })),
                         input: Box::new(input),
                     }),
                 }
@@ -359,7 +368,7 @@ impl PlanResolver<'_> {
             spec::QueryNode::Empty { produce_one_row } => Self::empty(produce_one_row),
             spec::QueryNode::Values(rows) => self.resolve_query_values(rows).await?,
             spec::QueryNode::Range(range) => crate::function::table::range::resolve_range(
-                &mut self.context.function_context(),
+                &mut self.context.function_context(&mut self.state.ids),
                 range,
             )?,
             spec::QueryNode::LocalRelation { data, schema } => {
@@ -395,16 +404,22 @@ impl PlanResolver<'_> {
                 is_streaming: _,
             } => {
                 let name: Vec<String> = table.name.clone().into();
-                if let Some(request) = self.ctes.get(&self.name_key(&name.join("."))).cloned() {
+                if let Some(request) = self
+                    .state
+                    .scope
+                    .ctes
+                    .get(&self.name_key(&name.join(".")))
+                    .cloned()
+                {
                     if table.temporal.is_some() || !table.options.is_empty() {
                         return Err(PlanError::analysis(
                             "CTE references do not accept table options",
                         ));
                     }
                     let origins = if request.parameter {
-                        &mut self.parameter_origins
+                        &mut self.state.parameter_origins
                     } else {
-                        &mut self.cte_origins
+                        &mut self.state.cte_origins
                     };
                     let output = request.plan.schema.resolved("CTE definition")?;
                     let renew = output
@@ -415,7 +430,7 @@ impl PlanResolver<'_> {
                         origins.extend(output.attributes.iter().map(|a| a.origin));
                     }
                     let mut plan = request.plan.instantiate_reference(
-                        &mut self.context.ids,
+                        &mut self.state.ids,
                         renew,
                         request.parameter || !renew,
                     )?;
@@ -428,6 +443,7 @@ impl PlanResolver<'_> {
                     let plan = Query {
                         schema: plan.schema.clone(),
                         kind: Deferred::Resolved(QueryKind::Scope {
+                            scope: None,
                             input: Box::new(plan),
                         }),
                     };
@@ -489,7 +505,7 @@ impl PlanResolver<'_> {
                         }
                         builtin(crate::function::table::TableFunctionInput {
                             arguments,
-                            context: self.context.function_context(),
+                            context: self.context.function_context(&mut self.state.ids),
                         })
                     }
                     _ => {
@@ -526,7 +542,7 @@ impl PlanResolver<'_> {
                     .iter()
                     .map(|f| {
                         self.context
-                            .function_context()
+                            .function_context(&mut self.state.ids)
                             .attribute(f.name().clone(), ExprType::from_field(f))
                     })
                     .collect();
@@ -537,7 +553,7 @@ impl PlanResolver<'_> {
             }
             node => {
                 return Err(PlanError::unsupported(format!(
-                    "native query resolution: {node:?}"
+                    "query resolution: {node:?}"
                 )));
             }
         })
@@ -559,7 +575,7 @@ impl PlanResolver<'_> {
             .map(|(position, field)| {
                 let mut attribute = self
                     .context
-                    .function_context()
+                    .function_context(&mut self.state.ids)
                     .attribute(field.name().clone(), ExprType::from_field(field));
                 attribute.qualifier.clone_from(&qualifier);
                 attribute.qualified_position = position;

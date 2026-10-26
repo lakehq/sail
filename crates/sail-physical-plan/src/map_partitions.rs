@@ -10,8 +10,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{Result, internal_datafusion_err};
 use sail_common_datafusion::array::record_batch::record_batch_with_schema;
-use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_plan::udf::StreamUDF;
 use tokio_stream::StreamExt;
 
 #[derive(Debug, Clone)]

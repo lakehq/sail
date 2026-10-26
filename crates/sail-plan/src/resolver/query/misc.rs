@@ -74,7 +74,7 @@ impl PlanResolver<'_> {
             } => self.stat_sample_by(*input, column, fractions, seed).await?,
             node => {
                 return Err(PlanError::unsupported(format!(
-                    "native query resolution: {node:?}"
+                    "query resolution: {node:?}"
                 )));
             }
         })
@@ -114,10 +114,13 @@ impl PlanResolver<'_> {
                 let value = crate::analyzer::lowering::evaluate_constant(&expression.expression)?;
                 bindings.push((name, value));
             }
-            let previous = self.parameters.clone();
-            self.parameters.extend(bindings);
-            let result = self.resolve_query_plan(input).await;
-            self.parameters = previous;
+            let previous = self.state.scope.parameters.clone();
+            self.state.scope.parameters.extend(bindings);
+            let result = self
+                .resolve_query_plan(input)
+                .await
+                .map(|input| self.scoped_query(input));
+            self.state.scope.parameters = previous;
             result?
         })
     }

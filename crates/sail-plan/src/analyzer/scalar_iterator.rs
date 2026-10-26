@@ -1,5 +1,5 @@
 //! Scalar Python iterators consume a relation, not individual scalar batches.
-//! Extract them while attribute identities and argument types are still native.
+//! Extract them in the intermediate plan before lowering.
 use std::sync::Arc;
 
 use arrow_schema::Schema;
