@@ -6,7 +6,6 @@ use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -35,7 +34,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
-use sail_data_source::resolve_listing_urls;
+use sail_data_source::resolve_table_url;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
@@ -1622,12 +1621,11 @@ pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
 }
 
 impl DeltaLakeSource {
-    pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        let mut urls = resolve_listing_urls(ctx, paths.clone()).await?;
-        match (urls.pop(), urls.is_empty()) {
-            (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
-            _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
-        }
+    pub async fn parse_table_url(_ctx: &dyn Session, mut paths: Vec<String>) -> Result<Url> {
+        let Some(path) = paths.pop().filter(|_| paths.is_empty()) else {
+            return plan_err!("expected a single path for Delta table sink");
+        };
+        resolve_table_url(path)
     }
 }
 

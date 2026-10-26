@@ -117,12 +117,7 @@ impl PlanResolver<'_> {
             spec::LakehouseCommandTarget::Table(table) => table,
             spec::LakehouseCommandTarget::Path(path) => {
                 // Resolve explicit paths before using the shared procedure target routing.
-                let mut urls =
-                    sail_data_source::resolve_listing_urls(&self.ctx.state(), vec![path]).await?;
-                let Some(url) = urls.pop().filter(|_| urls.is_empty()) else {
-                    return Err(PlanError::invalid("Expected a single lakehouse table path"));
-                };
-                let url: &url::Url = url.as_ref();
+                let url = sail_data_source::resolve_table_url(path)?;
                 spec::ObjectName::from([format.clone(), url.as_str().to_string()])
             }
         };

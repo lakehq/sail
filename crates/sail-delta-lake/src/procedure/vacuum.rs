@@ -258,12 +258,53 @@ fn protect(
     path: &str,
     dv: Option<&DeletionVectorDescriptor>,
 ) -> Result<()> {
-    // Action paths have already been URI-decoded by the protocol deserializer.
-    let url = root
-        .join(&encode_path(path))
-        .map_err(DeltaError::generic_err)?;
+    // Hadoop absolute paths have an absolute path component, not merely a scheme.
+    let absolute_uri = path.split_once(':').filter(|(scheme, rest)| {
+        scheme
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic)
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            && rest.starts_with('/')
+    });
+    let encoded = encode_path(path);
+    let mut url = if let Some((scheme, rest)) = absolute_uri {
+        if scheme.eq_ignore_ascii_case(root.scheme())
+            && (!rest.starts_with("//") || rest.starts_with("///"))
+        {
+            // Qualify before parsing: special URL schemes otherwise infer a host from the path.
+            let mut qualified = root.clone();
+            qualified.set_path(&encode_path(rest.strip_prefix("//").unwrap_or(rest)));
+            Ok(qualified)
+        } else {
+            Url::parse(&encoded)
+        }
+    } else if path.starts_with('/') {
+        root.join(&encoded)
+    } else {
+        root.join(&format!("./{encoded}"))
+    }
+    .map_err(DeltaError::generic_err)?;
+    // Qualify a missing authority with the table's filesystem, never replace a host.
+    if url.scheme() == root.scheme() && url.host_str().is_none() {
+        let mut qualified = root.clone();
+        qualified.set_path(url.path());
+        url = qualified;
+    }
     if let Some(path) = relative_path(root, &url)? {
         files.insert(path);
+    }
+    // Decoding erased the distinction between `scheme:/path` and `scheme%3A/path`.
+    // Protect the literal relative object too; `scheme://` cannot name such an object.
+    if absolute_uri.is_some_and(|(_, rest)| !rest.starts_with("//")) {
+        let url = root
+            .join(&format!("./{encoded}"))
+            .map_err(DeltaError::generic_err)?;
+        if let Some(path) = relative_path(root, &url)? {
+            files.insert(path);
+        }
     }
     if let Some(dv) = dv
         && let Some(url) = resolve_dv_absolute_path(root, dv)?
@@ -288,7 +329,7 @@ fn relative_path(root: &Url, url: &Url) -> Result<Option<Path>> {
 
 fn absolute_path(root: &Url, path: &Path) -> Result<String> {
     Ok(root
-        .join(&encode_path(path.as_ref()))
+        .join(&format!("./{}", encode_path(path.as_ref())))
         .map_err(DeltaError::generic_err)?
         .to_string())
 }
@@ -319,6 +360,130 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn vacuum_resolves_relative_object_paths() {
+        for root in ["file:///table%20%23/", "s3://bucket/table%20%23/"] {
+            let root = Url::parse(root).unwrap();
+            for (path, encoded) in [
+                ("plain.parquet", "plain.parquet"),
+                ("data:0001.parquet", "data:0001.parquet"),
+                ("nested/data:0002.parquet", "nested/data:0002.parquet"),
+                ("data:/nested.parquet", "data:/nested.parquet"),
+                ("1scheme:/nested.parquet", "1scheme:/nested.parquet"),
+                ("+scheme:/nested.parquet", "+scheme:/nested.parquet"),
+                ("-scheme:/nested.parquet", "-scheme:/nested.parquet"),
+                (".scheme:/nested.parquet", ".scheme:/nested.parquet"),
+                ("space #/%3A?*.parquet", "space%20%23/%253A%3F%2A.parquet"),
+            ] {
+                let mut files = HashSet::new();
+                protect(&mut files, &root, path, None).unwrap();
+                let object = Path::parse(path).unwrap();
+                assert_eq!(files, HashSet::from([object.clone()]), "{root} {path}");
+                assert_eq!(
+                    absolute_path(&root, &object).unwrap(),
+                    format!("{root}{encoded}")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vacuum_protects_only_in_table_absolute_paths() {
+        for root in [
+            "file:///table/",
+            "s3://bucket/table/",
+            "https://bucket.s3.amazonaws.com/table/",
+        ] {
+            let root = Url::parse(root).unwrap();
+            for (path, expected) in [
+                ("/table/data.parquet".to_string(), true),
+                (format!("{root}data.parquet"), true),
+                (format!("{}:///table/data.parquet", root.scheme()), true),
+                ("foreign://bucket/table/data.parquet".to_string(), false),
+                ("/table-other/data.parquet".to_string(), false),
+                (
+                    format!("{}://other/table/data.parquet", root.scheme()),
+                    false,
+                ),
+                (
+                    format!(
+                        "{}/outside/data.parquet",
+                        &root[..url::Position::BeforePath]
+                    ),
+                    false,
+                ),
+                ("//other/table/data.parquet".to_string(), false),
+            ] {
+                let mut files = HashSet::new();
+                protect(&mut files, &root, &path, None).unwrap();
+                let expected = if expected {
+                    HashSet::from([Path::from("data.parquet")])
+                } else {
+                    HashSet::new()
+                };
+                assert_eq!(files, expected, "{root} {path}");
+            }
+        }
+        let mut files = HashSet::new();
+        let root = Url::parse("s3://bucket/table/").unwrap();
+        protect(&mut files, &root, "//bucket/table/data.parquet", None).unwrap();
+        assert_eq!(files, HashSet::from([Path::from("data.parquet")]));
+    }
+
+    #[test]
+    fn vacuum_protects_both_interpretations_of_decoded_scheme_paths() {
+        for root in [
+            "file:///table/",
+            "s3://bucket/table/",
+            "https://bucket.s3.amazonaws.com/table/",
+        ] {
+            let root = Url::parse(root).unwrap();
+            for (suffix, relative) in [
+                ("/table/data.parquet", Some("data.parquet")),
+                ("/table/space #/%3A?.parquet", Some("space #/%3A?.parquet")),
+                ("/outside/data.parquet", None),
+            ] {
+                let path = format!("{}:{suffix}", root.scheme());
+                let mut files = HashSet::new();
+                protect(&mut files, &root, &path, None).unwrap();
+                let object = Path::parse(&path).unwrap();
+                let mut expected = HashSet::from([object.clone()]);
+                if let Some(relative) = relative {
+                    expected.insert(Path::parse(relative).unwrap());
+                }
+                assert_eq!(files, expected, "{root} {path}");
+                assert_eq!(
+                    absolute_path(&root, &object).unwrap(),
+                    format!("{root}{}", encode_path(&path))
+                );
+            }
+            let mut files = HashSet::new();
+            protect(&mut files, &root, "foreign:/table/data.parquet", None).unwrap();
+            assert_eq!(
+                files,
+                HashSet::from([Path::from("foreign:/table/data.parquet")])
+            );
+        }
+    }
+
+    #[test]
+    fn vacuum_fails_closed_on_invalid_absolute_paths() {
+        for root in ["file:///table/", "s3://bucket/table/"] {
+            let root = Url::parse(root).unwrap();
+            for path in [
+                "s3://bucket:invalid/table/data.parquet",
+                "https://bucket:invalid/table/data.parquet",
+            ] {
+                let mut files = HashSet::new();
+                assert!(
+                    protect(&mut files, &root, path, None).is_err(),
+                    "{root} {path}"
+                );
+                assert!(files.is_empty());
+            }
+        }
+    }
 
     #[derive(Debug, Default)]
     struct VacuumStore {

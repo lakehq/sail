@@ -4,8 +4,11 @@ import json
 import os
 import shutil
 import time
-from urllib.parse import unquote
+from urllib.parse import quote, unquote, urlparse
+from uuid import uuid4
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pyspark.sql import Row
 from pyspark.sql.connect import proto
@@ -336,6 +339,89 @@ def test_optimize_compacts_read_mode_table_files(spark, read_mode_table):
     assert max(_commits(path)) == before + 1
     assert len(_active_files(path)) == 1
     assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == [0, 1, 2, 3]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows filenames cannot contain colons")
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "delete"])
+def test_vacuum_preserves_colon_action_paths(spark, tmp_path, dry_run):
+    path = tmp_path / "table"
+    log = path / "_delta_log"
+    log.mkdir(parents=True)
+    now = int(time.time() * 1000)
+    old = time.time() - 9 * 24 * 3600
+    schema = {"type": "struct", "fields": [{"name": "id", "type": "long", "nullable": True, "metadata": {}}]}
+    actions = [
+        {"protocol": {"minReaderVersion": 1, "minWriterVersion": 2}},
+        {
+            "metaData": {
+                "id": str(uuid4()),
+                "format": {"provider": "parquet", "options": {}},
+                "schemaString": json.dumps(schema),
+                "partitionColumns": [],
+                "configuration": {},
+                "createdTime": now,
+            }
+        },
+    ]
+    retained = {}
+    for value, name in enumerate(
+        ["plain.parquet", "data:0001.parquet", "nested/data:0002.parquet", "removed:0001.parquet", "removed.parquet"]
+    ):
+        file = path / name
+        file.parent.mkdir(exist_ok=True)
+        pq.write_table(pa.table({"id": pa.array([value], pa.int64())}), file)
+        os.utime(file, (old, old))
+        retained[file] = file.read_bytes()
+        action = {"path": quote(name, safe="/"), "partitionValues": {}, "size": file.stat().st_size, "dataChange": True}
+        if name.startswith("removed"):
+            actions.append({"remove": {**action, "deletionTimestamp": now, "extendedFileMetadata": True}})
+        else:
+            actions.append({"add": {**action, "modificationTime": int(old * 1000)}})
+    (log / "00000000000000000000.json").write_text("".join(json.dumps(action) + "\n" for action in actions))
+    orphan = path / "orphan:0001.parquet"
+    orphan.write_bytes(next(iter(retained.values())))
+    os.utime(orphan, (old, old))
+    before = {file: file.read_bytes() for file in path.rglob("*") if file.is_file()}
+    assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == [0, 1, 2]
+    suffix = " DRY RUN" if dry_run else ""
+    result = spark.sql(f"VACUUM delta.`{path}`{suffix}").collect()
+    # A cached read can hide physical deletion, so check the actual bytes first.
+    assert all(file.exists() and file.read_bytes() == content for file, content in retained.items())
+    assert all(urlparse(row.path).scheme == "file" for row in result)
+    assert _paths(result) == {str(orphan if dry_run else path)}
+    assert orphan.exists() is dry_run
+    if dry_run:
+        assert {file: file.read_bytes() for file in path.rglob("*") if file.is_file()} == before
+    assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == [0, 1, 2]
+
+
+@pytest.mark.parametrize(
+    ("command", "pattern"),
+    [
+        ("VACUUM {target}", "*.parquet"),
+        ("VACUUM {target} DRY RUN", "*.parquet"),
+        ("OPTIMIZE {target}", "part-?.parquet"),
+    ],
+)
+@pytest.mark.parametrize("qualified", [False, True], ids=["string-target", "delta-target"])
+def test_maintenance_rejects_glob_targets_without_mutation(spark, tmp_path, command, qualified, pattern):
+    path = tmp_path / "table"
+    for value in range(2):
+        spark.range(value, value + 1).coalesce(1).write.format("delta").mode("append").save(str(path))
+    # A widened VACUUM would delete even this file that does not match the glob.
+    orphan = path / "unrelated.txt"
+    orphan.write_bytes(b"orphan")
+    old = time.time() - 9 * 24 * 3600
+    os.utime(orphan, (old, old))
+    before = {file: file.read_bytes() for file in path.rglob("*") if file.is_file()}
+    target_path = str(path / pattern)
+    target = f"delta.`{target_path}`" if qualified else f"'{escape_sql_string_literal(target_path)}'"
+    statement = command.format(target=target)
+    try:
+        with pytest.raises(Exception, match=r"(?i)(glob|wildcard)"):
+            spark.sql(statement).collect()
+    finally:
+        assert {file: file.read_bytes() for file in path.rglob("*") if file.is_file()} == before
 
 
 def test_vacuum_dry_run_returns_all_candidates(spark, maintenance_table):

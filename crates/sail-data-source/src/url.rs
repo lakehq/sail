@@ -558,6 +558,29 @@ pub fn resolve_listing_writer_url(path: String) -> Result<Url> {
     Ok(base)
 }
 
+/// Resolve a single table directory without caller-supplied glob patterns.
+pub fn resolve_table_url(path: String) -> Result<Url> {
+    let raw_path = if std::path::Path::new(&path).is_absolute() {
+        path.as_str()
+    } else {
+        match RawGlobUrl::parser()
+            .parse(&path)
+            .into_result()
+            .map_err(|_| plan_datafusion_err!("invalid table URL: {path}"))?
+        {
+            RawGlobUrl::Hierarchical { path, .. }
+            | RawGlobUrl::NonHierarchical { path, .. }
+            | RawGlobUrl::RelativePath(path) => path,
+        }
+    };
+    // Expansion can simplify a character class or brace expression into a literal.
+    // Validate before expansion, without decoding escapes or inspecting the authority.
+    if raw_path.contains(['*', '?', '[', ']', '{', '}']) {
+        return plan_err!("glob pattern is not allowed in the table URL: {path}");
+    }
+    resolve_listing_writer_url(path)
+}
+
 /// If `url` points to a directory and the user did not supply an explicit
 /// glob, attach a default pattern that excludes file names starting with
 /// `.` or `_` (commit/_SUCCESS markers, `.crc` checksum files, etc.).
@@ -793,6 +816,57 @@ mod tests {
 
         let error = PathGlobFilter::parse("[").unwrap_err();
         assert!(error.to_string().contains("invalid path glob filter"));
+    }
+
+    #[test]
+    fn test_resolve_table_url_rejects_globs() {
+        for root in [
+            "s3://bucket/table/",
+            "file:///tmp/table/",
+            "/tmp/table/",
+            "table/",
+        ] {
+            for pattern in ["*", "?", "[ab]", "[]", "[!]a", "[-]a", "{a,b}", "{a}", "a}"] {
+                let path = format!("{root}{pattern}");
+                assert!(resolve_table_url(path.clone()).is_err(), "{path}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_table_url_preserves_literal_paths() {
+        let cwd = Url::from_directory_path(std::env::current_dir().unwrap()).unwrap();
+        let absolute = std::env::temp_dir().join("table");
+        let literal = std::env::temp_dir().join("table%7Ba%7D");
+        for (path, expected) in [
+            (
+                absolute.to_str().unwrap(),
+                Url::from_directory_path(&absolute).unwrap().to_string(),
+            ),
+            ("table", format!("{cwd}table/")),
+            ("./nested/../table/", format!("{cwd}table/")),
+            ("file:///tmp/table", "file:///tmp/table/".to_string()),
+            ("s3://bucket/table", "s3://bucket/table/".to_string()),
+            ("s3://bucket/table/", "s3://bucket/table/".to_string()),
+            ("https://[::1]/table", "https://[::1]/table/".to_string()),
+            (
+                literal.to_str().unwrap(),
+                Url::from_directory_path(&literal).unwrap().to_string(),
+            ),
+        ] {
+            assert_eq!(
+                resolve_table_url(path.to_string()).unwrap().as_str(),
+                expected,
+                "{path}"
+            );
+        }
+        for root in ["file:///tmp/", "s3://bucket/"] {
+            let path = format!("{root}literal%2A%3F%5B%5D%7Ba%7D%23%25");
+            assert_eq!(
+                resolve_table_url(path.clone()).unwrap().as_str(),
+                format!("{path}/")
+            );
+        }
     }
 
     #[test]
