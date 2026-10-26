@@ -20,12 +20,13 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use apache_avro::{Writer as AvroWriter, to_value};
+use apache_avro::to_value;
 
 use super::{
     DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
 };
 use crate::spec::FormatVersion;
+use crate::spec::avro_utils::create_avro_writer;
 use crate::spec::manifest_list::{FieldSummary, ManifestContentType, ManifestFile};
 use crate::spec::types::{Datum, Literal, PrimitiveLiteral, PrimitiveType, Type};
 
@@ -68,7 +69,7 @@ fn compare_partition_literals(
     }
 }
 
-fn partition_summaries(
+pub(crate) fn partition_summaries(
     metadata: &ManifestMetadata,
     entries: &[ManifestEntryRef],
 ) -> Result<Vec<FieldSummary>, String> {
@@ -339,6 +340,11 @@ impl ManifestWriter {
     }
 
     pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
+        if self.metadata.format_version == FormatVersion::V1
+            && self.metadata.content != ManifestContentType::Data
+        {
+            return Err("Iceberg V1 manifests cannot contain deletes".into());
+        }
         // Build Avro schema from partition spec
         let partition_type = self
             .metadata
@@ -347,7 +353,8 @@ impl ManifestWriter {
             .map_err(|e| format!("Partition type error: {e}"))?;
         let (declared_schema, encoding_schema) =
             super::schema::manifest_entry_schemas(&partition_type, self.metadata.format_version);
-        let mut writer = AvroWriter::new(&encoding_schema, Vec::new());
+        let mut writer = create_avro_writer(&encoding_schema, Vec::new())
+            .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
         // Add user metadata per Iceberg spec
         let schema_json = serde_json::to_vec(&self.metadata.schema)
@@ -386,6 +393,7 @@ impl ManifestWriter {
         }
 
         for entry in &self.entries {
+            super::validate_data_file_version(&entry.data_file, self.metadata.format_version)?;
             let entry = entry.as_ref().clone();
             let value = match self.metadata.format_version {
                 FormatVersion::V1 => to_value(super::_serde::ManifestEntryV1::from_entry(
@@ -400,14 +408,14 @@ impl ManifestWriter {
             .resolve(&encoding_schema)
             .map_err(|e| format!("Avro resolve error: {e}"))?;
             writer
-                .append(value)
+                .append_value(value)
                 .map_err(|e| format!("Avro append error: {e}"))?;
         }
 
         let encoded = writer
             .into_inner()
             .map_err(|e| format!("Avro writer finalize error: {e}"))?;
-        super::replace_avro_schema_header(&encoded, &declared_schema)
+        super::replace_avro_schema_header(&encoded, &declared_schema, &partition_type)
     }
 }
 
@@ -566,6 +574,206 @@ mod tests {
     }
 
     #[test]
+    fn both_writers_reject_values_that_version_projection_would_drop() {
+        for version in [FormatVersion::V1, FormatVersion::V2] {
+            for name in [
+                "first_row_id",
+                "content_offset",
+                "content_size_in_bytes",
+                "referenced_data_file",
+                "equality_ids",
+                "content",
+            ] {
+                if version == FormatVersion::V2
+                    && matches!(name, "referenced_data_file" | "equality_ids" | "content")
+                {
+                    continue;
+                }
+                let metadata = ManifestMetadata::new(
+                    Arc::new(Schema::builder().build().expect("schema")),
+                    0,
+                    PartitionSpec::unpartitioned_spec(),
+                    version,
+                    ManifestContentType::Data,
+                );
+                let partition_type = metadata
+                    .partition_spec
+                    .partition_type(&metadata.schema)
+                    .expect("partition type");
+                let mut file = partitioned_file("data.parquet", vec![]);
+                file.content = DataContentType::Data;
+                match name {
+                    "first_row_id" => file.first_row_id = Some(7),
+                    "content_offset" => file.content_offset = Some(4),
+                    "content_size_in_bytes" => file.content_size_in_bytes = Some(20),
+                    "referenced_data_file" => {
+                        file.referenced_data_file = Some("data.parquet".into())
+                    }
+                    "equality_ids" => file.equality_ids = vec![1],
+                    "content" => file.content = DataContentType::PositionDeletes,
+                    _ => unreachable!(),
+                }
+                let mut writer = ManifestWriterBuilder::new(None, None, metadata).build();
+                writer.add(file.clone());
+                assert!(writer.to_avro_bytes_v2().is_err(), "{version:?}: {name}");
+                assert!(
+                    super::super::write_data_files_to_avro(
+                        &mut Vec::new(),
+                        [file],
+                        &partition_type,
+                        version
+                    )
+                    .is_err(),
+                    "standalone {version:?}: {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn v2_referenced_data_file_is_preserved_by_both_writers() {
+        let metadata = ManifestMetadata::new(
+            Arc::new(Schema::builder().build().expect("schema")),
+            0,
+            PartitionSpec::unpartitioned_spec(),
+            FormatVersion::V2,
+            ManifestContentType::Deletes,
+        );
+        let partition_type = metadata
+            .partition_spec
+            .partition_type(&metadata.schema)
+            .expect("partition type");
+        let mut file = partitioned_file("delete.parquet", vec![]);
+        file.referenced_data_file = Some("data.parquet".into());
+        let mut writer = ManifestWriterBuilder::new(Some(7), None, metadata.clone()).build();
+        writer.add(file.clone());
+        let bytes = writer.to_avro_bytes_v2().expect("V2 manifest");
+        assert_eq!(
+            Manifest::parse_avro(&bytes)
+                .expect("read manifest")
+                .entries()[0]
+                .data_file,
+            file
+        );
+        let mut bytes = Vec::new();
+        super::super::write_data_files_to_avro(
+            &mut bytes,
+            [file.clone()],
+            &partition_type,
+            FormatVersion::V2,
+        )
+        .expect("V2 data file");
+        let parsed = super::super::read_data_files_from_avro(
+            &mut bytes.as_slice(),
+            &metadata.schema,
+            0,
+            &partition_type,
+            FormatVersion::V2,
+        )
+        .expect("read data file");
+        assert_eq!(parsed, vec![file]);
+    }
+
+    #[test]
+    fn required_partitions_and_timestamp_annotations_match_payload_in_both_writers() {
+        for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+            let mut types = vec![PrimitiveType::Timestamp, PrimitiveType::Timestamptz];
+            if version == FormatVersion::V3 {
+                types.extend([PrimitiveType::TimestampNs, PrimitiveType::TimestamptzNs]);
+            }
+            let schema = Schema::builder()
+                .with_fields(types.iter().enumerate().map(|(index, primitive)| {
+                    Arc::new(NestedField::optional(
+                        index as i32 + 1,
+                        format!("time{index}"),
+                        Type::Primitive(primitive.clone()),
+                    ))
+                }))
+                .build()
+                .expect("timestamp schema");
+            let mut builder = PartitionSpec::builder();
+            for index in 0..types.len() {
+                builder = builder.add_field(
+                    index as i32 + 1,
+                    format!("time{index}"),
+                    Transform::Identity,
+                );
+            }
+            let partition_spec = builder.build();
+            let metadata = ManifestMetadata::new(
+                Arc::new(schema),
+                0,
+                partition_spec,
+                version,
+                ManifestContentType::Data,
+            );
+            let partition_type = metadata
+                .partition_spec
+                .partition_type(&metadata.schema)
+                .expect("partition type");
+            let mut file = partitioned_file(
+                "data.parquet",
+                types
+                    .iter()
+                    .map(|_| Some(Literal::Primitive(PrimitiveLiteral::Long(123456))))
+                    .collect(),
+            );
+            file.content = DataContentType::Data;
+            let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
+            writer.add(file.clone());
+            let manifest_bytes = writer.to_avro_bytes_v2().expect("write manifest");
+            let mut data_bytes = Vec::new();
+            super::super::write_data_files_to_avro(
+                &mut data_bytes,
+                [file.clone()],
+                &partition_type,
+                version,
+            )
+            .expect("write standalone file");
+            for bytes in [&manifest_bytes, &data_bytes] {
+                let header = super::super::parse_avro_object_header(bytes).expect("header");
+                let mut schema: serde_json::Value =
+                    serde_json::from_slice(header.metadata.get("avro.schema").expect("schema"))
+                        .expect("raw JSON schema");
+                assert!(
+                    super::super::find_avro_field_type(&mut schema, 102)
+                        .expect("partition")
+                        .is_object()
+                );
+                for (index, field) in partition_type.fields().iter().enumerate() {
+                    let schema = super::super::find_avro_field_type(&mut schema, field.id)
+                        .and_then(super::super::non_null_avro_schema)
+                        .expect("timestamp field");
+                    assert_eq!(schema["adjust-to-utc"], serde_json::json!(index % 2 == 1));
+                    assert_eq!(
+                        schema["logicalType"],
+                        if index < 2 {
+                            "timestamp-micros"
+                        } else {
+                            "timestamp-nanos"
+                        }
+                    );
+                }
+                let mut reader = apache_avro::Reader::new(bytes.as_slice()).expect("typed header");
+                assert!(reader.next().expect("payload").is_ok());
+                assert!(reader.next().is_none());
+            }
+            let parsed = Manifest::parse_avro(&manifest_bytes).expect("read manifest");
+            assert_eq!(parsed.entries()[0].data_file.partition, file.partition);
+            assert_eq!(parsed.entries()[0].snapshot_id, None);
+            let parsed = super::super::read_data_files_from_avro(
+                &mut data_bytes.as_slice(),
+                &metadata.schema,
+                0,
+                &partition_type,
+                version,
+            )
+            .expect("read standalone file");
+            assert_eq!(parsed[0].partition, file.partition);
+        }
+    }
+
+    #[test]
     fn uuid_partition_order_matches_java_uuid_order() {
         let signed_high_bit = PrimitiveLiteral::UInt128(1_u128 << 127);
         let positive_high_half = PrimitiveLiteral::UInt128(1_u128 << 126);
@@ -663,6 +871,11 @@ mod tests {
                     Type::Primitive(PrimitiveType::Uuid),
                     false,
                 )),
+                Arc::new(NestedField::optional(
+                    6,
+                    "fixed_copy",
+                    Type::Primitive(PrimitiveType::Fixed(3)),
+                )),
             ])
             .build()
             .expect("table schema");
@@ -672,6 +885,7 @@ mod tests {
             .add_field(3, "uuid_value", Transform::Identity)
             .add_field(4, "decimal_copy", Transform::Identity)
             .add_field(5, "uuid_copy", Transform::Identity)
+            .add_field(6, "fixed_copy", Transform::Identity)
             .build();
         let metadata = ManifestMetadata::new(
             Arc::new(schema),
@@ -690,6 +904,7 @@ mod tests {
             Some(Literal::Primitive(PrimitiveLiteral::UInt128(
                 0xffeeddcc_bbaa_9988_7766_554433221100,
             ))),
+            Some(Literal::Primitive(PrimitiveLiteral::Binary(vec![4, 5, 6]))),
         ];
         let mut file = partitioned_file("data.parquet", expected_partition.clone());
         file.content = DataContentType::Data;

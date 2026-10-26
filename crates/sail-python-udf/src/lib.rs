@@ -1,5 +1,6 @@
 mod accumulator;
 mod array;
+mod buffer;
 pub mod cereal;
 pub mod config;
 mod conversion;

@@ -20,12 +20,12 @@ from pysail.tests.spark.iceberg.test_iceberg_equality_delete import (
 from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
 
 
-def _create_partitioned_table(spark, table_name: str, location: Path) -> None:
+def _create_partitioned_table(spark, table_name: str, location: Path, value_type: str = "BIGINT") -> None:
     escaped_location = escape_sql_string_literal(str(location))
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
     spark.sql(
         f"""
-        CREATE TABLE {table_name} (id BIGINT, category STRING, value BIGINT)
+        CREATE TABLE {table_name} (id BIGINT, category STRING, value {value_type})
         USING iceberg
         PARTITIONED BY (category)
         LOCATION '{escaped_location}'
@@ -40,7 +40,7 @@ def _rows(spark, table_name: str) -> list[tuple[int, str, int]]:
 
 def _live_data_file_paths(location: Path) -> set[str]:
     table = StaticTable.from_metadata(
-        str(location),
+        location.as_uri(),
         properties=pyiceberg_file_io_properties(),
     )
     return {str(task.file.file_path) for task in table.scan().plan_files()}
@@ -61,17 +61,19 @@ def _publish_injected_metadata(location: Path) -> None:
 def test_iceberg_predicate_overwrite_rewrites_only_candidate_partition(spark, tmp_path):
     table_name = "iceberg_predicate_overwrite"
     location = tmp_path / table_name
-    _create_partitioned_table(spark, table_name, location)
+    # A required non-partition column must not stop the overwrite from choosing files.
+    _create_partitioned_table(spark, table_name, location, value_type="BIGINT NOT NULL")
     try:
+        schema = "id BIGINT, category STRING, value BIGINT NOT NULL"
         spark.createDataFrame(
             [(1, "A", 10), (2, "B", 20), (3, "A", 30), (4, "B", 40)],
-            schema="id BIGINT, category STRING, value BIGINT",
+            schema=schema,
         ).writeTo(table_name).append()
         initial_live_files = _live_data_file_paths(location)
 
         spark.createDataFrame(
             [(5, "A", 100), (6, "A", 200)],
-            schema="id BIGINT, category STRING, value BIGINT",
+            schema=schema,
         ).writeTo(table_name).overwrite(F.col("category") == "A")
 
         assert _rows(spark, table_name) == [
@@ -138,7 +140,7 @@ def test_iceberg_predicate_overwrite_rejects_non_partition_column(spark, tmp_pat
 
 
 @pytest.mark.parametrize("mode", ["predicate", "dynamic"])
-def test_iceberg_scoped_overwrite_rejects_v3_table(spark, tmp_path, mode):
+def test_iceberg_scoped_overwrite_assigns_v3_lineage(spark, tmp_path, mode):
     table_name = f"iceberg_scoped_overwrite_v3_{mode}"
     location = tmp_path / table_name
     _create_partitioned_table(spark, table_name, location)
@@ -154,8 +156,12 @@ def test_iceberg_scoped_overwrite_rejects_v3_table(spark, tmp_path, mode):
             else:
                 writer.overwritePartitions()
 
-        with pytest.raises(Exception, match=r"v3.*overwrite"):
-            overwrite()
+        overwrite()
+        from pysail.testing.spark.steps.iceberg import _current_row_lineage, _find_latest_metadata
+
+        lineage = _current_row_lineage(location)
+        assert set(lineage) == {2}
+        assert lineage[2][1] == _find_latest_metadata(location)["last-sequence-number"]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -168,7 +174,7 @@ def test_iceberg_scoped_overwrite_rejects_active_delete_files(spark, tmp_path, m
     try:
         schema = "id BIGINT, category STRING, value BIGINT"
         spark.createDataFrame([(1, "A", 10), (2, "B", 20), (3, "A", 30)], schema=schema).writeTo(table_name).append()
-        table = StaticTable.from_metadata(str(location), properties=pyiceberg_file_io_properties())
+        table = StaticTable.from_metadata(location.as_uri(), properties=pyiceberg_file_io_properties())
         _append_equality_delete_snapshot(
             table,
             pa.table({"id": [1]}),
@@ -336,7 +342,7 @@ def test_iceberg_v1_dynamic_overwrite_writes_v1_metadata_shapes(spark, tmp_path)
         assert metadata["snapshots"][-1]["summary"]["operation"] == "overwrite"
 
         external_table = StaticTable.from_metadata(
-            str(location),
+            location.as_uri(),
             properties=pyiceberg_file_io_properties(),
         )
         current_snapshot = external_table.current_snapshot()
@@ -468,3 +474,21 @@ def test_iceberg_v1_append_preserves_non_main_snapshot_ref(spark, sql_catalog):
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
         sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_dynamic_overwrite_option_preserves_other_partitions(spark, tmp_path):
+    table_name = "iceberg_dynamic_overwrite_option"
+    location = tmp_path / table_name
+    _create_partitioned_table(spark, table_name, location)
+    try:
+        spark.createDataFrame([(1, "A", 10), (2, "B", 20)], "id BIGINT, category STRING, value BIGINT").writeTo(
+            table_name
+        ).append()
+        original_files = _live_data_file_paths(location)
+        spark.createDataFrame([(3, "A", 30)], "id BIGINT, category STRING, value BIGINT").writeTo(table_name).option(
+            "overwrite-mode", "dynamic"
+        ).overwrite(F.lit(True))
+        assert _rows(spark, table_name) == [(2, "B", 20), (3, "A", 30)]
+        assert original_files & _live_data_file_paths(location)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")

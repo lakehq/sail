@@ -28,7 +28,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use log::warn;
@@ -444,7 +444,7 @@ impl DeltaCommitExec {
             .await
     }
 
-    async fn publish_staged_commit(
+    pub(crate) async fn publish_staged_commit(
         log_store: &LogStoreRef,
         staged: &CatalogManagedStagedCommit,
     ) -> Result<()> {
@@ -473,7 +473,7 @@ impl DeltaCommitExec {
         }
     }
 
-    async fn latest_published_backfilled_version(
+    pub(crate) async fn latest_published_backfilled_version(
         log_store: &LogStoreRef,
         end_version: i64,
     ) -> Result<Option<i64>> {
@@ -608,7 +608,7 @@ impl ExecutionPlan for DeltaCommitExec {
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
 
-                // Arrow-native action rows + optional CommitMeta row only.
+                // A batch may coalesce action rows from multiple writer partitions.
                 if batch.column_by_name(COL_ACTION).is_some() {
                     let (decoded_actions, decoded_meta) =
                         decode_actions_and_meta_from_batch(&batch)?;
@@ -629,11 +629,11 @@ impl ExecutionPlan for DeltaCommitExec {
                             _ => actions.push(ca),
                         }
                     }
-                    if let Some(ExecCommitMeta {
+                    for ExecCommitMeta {
                         row_count,
                         operation: op,
                         operation_metrics: metrics,
-                    }) = decoded_meta
+                    } in decoded_meta
                     {
                         total_rows = total_rows.saturating_add(row_count);
                         if operation.is_none() {
@@ -835,6 +835,70 @@ impl ExecutionPlan for DeltaCommitExec {
             } else {
                 None
             };
+
+            if matches!(sink_mode, PhysicalSinkMode::OverwritePartitions)
+                && let Some(snapshot) = &reference
+            {
+                let partition_schema = final_actions
+                    .iter()
+                    .rev()
+                    .find_map(|action| match action {
+                        CommitAction::Metadata(metadata) => Some(metadata.parse_schema_arrow()),
+                        _ => None,
+                    })
+                    .transpose()
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?
+                    .unwrap_or_else(|| snapshot.schema().clone());
+                let partition_fields = snapshot
+                    .physical_partition_columns()
+                    .into_iter()
+                    .map(|column| {
+                        let field = partition_schema.field_with_name(&column.logical_name)?;
+                        Ok((column.physical_name, field.data_type().clone()))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let partition_key = |add: &crate::spec::Add| -> Result<Vec<ScalarValue>> {
+                    partition_fields
+                        .iter()
+                        .map(|(name, data_type)| {
+                            crate::conversion::parse_optional_partition_value(
+                                add.partition_values
+                                    .get(name)
+                                    .and_then(|value| value.as_deref()),
+                                data_type,
+                            )
+                            // ScalarValue compares float bits, while Spark equates signed zeros.
+                            .map(|value| match value {
+                                ScalarValue::Float32(Some(0.0)) => ScalarValue::Float32(Some(0.0)),
+                                ScalarValue::Float64(Some(0.0)) => ScalarValue::Float64(Some(0.0)),
+                                value => value,
+                            })
+                            .map_err(|error| DataFusionError::External(Box::new(error)))
+                        })
+                        .collect()
+                };
+                let partitions = final_actions
+                    .iter()
+                    .filter_map(|action| match action {
+                        CommitAction::Add(add) => Some(partition_key(add)),
+                        _ => None,
+                    })
+                    .collect::<Result<std::collections::HashSet<_>>>()?;
+                let removed = snapshot.adds().iter().try_fold(
+                    Vec::new(),
+                    |mut removed, add| -> Result<_> {
+                        if partitions.contains(&partition_key(add)?) {
+                            removed.push(add.clone());
+                        }
+                        Ok(removed)
+                    },
+                )?;
+                final_actions.extend(
+                    crate::datasource::actions::adds_to_remove_actions(removed)
+                        .into_iter()
+                        .map(CommitAction::Remove),
+                );
+            }
 
             if table_exists {
                 final_actions = apply_identity_high_water_marks(

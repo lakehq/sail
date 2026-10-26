@@ -35,6 +35,13 @@ impl Actor for WorkerActor {
                 enable_tls: options.enable_tls,
                 host: options.driver_host.clone(),
                 port: options.driver_port,
+                flight_connection_count: options.shuffle_backend.flight_connection_count(),
+                flight_initial_stream_window_size: options
+                    .shuffle_backend
+                    .flight_initial_stream_window_size(),
+                flight_initial_connection_window_size: options
+                    .shuffle_backend
+                    .flight_initial_connection_window_size(),
             },
         );
         let metrics_client = driver_client_set.core.clone();
@@ -69,7 +76,7 @@ impl Actor for WorkerActor {
                 *max_file_size,
                 *compression,
             )),
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Celeborn { .. } => None,
+            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Celeborn { .. } => None,
         };
         let celeborn_streams = match &self.options.shuffle_backend {
             ShuffleBackendKind::Celeborn { compression, .. } => {
@@ -87,7 +94,7 @@ impl Actor for WorkerActor {
                 ));
                 Some(CelebornStreamManager::new(client))
             }
-            ShuffleBackendKind::Flight | ShuffleBackendKind::Storage { .. } => None,
+            ShuffleBackendKind::Flight { .. } | ShuffleBackendKind::Storage { .. } => None,
         };
         let task_runner = ctx
             .children_mut()
@@ -116,7 +123,16 @@ impl Actor for WorkerActor {
         let span = Span::enter_with_local_parent("WorkerActor::serve");
         let task_context = self.options.session.task_ctx();
         self.server = server
-            .start(Self::serve(ctx.handle().clone(), task_runner, task_context, addr).in_span(span))
+            .start(
+                Self::serve(
+                    ctx.handle().clone(),
+                    task_runner,
+                    task_context,
+                    addr,
+                    self.options.shuffle_backend.flight_compression(),
+                )
+                .in_span(span),
+            )
             .await;
     }
 

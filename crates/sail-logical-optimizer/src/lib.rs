@@ -1,12 +1,19 @@
 use std::sync::Arc;
 
+use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
 mod resolve_lambda_variables;
+mod rewrite_binary_grouping;
+mod scalar_iterator_udf;
+mod scalar_subquery_keys;
 
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
+use rewrite_binary_grouping::RewriteBinaryGrouping;
+use scalar_iterator_udf::ExtractScalarIteratorUDF;
+use scalar_subquery_keys::NormalizeScalarSubqueryKeys;
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     // FIXME: Create analyzer rule for TypeCoercion in Sail
@@ -18,6 +25,8 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
         vec![Arc::new(ResolveLambdaVariables)];
     rules.extend(built_in_rules);
+    // Iterator UDFs need partition streams and must be extracted before scalar folding.
+    rules.push(Arc::new(ExtractScalarIteratorUDF));
     rules
 }
 
@@ -31,7 +40,13 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // in Filter/Aggregate) are left for DataFusion's `DecorrelateLateralJoin`.
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
-    custom.extend(rules);
+    for rule in rules {
+        if rule.name() == ScalarSubqueryToJoin::new().name() {
+            custom.push(Arc::new(NormalizeScalarSubqueryKeys));
+        }
+        custom.push(rule);
+    }
+    custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
     // folding can change the type or nullability of higher-order function
     // arguments, and the lambda variable fields must be refreshed to match.

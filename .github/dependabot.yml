@@ -17,6 +17,7 @@ updates:
         update-types:
           - "major"
     ignore:
+      - dependency-name: "rustfs-mimalloc-sys"
       - dependency-name: "datafusion"
       - dependency-name: "datafusion-*"
       - dependency-name: "arrow"

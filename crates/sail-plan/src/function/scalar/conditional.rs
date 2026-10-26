@@ -3,13 +3,14 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -68,6 +69,19 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
     Ok(expr_fn::coalesce(arguments))
+}
+
+/// Spark defines `nvl` (and its alias `ifnull`) as `coalesce` with two arguments.
+fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    coalesce(ScalarFunctionInput {
+        arguments: vec![left, right],
+        function_context,
+    })
 }
 
 fn coerce_string_temporal_values(
@@ -181,11 +195,11 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
     vec![
         ("coalesce", F::custom(coalesce)),
         ("if", F::custom(if_expr)),
-        ("ifnull", F::binary(expr_fn::nvl)),
+        ("ifnull", F::custom(nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
         ("nullif", F::binary(expr_fn::nullif)),
         ("nullifzero", F::custom(nullifzero)),
-        ("nvl", F::binary(expr_fn::nvl)),
+        ("nvl", F::custom(nvl)),
         ("nvl2", F::ternary(expr_fn::nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
@@ -193,62 +207,69 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
     ]
 }
 
-/// Create a zero literal with the same type as the input expression
-fn create_zero_literal(data_type: &DataType) -> ScalarValue {
-    match data_type {
-        DataType::Int8 => ScalarValue::Int8(Some(0)),
-        DataType::Int16 => ScalarValue::Int16(Some(0)),
-        DataType::Int32 => ScalarValue::Int32(Some(0)),
-        DataType::Int64 => ScalarValue::Int64(Some(0)),
-        DataType::UInt8 => ScalarValue::UInt8(Some(0)),
-        DataType::UInt16 => ScalarValue::UInt16(Some(0)),
-        DataType::UInt32 => ScalarValue::UInt32(Some(0)),
-        DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-        DataType::Float32 => ScalarValue::Float32(Some(0.0)),
-        DataType::Float64 => ScalarValue::Float64(Some(0.0)),
-        DataType::Decimal128(precision, scale) => {
-            ScalarValue::Decimal128(Some(0), *precision, *scale)
-        }
-        DataType::Decimal256(precision, scale) => {
-            ScalarValue::Decimal256(Some(0.into()), *precision, *scale)
-        }
-        // For non-numeric types, default to Int32
-        _ => ScalarValue::Int32(Some(0)),
-    }
-}
-
-/// Implementation of nullifzero function with type-aware casting
 fn nullifzero(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
         function_context,
     } = input;
     let arg = arguments.one()?;
-
-    // Get the data type of the input argument
-    let data_type = arg.to_field(function_context.schema)?.1.data_type().clone();
-
-    // Create a zero literal with the same type as the input
-    let zero_literal = lit(create_zero_literal(&data_type));
-
-    // Return nullif(arg, zero_literal)
-    Ok(expr_fn::nullif(arg, zero_literal))
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let condition = match arg.get_type(function_context.schema)? {
+        data_type if is_string_type(&data_type) => {
+            let value = if ansi_mode {
+                cast(arg.clone(), DataType::Int64)
+            } else {
+                ScalarUDF::from(SparkCastStringToInt32::new()).call(vec![arg.clone()])
+            };
+            value.eq(lit(0_i32))
+        }
+        DataType::Boolean if !ansi_mode => arg.clone().eq(lit(false)),
+        data_type if data_type.is_numeric() || data_type == DataType::Null => {
+            arg.clone().eq(lit(0_i32))
+        }
+        data_type => {
+            return Err(PlanError::invalid(format!(
+                "nullifzero cannot compare data type {data_type} with an integer zero"
+            )));
+        }
+    };
+    Ok(when(condition, lit(ScalarValue::Null)).otherwise(arg)?)
 }
 
-/// Implementation of zeroifnull function with type-aware casting
 fn zeroifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
         function_context,
     } = input;
     let arg = arguments.one()?;
-
-    // Get the data type of the input argument
-    let data_type = arg.to_field(function_context.schema)?.1.data_type().clone();
-
-    // Create a zero literal with the same type as the input
-    let zero_literal = lit(create_zero_literal(&data_type));
-
-    // Return nvl(arg, zero_literal)
-    Ok(expr_fn::nvl(arg, zero_literal))
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let (arg, zero) = match arg.get_type(function_context.schema)? {
+        DataType::Float32 if ansi_mode => (cast(arg, DataType::Float64), lit(0_i32)),
+        data_type if is_string_type(&data_type) && ansi_mode => {
+            (cast(arg, DataType::Int64), lit(0_i32))
+        }
+        data_type if is_string_type(&data_type) => (arg, lit("0")),
+        DataType::Decimal128(precision, scale) => {
+            // The INT zero contributes ten integer digits. Keep integer digits when
+            // the common decimal type exceeds Spark's 38-digit precision limit.
+            let integer_digits = (i16::from(precision) - i16::from(scale)).max(10);
+            let scale = i16::from(scale).max(0);
+            let precision = (integer_digits + scale).min(38) as u8;
+            let scale = scale.min((38 - integer_digits).max(0)) as i8;
+            let data_type = DataType::Decimal128(precision, scale);
+            let arg = if ansi_mode {
+                cast(arg, data_type)
+            } else {
+                try_cast(arg, data_type)
+            };
+            (arg, lit(0_i32))
+        }
+        data_type if data_type.is_numeric() || data_type == DataType::Null => (arg, lit(0_i32)),
+        data_type => {
+            return Err(PlanError::invalid(format!(
+                "zeroifnull cannot combine data type {data_type} with an integer zero"
+            )));
+        }
+    };
+    Ok(expr_fn::coalesce(vec![arg, zero]))
 }

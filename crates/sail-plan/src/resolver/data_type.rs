@@ -306,6 +306,19 @@ impl PlanResolver<'_> {
             metadata,
         } = field;
         let mut metadata: HashMap<String, String> = metadata.iter().cloned().collect();
+        if let spec::DataType::Interval {
+            interval_unit,
+            start_field,
+            end_field,
+        } = data_type
+            && let Some(interval) =
+                spec::SparkIntervalMetadata::try_new(*interval_unit, *start_field, *end_field)?
+        {
+            metadata.insert(
+                spec::SAIL_SPARK_INTERVAL_METADATA_KEY.to_string(),
+                interval.to_json()?,
+            );
+        }
         let data_type = match data_type {
             spec::DataType::UserDefined {
                 jvm_class,

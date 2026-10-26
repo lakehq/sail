@@ -13,7 +13,7 @@ use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_
 use crate::physical_plan::write_location;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
-use crate::spec::partition::{PartitionSpec, UnboundPartitionField, UnboundPartitionSpec};
+use crate::spec::partition::{PartitionSpec, UnboundPartitionSpec};
 use crate::spec::{FormatVersion, Schema as IcebergSchema, TableMetadata, TableRequirement};
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_expr,
@@ -65,6 +65,7 @@ pub struct IcebergWriteContext {
     pub commit_writer_partition_spec: bool,
     pub requirements: Vec<TableRequirement>,
     pub variant_shredding: VariantShreddingConfig,
+    pub sort_order: crate::spec::SortOrder,
 }
 
 impl IcebergWriteContext {
@@ -86,7 +87,10 @@ impl IcebergWriteContext {
     }
 
     pub fn writer_arrow_schema(&self) -> Result<SchemaRef> {
-        Ok(Arc::new(iceberg_schema_to_arrow(&self.writer_schema)?))
+        Ok(Arc::new(crate::schema_defaults::write_default_schema(
+            &iceberg_schema_to_arrow(&self.writer_schema)?,
+            &self.writer_schema,
+        )?))
     }
 
     pub fn writer_partition_spec_id(&self) -> i32 {
@@ -97,21 +101,13 @@ impl IcebergWriteContext {
     }
 
     pub fn unbound_writer_partition_spec(&self) -> UnboundPartitionSpec {
-        let fields = self
-            .writer_partition_spec
+        self.writer_partition_spec
             .as_ref()
-            .map(|spec| {
-                spec.fields()
-                    .iter()
-                    .map(|field| UnboundPartitionField {
-                        source_id: field.source_id,
-                        name: field.name.clone(),
-                        transform: field.transform,
-                    })
-                    .collect()
+            .map(UnboundPartitionSpec::from)
+            .unwrap_or_else(|| UnboundPartitionSpec {
+                spec_id: None,
+                fields: vec![],
             })
-            .unwrap_or_default();
-        UnboundPartitionSpec { fields }
     }
 
     pub fn data_location(&self) -> Result<Url> {
@@ -173,6 +169,7 @@ pub fn prepare_iceberg_write_context(
         requirements,
         variant_shredding,
     ) = if let Some(table_metadata) = base_metadata {
+        crate::properties::validate_write_properties(&table_metadata.properties)?;
         let data_location = write_location::resolve_data_location_from_options_and_properties(
             options.write_data_path.as_deref(),
             options.write_folder_storage_path.as_deref(),
@@ -186,9 +183,6 @@ pub fn prepare_iceberg_write_context(
             if !partition_columns.is_empty() {
                 let current_schema = &schema_outcome.iceberg_schema;
                 let mut builder = PartitionSpec::builder();
-                if let Some(existing) = &partition_spec {
-                    builder = builder.with_spec_id(existing.spec_id());
-                }
                 for field in partition_columns {
                     let field_id =
                         current_schema
@@ -199,13 +193,15 @@ pub fn prepare_iceberg_write_context(
                                     format_partition_expr(field)
                                 ))
                             })?;
-                    builder = builder.add_field(
-                        field_id,
-                        partition_field_name(field),
-                        iceberg_transform_from_partition_field(field),
-                    );
+                    let transform = iceberg_transform_from_partition_field(field);
+                    builder = builder.add_field(field_id, partition_field_name(field), transform);
                 }
-                partition_spec = Some(builder.build());
+                partition_spec = Some(
+                    builder
+                        .build()
+                        .assign_ids(table_metadata)
+                        .map_err(DataFusionError::Plan)?,
+                );
             }
         } else {
             let current_schema = table_metadata.current_schema().ok_or_else(|| {
@@ -251,6 +247,7 @@ pub fn prepare_iceberg_write_context(
             crate::properties::metadata_properties_from_table_properties(
                 &options.table_properties,
             )?;
+        crate::properties::validate_write_properties(&metadata_properties)?;
         let variant_shredding = options.variant_shredding_config(&metadata_properties)?;
         let mut writer_schema = arrow_schema_to_iceberg(input_schema)?;
         writer_schema = SchemaEvolver::assign_schema_field_ids(&writer_schema)?;
@@ -304,6 +301,15 @@ pub fn prepare_iceberg_write_context(
         commit_writer_partition_spec,
         requirements,
         variant_shredding,
+        sort_order: base_metadata
+            .and_then(|metadata| {
+                metadata
+                    .sort_orders
+                    .iter()
+                    .find(|order| Some(order.order_id as i32) == metadata.default_sort_order_id)
+            })
+            .cloned()
+            .unwrap_or_else(crate::spec::SortOrder::unsorted_order),
     })
 }
 
@@ -318,16 +324,17 @@ fn extract_partition_columns(
     partition_spec
         .fields()
         .iter()
+        .filter(|field| field.transform != crate::spec::Transform::Void)
         .map(|partition_field| {
-            let field = iceberg_schema
-                .field_by_id(partition_field.source_id)
+            let name = iceberg_schema
+                .name_by_field_id(partition_field.source_id)
                 .ok_or_else(|| {
                     DataFusionError::Plan(format!(
                         "Partition column mismatch: field id {} missing in schema",
                         partition_field.source_id
                     ))
                 })?;
-            catalog_partition_field_from_iceberg(field.name.clone(), partition_field.transform)
+            catalog_partition_field_from_iceberg(name.to_string(), partition_field.transform)
                 .map_err(DataFusionError::Plan)
         })
         .collect()

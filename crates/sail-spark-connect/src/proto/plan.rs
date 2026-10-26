@@ -1457,7 +1457,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     Some(x) => {
                         from_ast_object_name(parse_object_name(x.as_str())?)?.child(function_name)
                     }
-                    None => spec::ObjectName::bare(function_name),
+                    None => from_ast_object_name(parse_object_name(function_name.as_str())?)?,
                 };
                 Ok(spec::CommandNode::FunctionExists { function })
             }
@@ -1830,9 +1830,18 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
             is_global,
             replace,
         } = command;
+        let name = from_ast_object_name(parse_object_name(&name)?)?;
+        let view = match name.parts() {
+            [view] => view.clone(),
+            _ => {
+                return Err(SparkError::invalid(
+                    "expected a single identifier for temporary view name",
+                ));
+            }
+        };
         let input = input.required("input relation")?.try_into()?;
         Ok(spec::CommandNode::CreateTemporaryView {
-            view: name.into(),
+            view,
             is_global,
             definition: spec::TemporaryViewDefinition {
                 input: Box::new(input),

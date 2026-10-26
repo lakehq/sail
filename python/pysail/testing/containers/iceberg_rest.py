@@ -8,16 +8,16 @@ from typing import TYPE_CHECKING
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
-from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+from testcontainers.core.wait_strategies import HttpWaitStrategy, LogMessageWaitStrategy
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-_MINIO_IMAGE = "minio/minio:RELEASE.2025-05-24T17-08-30Z"
-_MINIO_CLIENT_IMAGE = "minio/mc:RELEASE.2025-05-21T01-59-54Z"
+_SILO_IMAGE = "pgsty/silo:RELEASE.2026-09-03T13-18-01Z"
 _ICEBERG_REST_IMAGE = "apache/iceberg-rest-fixture:1.10.1"
-_MINIO_ALIAS = "minio"
-_MINIO_ENDPOINT = f"http://{_MINIO_ALIAS}:9000"
+_SILO_ALIAS = "silo"
+_SILO_PORT = 9000
+_SILO_ENDPOINT = f"http://{_SILO_ALIAS}:{_SILO_PORT}"
 _ICEBERG_REST_PORT = 8181
 
 
@@ -40,33 +40,19 @@ def _published_host(container: DockerContainer) -> str:
 
 @pytest.fixture(scope="session")
 def iceberg_rest_service() -> Generator[IcebergRestService, None, None]:
-    """Start MinIO and the Apache Iceberg REST catalog fixture."""
+    """Start Silo and the Apache Iceberg REST catalog fixture."""
     network = Network()
     network.create()
 
-    minio = (
-        DockerContainer(_MINIO_IMAGE)
+    silo = (
+        DockerContainer(_SILO_IMAGE)
+        .with_exposed_ports(_SILO_PORT)
         .with_env("MINIO_ROOT_USER", "admin")
         .with_env("MINIO_ROOT_PASSWORD", "password")
         .with_command("server /data --console-address :9001")
         .with_network(network)
-        .with_network_aliases(_MINIO_ALIAS)
-        .waiting_for(LogMessageWaitStrategy("MinIO Object Storage Server").with_startup_timeout(120))
-    )
-    create_bucket = " ".join(
-        [
-            f"until /usr/bin/mc alias set minio {_MINIO_ENDPOINT} admin password; do sleep 1; done;",
-            "/usr/bin/mc mb --ignore-existing minio/icebergdata;",
-            "/usr/bin/mc anonymous set public minio/icebergdata;",
-            "tail -f /dev/null",
-        ]
-    )
-    minio_client = (
-        DockerContainer(_MINIO_CLIENT_IMAGE)
-        .with_kwargs(entrypoint="/bin/sh")
-        .with_command(["-c", create_bucket])
-        .with_network(network)
-        .waiting_for(LogMessageWaitStrategy("Bucket created successfully").with_startup_timeout(120))
+        .with_network_aliases(_SILO_ALIAS)
+        .waiting_for(HttpWaitStrategy(_SILO_PORT, "/minio/health/ready").with_startup_timeout(120))
     )
     rest_catalog = (
         DockerContainer(_ICEBERG_REST_IMAGE)
@@ -78,7 +64,7 @@ def iceberg_rest_service() -> Generator[IcebergRestService, None, None]:
         .with_env("CATALOG_URI", "jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory")
         .with_env("CATALOG_WAREHOUSE", "s3://icebergdata/demo")
         .with_env("CATALOG_IO__IMPL", "org.apache.iceberg.aws.s3.S3FileIO")
-        .with_env("CATALOG_S3_ENDPOINT", _MINIO_ENDPOINT)
+        .with_env("CATALOG_S3_ENDPOINT", _SILO_ENDPOINT)
         .with_env("CATALOG_S3_PATH__STYLE__ACCESS", "true")
         .with_network(network)
         .waiting_for(
@@ -87,10 +73,18 @@ def iceberg_rest_service() -> Generator[IcebergRestService, None, None]:
     )
 
     try:
-        with minio, minio_client, rest_catalog:
-            yield IcebergRestService(
-                host=_published_host(rest_catalog),
-                port=int(rest_catalog.get_exposed_port(_ICEBERG_REST_PORT)),
-            )
+        with silo:
+            for command in [
+                ["mcli", "alias", "set", "local", f"http://127.0.0.1:{_SILO_PORT}", "admin", "password"],
+                ["mcli", "mb", "--ignore-existing", "local/icebergdata"],
+                ["mcli", "anonymous", "set", "public", "local/icebergdata"],
+            ]:
+                exit_code, output = silo.exec(command)
+                assert exit_code == 0, output.decode()
+            with rest_catalog:
+                yield IcebergRestService(
+                    host=_published_host(rest_catalog),
+                    port=int(rest_catalog.get_exposed_port(_ICEBERG_REST_PORT)),
+                )
     finally:
         network.remove()

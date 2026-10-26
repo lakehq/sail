@@ -19,6 +19,7 @@ pub(crate) struct GroupedCountMetadata {
     pub(crate) rows: Vec<GroupedCountMetadataRow>,
     pub(crate) residual_file_indices: Vec<usize>,
     pub(crate) metadata_file_count: usize,
+    pub(crate) metadata_row_count: u64,
     pub(crate) metadata_bytes: u64,
     pub(crate) residual_bytes: u64,
 }
@@ -49,8 +50,20 @@ impl DeltaSnapshot {
         group_columns: &[String],
         max_metadata_groups: usize,
     ) -> Option<GroupedCountMetadata> {
-        if !self.load_config().require_files || group_columns.is_empty() || max_metadata_groups == 0
-        {
+        if !self.load_config().require_files {
+            return None;
+        }
+
+        self.summarize_metadata_files(self.adds(), group_columns, max_metadata_groups)
+    }
+
+    pub(crate) fn summarize_metadata_files(
+        &self,
+        adds: &[Add],
+        group_columns: &[String],
+        max_metadata_groups: usize,
+    ) -> Option<GroupedCountMetadata> {
+        if max_metadata_groups == 0 {
             return None;
         }
 
@@ -76,10 +89,11 @@ impl DeltaSnapshot {
         let mut grouped_counts = IndexMap::<Vec<ScalarValue>, i64>::new();
         let mut residual_file_indices = Vec::new();
         let mut metadata_file_count = 0usize;
+        let mut metadata_row_count = 0u64;
         let mut metadata_bytes = 0u64;
         let mut residual_bytes = 0u64;
 
-        for (index, add) in self.adds().iter().enumerate() {
+        for (index, add) in adds.iter().enumerate() {
             let file_size = u64::try_from(add.size).ok()?;
             match classify_file(add, &columns) {
                 FileContribution::Metadata {
@@ -94,6 +108,7 @@ impl DeltaSnapshot {
                     let count = grouped_counts.entry(group_values).or_default();
                     *count = count.checked_add(logical_rows)?;
                     metadata_file_count = metadata_file_count.checked_add(1)?;
+                    metadata_row_count = metadata_row_count.checked_add(logical_rows as u64)?;
                     metadata_bytes = metadata_bytes.checked_add(file_size)?;
                 }
                 FileContribution::Empty => {
@@ -117,6 +132,7 @@ impl DeltaSnapshot {
                 .collect(),
             residual_file_indices,
             metadata_file_count,
+            metadata_row_count,
             metadata_bytes,
             residual_bytes,
         })

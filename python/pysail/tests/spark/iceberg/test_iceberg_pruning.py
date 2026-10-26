@@ -310,3 +310,24 @@ def test_limit_pushdown_behavior(spark, tmp_path):
         assert df.count() == 7
     finally:
         catalog.drop_table("default.prune_limit")
+
+
+def test_truncated_manifest_bounds_do_not_replace_string_aggregates(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.truncated_bounds"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(1, "id", LongType(), required=False), NestedField(2, "s", StringType(), required=False)
+        ),
+        properties={"write.metadata.metrics.default": "truncate(2)"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2], "s": ["abcdef", "xyzzzz"]}))
+        file = next(iter(table.scan().plan_files())).file
+        assert file.lower_bounds[2] == b"ab"
+        assert file.upper_bounds[2] == b"xz"
+        rows = spark.read.format("iceberg").load(table.location()).selectExpr("min(s)", "max(s)").collect()
+        assert [tuple(row) for row in rows] == [("abcdef", "xyzzzz")]
+    finally:
+        catalog.drop_table(identifier)

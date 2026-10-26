@@ -143,7 +143,23 @@ impl SparkRuntimeConfig {
     }
 
     pub(crate) fn set(&mut self, key: String, value: String) -> SparkResult<()> {
+        // TODO: Investigate how spark.wap.branch and spark.wap.id should reach
+        // Iceberg write planning for validation at the format boundary.
         self.validate_removed_key(key.as_str(), value.as_str())?;
+        // Spark limits this setting to Int32; Sail accepts positive Int64 counts,
+        // matching its partitioning hints. Plan conversion checks the usize limit.
+        if key == SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS {
+            let partitions = value.trim().parse::<i64>().map_err(|_| {
+                SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be a positive 64-bit integer",
+                )
+            })?;
+            if partitions <= 0 {
+                return Err(SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be positive",
+                ));
+            }
+        }
         self.config.insert(key, value);
         Ok(())
     }
@@ -220,6 +236,28 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_REDACTION_OPTIONS_REGEX) {
+            output.redaction_options_regex = value.to_string();
+        }
+        if let Some(value) = config.get_option("spark.redaction.regex") {
+            output.redaction_regex = value.to_string();
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS) {
+            let partitions = value.trim().parse::<i64>().map_err(|_| {
+                SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be a positive 64-bit integer",
+                )
+            })?;
+            if partitions <= 0 {
+                return Err(SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be positive",
+                ));
+            }
+            output.shuffle_partitions = usize::try_from(partitions).map_err(|_| {
+                SparkError::invalid("spark.sql.shuffle.partitions exceeds the platform limit")
+            })?;
+        }
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
@@ -268,6 +306,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.ansi_mode = value;
         }
 
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_TYPE_COERCION_DATETIME_TO_STRING_ENABLED)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_type_coercion_datetime_to_string = value;
+        }
+
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_STORE_ASSIGNMENT_POLICY) {
             output.store_assignment_policy = match value.trim().to_ascii_uppercase().as_str() {
                 "ANSI" => StoreAssignmentPolicy::Ansi,
@@ -276,6 +322,20 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
                 _ => {
                     return Err(SparkError::invalid(format!(
                         "invalid store assignment policy: {value}"
+                    )));
+                }
+            };
+        }
+
+        if let Some(value) =
+            config.get_option(SparkConfigKey::SPARK_SQL_SOURCES_PARTITION_OVERWRITE_MODE)
+        {
+            output.dynamic_partition_overwrite = match value.trim().to_ascii_uppercase().as_str() {
+                "STATIC" => false,
+                "DYNAMIC" => true,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid partition overwrite mode: {value}"
                     )));
                 }
             };

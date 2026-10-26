@@ -415,6 +415,32 @@ def delta_log_json_file_matches_snapshot(
     assert obj == snapshot
 
 
+@then(parsers.parse("delta log latest removes in {location_var} match adds from versions {versions}"))
+def delta_log_latest_removes_match_adds(location_var: str, versions: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    log_dir = Path(location.path) / "_delta_log"
+    commits = sorted(log_dir.glob("*.json"))
+    assert commits, f"No Delta commits found in {log_dir}"
+
+    def file_identities(path: Path, action_type: str) -> list[str]:
+        actions = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        return [
+            json.dumps({"path": action["path"], "deletionVector": action.get("deletionVector")}, sort_keys=True)
+            for entry in actions
+            if (action := entry.get(action_type)) is not None
+        ]
+
+    expected = [
+        identity
+        for version in _parse_version_list(versions)
+        for identity in file_identities(log_dir / f"{version:020}.json", "add")
+    ]
+    assert expected, "Expected at least one original Add action"
+    actual = file_identities(commits[-1], "remove")
+    assert sorted(actual) == sorted(expected)
+
+
 @then(parsers.parse("delta log JSON file {filename} in {location_var} contains"))
 def delta_log_json_file_contains(
     filename: str,

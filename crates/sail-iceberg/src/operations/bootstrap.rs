@@ -25,6 +25,7 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::helpers::format_version_for_schema;
+use crate::operations::metadata_commit::{PreviousMetadataFile, previous_metadata_log_entry};
 use crate::operations::{PreparedSnapshotCommit, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::table_metadata::SnapshotLog;
@@ -431,6 +432,11 @@ pub async fn replace_empty_table_metadata(
     latest_meta_path: &str,
     metadata_style: NewTableMetadataStyle,
 ) -> Result<BootstrapResult> {
+    let previous_entry = previous_metadata_log_entry(
+        table_url,
+        PreviousMetadataFile::ObjectPath(latest_meta_path),
+        previous_metadata.last_updated_ms,
+    )?;
     let (requested_format_version, table_properties) =
         crate::properties::metadata_properties_from_table_properties(table_properties)?;
     let format_version = previous_metadata
@@ -459,22 +465,29 @@ pub async fn replace_empty_table_metadata(
     replacement_metadata.location = table_url.to_string();
     replacement_metadata.last_updated_ms = commit_timestamp_ms;
     replacement_metadata.last_column_id = last_column_id;
-    replacement_metadata.schemas.push(iceberg_schema.clone());
+    if !replacement_metadata
+        .schemas
+        .iter()
+        .any(|schema| schema.schema_id() == iceberg_schema.schema_id())
+    {
+        replacement_metadata.schemas.push(iceberg_schema.clone());
+    }
     replacement_metadata.current_schema_id = iceberg_schema.schema_id();
-    replacement_metadata
+    if !replacement_metadata
         .partition_specs
-        .push(partition_spec.clone());
+        .iter()
+        .any(|spec| spec.spec_id() == partition_spec.spec_id())
+    {
+        replacement_metadata
+            .partition_specs
+            .push(partition_spec.clone());
+    }
     replacement_metadata.default_spec_id = partition_spec.spec_id();
     replacement_metadata.last_partition_id = last_partition_id;
     replacement_metadata.properties = table_properties;
     replacement_metadata.current_snapshot_id = Some(-1);
     replacement_metadata.next_row_id = next_row_id;
-    replacement_metadata
-        .metadata_log
-        .push(crate::spec::metadata::table_metadata::MetadataLog {
-            timestamp_ms: previous_metadata.last_updated_ms,
-            metadata_file: latest_meta_path.to_string(),
-        });
+    replacement_metadata.metadata_log.push(previous_entry);
     replacement_metadata.refs.remove(MAIN_BRANCH);
     if format_version >= FormatVersion::V2 {
         if !replacement_metadata
@@ -513,6 +526,14 @@ pub async fn bootstrap_first_snapshot(
     previous_metadata_file: Option<&str>,
     persist_strategy: PersistStrategy,
 ) -> Result<BootstrapResult> {
+    let previous_entry = previous_metadata_log_entry(
+        table_url,
+        previous_metadata_file.map_or(
+            PreviousMetadataFile::ObjectPath(latest_meta_path),
+            PreviousMetadataFile::CatalogLocation,
+        ),
+        table_metadata.last_updated_ms,
+    )?;
     let iceberg_schema = table_metadata
         .current_schema()
         .cloned()
@@ -541,7 +562,6 @@ pub async fn bootstrap_first_snapshot(
         }
     };
 
-    let previous_metadata_timestamp_ms = table_metadata.last_updated_ms;
     let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     table_metadata.current_snapshot_id = Some(snapshot.snapshot_id());
     table_metadata.snapshots.push(snapshot.clone());
@@ -549,14 +569,7 @@ pub async fn bootstrap_first_snapshot(
         timestamp_ms: commit_timestamp_ms,
         snapshot_id: snapshot.snapshot_id(),
     });
-    table_metadata
-        .metadata_log
-        .push(crate::spec::metadata::table_metadata::MetadataLog {
-            timestamp_ms: previous_metadata_timestamp_ms,
-            metadata_file: previous_metadata_file
-                .unwrap_or(latest_meta_path)
-                .to_string(),
-        });
+    table_metadata.metadata_log.push(previous_entry);
     table_metadata.last_sequence_number = snapshot.sequence_number();
     table_metadata.last_updated_ms = commit_timestamp_ms;
     if let Some(added_rows) = snapshot.added_rows {

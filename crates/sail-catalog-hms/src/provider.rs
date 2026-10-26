@@ -1,7 +1,7 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use futures::future::try_join_all;
-use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
@@ -14,24 +14,25 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use sail_common_hms::hms::{
     EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
-    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
-    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
-    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
+    ThriftHiveMetastoreClient, ThriftHiveMetastoreCreateDatabaseException,
+    ThriftHiveMetastoreCreateTableException, ThriftHiveMetastoreDropDatabaseException,
+    ThriftHiveMetastoreDropTableException,
     ThriftHiveMetastoreDropTableWithEnvironmentContextException,
     ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
     ThriftHiveMetastoreGetTableReqException,
 };
+use sail_thrift::{Client, ClientError, Connector, MaybeException, ReadHalf, Transport, WriteHalf};
 use tokio::sync::Mutex;
-use volo_thrift::MaybeException;
 
 use crate::convert::{
-    GenericDataSourceFormat, alter_spark_column_default, build_database, build_generic_table,
-    build_view, database_to_status, inject_spark_metadata, is_view_table, reject_spark_properties,
-    reject_spark_property_keys, table_to_status, validate_namespace, view_to_status,
+    GenericDataSourceFormat, alter_spark_column_default, alter_spark_column_type, build_database,
+    build_generic_table, build_view, database_to_status, inject_spark_metadata, is_view_table,
+    reject_spark_properties, reject_spark_property_keys, table_to_status, validate_namespace,
+    view_to_status,
 };
 use crate::data_type::arrow_to_hive_type;
 use crate::managed_table;
-use crate::security::{KerberosMakeTransport, SaslQop};
+use crate::security::{SaslQop, kerberos_transport};
 
 #[derive(Debug, Clone, Default)]
 pub struct HmsCatalogConfig {
@@ -68,6 +69,37 @@ enum CatalogAuthMode {
     Kerberos { hostbased_service: String },
 }
 
+struct HmsConnector {
+    address: std::net::SocketAddr,
+    auth: CatalogAuthMode,
+    qop: SaslQop,
+    timeout: Duration,
+}
+
+#[async_trait::async_trait]
+impl Connector for HmsConnector {
+    async fn connect(&self) -> std::io::Result<(ReadHalf, WriteHalf)> {
+        let stream =
+            tokio::time::timeout(self.timeout, tokio::net::TcpStream::connect(self.address))
+                .await
+                .map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::TimedOut, "HMS connection timed out")
+                })??;
+        stream.set_nodelay(true)?;
+        match &self.auth {
+            CatalogAuthMode::None => {
+                let (reader, writer) = stream.into_split();
+                Ok((Box::new(reader), Box::new(writer)))
+            }
+            CatalogAuthMode::Kerberos { hostbased_service } => {
+                let (reader, writer) =
+                    kerberos_transport(stream, hostbased_service, self.qop).await?;
+                Ok((Box::new(reader), Box::new(writer)))
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct DropTableRequest {
     delete_data: bool,
@@ -78,9 +110,9 @@ const HMS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn build_drop_table_request(purge: bool) -> DropTableRequest {
     let environment_context = purge.then(|| EnvironmentContext {
-        properties: Some(AHashMap::from_iter([(
-            FastStr::from_static_str("ifPurge"),
-            FastStr::from_static_str("TRUE"),
+        properties: Some(HashMap::from_iter([(
+            String::from("ifPurge"),
+            String::from("TRUE"),
         )])),
     });
 
@@ -99,6 +131,38 @@ pub(crate) fn apply_alter_table_options(
     options: AlterTableOptions,
 ) -> CatalogResult<()> {
     match options {
+        // Iceberg partition specs live in format metadata; HMS partition keys stay empty.
+        AlterTableOptions::AlterSnapshotReference { .. }
+        | AlterTableOptions::AlterIdentifierFields { .. }
+        | AlterTableOptions::AlterPartitionSpec { .. }
+        | AlterTableOptions::SetPartitioning { .. } => {}
+        AlterTableOptions::SetWriteOrder { distribution, .. } => {
+            if let Some(value) = distribution {
+                hms_table
+                    .parameters
+                    .get_or_insert_with(HashMap::new)
+                    .insert("write.distribution-mode".into(), value);
+            }
+        }
+        AlterTableOptions::SetLocation { location } => {
+            let storage = hms_table.sd.as_mut().ok_or_else(|| {
+                CatalogError::InvalidArgument("Missing HMS storage descriptor".into())
+            })?;
+            storage.location = Some(location.clone());
+            if let Some(serde) = storage.serde_info.as_mut() {
+                let parameters = serde.parameters.get_or_insert_with(HashMap::new);
+                if parameters.contains_key("path") {
+                    parameters.insert("path".into(), location);
+                }
+            }
+        }
+        AlterTableOptions::ReplaceColumns { fields, .. } => {
+            crate::convert::replace_columns(hms_table, &arrow::datatypes::Schema::new(fields))?
+        }
+        AlterTableOptions::AlterColumns {
+            changes,
+            case_sensitive,
+        } => crate::convert::alter_columns(hms_table, &changes, case_sensitive)?,
         AlterTableOptions::SetTableProperties { properties } => {
             reject_spark_properties(&properties)?;
             managed_table::validate_metadata_location_precondition(
@@ -107,14 +171,14 @@ pub(crate) fn apply_alter_table_options(
                 table_name,
                 &properties,
             )?;
-            let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
+            let parameters = hms_table.parameters.get_or_insert_with(HashMap::new);
             for (key, value) in properties {
-                parameters.insert(key.into(), value.into());
+                parameters.insert(key, value);
             }
         }
         AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
             reject_spark_property_keys(&keys)?;
-            let parameters = hms_table.parameters.get_or_insert_with(AHashMap::new);
+            let parameters = hms_table.parameters.get_or_insert_with(HashMap::new);
             for key in keys {
                 if if_exists || parameters.contains_key(key.as_str()) {
                     parameters.remove(key.as_str());
@@ -125,7 +189,9 @@ pub(crate) fn apply_alter_table_options(
                 }
             }
         }
-        AlterTableOptions::AlterColumnType { name, data_type } => {
+        AlterTableOptions::AlterColumnType {
+            name, data_type, ..
+        } => {
             let [column_name] = name.as_slice() else {
                 return Err(CatalogError::NotSupported(
                     "Hive Metastore catalog does not support altering nested column types"
@@ -145,18 +211,34 @@ pub(crate) fn apply_alter_table_options(
             })?;
             let Some(column) = columns
                 .iter_mut()
-                .find(|column| column.name.as_deref() == Some(column_name.as_str()))
+                .chain(hms_table.partition_keys.iter_mut().flatten())
+                .find(|column| {
+                    column
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(column_name))
+                })
             else {
+                if crate::convert::extract_property(
+                    hms_table.parameters.as_ref(),
+                    crate::convert::SPARK_DATASOURCE_PROVIDER_KEY,
+                )
+                .is_some_and(|provider| provider.eq_ignore_ascii_case("delta"))
+                {
+                    return alter_spark_column_type(hms_table, &name, &data_type);
+                }
                 return Err(CatalogError::InvalidArgument(format!(
                     "Column '{column_name}' does not exist on '{db_name}.{table_name}'"
                 )));
             };
-            column.r#type = Some(FastStr::from(hive_type));
+            column.r#type = Some(hive_type);
+            alter_spark_column_type(hms_table, &name, &data_type)?;
         }
         AlterTableOptions::AlterColumnDefault { name, default } => {
             alter_spark_column_default(hms_table, &name, default)?;
         }
-        AlterTableOptions::AddCheckConstraint { .. } => {
+        AlterTableOptions::AddCheckConstraint { .. }
+        | AlterTableOptions::DropCheckConstraint { .. } => {
             return Err(CatalogError::NotSupported(
                 "CHECK constraints are handled by lake sources".to_string(),
             ));
@@ -333,7 +415,7 @@ impl HmsCatalogProvider {
 
     /// Determines whether an error is retryable by failing over to the next endpoint.
     /// Matches on stable prefixes injected at each error source:
-    /// - "transport error" from `hms_client_error` for volo-thrift transport failures
+    /// - "transport error" from `hms_client_error` for Thrift transport failures
     /// - "gssapi error" from `check_gss_ok` for Kerberos/GSSAPI failures
     /// - "dns error" from `build_client_for_endpoint` for DNS resolution failures
     fn should_retry(error: &CatalogError) -> bool {
@@ -348,10 +430,9 @@ impl HmsCatalogProvider {
         }
     }
 
-    /// Converts a volo-thrift `ClientError` into a `CatalogError`,
+    /// Converts a Thrift `ClientError` into a `CatalogError`,
     /// preserving transport-level classification for retry logic.
-    pub(crate) fn hms_client_error(context: &str, error: volo_thrift::ClientError) -> CatalogError {
-        use volo_thrift::ClientError;
+    pub(crate) fn hms_client_error(context: &str, error: ClientError) -> CatalogError {
         match &error {
             ClientError::Transport(_) => {
                 CatalogError::External(format!("{context}: transport error: {error}"))
@@ -383,45 +464,32 @@ impl HmsCatalogProvider {
                 ))
             })?;
 
-        let builder = ThriftHiveMetastoreClientBuilder::new("hms")
-            .address(address)
-            .connect_timeout(Some(connect_timeout(&self.config)));
-
-        let auth_mode = catalog_auth_mode(&self.config, &endpoint.uri)?;
-        let thrift_transport = self
+        let auth = catalog_auth_mode(&self.config, &endpoint.uri)?;
+        let transport = match self
             .config
             .thrift_transport
             .as_deref()
             .unwrap_or("buffered")
-            .to_ascii_lowercase();
-
-        let client = match (auth_mode, thrift_transport.as_str()) {
-            (CatalogAuthMode::None, "buffered") => builder
-                .make_codec(volo_thrift::codec::default::DefaultMakeCodec::buffered())
-                .build(),
-            (CatalogAuthMode::None, "framed") => builder
-                .make_codec(volo_thrift::codec::default::DefaultMakeCodec::framed())
-                .build(),
-            (CatalogAuthMode::Kerberos { hostbased_service }, "buffered") => builder
-                .make_transport(KerberosMakeTransport::new(
-                    hostbased_service,
-                    self.min_sasl_qop,
-                ))
-                .make_codec(volo_thrift::codec::default::DefaultMakeCodec::buffered())
-                .build(),
-            (CatalogAuthMode::Kerberos { hostbased_service }, "framed") => builder
-                .make_transport(KerberosMakeTransport::new(
-                    hostbased_service,
-                    self.min_sasl_qop,
-                ))
-                .make_codec(volo_thrift::codec::default::DefaultMakeCodec::framed())
-                .build(),
-            (_, other) => {
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "buffered" => Transport::Buffered,
+            "framed" => Transport::Framed,
+            other => {
                 return Err(CatalogError::InvalidArgument(format!(
                     "Unsupported thrift_transport '{other}', expected 'buffered' or 'framed'"
                 )));
             }
         };
+        let client = ThriftHiveMetastoreClient(Client::new(
+            HmsConnector {
+                address,
+                auth,
+                qop: self.min_sasl_qop,
+                timeout: connect_timeout(&self.config),
+            },
+            transport,
+        ));
         Ok(client)
     }
 
@@ -534,8 +602,8 @@ impl HmsCatalogProvider {
         // legacy method is kept as a fallback for older metastores.
         match client
             .get_table_req(GetTableRequest {
-                db_name: db_name.to_string().into(),
-                tbl_name: table_name.to_string().into(),
+                db_name: db_name.to_string(),
+                tbl_name: table_name.to_string(),
                 capabilities: None,
             })
             .await
@@ -547,13 +615,9 @@ impl HmsCatalogProvider {
             Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                 "{context} '{db_name}.{table_name}': {err:?}"
             ))),
-            Err(err)
-                if err
-                    .to_string()
-                    .contains("Invalid method name: 'get_table_req'") =>
-            {
+            Err(err) if err.is_unknown_method() => {
                 match client
-                    .get_table(db_name.to_string().into(), table_name.to_string().into())
+                    .get_table(db_name.to_string(), table_name.to_string())
                     .await
                 {
                     Ok(MaybeException::Ok(table)) => Ok(table),
@@ -586,11 +650,7 @@ impl HmsCatalogProvider {
         hms_table: Table,
     ) -> CatalogResult<()> {
         match client
-            .alter_table(
-                db_name.to_string().into(),
-                table_name.to_string().into(),
-                hms_table,
-            )
+            .alter_table(db_name.to_string(), table_name.to_string(), hms_table)
             .await
         {
             Ok(MaybeException::Ok(())) => Ok(()),
@@ -679,7 +739,7 @@ impl HmsCatalogProvider {
             .with_failover(|client| {
                 let db_name = db_name_owned.clone();
                 async move {
-                    match client.get_all_tables(db_name.clone().into()).await {
+                    match client.get_all_tables(db_name.clone()).await {
                         Ok(MaybeException::Ok(names)) => Ok(names),
                         Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                             "Failed to list HMS tables for '{db_name}': {err:?}"
@@ -698,10 +758,7 @@ impl HmsCatalogProvider {
             let db_name = db_name_owned.clone();
             let tbl_names = tbl_names.clone();
             async move {
-                match client
-                    .get_table_objects_by_name(db_name.into(), tbl_names)
-                    .await
-                {
+                match client.get_table_objects_by_name(db_name, tbl_names).await {
                     Ok(MaybeException::Ok(tables)) => Ok(tables),
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                         "Failed to batch-fetch HMS tables: {err:?}"
@@ -730,7 +787,7 @@ impl HmsCatalogProvider {
             let table = table.clone();
             async move {
                 match client
-                    .drop_table(db_name.clone().into(), table.clone().into(), delete_data)
+                    .drop_table(db_name.clone(), table.clone(), delete_data)
                     .await
                 {
                     Ok(MaybeException::Ok(())) => Ok(()),
@@ -776,8 +833,8 @@ impl HmsCatalogProvider {
                 async move {
                     match client
                         .drop_table_with_environment_context(
-                            db_name.clone().into(),
-                            table.clone().into(),
+                            db_name.clone(),
+                            table.clone(),
                             delete_data,
                             environment_context,
                         )
@@ -796,15 +853,9 @@ impl HmsCatalogProvider {
                         Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                             "Failed to drop HMS table '{db_name}.{table}': {err:?}"
                         ))),
-                        Err(err)
-                            if err.to_string().contains(
-                                "Invalid method name: 'drop_table_with_environment_context'",
-                            ) =>
-                        {
-                            Err(CatalogError::NotSupported(
-                                "drop_table_with_environment_context_unavailable".to_string(),
-                            ))
-                        }
+                        Err(err) if err.is_unknown_method() => Err(CatalogError::NotSupported(
+                            "drop_table_with_environment_context_unavailable".to_string(),
+                        )),
                         Err(err) => Err(Self::hms_client_error(
                             &format!("Failed to drop HMS table '{db_name}.{table}'"),
                             err,
@@ -847,9 +898,11 @@ fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<
             "Hive Metastore catalog does not support BUCKET BY for generic tables".to_string(),
         ));
     }
-    if options.partition_by.iter().any(|field| {
-        field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
-    }) {
+    if !options.format.eq_ignore_ascii_case("iceberg")
+        && options.partition_by.iter().any(|field| {
+            field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
+        })
+    {
         return Err(CatalogError::NotSupported(
             "Hive Metastore catalog only supports identity partition columns".to_string(),
         ));
@@ -905,7 +958,7 @@ impl CatalogProvider for HmsCatalogProvider {
             .with_failover(|client| {
                 let db_name = db_name.clone();
                 async move {
-                    match client.get_database(db_name.clone().into()).await {
+                    match client.get_database(db_name.clone()).await {
                         Ok(MaybeException::Ok(database)) => Ok(database),
                         Ok(MaybeException::Exception(
                             ThriftHiveMetastoreGetDatabaseException::O1(_),
@@ -939,7 +992,7 @@ impl CatalogProvider for HmsCatalogProvider {
                 self.with_failover(|client| {
                     let pat = pat.clone();
                     async move {
-                        match client.get_databases(pat.into()).await {
+                        match client.get_databases(pat).await {
                             Ok(MaybeException::Ok(databases)) => Ok(databases),
                             Ok(MaybeException::Exception(err)) => Err(CatalogError::External(
                                 format!("Failed to list HMS databases: {err:?}"),
@@ -1000,7 +1053,7 @@ impl CatalogProvider for HmsCatalogProvider {
             let db_name = db_name.clone();
             async move {
                 match client
-                    .drop_database(db_name.clone().into(), false, options.cascade)
+                    .drop_database(db_name.clone(), false, options.cascade)
                     .await
                 {
                     Ok(MaybeException::Ok(())) => Ok(()),
@@ -1038,6 +1091,7 @@ impl CatalogProvider for HmsCatalogProvider {
         let partition_columns: Vec<String> = options
             .partition_by
             .iter()
+            .filter(|_| format.logical_format != "iceberg")
             .map(|field| field.column.clone())
             .collect();
         let columns_for_metadata = options.columns.clone();
@@ -1055,12 +1109,14 @@ impl CatalogProvider for HmsCatalogProvider {
             options.comment,
             options.properties,
         )?;
-        inject_spark_metadata(
-            &mut hms_table,
-            &columns_for_metadata,
-            &partition_columns,
-            &format_for_metadata,
-        )?;
+        if format.logical_format != "iceberg" {
+            inject_spark_metadata(
+                &mut hms_table,
+                &columns_for_metadata,
+                &partition_columns,
+                &format_for_metadata,
+            )?;
+        }
 
         self.create_hms_table(database, table, hms_table, if_not_exists)
             .await
@@ -1127,6 +1183,65 @@ impl CatalogProvider for HmsCatalogProvider {
         }
     }
 
+    fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
+        match options {
+            AlterTableOptions::SetTableProperties { properties } => {
+                reject_spark_properties(properties)
+            }
+            AlterTableOptions::UnsetTableProperties { keys, .. } => {
+                reject_spark_property_keys(keys)
+            }
+            AlterTableOptions::AlterColumnType {
+                name, data_type, ..
+            } => {
+                if name.len() != 1 {
+                    return Err(CatalogError::NotSupported(
+                        "Hive Metastore catalog does not support altering nested column types"
+                            .to_string(),
+                    ));
+                }
+                arrow_to_hive_type(data_type).map(|_| ())
+            }
+            AlterTableOptions::AlterColumnDefault { name, .. } if name.len() != 1 => {
+                Err(CatalogError::NotSupported(
+                    "Hive Metastore catalog does not support altering nested column defaults"
+                        .to_string(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        let target_db = validate_namespace(destination_database)?;
+        self.with_failover(|client| {
+            let db_name = db_name.clone();
+            let target_db = target_db.clone();
+            let table = table.to_string();
+            let target_table = destination_table.to_string();
+            async move {
+                let mut metadata = Self::get_table_with_client(
+                    &client,
+                    &db_name,
+                    &table,
+                    "Failed to fetch HMS table for rename",
+                )
+                .await?;
+                metadata.db_name = Some(target_db);
+                metadata.table_name = Some(target_table);
+                Self::alter_table_with_client(&client, &db_name, &table, metadata).await
+            }
+        })
+        .await
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,
@@ -1137,8 +1252,13 @@ impl CatalogProvider for HmsCatalogProvider {
         let table_name = table.to_string();
 
         if managed_table::is_metadata_location_update(&options) {
-            return managed_table::alter_table_with_lock(self, &db_name, &table_name, options)
-                .await;
+            return managed_table::alter_table_with_lock(
+                self,
+                &db_name,
+                &table_name,
+                vec![options],
+            )
+            .await;
         }
 
         self.with_failover(|client| {
@@ -1161,6 +1281,16 @@ impl CatalogProvider for HmsCatalogProvider {
             }
         })
         .await
+    }
+
+    async fn alter_table_atomically(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: Vec<AlterTableOptions>,
+    ) -> CatalogResult<()> {
+        let db_name = validate_namespace(database)?;
+        managed_table::alter_table_with_lock(self, &db_name, table, options).await
     }
 
     async fn create_view(
@@ -1257,9 +1387,9 @@ impl CatalogProvider for HmsCatalogProvider {
 mod tests {
     #![expect(clippy::unwrap_used)]
 
+    use std::collections::HashMap;
     use std::time::Duration;
 
-    use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::AlterTableOptions;
     use sail_common_hms::hms::Table;
@@ -1284,17 +1414,17 @@ mod tests {
             .and_then(|context| context.properties)
             .unwrap();
         assert_eq!(
-            properties.get(&FastStr::from_static_str("ifPurge")),
-            Some(&FastStr::from_static_str("TRUE"))
+            properties.get(&String::from("ifPurge")),
+            Some(&String::from("TRUE"))
         );
     }
 
     #[test]
     fn test_apply_alter_table_options_rejects_reserved_spark_properties() {
         let mut table = Table {
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str("owner"),
-                FastStr::from_static_str("alice"),
+            parameters: Some(HashMap::from_iter([(
+                String::from("owner"),
+                String::from("alice"),
             )])),
             ..Default::default()
         };
@@ -1326,9 +1456,9 @@ mod tests {
     #[test]
     fn test_apply_alter_table_options_rejects_reserved_spark_unset_properties() {
         let mut table = Table {
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str("spark.sql.sources.provider"),
-                FastStr::from_static_str("parquet"),
+            parameters: Some(HashMap::from_iter([(
+                String::from("spark.sql.sources.provider"),
+                String::from("parquet"),
             )])),
             ..Default::default()
         };
@@ -1360,11 +1490,9 @@ mod tests {
     #[test]
     fn test_apply_alter_table_options_rejects_stale_iceberg_metadata_location() {
         let mut table = Table {
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str("metadata_location"),
-                FastStr::from_static_str(
-                    "s3://warehouse/items/metadata/00001-current.metadata.json",
-                ),
+            parameters: Some(HashMap::from_iter([(
+                String::from("metadata_location"),
+                String::from("s3://warehouse/items/metadata/00001-current.metadata.json"),
             )])),
             ..Default::default()
         };
@@ -1403,11 +1531,9 @@ mod tests {
     #[test]
     fn test_apply_alter_table_options_accepts_matching_iceberg_metadata_location() {
         let mut table = Table {
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str("metadata-location"),
-                FastStr::from_static_str(
-                    "s3://warehouse/items/metadata/00001-current.metadata.json",
-                ),
+            parameters: Some(HashMap::from_iter([(
+                String::from("metadata-location"),
+                String::from("s3://warehouse/items/metadata/00001-current.metadata.json"),
             )])),
             ..Default::default()
         };

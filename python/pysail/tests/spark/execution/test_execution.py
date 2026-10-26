@@ -39,6 +39,21 @@ def test_basic_query_execution(spark):
     assert result[0]["result"] == 2  # noqa: PLR2004
 
 
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        pytest.param("upper(key) = 'MODE'", id="string"),
+        pytest.param("size(split(key, 'o')) = 2 AND reverse(key) = 'edom'", id="array-length"),
+        pytest.param("cardinality(str_to_map(key, 'o', ':')) = 2 AND reverse(key) = 'edom'", id="map-cardinality"),
+    ],
+)
+def test_builtin_functions_in_driver_system_table_filter(spark, predicate):
+    # Pushed system-table filters are decoded on the driver, whose task context
+    # does not register DataFusion's default scalar functions.
+    rows = spark.table("system.session.options").where(predicate).select("key").collect()
+    assert [row.key for row in rows] == ["mode"]
+
+
 @pytest.mark.timeout(30)
 @pytest.mark.parametrize(
     ("with_replacement", "expected"),
@@ -397,6 +412,22 @@ def test_coalesce_preserves_data_in_cluster_mode(spark):
     expected = df.orderBy("id").toPandas()
 
     assert_frame_equal(actual, expected)
+
+
+@pytest.mark.parametrize(
+    ("left_input_partitions", "left_output_partitions", "right_input_partitions", "right_output_partitions"),
+    [(4, 2, 4, 2), (5, 3, 7, 2)],
+)
+def test_union_of_coalesced_inputs_preserves_data_in_cluster_mode(
+    spark, left_input_partitions, left_output_partitions, right_input_partitions, right_output_partitions
+):
+    left = spark.range(0, 40, numPartitions=left_input_partitions).coalesce(left_output_partitions)
+    right = spark.range(100, 140, numPartitions=right_input_partitions).coalesce(right_output_partitions)
+
+    # Collect the union directly so a downstream sort or aggregation cannot hide
+    # its branch-local partition mapping. Check every row, including duplicates.
+    actual = sorted(row.id for row in left.unionAll(right).collect())
+    assert actual == [*range(40), *range(100, 140)]
 
 
 def test_coalesce_to_one_partition_in_cluster_mode(spark):

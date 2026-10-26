@@ -122,6 +122,7 @@ impl From<ExecutionError> for SparkError {
             ExecutionError::JsonError(e) => SparkError::JsonError(e),
             ExecutionError::IoError(e) => SparkError::IoError(e),
             ExecutionError::TonicTransportError(e) => SparkError::InternalError(e.to_string()),
+            ExecutionError::FlightTransportError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::TonicStatusError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::KubernetesError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::InternalError(e) => SparkError::InternalError(e),
@@ -356,9 +357,9 @@ impl From<CommonErrorCause> for SparkThrowable {
         match value {
             CommonErrorCause::NotImplemented(x) => SparkThrowable::UnsupportedOperationException(x),
             CommonErrorCause::InvalidArgument(x) => SparkThrowable::IllegalArgumentException(x),
-            CommonErrorCause::Unknown(x) | CommonErrorCause::Internal(x) => {
-                SparkThrowable::SparkRuntimeException(x)
-            }
+            CommonErrorCause::Unknown(x)
+            | CommonErrorCause::Internal(x)
+            | CommonErrorCause::CommitStateUnknown(x) => SparkThrowable::SparkRuntimeException(x),
             CommonErrorCause::Io(x)
             | CommonErrorCause::ArrowMemory(x)
             | CommonErrorCause::ArrowCompute(x)

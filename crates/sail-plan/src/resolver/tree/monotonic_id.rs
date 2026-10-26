@@ -1,14 +1,15 @@
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::common::Result;
 use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
+use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, Extension, LogicalPlan, ident};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 
+use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
@@ -52,10 +53,13 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
         let col = match &self.column_name {
             Some(c) => c.clone(),
             None => {
-                // Create an internal-only field id (external name is empty)
-                let col = self.state.register_field_name("");
+                // Create an internal-only field ID without a referenceable name.
+                let col = self.state.next_field_id();
 
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());
+                // Row numbers depend on the user's input order even when the consumer does not.
+                let (plan, _, _) = PlanResolver::require_input_sort_inner(plan)
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?;
                 self.plan = LogicalPlan::Extension(Extension {
                     node: Arc::new(MonotonicIdNode::try_new(Arc::new(plan), col.clone())?),
                 });
@@ -64,6 +68,6 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
             }
         };
 
-        Ok(Transformed::yes(ident(&col)))
+        Ok(Transformed::yes(ident(&col).alias(&col)))
     }
 }

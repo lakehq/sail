@@ -20,10 +20,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use apache_avro::reader::datum::GenericDatumReader;
 use apache_avro::types::Value as AvroValue;
-use apache_avro::{
-    Reader as AvroReader, Schema as AvroSchema, from_avro_datum, from_value as avro_from_value,
-};
+use apache_avro::writer::datum::GenericDatumWriter;
+use apache_avro::{Reader as AvroReader, Schema as AvroSchema, from_value as avro_from_value};
 use serde_json::Value as JsonValue;
 
 mod _serde;
@@ -34,13 +34,14 @@ mod schema;
 mod writer;
 
 // Provide data file avro helpers API surface
-use apache_avro::{Writer as AvroWriter, to_value};
+use apache_avro::to_value;
 pub use data_file::*;
 pub use entry::*;
 pub use metadata::*;
 pub use writer::*;
 
 use crate::spec::Schema as IcebergSchema;
+use crate::spec::avro_utils::create_avro_writer;
 use crate::spec::metadata::format::FormatVersion;
 use crate::spec::types::{PrimitiveType, StructType, Type};
 
@@ -57,7 +58,10 @@ fn parse_avro_object_header(bytes: &[u8]) -> Result<AvroObjectHeader, String> {
         return Err("Invalid Avro object container magic".to_string());
     }
     let mut cursor = std::io::Cursor::new(&bytes[AVRO_OBJECT_HEADER.len()..]);
-    let metadata = from_avro_datum(&AvroSchema::map(AvroSchema::Bytes), &mut cursor, None)
+    let metadata_schema = AvroSchema::map(AvroSchema::Bytes).build();
+    let metadata = GenericDatumReader::builder(&metadata_schema)
+        .build()
+        .and_then(|reader| reader.read_value(&mut cursor))
         .map_err(|error| format!("Avro object metadata error: {error}"))?;
     let AvroValue::Map(metadata) = metadata else {
         return Err("Avro object metadata is not a map".to_string());
@@ -97,11 +101,11 @@ fn replace_avro_schema_header_bytes(bytes: &[u8], schema: Vec<u8>) -> Result<Vec
         .into_iter()
         .map(|(key, value)| (key, AvroValue::Bytes(value)))
         .collect::<HashMap<_, _>>();
-    let encoded_metadata = apache_avro::to_avro_datum(
-        &AvroSchema::map(AvroSchema::Bytes),
-        AvroValue::Map(metadata),
-    )
-    .map_err(|error| format!("Avro header serialization error: {error}"))?;
+    let metadata_schema = AvroSchema::map(AvroSchema::Bytes).build();
+    let encoded_metadata = GenericDatumWriter::builder(&metadata_schema)
+        .build()
+        .and_then(|writer| writer.write_value_to_vec(AvroValue::Map(metadata)))
+        .map_err(|error| format!("Avro header serialization error: {error}"))?;
 
     let mut output = Vec::with_capacity(
         AVRO_OBJECT_HEADER.len() + encoded_metadata.len() + marker.len() + bytes.len()
@@ -117,8 +121,30 @@ fn replace_avro_schema_header_bytes(bytes: &[u8], schema: Vec<u8>) -> Result<Vec
 pub(super) fn replace_avro_schema_header(
     bytes: &[u8],
     schema: &AvroSchema,
+    partition_type: &StructType,
 ) -> Result<Vec<u8>, String> {
-    let schema = serde_json::to_vec(schema)
+    let mut schema = serde_json::to_value(schema)
+        .map_err(|error| format!("Avro schema serialization error: {error}"))?;
+    // Typed Avro timestamp schemas discard Iceberg's adjust-to-utc property.
+    // Add it only at the final JSON boundary, preserving the encoding adapters.
+    for field in partition_type.fields() {
+        let adjust_to_utc = match field.field_type.as_ref() {
+            Type::Primitive(PrimitiveType::Timestamp | PrimitiveType::TimestampNs) => false,
+            Type::Primitive(PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs) => true,
+            _ => continue,
+        };
+        let object = find_avro_field_type(&mut schema, field.id)
+            .and_then(non_null_avro_schema)
+            .and_then(JsonValue::as_object_mut)
+            .ok_or_else(|| {
+                format!(
+                    "Missing Avro timestamp schema for partition field {}",
+                    field.id
+                )
+            })?;
+        object.insert("adjust-to-utc".into(), JsonValue::Bool(adjust_to_utc));
+    }
+    let schema = serde_json::to_vec(&schema)
         .map_err(|error| format!("Avro schema serialization error: {error}"))?;
     replace_avro_schema_header_bytes(bytes, schema)
 }
@@ -374,6 +400,27 @@ where
     }
 }
 
+fn validate_data_file_version(file: &DataFile, version: FormatVersion) -> Result<(), String> {
+    if version == FormatVersion::V1 {
+        if file.content != DataContentType::Data {
+            return Err("Iceberg V1 manifests cannot contain delete files".into());
+        }
+        if !file.equality_ids.is_empty() || file.referenced_data_file.is_some() {
+            return Err("Iceberg V1 cannot represent equality_ids or referenced_data_file".into());
+        }
+    }
+    if version < FormatVersion::V3
+        && (file.first_row_id.is_some()
+            || file.content_offset.is_some()
+            || file.content_size_in_bytes.is_some())
+    {
+        return Err(
+            "Iceberg first_row_id, content_offset and content_size_in_bytes require V3".into(),
+        );
+    }
+    Ok(())
+}
+
 /// Convert data files to avro bytes and write to writer. Return the bytes written.
 pub fn write_data_files_to_avro<W: std::io::Write>(
     writer: &mut W,
@@ -382,23 +429,28 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     version: FormatVersion,
 ) -> Result<usize, String> {
     let (declared_schema, encoding_schema) = schema::data_file_schemas(partition_type, version);
-    let mut avro_writer = AvroWriter::new(&encoding_schema, Vec::new());
+    let mut avro_writer = create_avro_writer(&encoding_schema, Vec::new())
+        .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
     for data_file in data_files {
-        let serde_df = _serde::DataFileSerde::from_data_file(data_file, partition_type)?;
+        validate_data_file_version(&data_file, version)?;
+        let mut serde_df = _serde::DataFileSerde::from_data_file(data_file, partition_type)?;
+        if version == FormatVersion::V1 {
+            serde_df.block_size_in_bytes.get_or_insert(67_108_864);
+        }
         let value = to_value(serde_df)
             .map_err(|e| format!("Avro to_value error: {e}"))?
             .resolve(&encoding_schema)
             .map_err(|e| format!("Avro resolve error: {e}"))?;
         avro_writer
-            .append(value)
+            .append_value(value)
             .map_err(|e| format!("Avro append error: {e}"))?;
     }
 
     let encoded = avro_writer
         .into_inner()
         .map_err(|e| format!("Avro writer finalize error: {e}"))?;
-    let output = replace_avro_schema_header(&encoded, &declared_schema)?;
+    let output = replace_avro_schema_header(&encoded, &declared_schema, partition_type)?;
     writer
         .write_all(&output)
         .map_err(|error| format!("Avro output write error: {error}"))?;
@@ -643,6 +695,59 @@ mod tests {
     }
 
     #[test]
+    fn legacy_nullable_partition_records_remain_readable() -> Result<(), String> {
+        let table_schema = Schema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                1,
+                "p",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()?;
+        let partition_type = StructType::new(vec![Arc::new(NestedField::optional(
+            1000,
+            "p",
+            Type::Primitive(PrimitiveType::Long),
+        ))]);
+        let (_, encoding_schema) =
+            super::schema::data_file_schemas(&partition_type, FormatVersion::V2);
+        let mut schema =
+            serde_json::to_value(&encoding_schema).map_err(|error| error.to_string())?;
+        let partition = super::find_avro_field_type(&mut schema, 102).ok_or("missing partition")?;
+        *partition = json!(["null", partition.clone()]);
+        let schema = apache_avro::Schema::parse_str(&schema.to_string())
+            .map_err(|error| error.to_string())?;
+        let mut file: super::_serde::DataFileSerde = serde_json::from_value(json!({
+            "file_path": "data.parquet", "file_format": "PARQUET",
+            "record_count": 1, "file_size_in_bytes": 20
+        }))
+        .map_err(|error| error.to_string())?;
+        file.partition = Some(crate::spec::types::RawLiteral::from_struct_values(
+            &[Some(Literal::Primitive(PrimitiveLiteral::Long(7)))],
+            &partition_type,
+        )?);
+        let value = to_value(file)
+            .and_then(|value| value.resolve(&schema))
+            .map_err(|error| error.to_string())?;
+        let mut writer = AvroWriter::new(&schema, Vec::new()).map_err(|error| error.to_string())?;
+        writer
+            .append_value(value)
+            .map_err(|error| error.to_string())?;
+        let bytes = writer.into_inner().map_err(|error| error.to_string())?;
+        let files = read_data_files_from_avro(
+            &mut bytes.as_slice(),
+            &table_schema,
+            0,
+            &partition_type,
+            FormatVersion::V2,
+        )?;
+        assert_eq!(
+            files[0].partition,
+            vec![Some(Literal::Primitive(PrimitiveLiteral::Long(7)))]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_read_data_files_falls_back_after_typed_fixed_decode_error() -> Result<(), String> {
         let table_schema = Schema::builder()
             .with_fields([
@@ -707,9 +812,10 @@ mod tests {
         .map_err(|error| format!("Avro to_value error: {error}"))?
         .resolve(&legacy_schema)
         .map_err(|error| format!("Avro resolve error: {error}"))?;
-        let mut writer = AvroWriter::new(&legacy_schema, Vec::new());
+        let mut writer = AvroWriter::new(&legacy_schema, Vec::new())
+            .map_err(|error| format!("Avro writer creation error: {error}"))?;
         writer
-            .append(value)
+            .append_value(value)
             .map_err(|error| format!("Avro append error: {error}"))?;
         let bytes = writer
             .into_inner()

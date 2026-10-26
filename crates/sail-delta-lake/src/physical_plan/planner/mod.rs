@@ -17,6 +17,7 @@ use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 
+mod change_data;
 mod commit;
 pub mod context;
 mod log_scan;
@@ -26,6 +27,7 @@ pub mod utils;
 
 mod op_delete;
 mod op_merge;
+mod op_truncate;
 mod op_update;
 mod op_write;
 mod row_level;

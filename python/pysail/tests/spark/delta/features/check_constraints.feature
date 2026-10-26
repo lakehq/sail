@@ -368,3 +368,50 @@ Feature: Delta Lake CHECK Constraints
         | id | day | value |
         | 1  | 0   | 10    |
         | 2  | 1   | 20    |
+
+  Rule: CHECK constraints can be removed
+
+    Background:
+      Given variable location for temporary directory delta_drop_constraint
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_check_constraints_test
+        """
+
+    Scenario: DROP CONSTRAINT removes enforcement and respects IF EXISTS
+      Given statement template
+        """
+        CREATE TABLE delta_check_constraints_test (id INT) USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test ADD CONSTRAINT positive_id CHECK (id > 0)
+        """
+      Given statement with error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
+        """
+        INSERT INTO delta_check_constraints_test VALUES (-1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test DROP CONSTRAINT POSITIVE_ID
+        """
+      Given statement
+        """
+        INSERT INTO delta_check_constraints_test VALUES (-1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test DROP CONSTRAINT IF EXISTS positive_id
+        """
+      Given statement with error does not exist
+        """
+        ALTER TABLE delta_check_constraints_test DROP CONSTRAINT positive_id
+        """
+      When query
+        """
+        SELECT id FROM delta_check_constraints_test
+        """
+      Then query result
+        | id |
+        | -1 |

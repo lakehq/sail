@@ -2,9 +2,14 @@
 name = "sail-python"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+mimalloc = ["dep:sail-mimalloc"]
+default = ["mimalloc"]
 
 [dependencies]
 sail-common = { path = "../sail-common" }
@@ -12,7 +17,8 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-flight = { path = "../sail-flight" }
 sail-spark-connect = { path = "../sail-spark-connect" }
-sail-cli = { path = "../sail-cli" }
+sail-cli = { path = "../sail-cli", default-features = false }
+sail-mimalloc = { path = "../sail-mimalloc", optional = true, features = ["local-dynamic-tls"] }
 sail-celeborn = { path = "../sail-celeborn" }
 sail-catalog = { path = "../sail-catalog" }
 sail-catalog-glue = { path = "../sail-catalog-glue" }

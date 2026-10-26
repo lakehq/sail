@@ -5,6 +5,7 @@ use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{Result, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::coalesce::LimitedBatchCoalescer;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::{StreamExt, TryStreamExt};
@@ -75,7 +76,7 @@ impl ExecutionPlan for ShuffleReadExec {
     fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let reader = self.reader.clone();
         let output = futures::stream::once(async move {
@@ -85,6 +86,41 @@ impl ExecutionPlan for ShuffleReadExec {
             }))
         })
         .try_flatten();
+        let output: SendableRecordBatchStream =
+            Box::pin(RecordBatchStreamAdapter::new(self.schema(), output));
+        // Unbounded inputs must emit partial batches promptly.
+        if self.properties.boundedness.is_unbounded() {
+            return Ok(output);
+        }
+        // The reader has merged the producers for this partition. Share one
+        // coalescer across them instead of buffering each producer separately.
+        let coalescer =
+            LimitedBatchCoalescer::new(self.schema(), context.session_config().batch_size(), None);
+        let output = futures::stream::try_unfold(
+            (output, coalescer, false),
+            |(mut input, mut coalescer, mut done)| async move {
+                loop {
+                    if let Some(batch) = coalescer.next_completed_batch() {
+                        return Ok::<_, datafusion::error::DataFusionError>(Some((
+                            batch,
+                            (input, coalescer, done),
+                        )));
+                    }
+                    if done {
+                        return Ok(None);
+                    }
+                    match input.try_next().await? {
+                        Some(batch) => {
+                            coalescer.push_batch(batch)?;
+                        }
+                        None => {
+                            coalescer.finish()?;
+                            done = true;
+                        }
+                    }
+                }
+            },
+        );
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             output,

@@ -209,20 +209,16 @@ impl SchemaBuilder {
                     Self::index_fields_recursive(struct_type.fields(), id_to_field);
                 }
                 Type::List(list_type) => {
-                    id_to_field.insert(list_type.element_field.id, list_type.element_field.clone());
-                    if let Type::Struct(struct_type) = list_type.element_field.field_type.as_ref() {
-                        Self::index_fields_recursive(struct_type.fields(), id_to_field);
-                    }
+                    Self::index_fields_recursive(
+                        std::slice::from_ref(&list_type.element_field),
+                        id_to_field,
+                    );
                 }
                 Type::Map(map_type) => {
-                    id_to_field.insert(map_type.key_field.id, map_type.key_field.clone());
-                    id_to_field.insert(map_type.value_field.id, map_type.value_field.clone());
-                    if let Type::Struct(struct_type) = map_type.key_field.field_type.as_ref() {
-                        Self::index_fields_recursive(struct_type.fields(), id_to_field);
-                    }
-                    if let Type::Struct(struct_type) = map_type.value_field.field_type.as_ref() {
-                        Self::index_fields_recursive(struct_type.fields(), id_to_field);
-                    }
+                    Self::index_fields_recursive(
+                        &[map_type.key_field.clone(), map_type.value_field.clone()],
+                        id_to_field,
+                    );
                 }
                 _ => {}
             }
@@ -382,11 +378,48 @@ impl Schema {
         self.id_to_field.get(&field_id)
     }
 
+    /// Resolve a row-level field path without traversing lists or maps.
+    pub fn field_path_by_id(&self, field_id: i32) -> Option<Vec<NestedFieldRef>> {
+        fn find_path(fields: &[NestedFieldRef], id: i32) -> Option<Vec<NestedFieldRef>> {
+            for field in fields {
+                if field.id == id {
+                    return Some(vec![field.clone()]);
+                }
+                if let Type::Struct(children) = field.field_type.as_ref()
+                    && let Some(mut path) = find_path(children.fields(), id)
+                {
+                    path.insert(0, field.clone());
+                    return Some(path);
+                }
+            }
+            None
+        }
+        find_path(self.fields(), field_id)
+    }
+
     /// Get field by field name.
     pub fn field_by_name(&self, field_name: &str) -> Option<&NestedFieldRef> {
         self.name_to_id
             .get(field_name)
             .and_then(|id| self.field_by_id(*id))
+    }
+
+    pub(crate) fn field_by_name_case_insensitive(
+        &self,
+        field_name: &str,
+    ) -> Result<Option<&NestedFieldRef>, String> {
+        let name = field_name.to_lowercase();
+        let mut matches = self
+            .name_to_id
+            .iter()
+            .filter(|(candidate, _)| candidate.to_lowercase() == name);
+        let Some((_, id)) = matches.next() else {
+            return Ok(None);
+        };
+        if matches.next().is_some() {
+            return Err(format!("Ambiguous column '{field_name}'"));
+        }
+        Ok(self.field_by_id(*id))
     }
 
     /// Returns [`highest_field_id`].

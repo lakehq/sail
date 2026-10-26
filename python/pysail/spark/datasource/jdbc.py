@@ -349,6 +349,7 @@ class JdbcDataSource(DataSource):
             raise ValueError(msg)
         dbtable = dbtable or None
         query = opts.get("query") or None
+        query = query.strip().rstrip(";") if query is not None else None
 
         if dbtable and query:
             msg = "Options 'dbtable' and 'query' are mutually exclusive. Specify only one."

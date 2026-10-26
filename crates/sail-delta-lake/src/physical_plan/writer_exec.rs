@@ -47,6 +47,7 @@ use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{StreamExt, once};
+use object_store::ObjectStoreExt;
 use sail_common_datafusion::array::record_batch::cast_array_recursively;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
@@ -285,6 +286,7 @@ impl MergeRowMetrics {
 #[derive(Debug)]
 pub struct DeltaWriterExec {
     input: Arc<dyn ExecutionPlan>,
+    input_ordering: Option<LexOrdering>,
     table_url: Url,
     options: DeltaWriterExecOptions,
     metadata_configuration: HashMap<String, String>,
@@ -376,8 +378,10 @@ impl DeltaWriterExec {
         let schema = delta_action_schema()?;
         let output_partitions = input.output_partitioning().partition_count().max(1);
         let cache = Self::compute_properties(schema, output_partitions);
+        let input_ordering = input.output_ordering().cloned();
         Ok(Self {
             input,
+            input_ordering,
             table_url,
             options,
             metadata_configuration,
@@ -552,33 +556,25 @@ impl ExecutionPlan for DeltaWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_columns.is_empty() {
-            // Upstream repartitioning controls file counts and small-file behavior.
-            return vec![Distribution::UnspecifiedDistribution];
-        }
+        vec![Distribution::UnspecifiedDistribution]
+    }
 
-        // For partitioned tables, require grouping by the partition key so that each task can
-        // write its partitions correctly without opening many writers concurrently.
-        //
-        // TODO(optimizer): Reduce the cost of meeting this distribution requirement.
-        let mut exprs: Vec<Arc<dyn datafusion_physical_expr::PhysicalExpr>> =
-            Vec::with_capacity(self.partition_columns.len());
-        for name in &self.partition_columns {
-            let idx = match self.input.schema().index_of(name) {
-                Ok(i) => i,
-                Err(_) => return vec![Distribution::UnspecifiedDistribution],
-            };
-            exprs.push(Arc::new(
-                datafusion_physical_expr::expressions::Column::new(name, idx),
-            ));
-        }
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // As with DataSinkExec, the files retain the order of the incoming rows.
+        vec![true]
+    }
 
-        vec![Distribution::KeyPartitioned(exprs)]
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        // Writer parallelism follows the input plan. Letting `EnforceDistribution` add a
+        // round-robin repartition just for the writer would make the file layout and the
+        // `operationMetrics` file/byte counters depend on batch arrival order. Operators that do
+        // benefit from partitioning still get it, so upstream parallelism is unaffected.
+        vec![false]
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         if self.partition_columns.is_empty() {
-            return vec![None];
+            return vec![self.input_ordering.clone().map(Into::into)];
         }
 
         // TODO(optimizer): Reduce the cost of meeting this ordering requirement.
@@ -598,6 +594,19 @@ impl ExecutionPlan for DeltaWriterExec {
                     nulls_first: false,
                 },
             });
+        }
+
+        // Retain the requested order within each table partition as well as grouping
+        // rows by partition. The commit operator does not require ordered input.
+        if let Some(ordering) = &self.input_ordering {
+            for sort in ordering {
+                if !sort_exprs
+                    .iter()
+                    .any(|existing| existing.expr.eq(&sort.expr))
+                {
+                    sort_exprs.push(sort.clone());
+                }
+            }
         }
 
         let Some(ordering) = LexOrdering::new(sort_exprs) else {
@@ -634,7 +643,7 @@ impl ExecutionPlan for DeltaWriterExec {
             return internal_err!("DeltaWriterExec requires exactly one child");
         }
 
-        Ok(Arc::new(Self::new(
+        let mut writer = Self::new(
             Arc::clone(&children[0]),
             self.table_url.clone(),
             self.options.clone(),
@@ -645,7 +654,9 @@ impl ExecutionPlan for DeltaWriterExec {
             self.sink_schema.clone(),
             self.write_context.clone(),
             self.lakehouse_table.clone(),
-        )?))
+        )?;
+        writer.input_ordering = self.input_ordering.clone();
+        Ok(Arc::new(writer))
     }
 
     fn execute(
@@ -707,7 +718,8 @@ impl DeltaWriterExec {
             match &sink_mode {
                 PhysicalSinkMode::Append
                 | PhysicalSinkMode::Overwrite
-                | PhysicalSinkMode::OverwriteIf { .. } => {}
+                | PhysicalSinkMode::OverwriteIf { .. }
+                | PhysicalSinkMode::OverwritePartitions => {}
                 PhysicalSinkMode::ErrorIfExists => {
                     if table_exists {
                         return Err(DataFusionError::Plan(format!(
@@ -724,11 +736,6 @@ impl DeltaWriterExec {
                         return encode_actions(vec![], Some(ExecCommitMeta::default()));
                     }
                 }
-                PhysicalSinkMode::OverwritePartitions => {
-                    return Err(DataFusionError::NotImplemented(
-                        "OverwritePartitions mode not implemented".to_string(),
-                    ));
-                }
             }
 
             let schema_actions = write_context.schema_actions.clone();
@@ -736,6 +743,11 @@ impl DeltaWriterExec {
             let operation = write_context.operation.clone();
             let kernel_mode = write_context.effective_column_mapping_mode;
             let writer_schema = write_context.writer_schema()?;
+            let writer_schema = if options.change_data {
+                change_data_schema(&writer_schema)
+            } else {
+                writer_schema
+            };
             let stats_excluded_columns = variant_top_level_columns(&writer_schema);
             let variant_shredding =
                 Self::variant_shredding_config(&write_context, !stats_excluded_columns.is_empty())?;
@@ -787,14 +799,27 @@ impl DeltaWriterExec {
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());
-            let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
+            let writer_path = if options.change_data {
+                writer_path.join("_change_data")
+            } else {
+                writer_path
+            };
+            let mut writer =
+                DeltaWriter::new(object_store.clone(), writer_path.clone(), writer_config);
 
             let logical_schema_for_mapping = logical_kernel_for_mapping
                 .as_ref()
                 .map(Schema::try_from)
                 .transpose()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .map(Arc::new);
+                .map(Arc::new)
+                .map(|schema| {
+                    if options.change_data {
+                        change_data_schema(&schema)
+                    } else {
+                        schema
+                    }
+                });
 
             let mut total_rows = 0u64;
             let mut data = stream;
@@ -854,6 +879,44 @@ impl DeltaWriterExec {
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let close_time_ms = close_start.elapsed().as_millis() as u64;
+
+            if options.change_data {
+                let mut actions = add_actions
+                    .into_iter()
+                    .map(|add| {
+                        Action::Cdc(crate::spec::AddCDCFile {
+                            path: format!("_change_data/{}", add.path),
+                            partition_values: add.partition_values,
+                            size: add.size,
+                            data_change: false,
+                            tags: None,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if actions.is_empty() {
+                    // An empty CDC file also suppresses inferred changes from copied data files.
+                    let file_name = format!("cdc-{}.parquet", uuid::Uuid::new_v4());
+                    let parquet =
+                        parquet::arrow::ArrowWriter::try_new(Vec::new(), writer_schema, None)?;
+                    let bytes = parquet.into_inner()?;
+                    let size = i64::try_from(bytes.len())
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                    object_store
+                        .put(&writer_path.clone().join(file_name.as_str()), bytes.into())
+                        .await?;
+                    actions.push(Action::Cdc(crate::spec::AddCDCFile {
+                        path: format!("_change_data/{file_name}"),
+                        size,
+                        data_change: false,
+                        partition_values: physical_partition_columns
+                            .iter()
+                            .map(|name| (name.clone(), None))
+                            .collect(),
+                        tags: None,
+                    }));
+                }
+                return encode_actions(actions, None);
+            }
 
             let num_added_files: u64 = add_actions.len() as u64;
             let num_added_bytes: u64 = add_actions
@@ -1259,6 +1322,16 @@ impl DisplayAs for DeltaWriterExec {
             }
         }
     }
+}
+
+fn change_data_schema(schema: &SchemaRef) -> SchemaRef {
+    let mut fields = schema.fields().to_vec();
+    fields.push(Arc::new(datafusion::arrow::datatypes::Field::new(
+        crate::change_data_feed::CHANGE_TYPE_COLUMN,
+        DataType::Utf8,
+        true,
+    )));
+    Arc::new(Schema::new(fields))
 }
 
 #[cfg(test)]

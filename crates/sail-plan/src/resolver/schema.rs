@@ -56,6 +56,7 @@ impl PlanResolver<'_> {
         plan_id: Option<i64>,
         state: &PlanResolverState,
     ) -> PlanResult<Option<Column>> {
+        // TODO: Deduplicate candidates of the same attribute (e.g. `SELECT a, a`) as Spark does.
         let columns = self.resolve_column_candidates(schema, name, plan_id, state);
         if columns.len() > 1 {
             return Err(PlanError::AnalysisError(format!(
