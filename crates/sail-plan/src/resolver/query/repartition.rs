@@ -79,9 +79,10 @@ impl PlanResolver<'_> {
             ));
         }
         // Like a filter, Spark recovers partitioning attributes removed by the input.
-        let (mut expr, mut input) = self
+        let (expr, input) = self
             .resolve_expressions_with_missing_inputs(partition_expressions, input, state)
             .await?;
+        let (mut input, mut expr) = self.rewrite_partition_expressions(input, expr, state)?;
         let kind = if range {
             let sorts = expr
                 .into_iter()

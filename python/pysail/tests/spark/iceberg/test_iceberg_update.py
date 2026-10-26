@@ -7,6 +7,7 @@ from pyiceberg.table import StaticTable
 
 from pysail.testing.spark.steps.iceberg import _current_snapshot, _find_latest_metadata, _latest_metadata_path
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
+from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
 
 
 def _read_position_deletes(path, original_files, granularity, sequence_number):
@@ -71,7 +72,9 @@ def test_v2_mor_update_preserves_files_positions_and_history(spark, tmp_path, pa
 
         actual_deletes = _read_position_deletes(path, original_files, granularity, snapshot["sequence-number"])
         assert actual_deletes == expected_deletes
-        external = StaticTable.from_metadata(str(_latest_metadata_path(path)))
+        external = StaticTable.from_metadata(
+            _latest_metadata_path(path).as_uri(), properties=pyiceberg_file_io_properties()
+        )
         assert [tuple(row.values()) for row in external.scan().to_arrow().sort_by("id").to_pylist()] == expected
         historical = (
             spark.read.format("iceberg").option("snapshotId", before["current-snapshot-id"]).load(path.as_uri())
@@ -82,7 +85,9 @@ def test_v2_mor_update_preserves_files_positions_and_history(spark, tmp_path, pa
         spark.sql(f"UPDATE {name} SET value = value + 100, part = NULL WHERE id IN (2, 10)").collect()
         expected = [(2, 120, None), (5, 50, "B"), (10, 101, None), (10, 101, None), (30, 3, "C"), (40, 4, "C")]
         assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
-        external = StaticTable.from_metadata(str(_latest_metadata_path(path)))
+        external = StaticTable.from_metadata(
+            _latest_metadata_path(path).as_uri(), properties=pyiceberg_file_io_properties()
+        )
         assert [tuple(row.values()) for row in external.scan().to_arrow().sort_by("id").to_pylist()] == expected
         files = set(path.rglob("*.parquet"))
         spark.sql(f"UPDATE {name} SET value = 0 WHERE id = -1").collect()
