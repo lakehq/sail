@@ -451,6 +451,7 @@ pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
 /// The kind of row-level DML command being executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RowLevelCommand {
+    Truncate,
     Delete,
     Update,
     Merge,

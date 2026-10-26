@@ -199,7 +199,11 @@ impl PlanResolver<'_> {
         } = sort;
         let has_grouping_set = Self::has_grouping_set(&aggregate.group_expr);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&aggregate.group_expr);
-        let expr = Self::rewrite_grouping_expr(expr, &grouping_exprs, has_grouping_set)?;
+        let duplicate_sets = has_grouping_set
+            && Self::correlation_keeps_grouping(&aggregate.input, &aggregate.group_expr)?
+            && Self::has_duplicate_grouping_sets(&aggregate.group_expr)?;
+        let expr =
+            Self::rewrite_grouping_expr(expr, &grouping_exprs, has_grouping_set, duplicate_sets)?;
         Ok(Sort {
             expr,
             asc,
