@@ -13,7 +13,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant_schema_evolution/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields: []
@@ -67,9 +67,9 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant_schema_evolution/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_variant_schema_evolution/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
   next-row-id: 2
   partition-specs:
@@ -190,7 +190,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_variant/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_variant/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   next-row-id: 1
   partition-specs:
