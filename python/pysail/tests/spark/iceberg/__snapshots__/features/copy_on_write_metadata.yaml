@@ -11,9 +11,9 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_cow_metadata/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
   partition-spec: []
   partition-specs:
@@ -145,9 +145,9 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_cow_metadata/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields: []
@@ -269,11 +269,11 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_cow_metadata/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
     timestamp-ms: <timestamp>
   partition-spec:
   - field-id: 1000
@@ -468,11 +468,11 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_cow_metadata/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
     timestamp-ms: <timestamp>
   partition-spec:
   - field-id: 1000
@@ -667,11 +667,11 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_cow_metadata/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
     timestamp-ms: <timestamp>
   partition-spec:
   - field-id: 1000
@@ -868,11 +868,11 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_cow_metadata/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:
@@ -1054,11 +1054,11 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_cow_metadata/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:
@@ -1240,11 +1240,11 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_cow_metadata/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
+  - metadata-file: file://<tmp>/iceberg_cow_metadata/metadata/v3.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:

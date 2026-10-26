@@ -5,6 +5,7 @@ import pytest
 
 from pysail.testing.spark.ddl import exercise_lakehouse_replace_columns
 from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests.spark.catalog.test_lakehouse_column_ddl import identity, metadata_schema
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Requires lakehouse extensions")
@@ -14,10 +15,9 @@ pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Requires lakehouse exten
 def test_replace_columns_identity_and_writes(spark, tmp_path, fmt):
     table = f"replace_{fmt}"
     properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
+    location = escape_sql_string_literal(str(tmp_path))
     try:
-        spark.sql(
-            f"CREATE TABLE {table} (id INT, value STRING) USING {fmt} LOCATION '{tmp_path.as_uri()}' {properties}"
-        )
+        spark.sql(f"CREATE TABLE {table} (id INT, value STRING) USING {fmt} LOCATION '{location}' {properties}")
         before = metadata_schema(tmp_path, fmt)
         exercise_lakehouse_replace_columns(spark, table, fmt)
         after = metadata_schema(tmp_path, fmt)
@@ -56,10 +56,11 @@ def test_delta_replace_columns_analyzes_generated_expression(
     spark, tmp_path, expression, generated_type, id_type, valid
 ):
     table = "replace_generated_coercion"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
             f"CREATE TABLE {table} (id INT, generated {generated_type} GENERATED ALWAYS AS ({expression})) "
-            f"USING delta LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('delta.enableTypeWidening'='true')"
+            f"USING delta LOCATION '{location}' TBLPROPERTIES ('delta.enableTypeWidening'='true')"
         )
         spark.sql("INSERT INTO replace_generated_coercion (id) VALUES (1)")
         before = metadata_schema(tmp_path, "delta")
@@ -77,10 +78,11 @@ def test_delta_replace_columns_analyzes_generated_expression(
 
 def test_delta_replace_nested_columns_and_widen(spark, tmp_path):
     table = "replace_nested"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
             f"CREATE TABLE {table} (id INT NOT NULL COMMENT 'kept', nested STRUCT<a: INT, b: STRING>, "
-            f"items ARRAY<STRUCT<a: INT, b: STRING>>) USING delta LOCATION '{tmp_path.as_uri()}' "
+            f"items ARRAY<STRUCT<a: INT, b: STRING>>) USING delta LOCATION '{location}' "
             "TBLPROPERTIES ('delta.columnMapping.mode'='name', 'delta.enableTypeWidening'='true')"
         )
         spark.sql(
@@ -107,9 +109,11 @@ def test_delta_replace_nested_columns_and_widen(spark, tmp_path):
 def test_replace_partition_dependency_is_atomic(spark, tmp_path, fmt):
     table = f"replace_partition_{fmt}"
     properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT, part STRING) USING {fmt} PARTITIONED BY (part) LOCATION '{tmp_path.as_uri()}' {properties}"
+            f"CREATE TABLE {table} (id INT, part STRING) USING {fmt} PARTITIONED BY (part) "
+            f"LOCATION '{location}' {properties}"
         )
         spark.sql(f"INSERT INTO {table} VALUES (1, 'a')")
         before = metadata_schema(tmp_path, fmt)
@@ -133,9 +137,11 @@ def test_replace_partition_dependency_is_atomic(spark, tmp_path, fmt):
 )
 def test_invalid_delta_replacement_is_atomic(spark, tmp_path, columns, error):
     table = "replace_invalid"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT, value STRING) USING delta LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('delta.columnMapping.mode'='name')"
+            f"CREATE TABLE {table} (id INT, value STRING) USING delta "
+            f"LOCATION '{location}' TBLPROPERTIES ('delta.columnMapping.mode'='name')"
         )
         before = metadata_schema(tmp_path, "delta")
         with pytest.raises(Exception, match=error):
@@ -150,9 +156,11 @@ def test_replace_column_defaults_and_comments(spark, tmp_path, fmt):
     table = f"replace_defaults_{fmt}"
     properties = "'delta.feature.allowColumnDefaults'='supported'" if fmt == "delta" else "'format-version'='3'"
     default = "DEFAULT 'old'" if fmt == "delta" else ""
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT, value STRING {default} COMMENT 'kept') USING {fmt} LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ({properties})"
+            f"CREATE TABLE {table} (id INT, value STRING {default} COMMENT 'kept') USING {fmt} "
+            f"LOCATION '{location}' TBLPROPERTIES ({properties})"
         )
         spark.sql(f"ALTER TABLE {table} REPLACE COLUMNS (value STRING, id INT)")
         column = next(c for c in spark.catalog.listColumns(table) if c.name == "value")
@@ -166,10 +174,11 @@ def test_replace_column_defaults_and_comments(spark, tmp_path, fmt):
 @pytest.mark.parametrize("generated_type", ["INT", "BIGINT"])
 def test_delta_replace_columns_validates_generated_expression_type(spark, tmp_path, generated_type):
     table = "replace_generated_type"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
             f"CREATE TABLE {table} (id INT, generated INT GENERATED ALWAYS AS (id + 1)) "
-            f"USING delta LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('delta.enableTypeWidening'='true')"
+            f"USING delta LOCATION '{location}' TBLPROPERTIES ('delta.enableTypeWidening'='true')"
         )
         spark.sql("INSERT INTO replace_generated_type (id) VALUES (1)")
         before = metadata_schema(tmp_path, "delta")
@@ -210,7 +219,9 @@ def test_delta_replace_columns_respects_case_sensitive_resolution(
     key = "spark.sql.caseSensitive"
     previous = spark.conf.get(key)
     try:
-        spark.sql(f"CREATE TABLE {table} ({definition}) USING delta LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(
+            f"CREATE TABLE {table} ({definition}) USING delta LOCATION '{escape_sql_string_literal(str(tmp_path))}'"
+        )
         spark.sql(f"INSERT INTO {table} SELECT {value}")
         before = {log.name: log.read_bytes() for log in (tmp_path / "_delta_log").glob("*.json")}
         rows = spark.table(table).collect()

@@ -1,13 +1,30 @@
 import json
+from nturl2path import url2pathname as windows_url2pathname
+from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 import pandas as pd
 import pyarrow as pa
 import pytest
 from pandas.testing import assert_frame_equal
+from pyiceberg.avro.file import AvroFile
+from pyiceberg.expressions import EqualTo
+from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
+from pyiceberg.table import StaticTable
+from pyiceberg.transforms import IdentityTransform
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
+from pysail.testing.spark.steps.iceberg import (
+    _current_manifest_list,
+    _current_snapshot,
+    _find_latest_metadata,
+    _pyarrow_input_file,
+)
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
 
 
 @pytest.fixture
@@ -37,6 +54,138 @@ def latest_iceberg_metadata(table_path):
         file_name = hint if hint.endswith(".metadata.json") else f"{hint}.metadata.json"
         metadata_file = metadata_dir / file_name
     return json.loads(metadata_file.read_text(encoding="utf-8"))
+
+
+def metadata_file_path(location, path_converter=url2pathname):
+    uri = urlsplit(location)
+    path = uri.path
+    if uri.netloc and uri.netloc.lower() != "localhost":
+        path = f"//{uri.netloc}{path}"
+    # Convert drive/UNC syntax without decoding Hadoop's literal percent escapes.
+    return path_converter(path.replace("%", "%25"))
+
+
+@pytest.mark.parametrize(
+    ("location", "expected"),
+    [
+        ("file:///C:/warehouse/space%20name/v1.metadata.json", r"C:\warehouse\space%20name\v1.metadata.json"),
+        (
+            "file://localhost/C:/warehouse/percent%25name/v1.metadata.json",
+            r"C:\warehouse\percent%25name\v1.metadata.json",
+        ),
+        (
+            "file://server/share/literal%252Fname/hash%23name/v1.metadata.json",
+            r"\\server\share\literal%252Fname\hash%23name\v1.metadata.json",
+        ),
+    ],
+)
+def test_metadata_file_uri_windows_paths(location, expected):
+    assert metadata_file_path(location, windows_url2pathname) == expected
+
+
+def assert_previous_metadata(metadata, previous_file, previous_location):
+    entry = metadata["metadata-log"][-1]
+    assert entry["metadata-file"] == previous_location
+    previous_bytes = Path(metadata_file_path(entry["metadata-file"])).read_bytes()
+    assert previous_bytes == previous_file.read_bytes()
+    previous = json.loads(previous_bytes)
+    assert entry["timestamp-ms"] == previous["last-updated-ms"]
+    assert metadata["table-uuid"] == previous["table-uuid"]
+
+
+@pytest.mark.parametrize("format_version", [2, 3])
+def test_append_after_upgrade_preserves_manifest_summaries(spark, sql_catalog, format_version):
+    identifier = "default.manifest_summary_upgrade"
+    name = "manifest_summary_upgrade"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "p", LongType(), required=False),
+        ),
+        partition_spec=PartitionSpec(PartitionField(2, 1000, IdentityTransform(), "p")),
+        properties={"format-version": "1"},
+    )
+    try:
+        table.append(pa.table({"id": [1, 2, 3], "p": [10, None, 30]}))
+        before = {
+            manifest.manifest_path: manifest.partitions for manifest in table.current_snapshot().manifests(table.io)
+        }
+        location = escape_sql_string_literal(table.location())
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{location}'").collect()
+        spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='{format_version}')").collect()
+        spark.createDataFrame([(4, 40)], "id BIGINT, p BIGINT").writeTo(name).append()
+
+        external = StaticTable.from_metadata(table.location(), properties=pyiceberg_file_io_properties())
+        after = {
+            manifest.manifest_path: manifest.partitions
+            for manifest in external.current_snapshot().manifests(external.io)
+        }
+        assert before.keys() <= after.keys()
+        for path, summaries in before.items():
+            assert after[path] == summaries
+        assert external.scan(row_filter=EqualTo("p", 10)).to_arrow().to_pylist() == [{"id": 1, "p": 10}]
+        assert external.scan().to_arrow().num_rows == 4  # noqa: PLR2004
+        rows = spark.sql(f"SELECT id, p FROM {name} WHERE p=10").collect()  # noqa: S608
+        assert [tuple(row) for row in rows] == [(1, 10)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
+
+
+@pytest.mark.parametrize("format_version", [1, 2, 3])
+def test_manifest_wire_schema_and_snapshot_headers(spark, tmp_path, format_version):
+    name = "manifest_wire_contract"
+    path = tmp_path / name
+    try:
+        spark.sql(
+            f"CREATE TABLE {name} (id INT, ts TIMESTAMP, ntz TIMESTAMP_NTZ) USING iceberg "
+            f"PARTITIONED BY (ts, ntz) LOCATION '{path.as_uri()}' "
+            f"TBLPROPERTIES ('format-version'='{format_version}')"
+        ).collect()
+        for value in [1, 2]:
+            spark.sql(
+                f"INSERT INTO {name} VALUES ({value}, TIMESTAMP '2026-10-01 10:00:00', "  # noqa: S608
+                "TIMESTAMP_NTZ '2026-10-01 10:00:00')"
+            ).collect()
+        metadata = _find_latest_metadata(path)
+        snapshot = _current_snapshot(metadata)
+        io = PyArrowFileIO()
+        with AvroFile(_pyarrow_input_file(io, snapshot["manifest-list"])) as reader:
+            header = reader.header.meta
+            schema = json.loads(header["avro.schema"])
+            assert header["snapshot-id"] == str(snapshot["snapshot-id"])
+            assert header["parent-snapshot-id"] == str(snapshot["parent-snapshot-id"])
+            assert header["format-version"] == str(format_version)
+            if format_version >= 2:  # noqa: PLR2004
+                assert header["sequence-number"] == str(snapshot["sequence-number"])
+            if format_version == 3:  # noqa: PLR2004
+                assert header["first-row-id"] == str(snapshot["first-row-id"])
+            partitions = next(field for field in schema["fields"] if field["name"] == "partitions")
+            array = next(branch for branch in partitions["type"] if isinstance(branch, dict))
+            assert array["items"]["name"] == "r508"
+        for manifest in _current_manifest_list(metadata)["manifests"]:
+            with AvroFile(_pyarrow_input_file(io, manifest["manifest-path"])) as reader:
+                schema = json.loads(reader.header.meta["avro.schema"])
+                list(reader)  # Independently decode the payload, not just its header.
+            data_file = next(field for field in schema["fields"] if field["name"] == "data_file")["type"]
+            fields = {field["name"]: field for field in data_file["fields"]}
+            partition = fields["partition"]["type"]
+            assert partition["type"] == "record"
+            annotations = {
+                field["name"]: next(branch for branch in field["type"] if isinstance(branch, dict))
+                for field in partition["fields"]
+            }
+            assert annotations["ts"]["adjust-to-utc"] is True
+            assert annotations["ntz"]["adjust-to-utc"] is False
+            version_three_fields = {"first_row_id", "content_offset", "content_size_in_bytes"}
+            if format_version < 3:  # noqa: PLR2004
+                assert not version_three_fields.intersection(fields)
+            else:
+                assert version_three_fields <= fields.keys()
+            assert ("referenced_data_file" in fields) == (format_version >= 2)  # noqa: PLR2004
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
 def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
@@ -104,9 +253,12 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
         sql_catalog.drop_table(f"default.{table_name}")
 
 
-def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
-    table_path = tmp_path / "iceberg_empty_table"
-    table_location = table_path.as_uri()
+@pytest.mark.parametrize(
+    "directory", ["iceberg_empty_table", "percent%name", "literal%2Fname", "space name", "hash#name"]
+)
+def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path, directory):
+    table_location = (tmp_path / directory).as_uri()
+    table_path = tmp_path / urlsplit(table_location).path.rsplit("/", 1)[-1]
     table_name = "iceberg_empty_materialized_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -140,20 +292,22 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         assert insert_metadata["current-snapshot-id"] != -1
         assert len(insert_metadata["snapshots"]) == 1
         assert len(insert_metadata["metadata-log"]) == 1
-        assert insert_metadata["metadata-log"][0]["metadata-file"].endswith("/metadata/v1.metadata.json")
-        assert insert_metadata["metadata-log"][0]["timestamp-ms"] == create_metadata["last-updated-ms"]
+        assert_previous_metadata(insert_metadata, metadata_v1, f"{table_location}/metadata/v1.metadata.json")
         rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
         assert [(row.id, row.name) for row in rows] == [(1, "one")]
 
         spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two')")  # noqa: S608
         append_metadata = latest_iceberg_metadata(table_path)
-        assert append_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v2.metadata.json")
-        assert append_metadata["metadata-log"][-1]["timestamp-ms"] == insert_metadata["last-updated-ms"]
+        assert_previous_metadata(append_metadata, metadata_v2, f"{table_location}/metadata/v2.metadata.json")
 
+        # Existing historical keys are not repaired when a new entry is appended.
+        append_metadata["metadata-log"][0]["metadata-file"] = "legacy/metadata/v1.metadata.json"
+        metadata_v3 = metadata_dir / "v3.metadata.json"
+        metadata_v3.write_text(json.dumps(append_metadata), encoding="utf-8")
         spark.sql(f"ALTER TABLE {table_name} SET TBLPROPERTIES ('custom.key' = 'value')")
         altered_metadata = latest_iceberg_metadata(table_path)
-        assert altered_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v3.metadata.json")
-        assert altered_metadata["metadata-log"][-1]["timestamp-ms"] == append_metadata["last-updated-ms"]
+        assert altered_metadata["metadata-log"][:-1] == append_metadata["metadata-log"]
+        assert_previous_metadata(altered_metadata, metadata_v3, f"{table_location}/metadata/v3.metadata.json")
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -243,8 +397,11 @@ def test_iceberg_io_create_or_replace_existing_table_replaces_metadata_and_clear
         assert replacement_metadata.get("statistics") == insert_metadata.get("statistics")
         assert replacement_metadata.get("partition-statistics") == insert_metadata.get("partition-statistics")
         assert [field["name"] for field in replacement_metadata["schemas"][-1]["fields"]] == ["id", "name"]
-        assert replacement_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v2.metadata.json")
-        assert replacement_metadata["metadata-log"][-1]["timestamp-ms"] == insert_metadata["last-updated-ms"]
+        assert_previous_metadata(
+            replacement_metadata,
+            table_path / "metadata" / "v2.metadata.json",
+            f"{table_location}/metadata/v2.metadata.json",
+        )
         assert replacement_metadata["last-sequence-number"] == previous_sequence_number
 
         spark.sql(f"INSERT INTO {table_name} VALUES (2, 'two')")  # noqa: S608
