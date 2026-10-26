@@ -14,7 +14,8 @@ use crate::lake_source::{
     resolve_iceberg_metadata_location,
 };
 use crate::operations::metadata_commit::{
-    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, apply_snapshot_updates,
+    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, PreviousMetadataFile,
+    apply_snapshot_updates,
 };
 use crate::spec::TableMetadata;
 use crate::table::metadata_loader::{
@@ -139,9 +140,13 @@ pub(crate) async fn commit_snapshot_operation(
             }
         }
         apply_snapshot_updates(
+            table_url,
             &mut metadata,
             &prepared.updates,
-            metadata_location.as_deref().unwrap_or(&metadata_file),
+            metadata_location.as_deref().map_or(
+                PreviousMetadataFile::ObjectPath(&metadata_file),
+                PreviousMetadataFile::CatalogLocation,
+            ),
         )?;
         let style = if use_metadata_location_fallback {
             MetadataFileStyle::Unique

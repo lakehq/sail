@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;
 use crate::spec::manifest::{ManifestEntry, ManifestWriter, ManifestWriterBuilder};
-use crate::spec::manifest_list::ManifestListWriter;
+use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
 use crate::spec::{
     DataFile, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestFile, ManifestStatus,
     Operation, PartitionSpec, Schema, SnapshotBuilder, SnapshotReference, SnapshotRetention,
@@ -224,7 +224,7 @@ async fn populate_retained_manifest_counts(
     store_ctx: &StoreContext,
     manifest_file: &mut crate::spec::manifest_list::ManifestFile,
 ) -> Result<(), String> {
-    if manifest_counts_are_complete(manifest_file) {
+    if manifest_counts_are_complete(manifest_file) && manifest_file.partitions.is_some() {
         return Ok(());
     }
 
@@ -232,10 +232,16 @@ async fn populate_retained_manifest_counts(
         .await
         .map_err(|error| {
             format!(
-                "failed to load retained manifest {} to recover missing counts: {error}",
+                "failed to load retained manifest {} to recover missing counts or summaries: {error}",
                 manifest_file.manifest_path
             )
         })?;
+    if manifest_file.partitions.is_none() {
+        manifest_file.partitions = Some(crate::spec::manifest::partition_summaries(
+            manifest.metadata(),
+            manifest.entries(),
+        )?);
+    }
     let mut file_counts = [0i32; 3];
     let mut row_counts = [0i64; 3];
     for entry in manifest.entries() {
@@ -1305,7 +1311,13 @@ impl<'a> SnapshotProducer<'a> {
             "snapshot producer: new manifest list will have files: {}",
             total_manifest_count
         );
-        let list_bytes = list_writer.to_bytes(format_version)?;
+        let list_bytes = list_writer.to_bytes_with_context(ManifestListWriteContext {
+            version: format_version,
+            snapshot_id: new_snapshot_id,
+            parent_snapshot_id: (!self.is_bootstrap).then_some(self.tx.snapshot().snapshot_id()),
+            sequence_number: new_sequence_number,
+            first_row_id: self.row_lineage_start_row_id,
+        })?;
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
         let list_path = object_store::path::Path::from(list_rel.as_str());
         store_ctx
@@ -1405,6 +1417,124 @@ mod tests {
     use crate::spec::types::values::{Literal, PrimitiveLiteral};
     use crate::spec::types::{NestedField, PrimitiveType, Type};
     use crate::spec::{DataContentType, DataFileFormat, Transform};
+
+    #[test]
+    fn retained_summaries_are_recovered_from_original_manifest_metadata() {
+        futures::executor::block_on(async {
+            for partitioned in [false, true] {
+                let table_url =
+                    url::Url::parse("file:///tmp/iceberg-summary-recovery/").expect("URL");
+                let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+                let store_ctx = StoreContext::new(store, &table_url).expect("store");
+                let schema = Schema::builder()
+                    .with_fields([Arc::new(NestedField::optional(
+                        1,
+                        "historical",
+                        Type::Primitive(PrimitiveType::Long),
+                    ))])
+                    .build()
+                    .expect("historical schema");
+                let builder = PartitionSpec::builder().with_spec_id(9);
+                let partition_spec = if partitioned {
+                    builder
+                        .add_field(1, "historical", Transform::Identity)
+                        .build()
+                } else {
+                    builder.build()
+                };
+                let metadata = ManifestMetadata::new(
+                    Arc::new(schema),
+                    0,
+                    partition_spec,
+                    FormatVersion::V1,
+                    ManifestContentType::Data,
+                );
+                let mut writer = ManifestWriterBuilder::new(Some(7), None, metadata).build();
+                for (index, value) in [Some(10), None, Some(20)].into_iter().enumerate() {
+                    let mut file = data_file(&format!("data-{index}.parquet"), 1);
+                    file.partition_spec_id = 9;
+                    if partitioned {
+                        file.partition = vec![
+                            value.map(|value| Literal::Primitive(PrimitiveLiteral::Long(value))),
+                        ];
+                    }
+                    writer.add(file);
+                }
+                let bytes = writer.to_avro_bytes_v2().expect("historical manifest");
+                let mut retained = writer
+                    .into_manifest_file("metadata/original.avro".into(), 0, 7)
+                    .expect("list entry");
+                retained.partitions = None;
+                assert!(manifest_counts_are_complete(&retained));
+                let path = Path::from("metadata/original.avro");
+                store_ctx
+                    .prefixed
+                    .put(&path, Bytes::from(bytes.clone()).into())
+                    .await
+                    .expect("write manifest");
+                populate_retained_manifest_counts(&store_ctx, &mut retained)
+                    .await
+                    .expect("recover summary despite complete counts");
+                let summaries = retained.partitions.as_ref().expect("recovered summaries");
+                if partitioned {
+                    assert_eq!(summaries.len(), 1);
+                    assert!(summaries[0].contains_null);
+                    assert_eq!(summaries[0].contains_nan, Some(false));
+                    assert_eq!(
+                        summaries[0].lower_bound_bytes.as_deref(),
+                        Some(10_i64.to_le_bytes().as_slice())
+                    );
+                    assert_eq!(
+                        summaries[0].upper_bound_bytes.as_deref(),
+                        Some(20_i64.to_le_bytes().as_slice())
+                    );
+                } else {
+                    assert!(summaries.is_empty());
+                }
+                let original_summary = retained.partitions.clone();
+                retained.added_rows_count = None;
+                populate_retained_manifest_counts(&store_ctx, &mut retained)
+                    .await
+                    .expect("recover counts without replacing summary");
+                assert_eq!(retained.added_rows_count, Some(3));
+                assert_eq!(retained.partitions, original_summary);
+                assert_eq!(
+                    store_ctx
+                        .prefixed
+                        .get(&path)
+                        .await
+                        .expect("original manifest")
+                        .bytes()
+                        .await
+                        .expect("bytes")
+                        .as_ref(),
+                    bytes.as_slice()
+                );
+
+                retained.partitions = None;
+                store_ctx
+                    .prefixed
+                    .put(&path, Bytes::from_static(b"invalid manifest").into())
+                    .await
+                    .expect("replace fixture");
+                assert!(
+                    populate_retained_manifest_counts(&store_ctx, &mut retained)
+                        .await
+                        .is_err()
+                );
+                store_ctx
+                    .prefixed
+                    .delete(&path)
+                    .await
+                    .expect("remove fixture");
+                assert!(
+                    populate_retained_manifest_counts(&store_ctx, &mut retained)
+                        .await
+                        .is_err()
+                );
+            }
+        });
+    }
 
     #[test]
     fn copy_on_write_classification_preserves_explicit_overwrite_modes() {

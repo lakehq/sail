@@ -13,7 +13,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_bucket_transform/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_bucket_transform/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_bucket_transform/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:
@@ -79,7 +79,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_multi_transform/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_multi_transform/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_multi_transform/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:
@@ -168,7 +168,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_date_transform/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_date_transform/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_date_transform/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:
@@ -234,7 +234,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_timestamp_transform/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_timestamp_transform/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_timestamp_transform/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:
@@ -300,7 +300,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_date_transform/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_date_transform/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_date_transform/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:
@@ -377,7 +377,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_truncate_transform/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_truncate_transform/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_truncate_transform/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:
@@ -454,7 +454,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_date_transform/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_date_transform/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_date_transform/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields:

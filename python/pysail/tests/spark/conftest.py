@@ -167,6 +167,10 @@ def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> bool | No
         pytest.mark.skipif(is_jvm_spark(), reason="Sail-only feature not supported by JVM Spark")(function)
         return True
 
+    if tag == "skip-on-windows":
+        pytest.mark.skipif(platform.system() == "Windows", reason="Not supported on Windows")(function)
+        return True
+
     if tag == "sail-bug":
         # We set `strict=True` so that outdated markers are reported as errors so that we can remove them timely.
         pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)(function)
