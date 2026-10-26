@@ -357,9 +357,9 @@ impl From<CommonErrorCause> for SparkThrowable {
         match value {
             CommonErrorCause::NotImplemented(x) => SparkThrowable::UnsupportedOperationException(x),
             CommonErrorCause::InvalidArgument(x) => SparkThrowable::IllegalArgumentException(x),
-            CommonErrorCause::Unknown(x) | CommonErrorCause::Internal(x) => {
-                SparkThrowable::SparkRuntimeException(x)
-            }
+            CommonErrorCause::Unknown(x)
+            | CommonErrorCause::Internal(x)
+            | CommonErrorCause::CommitStateUnknown(x) => SparkThrowable::SparkRuntimeException(x),
             CommonErrorCause::Io(x)
             | CommonErrorCause::ArrowMemory(x)
             | CommonErrorCause::ArrowCompute(x)

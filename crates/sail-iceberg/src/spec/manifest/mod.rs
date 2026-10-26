@@ -121,8 +121,30 @@ fn replace_avro_schema_header_bytes(bytes: &[u8], schema: Vec<u8>) -> Result<Vec
 pub(super) fn replace_avro_schema_header(
     bytes: &[u8],
     schema: &AvroSchema,
+    partition_type: &StructType,
 ) -> Result<Vec<u8>, String> {
-    let schema = serde_json::to_vec(schema)
+    let mut schema = serde_json::to_value(schema)
+        .map_err(|error| format!("Avro schema serialization error: {error}"))?;
+    // Typed Avro timestamp schemas discard Iceberg's adjust-to-utc property.
+    // Add it only at the final JSON boundary, preserving the encoding adapters.
+    for field in partition_type.fields() {
+        let adjust_to_utc = match field.field_type.as_ref() {
+            Type::Primitive(PrimitiveType::Timestamp | PrimitiveType::TimestampNs) => false,
+            Type::Primitive(PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs) => true,
+            _ => continue,
+        };
+        let object = find_avro_field_type(&mut schema, field.id)
+            .and_then(non_null_avro_schema)
+            .and_then(JsonValue::as_object_mut)
+            .ok_or_else(|| {
+                format!(
+                    "Missing Avro timestamp schema for partition field {}",
+                    field.id
+                )
+            })?;
+        object.insert("adjust-to-utc".into(), JsonValue::Bool(adjust_to_utc));
+    }
+    let schema = serde_json::to_vec(&schema)
         .map_err(|error| format!("Avro schema serialization error: {error}"))?;
     replace_avro_schema_header_bytes(bytes, schema)
 }
@@ -378,6 +400,27 @@ where
     }
 }
 
+fn validate_data_file_version(file: &DataFile, version: FormatVersion) -> Result<(), String> {
+    if version == FormatVersion::V1 {
+        if file.content != DataContentType::Data {
+            return Err("Iceberg V1 manifests cannot contain delete files".into());
+        }
+        if !file.equality_ids.is_empty() || file.referenced_data_file.is_some() {
+            return Err("Iceberg V1 cannot represent equality_ids or referenced_data_file".into());
+        }
+    }
+    if version < FormatVersion::V3
+        && (file.first_row_id.is_some()
+            || file.content_offset.is_some()
+            || file.content_size_in_bytes.is_some())
+    {
+        return Err(
+            "Iceberg first_row_id, content_offset and content_size_in_bytes require V3".into(),
+        );
+    }
+    Ok(())
+}
+
 /// Convert data files to avro bytes and write to writer. Return the bytes written.
 pub fn write_data_files_to_avro<W: std::io::Write>(
     writer: &mut W,
@@ -390,7 +433,11 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
         .map_err(|error| format!("Avro writer creation error: {error}"))?;
 
     for data_file in data_files {
-        let serde_df = _serde::DataFileSerde::from_data_file(data_file, partition_type)?;
+        validate_data_file_version(&data_file, version)?;
+        let mut serde_df = _serde::DataFileSerde::from_data_file(data_file, partition_type)?;
+        if version == FormatVersion::V1 {
+            serde_df.block_size_in_bytes.get_or_insert(67_108_864);
+        }
         let value = to_value(serde_df)
             .map_err(|e| format!("Avro to_value error: {e}"))?
             .resolve(&encoding_schema)
@@ -403,7 +450,7 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     let encoded = avro_writer
         .into_inner()
         .map_err(|e| format!("Avro writer finalize error: {e}"))?;
-    let output = replace_avro_schema_header(&encoded, &declared_schema)?;
+    let output = replace_avro_schema_header(&encoded, &declared_schema, partition_type)?;
     writer
         .write_all(&output)
         .map_err(|error| format!("Avro output write error: {error}"))?;
@@ -645,6 +692,59 @@ mod tests {
             schema.pointer("/fields/1/type/fields/0/type/fields/2/type/logicalType"),
             Some(&json!("decimal"))
         );
+    }
+
+    #[test]
+    fn legacy_nullable_partition_records_remain_readable() -> Result<(), String> {
+        let table_schema = Schema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                1,
+                "p",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()?;
+        let partition_type = StructType::new(vec![Arc::new(NestedField::optional(
+            1000,
+            "p",
+            Type::Primitive(PrimitiveType::Long),
+        ))]);
+        let (_, encoding_schema) =
+            super::schema::data_file_schemas(&partition_type, FormatVersion::V2);
+        let mut schema =
+            serde_json::to_value(&encoding_schema).map_err(|error| error.to_string())?;
+        let partition = super::find_avro_field_type(&mut schema, 102).ok_or("missing partition")?;
+        *partition = json!(["null", partition.clone()]);
+        let schema = apache_avro::Schema::parse_str(&schema.to_string())
+            .map_err(|error| error.to_string())?;
+        let mut file: super::_serde::DataFileSerde = serde_json::from_value(json!({
+            "file_path": "data.parquet", "file_format": "PARQUET",
+            "record_count": 1, "file_size_in_bytes": 20
+        }))
+        .map_err(|error| error.to_string())?;
+        file.partition = Some(crate::spec::types::RawLiteral::from_struct_values(
+            &[Some(Literal::Primitive(PrimitiveLiteral::Long(7)))],
+            &partition_type,
+        )?);
+        let value = to_value(file)
+            .and_then(|value| value.resolve(&schema))
+            .map_err(|error| error.to_string())?;
+        let mut writer = AvroWriter::new(&schema, Vec::new()).map_err(|error| error.to_string())?;
+        writer
+            .append_value(value)
+            .map_err(|error| error.to_string())?;
+        let bytes = writer.into_inner().map_err(|error| error.to_string())?;
+        let files = read_data_files_from_avro(
+            &mut bytes.as_slice(),
+            &table_schema,
+            0,
+            &partition_type,
+            FormatVersion::V2,
+        )?;
+        assert_eq!(
+            files[0].partition,
+            vec![Some(Literal::Primitive(PrimitiveLiteral::Long(7)))]
+        );
+        Ok(())
     }
 
     #[test]

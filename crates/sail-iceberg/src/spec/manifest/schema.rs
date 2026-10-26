@@ -405,7 +405,7 @@ fn int_key_map(
     })
 }
 
-fn data_file_schema_v2_with_layout(
+fn data_file_schema_v3_with_layout(
     partition_type: &StructType,
     layout: PartitionAvroLayout,
 ) -> AvroSchema {
@@ -417,7 +417,7 @@ fn data_file_schema_v2_with_layout(
             "partition",
             partition_record_schema(partition_type, layout),
             102,
-            false,
+            true,
         ),
         record_field("record_count", AvroSchema::Long, 103, true),
         record_field("file_size_in_bytes", AvroSchema::Long, 104, true),
@@ -508,33 +508,10 @@ fn data_file_schema_v1_with_layout(
     partition_type: &StructType,
     layout: PartitionAvroLayout,
 ) -> AvroSchema {
-    let AvroSchema::Record(mut record) = data_file_schema_v2_with_layout(partition_type, layout)
+    let AvroSchema::Record(mut record) = data_file_schema_v3_with_layout(partition_type, layout)
     else {
         unreachable!("data file schema must be an Avro record")
     };
-    let Some(partition_index) = record
-        .fields
-        .iter()
-        .position(|field| field.name == "partition")
-    else {
-        unreachable!("data file schema must contain a partition field")
-    };
-    let partition_field = &mut record.fields[partition_index];
-    let optional_schema = std::mem::replace(&mut partition_field.schema, AvroSchema::Null);
-    partition_field.schema = match optional_schema {
-        AvroSchema::Union(union) => {
-            let Some(schema) = union
-                .variants()
-                .iter()
-                .find(|schema| !matches!(schema, AvroSchema::Null))
-            else {
-                unreachable!("partition field union must contain a non-null schema")
-            };
-            schema.clone()
-        }
-        schema => schema,
-    };
-    partition_field.default = None;
     record.fields.retain(|field| {
         !matches!(
             field.name.as_str(),
@@ -564,17 +541,42 @@ fn data_file_schema_v1_with_layout(
     AvroSchema::Record(record)
 }
 
+fn data_file_schema_with_layout(
+    partition_type: &StructType,
+    version: FormatVersion,
+    layout: PartitionAvroLayout,
+) -> AvroSchema {
+    if version == FormatVersion::V1 {
+        return data_file_schema_v1_with_layout(partition_type, layout);
+    }
+    let AvroSchema::Record(mut record) = data_file_schema_v3_with_layout(partition_type, layout)
+    else {
+        unreachable!("data file schema must be a record")
+    };
+    if version == FormatVersion::V2 {
+        record.fields.retain(|field| {
+            !matches!(
+                field.name.as_str(),
+                "first_row_id" | "content_offset" | "content_size_in_bytes"
+            )
+        });
+        record.lookup = record
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| (field.name.clone(), index))
+            .collect();
+    }
+    AvroSchema::Record(record)
+}
+
 pub(super) fn data_file_schemas(
     partition_type: &StructType,
     version: FormatVersion,
 ) -> (AvroSchema, AvroSchema) {
-    let schema = match version {
-        FormatVersion::V1 => data_file_schema_v1_with_layout,
-        FormatVersion::V2 | FormatVersion::V3 => data_file_schema_v2_with_layout,
-    };
     (
-        schema(partition_type, PartitionAvroLayout::Declared),
-        schema(partition_type, PartitionAvroLayout::Encoded),
+        data_file_schema_with_layout(partition_type, version, PartitionAvroLayout::Declared),
+        data_file_schema_with_layout(partition_type, version, PartitionAvroLayout::Encoded),
     )
 }
 
@@ -616,9 +618,10 @@ fn manifest_entry_schema_v1_with_layout(
 
 fn manifest_entry_schema_v2_with_layout(
     partition_type: &StructType,
+    version: FormatVersion,
     layout: PartitionAvroLayout,
 ) -> AvroSchema {
-    let df_schema = data_file_schema_v2_with_layout(partition_type, layout);
+    let df_schema = data_file_schema_with_layout(partition_type, version, layout);
     let fields = vec![
         record_field("status", AvroSchema::Int, 0, true),
         record_field("snapshot_id", AvroSchema::Long, 1, false),
@@ -657,9 +660,11 @@ pub(super) fn manifest_entry_schemas(
     partition_type: &StructType,
     version: FormatVersion,
 ) -> (AvroSchema, AvroSchema) {
-    let schema = match version {
-        FormatVersion::V1 => manifest_entry_schema_v1_with_layout,
-        FormatVersion::V2 | FormatVersion::V3 => manifest_entry_schema_v2_with_layout,
+    let schema = |partition_type, layout| match version {
+        FormatVersion::V1 => manifest_entry_schema_v1_with_layout(partition_type, layout),
+        FormatVersion::V2 | FormatVersion::V3 => {
+            manifest_entry_schema_v2_with_layout(partition_type, version, layout)
+        }
     };
     (
         schema(partition_type, PartitionAvroLayout::Declared),
@@ -676,6 +681,46 @@ mod tests {
     use super::manifest_entry_schemas;
     use crate::spec::metadata::format::FormatVersion;
     use crate::spec::types::{NestedField, PrimitiveType, StructType, Type};
+
+    #[test]
+    #[expect(clippy::panic)]
+    fn version_projection_and_required_partition_match_in_both_layouts() {
+        for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+            let (declared, encoded) = super::data_file_schemas(&StructType::new(vec![]), version);
+            for schema in [declared, encoded] {
+                let AvroSchema::Record(record) = schema else {
+                    panic!("data file record")
+                };
+                let partition = record.fields.iter().find(|field| field.name == "partition");
+                assert!(
+                    partition.is_some_and(|field| matches!(field.schema, AvroSchema::Record(_))
+                        && field.default.is_none())
+                );
+                for name in ["first_row_id", "content_offset", "content_size_in_bytes"] {
+                    assert_eq!(
+                        record.lookup.contains_key(name),
+                        version == FormatVersion::V3
+                    );
+                }
+                assert_eq!(
+                    record.lookup.contains_key("referenced_data_file"),
+                    version >= FormatVersion::V2
+                );
+                assert_eq!(
+                    record.lookup.contains_key("content"),
+                    version >= FormatVersion::V2
+                );
+                assert_eq!(
+                    record.lookup.contains_key("equality_ids"),
+                    version >= FormatVersion::V2
+                );
+                assert_eq!(
+                    record.lookup.contains_key("block_size_in_bytes"),
+                    version == FormatVersion::V1
+                );
+            }
+        }
+    }
 
     #[test]
     fn repeated_fixed_partition_types_use_named_references() -> Result<(), String> {

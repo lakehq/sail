@@ -6,7 +6,7 @@ use sail_common::spec::{
 };
 
 use super::operation::PreparedSnapshotOperation;
-use crate::spec::manifest_list::ManifestListWriter;
+use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
 use crate::spec::{
     FormatVersion, MAIN_BRANCH, Operation, Snapshot, SnapshotReference, SnapshotRetention, Summary,
     TableMetadata, TableRequirement, TableUpdate,
@@ -190,8 +190,21 @@ fn empty_snapshot(
 ) -> Result<Snapshot> {
     let id = crate::utils::snapshot_id::generate_unique_snapshot_id(metadata);
     let path = format!("metadata/snap-{id}-{}.avro", uuid::Uuid::new_v4());
+    let sequence_number = if metadata.format_version == FormatVersion::V1 {
+        0
+    } else {
+        metadata.last_sequence_number + 1
+    };
+    let first_row_id =
+        (metadata.format_version >= FormatVersion::V3).then_some(metadata.next_row_id.unwrap_or(0));
     let bytes = ManifestListWriter::new()
-        .to_bytes(metadata.format_version)
+        .to_bytes_with_context(ManifestListWriteContext {
+            version: metadata.format_version,
+            snapshot_id: id,
+            parent_snapshot_id: None,
+            sequence_number,
+            first_row_id,
+        })
         .map_err(DataFusionError::Execution)?;
     prepared.manifests.push((path.clone(), bytes));
     let mut summary = Summary::new(Operation::Append);
@@ -208,18 +221,13 @@ fn empty_snapshot(
     Ok(Snapshot {
         snapshot_id: id,
         parent_snapshot_id: None,
-        sequence_number: if metadata.format_version == FormatVersion::V1 {
-            0
-        } else {
-            metadata.last_sequence_number + 1
-        },
+        sequence_number,
         timestamp_ms: crate::utils::timestamp::monotonic_timestamp_ms(),
         manifest_list: format!("{}/{path}", metadata.location.trim_end_matches('/')),
         manifests: None,
         summary,
         schema_id: Some(metadata.current_schema_id),
-        first_row_id: (metadata.format_version >= FormatVersion::V3)
-            .then_some(metadata.next_row_id.unwrap_or(0)),
+        first_row_id,
         added_rows: (metadata.format_version >= FormatVersion::V3).then_some(0),
         key_id: None,
     })

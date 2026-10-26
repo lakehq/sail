@@ -9,7 +9,7 @@ use sail_common::spec;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
-use crate::resolver::expression::predicate::coerce_timestamp_in_subquery_pair;
+use crate::resolver::expression::predicate::coerce_in_subquery_pair;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
@@ -55,16 +55,15 @@ impl PlanResolver<'_> {
                 .ok_or_else(|| {
                     PlanError::internal("IN subquery should expose one output column")
                 })?;
-            let (coerced_left, coerced_right, _, right_changed) =
-                coerce_timestamp_in_subquery_pair(
-                    expr,
-                    &left_type,
-                    schema,
-                    Expr::Column(right_column.clone()),
-                    &right_type,
-                    subquery.schema(),
-                    &self.config,
-                )?;
+            let (coerced_left, coerced_right, _, right_changed) = coerce_in_subquery_pair(
+                expr,
+                &left_type,
+                schema,
+                Expr::Column(right_column.clone()),
+                &right_type,
+                subquery.schema(),
+                &self.config,
+            )?;
             expr = coerced_left;
             if right_changed {
                 subquery = LogicalPlan::Projection(Projection::try_new(
@@ -169,7 +168,7 @@ impl PlanResolver<'_> {
                     .schema()
                     .qualified_field_from_column(&inner_col)?;
                 let inner_type = inner_field.data_type().clone();
-                let (outer, inner, _, _) = coerce_timestamp_in_subquery_pair(
+                let (outer, inner, _, _) = coerce_in_subquery_pair(
                     outer,
                     &outer_type,
                     schema,

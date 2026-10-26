@@ -27,6 +27,7 @@ pub mod utils;
 
 mod op_delete;
 mod op_merge;
+mod op_truncate;
 mod op_update;
 mod op_write;
 mod row_level;
