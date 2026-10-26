@@ -5,7 +5,7 @@ import time
 import pytest
 
 from pysail.testing.spark.session import spark_connect_server
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
@@ -35,7 +35,13 @@ def remote(shuffle_backend, tmp_path_factory):
 
 def _system_rows(spark, query):
     # System tables use uint64, which PySpark collect() does not support.
-    table, _ = spark.sql(query)._to_table()  # noqa: SLF001
+    frame = spark.sql(query)
+    if pyspark_version() >= (4, 0):
+        table, _ = frame._to_table()  # noqa: SLF001
+    else:
+        # Spark 3.5 has no DataFrame._to_table(); use its raw Arrow client API.
+        plan = frame._plan.to_proto(spark.client)  # noqa: SLF001
+        table, _ = spark.client.to_table(plan)
     return table.to_pylist()
 
 
