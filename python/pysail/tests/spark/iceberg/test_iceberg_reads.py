@@ -2,7 +2,8 @@ import math
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pyarrow as pa
 from pyiceberg.schema import Schema
@@ -14,7 +15,7 @@ from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 def _local_file_path(location: str) -> Path:
     parsed = urlparse(location)
-    return Path(unquote(parsed.path) if parsed.scheme else location).resolve()
+    return Path(url2pathname(parsed.path) if parsed.scheme == "file" else location).resolve()
 
 
 def test_nan_reads(spark, tmp_path):

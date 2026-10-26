@@ -6,6 +6,8 @@ import json
 import pytest
 from pyspark.sql.types import StructType
 
+from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
+
 
 def _commits(path):
     return sorted((path / "_delta_log").glob("[0-9]" * 20 + ".json"))
@@ -20,12 +22,12 @@ def _actions(commit):
 def test_truncate_metadata_only_preserves_history_and_cdf(spark, tmp_path, partitioned, by_path):
     name = "delta_truncate"
     path = tmp_path / "table"
-    target = f"delta.`{path.as_uri()}`" if by_path else name
+    target = f"delta.`{escape_sql_identifier(str(path))}`" if by_path else name
     partition = "PARTITIONED BY (p)" if partitioned else ""
     moved = []
     try:
         spark.sql(f"""CREATE TABLE {name} (id INT, p STRING) USING delta {partition}
-            LOCATION '{path.as_uri()}' TBLPROPERTIES ('delta.enableChangeDataFeed'='true', 'note'='keep')""")
+            LOCATION '{escape_sql_string_literal(str(path))}' TBLPROPERTIES ('delta.enableChangeDataFeed'='true', 'note'='keep')""")
         empty_commits = _commits(path)
         result = spark.sql(f"TRUNCATE TABLE {target}")
         assert result.schema == StructType([])
@@ -60,14 +62,14 @@ def test_truncate_metadata_only_preserves_history_and_cdf(spark, tmp_path, parti
         assert spark.table(name).schema == schema
         assert spark.table(name).collect() == []
         assert set(path.rglob("*.parquet")) == files
-        historical = spark.read.format("delta").option("versionAsOf", version).load(path.as_uri())
+        historical = spark.read.format("delta").option("versionAsOf", version).load(str(path))
         assert [row.id for row in historical.orderBy("id").collect()] == [1, 2, 3]
         changes = (
             spark.read.format("delta")
             .option("readChangeFeed", "true")
             .option("startingVersion", version + 1)
             .option("endingVersion", version + 1)
-            .load(path.as_uri())
+            .load(str(path))
         )
         assert [(row.id, row["_change_type"]) for row in changes.orderBy("id").collect()] == [
             (1, "delete"),
@@ -90,7 +92,7 @@ def test_truncate_rejects_append_only_even_when_empty(spark, tmp_path, populated
     name = "delta_truncate_append_only"
     path = tmp_path / name
     try:
-        spark.sql(f"""CREATE TABLE {name} (id INT) USING delta LOCATION '{path.as_uri()}'
+        spark.sql(f"""CREATE TABLE {name} (id INT) USING delta LOCATION '{escape_sql_string_literal(str(path))}'
             TBLPROPERTIES ('delta.appendOnly'='true')""")
         if populated:
             spark.sql(f"INSERT INTO {name} VALUES (1)")
@@ -108,7 +110,9 @@ def test_truncate_resolves_delta_namespace_as_named_table(spark, tmp_path):
     name = f"`{catalog}`.delta.truncate_namespace"
     spark.sql(f"CREATE DATABASE IF NOT EXISTS `{catalog}`.delta")
     try:
-        spark.sql(f"CREATE TABLE {name} (id INT) USING delta LOCATION '{(tmp_path / 'named').as_uri()}'")
+        spark.sql(
+            f"CREATE TABLE {name} (id INT) USING delta LOCATION '{escape_sql_string_literal(str(tmp_path / 'named'))}'"
+        )
         spark.sql(f"INSERT INTO {name} VALUES (1)")
         spark.sql("TRUNCATE TABLE delta.truncate_namespace").collect()
         assert spark.table(name).collect() == []
@@ -121,7 +125,9 @@ def test_truncate_rejects_views_missing_tables_and_partition_clause(spark, tmp_p
     name = "delta_truncate_guard"
     path = tmp_path / name
     try:
-        spark.sql(f"CREATE TABLE {name} (id INT, p INT) USING delta PARTITIONED BY (p) LOCATION '{path.as_uri()}'")
+        spark.sql(
+            f"CREATE TABLE {name} (id INT, p INT) USING delta PARTITIONED BY (p) LOCATION '{escape_sql_string_literal(str(path))}'"
+        )
         spark.sql(f"INSERT INTO {name} VALUES (1, 1), (2, 2)")
         before = _commits(path)
         with pytest.raises(Exception, match=r"(?i)syntax|parse|partition"):

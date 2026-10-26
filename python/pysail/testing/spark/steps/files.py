@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import stat
 import textwrap
 from pathlib import Path
 
+import pytest
 from pytest_bdd import given, parsers, then
 
 from pysail.testing.spark.utils.files import assert_file_lifecycle, get_data_files
@@ -366,6 +368,8 @@ def location_is_plain_directory(location_var: str, variables: dict) -> None:
 
 @given(parsers.parse("mode of {location_var} is set to {mode}"))
 def location_mode_is_set(location_var: str, mode: str, variables: dict) -> None:
+    if os.name == "nt":
+        pytest.skip("Windows chmod does not support POSIX directory permission bits")
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
     Path(location.path).chmod(int(mode, 8))
