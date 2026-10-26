@@ -1,6 +1,6 @@
-import pytest
 import pyspark.sql.functions as F  # noqa: N812
-from pyspark.errors import AnalysisException
+import pytest
+from pyspark.errors import AnalysisException, IllegalArgumentException
 from pyspark.sql import Row
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
@@ -85,8 +85,8 @@ def test_join_hints_preserve_results_and_schema(spark, hint_tables, hint, sql):
     if not is_jvm_spark() and (canonical := aliases.get(hint.upper())):
         if sql:
             canonical_result = spark.sql(
-                f"SELECT /*+ {canonical}(l) */ * FROM hint_left l JOIN hint_right r ON l.k = r.b AND l.a > r.b"
-            )  # noqa: S608
+                f"SELECT /*+ {canonical}(l) */ * FROM hint_left l JOIN hint_right r ON l.k = r.b AND l.a > r.b"  # noqa: S608
+            )
         else:
             canonical_result = left.hint(canonical).join(right, (left.k == right.b) & (left.a > right.b))
         assert normalize_plan_text(result._explain_string()) == normalize_plan_text(canonical_result._explain_string())  # noqa: SLF001
@@ -146,8 +146,8 @@ def test_join_hint_strategy_precedence_and_scope(spark, hint_tables, snapshot): 
         plans[hint] = normalize_plan_text(query._explain_string())  # noqa: SLF001
     for relation in ["c", "hint_left"]:
         query = spark.sql(
-            f"WITH c AS (SELECT * FROM hint_left) SELECT /*+ BROADCAST({relation}) */ c.a, r.b FROM c JOIN hint_right r ON c.k = r.b"
-        )  # noqa: S608
+            f"WITH c AS (SELECT * FROM hint_left) SELECT /*+ BROADCAST({relation}) */ c.a, r.b FROM c JOIN hint_right r ON c.k = r.b"  # noqa: S608
+        )
         plans[f"cte: {relation}"] = normalize_plan_text(query._explain_string())  # noqa: SLF001
     query = spark.sql("SELECT /*+ MERGE(hint_left) */ a, b FROM hint_left JOIN hint_right ON k = b")
     assert sorted(query.collect()) == [Row(a=i, b=i % 4) for i in range(12)]
@@ -230,7 +230,8 @@ def test_merge_hint_with_residual_filter(spark, hint_config, how):  # noqa: ARG0
 @pytest.mark.parametrize("parameters", [(0, "id"), (-1, "id"), (1.5,), (3, 5), (True,), ("missing",)])
 def test_partition_hint_invalid_parameters(spark, hint_config, hint, parameters):  # noqa: ARG001
     spark.conf.set("spark.sql.adaptive.enabled", "true")
-    with pytest.raises(Exception):  # Spark uses different exception types for invalid counts and columns.
+    # Spark uses IllegalArgumentException for non-positive counts and AnalysisException for columns.
+    with pytest.raises((AnalysisException, IllegalArgumentException)):
         spark.range(12).hint(hint, *parameters).collect()
 
 
