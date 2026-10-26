@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, DFSchemaRef, Result, internal_err, not_impl_err, plan_err};
 use datafusion::execution::{SessionStateBuilder, TaskContext};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
@@ -284,13 +285,15 @@ async fn execute(
         .with_scalar_functions(context.scalar_functions().values().cloned().collect())
         .build();
     let table_url = DeltaLakeSource::parse_table_url(&session, info.paths).await?;
-    let mut read_options = DeltaReadOptions::resolve(&session, info.options)?;
-    if let Some(plan) = &optimize {
-        if table_url.as_str() != plan.table_url {
-            return plan_err!("OPTIMIZE table location changed after planning");
-        }
-        read_options.version_as_of = Some(plan.version);
-        read_options.timestamp_as_of = None;
+    let read_options = resolve_maintenance_read_options(
+        &session,
+        info.options,
+        optimize.as_ref().map(|plan| plan.version),
+    )?;
+    if let Some(plan) = &optimize
+        && table_url.as_str() != plan.table_url
+    {
+        return plan_err!("OPTIMIZE table location changed after planning");
     }
     let (snapshot, log_store, _) = load_delta_read_state(
         &session,
@@ -324,6 +327,21 @@ async fn execute(
     }
 }
 
+/// Maintenance needs complete file state, not a metadata-only, CDF, or historical read.
+/// Only OPTIMIZE execution may pin the snapshot version selected during planning.
+pub(super) fn resolve_maintenance_read_options(
+    session: &dyn Session,
+    options: Vec<OptionLayer>,
+    planned_version: Option<i64>,
+) -> Result<DeltaReadOptions> {
+    let mut options = DeltaReadOptions::resolve(session, options)?;
+    options.metadata_as_data_read = false;
+    options.read_change_feed = false;
+    options.version_as_of = planned_version;
+    options.timestamp_as_of = None;
+    Ok(options)
+}
+
 pub(super) fn validate_snapshot(
     snapshot: &crate::snapshot::DeltaSnapshot,
     invocation: &sail_common_datafusion::lakeprocedure::LakeProcedureInvocation,
@@ -348,4 +366,47 @@ pub(super) fn validate_snapshot(
 pub struct DeltaMaintenancePredicate {
     pub schema: SchemaRef,
     pub expr: Arc<dyn PhysicalExpr>,
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::SessionContext;
+
+    use super::*;
+    use crate::options::DeltaLogReplayStrategy;
+
+    #[test]
+    fn maintenance_ignores_scan_modes_and_time_travel() -> Result<()> {
+        let session = SessionContext::new().state();
+        // CDF and time travel are read options, not catalog table properties.
+        for (metadata, cdf) in [(false, false), (true, false), (false, true), (true, true)] {
+            let layers = vec![OptionLayer::OptionList {
+                items: vec![
+                    ("metadataAsDataRead".to_string(), metadata.to_string()),
+                    ("readChangeFeed".to_string(), cdf.to_string()),
+                    ("versionAsOf".to_string(), "1".to_string()),
+                    ("timestampAsOf".to_string(), "2020-01-01".to_string()),
+                    ("deltaLogReplayStrategy".to_string(), "sort".to_string()),
+                ],
+            }];
+            let normal = DeltaReadOptions::resolve(&session, layers.clone())?;
+            assert_eq!(normal.metadata_as_data_read, metadata);
+            assert_eq!(normal.read_change_feed, cdf);
+            assert_eq!(normal.version_as_of, Some(1));
+            assert_eq!(normal.timestamp_as_of.as_deref(), Some("2020-01-01"));
+            for planned_version in [None, Some(7)] {
+                let options =
+                    resolve_maintenance_read_options(&session, layers.clone(), planned_version)?;
+                assert!(!options.metadata_as_data_read);
+                assert!(!options.read_change_feed);
+                assert_eq!(options.version_as_of, planned_version);
+                assert!(options.timestamp_as_of.is_none());
+                assert_eq!(
+                    options.delta_log_replay_strategy,
+                    DeltaLogReplayStrategy::Sort
+                );
+            }
+        }
+        Ok(())
+    }
 }

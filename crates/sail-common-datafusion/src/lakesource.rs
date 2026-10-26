@@ -9,7 +9,9 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
-use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
+use crate::datasource::{
+    DataSource, DeleteInfo, MergeInfo, RowLevelTarget, SourceInfo, UpdateInfo,
+};
 use crate::lakeprocedure::LakeProcedureProvider;
 use crate::lakerelation::LakeRelationProvider;
 
@@ -80,6 +82,10 @@ pub struct LakeSourceAlterTableResult {
 /// A row-level operation that requires lake-source-specific planning.
 #[derive(Debug, Clone)]
 pub enum RowLevelOperation {
+    Truncate {
+        target_plan: Arc<LogicalPlan>,
+        target: Box<RowLevelTarget>,
+    },
     Delete(Box<DeleteInfo>),
     Update(Box<UpdateInfo>),
     Merge(Box<MergeInfo>),
@@ -202,6 +208,10 @@ pub trait LakeSource: DataSource {
     ) -> Result<LogicalPlan> {
         let _ = ctx;
         match operation {
+            RowLevelOperation::Truncate { .. } => not_impl_err!(
+                "TRUNCATE TABLE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
             RowLevelOperation::Delete(_) => not_impl_err!(
                 "DELETE is not yet implemented for lake source '{}'",
                 self.name()

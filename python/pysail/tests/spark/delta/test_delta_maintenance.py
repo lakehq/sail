@@ -254,6 +254,87 @@ def test_optimize_materializes_dvs_and_vacuum_protects_them(spark, delta_jvm_spa
         spark.sql("DROP TABLE optimize_dv")
 
 
+@pytest.fixture(params=[False, True], ids=["file-state-read", "metadata-read"])
+def read_mode_table(spark, tmp_path, request):
+    name = "maintenance_read_mode"
+    path = tmp_path / "table"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT) USING delta "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' "
+        f"OPTIONS (metadataAsDataRead '{str(request.param).lower()}')"
+    ).collect()
+    try:
+        yield name, path
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "delete"])
+def test_vacuum_preserves_read_mode_table_files(spark, read_mode_table, dry_run):
+    # Delta 4.4.0 DeltaVacuumSuite's correctness case protects active files and recent
+    # tombstones even when their file mtimes are older than the retention threshold.
+    name, path = read_mode_table
+    spark.range(2).coalesce(1).write.format("delta").mode("append").save(str(path))
+    spark.range(2, 4).coalesce(1).write.format("delta").mode("overwrite").save(str(path))
+    retained = {file: file.read_bytes() for file in path.glob("*.parquet")}
+    assert len(retained) == 2  # noqa: PLR2004
+    orphan = path / "unreferenced.parquet"
+    orphan.write_bytes(next(iter(retained.values())))
+    old = time.time() - 8 * 24 * 3600
+    for file in [*retained, orphan]:
+        os.utime(file, (old, old))
+    assert sorted(row.id for row in spark.table(name).collect()) == [2, 3]
+    suffix = " DRY RUN" if dry_run else ""
+    result = spark.sql(f"VACUUM {name}{suffix}").collect()
+    assert _paths(result) == {str(orphan if dry_run else path)}
+    assert orphan.exists() is dry_run
+    assert all(file.exists() and file.read_bytes() == content for file, content in retained.items())
+    assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == [2, 3]
+    assert sorted(row.id for row in spark.read.format("delta").option("versionAsOf", 1).load(str(path)).collect()) == [
+        0,
+        1,
+    ]
+
+
+def test_optimize_compacts_read_mode_table_files(spark, read_mode_table):
+    # Delta 4.4.0 OptimizeCompactionSuite: compact current files and preserve all rows.
+    name, path = read_mode_table
+    spark.range(2).coalesce(1).write.format("delta").mode("append").save(str(path))
+    spark.range(2, 4).coalesce(1).write.format("delta").mode("append").save(str(path))
+    before = max(_commits(path))
+    result = spark.sql(f"OPTIMIZE {name}").first()
+    assert result.metrics.numFilesRemoved == 2  # noqa: PLR2004
+    assert result.metrics.numFilesAdded == 1
+    assert max(_commits(path)) == before + 1
+    assert len(_active_files(path)) == 1
+    assert sorted(row.id for row in spark.read.format("delta").load(str(path)).collect()) == [0, 1, 2, 3]
+
+
+def test_vacuum_dry_run_returns_all_candidates(spark, maintenance_table):
+    # Spark 4.2.0 + Delta 4.4.0 returns all 1,001 eligible files, without a display limit.
+    name, path = maintenance_table
+    spark.sql(f"INSERT INTO {name} VALUES (1, 'a')")  # noqa: S608
+    active = path / unquote(_active_files(path)[0].path)
+    contents = active.read_bytes()
+    old = time.time() - 8 * 24 * 3600
+    os.utime(active, (old, old))
+    candidates = {path / f"orphan-{index:04}.txt" for index in range(1001)}
+    for file in candidates:
+        file.write_bytes(b"orphan")
+        os.utime(file, (old, old))
+    before = _commits(path)
+    result = spark.sql(f"VACUUM {name} DRY RUN").collect()
+    assert len(result) == len(candidates)
+    assert _paths(result) == {str(file) for file in candidates}
+    assert all(file.read_bytes() == b"orphan" for file in candidates)
+    assert _commits(path) == before
+    assert active.read_bytes() == contents
+    assert _paths(spark.sql(f"VACUUM {name}").collect()) == {str(path)}
+    assert all(not file.exists() for file in candidates)
+    assert active.read_bytes() == contents
+    assert spark.table(name).collect() == [Row(id=1, part="a")]
+
+
 def test_vacuum_retention_dry_run_and_audit(spark, delta_jvm_spark, maintenance_table):
     name, path = maintenance_table
     spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('delta.deletedFileRetentionDuration' = 'interval 1 hours')")

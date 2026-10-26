@@ -216,6 +216,50 @@ def test_custom_procedures_are_not_registered(spark, inspection_table, namespace
     assert sorted(file.name for file in (path / "_delta_log").iterdir()) == before
 
 
+@pytest.mark.parametrize("command", ["DESCRIBE DETAIL", "DESCRIBE HISTORY", "OPTIMIZE", "VACUUM"])
+@pytest.mark.parametrize("prefix", ["", "./"], ids=["relative", "dot-relative"])
+def test_native_delta_command_keeps_relative_string_target_as_path(spark, tmp_path, command, prefix):
+    # Spark 4.2.0 + Delta 4.4.0 treat string targets as paths, not catalog identifiers.
+    path = tmp_path / "relative_delta_target"
+    spark.range(2).coalesce(1).write.format("delta").save(str(path))
+    relative = prefix + os.path.relpath(path)
+    absolute = escape_sql_string_literal(str(path))
+    suffix = " DRY RUN" if command == "VACUUM" else ""
+    actual = spark.sql(f"{command} '{escape_sql_string_literal(relative)}'{suffix}").collect()
+    if command == "OPTIMIZE":
+        assert len(actual) == 1
+        assert actual[0].metrics.numFilesRemoved == 0
+    else:
+        expected = spark.sql(f"{command} '{absolute}'{suffix}").collect()
+        assert actual == expected
+    # The same relative text in a delta identifier remains a catalog lookup.
+    identifier = relative.replace("`", "``")
+    with pytest.raises(Exception, match=r"(?i)(not found|does not exist)"):
+        spark.sql(f"{command} delta.`{identifier}`{suffix}").collect()
+    assert [row.id for row in spark.read.format("delta").load(str(path)).orderBy("id").collect()] == [0, 1]
+
+
+def test_native_delta_commands_resolve_delta_namespace_table(spark, tmp_path):
+    target = "delta.`relative-table`"
+    path = tmp_path / "catalog_target"
+    spark.sql("CREATE DATABASE delta")
+    try:
+        spark.sql(f"CREATE TABLE {target} (id BIGINT) USING delta LOCATION '{escape_sql_string_literal(str(path))}'")
+        spark.range(2).coalesce(1).write.format("delta").mode("append").save(str(path))
+        spark.range(2, 4).coalesce(1).write.format("delta").mode("append").save(str(path))
+        detail = spark.sql(f"DESCRIBE DETAIL {target}").first()
+        assert detail.name == "sail.delta.relative-table"
+        assert detail.numFiles == 2  # noqa: PLR2004
+        assert [row.version for row in spark.sql(f"DESCRIBE HISTORY {target}").collect()] == [2, 1, 0]
+        metrics = spark.sql(f"OPTIMIZE {target}").first().metrics
+        assert metrics.numFilesRemoved == 2  # noqa: PLR2004
+        assert metrics.numFilesAdded == 1
+        assert spark.sql(f"VACUUM {target} DRY RUN").collect() == []
+        assert [row.id for row in spark.table(f"sail.{target}").orderBy("id").collect()] == [0, 1, 2, 3]
+    finally:
+        spark.sql("DROP DATABASE delta CASCADE")
+
+
 def test_native_target_resolution(spark, inspection_table):
     name, _ = inspection_table
     spark.sql("CREATE TEMPORARY VIEW inspection_view AS SELECT 1 AS id")

@@ -344,6 +344,10 @@ impl OperationMetrics {
         use crate::spec::DeltaOperation;
 
         match operation {
+            DeltaOperation::Truncate {} => {
+                self.num_deleted_rows = self.num_touched_rows.take();
+                self.scan_time_ms = None;
+            }
             DeltaOperation::Delete { .. } => {
                 if self.num_copied_rows.is_none() {
                     self.num_copied_rows = self.num_output_rows;

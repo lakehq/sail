@@ -28,6 +28,28 @@ pub(crate) async fn plan_iceberg_row_level_write(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    if node.command() == RowLevelCommand::Truncate {
+        let table_url =
+            IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
+        let metadata_location = resolve_iceberg_metadata_location(
+            node.target_lakehouse_table(),
+            metadata_location_from_options(node.target_options()),
+            catalog_managed_iceberg_from_options(node.target_options()),
+        )?;
+        let table = Table::load_with_metadata_location(
+            session.runtime_env().as_ref(),
+            table_url.clone(),
+            metadata_location,
+        )
+        .await?;
+        return plan_metadata_delete(session, node, &table, &table_url)
+            .await?
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "TRUNCATE requires a full-table metadata delete"
+                )
+            });
+    }
     match node.mode() {
         RowLevelWriteMode::MergeOnRead => {
             plan_iceberg_merge_on_read(session, node, physical_inputs).await
@@ -131,7 +153,7 @@ async fn plan_iceberg_copy_on_write(
     let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session, node)?;
     let distribution_key = match node.command() {
-        RowLevelCommand::Delete => "write.delete.distribution-mode",
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => "write.delete.distribution-mode",
         RowLevelCommand::Update => "write.update.distribution-mode",
         RowLevelCommand::Merge => "write.merge.distribution-mode",
     };
@@ -220,7 +242,7 @@ async fn plan_metadata_delete(
     let batch = encode_commit_meta(CommitMeta {
         table_uri: table_url.to_string(),
         removed_data_file_paths: paths,
-        skip_empty_commit: true,
+        skip_empty_commit: node.command() != RowLevelCommand::Truncate,
         requirements: write_context.requirements,
         table_properties: writer_options.table_properties.clone(),
         lakehouse_table: writer_options.lakehouse_table.clone(),
@@ -232,7 +254,11 @@ async fn plan_metadata_delete(
             input,
             table_url.clone(),
             writer_options.lakehouse_table,
-            SnapshotUpdateKind::RowLevelRewrite,
+            if node.command() == RowLevelCommand::Truncate {
+                SnapshotUpdateKind::Truncate
+            } else {
+                SnapshotUpdateKind::RowLevelRewrite
+            },
         )
         .with_expected_snapshot_id(node.expected_snapshot_id()),
     )))

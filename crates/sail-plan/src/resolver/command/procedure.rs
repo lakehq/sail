@@ -109,10 +109,23 @@ impl PlanResolver<'_> {
         &self,
         format: String,
         procedure_name: String,
-        table: spec::ObjectName,
+        target: spec::LakehouseCommandTarget,
         arguments: Vec<(spec::Identifier, spec::Expr)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let table = match target {
+            spec::LakehouseCommandTarget::Table(table) => table,
+            spec::LakehouseCommandTarget::Path(path) => {
+                // Resolve explicit paths before using the shared procedure target routing.
+                let mut urls =
+                    sail_data_source::resolve_listing_urls(&self.ctx.state(), vec![path]).await?;
+                let Some(url) = urls.pop().filter(|_| urls.is_empty()) else {
+                    return Err(PlanError::invalid("Expected a single lakehouse table path"));
+                };
+                let url: &url::Url = url.as_ref();
+                spec::ObjectName::from([format.clone(), url.as_str().to_string()])
+            }
+        };
         let manager = self.ctx.extension::<CatalogManager>()?;
         let parts: Vec<String> = table.into();
         let is_path = matches!(parts.as_slice(), [source, path] if source.eq_ignore_ascii_case(&format) && (path.starts_with('/') || path.contains(":/")));

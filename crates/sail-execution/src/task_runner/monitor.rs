@@ -166,6 +166,49 @@ mod tests {
     use super::*;
     use crate::id::JobId;
 
+    #[tokio::test]
+    async fn preserves_unknown_commit_cause_through_task_status_and_remote_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::common::DataFusionError;
+        use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+        use sail_catalog::error::CatalogError;
+        use sail_common_datafusion::error::RemoteError;
+
+        let error = DataFusionError::Collection(vec![
+            DataFusionError::Execution("another failure".into()),
+            DataFusionError::Context(
+                "commit failed".into(),
+                Box::new(DataFusionError::External(Box::new(
+                    CatalogError::CommitStateUnknown("response lost".to_string().into()),
+                ))),
+            ),
+        ]);
+        let stream = RecordBatchStreamAdapter::new(
+            Arc::new(Schema::empty()),
+            futures::stream::iter([Err(error)]),
+        );
+        let message = TaskMonitor::execute(task_key(), Box::pin(stream)).await;
+        let TaskRunnerMessage::ReportTaskStatus {
+            status: TaskStatus::Failed,
+            cause: Some(cause),
+            ..
+        } = message
+        else {
+            return Err("expected task failure with cause".into());
+        };
+        assert!(!cause.is_retryable());
+        let cause = serde_json::from_str(&serde_json::to_string(&cause)?)?;
+        let error = DataFusionError::External(Box::new(RemoteError { cause }));
+        assert!(matches!(
+            CommonErrorCause::new::<PyErrExtractor>(&error),
+            CommonErrorCause::CommitStateUnknown(message) if message == "commit state unknown: response lost"
+        ));
+        Ok(())
+    }
+
     fn task_key() -> TaskKey {
         TaskKey {
             job_id: JobId::from(1),

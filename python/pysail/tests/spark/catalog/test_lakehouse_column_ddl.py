@@ -4,6 +4,7 @@ import json
 import pytest
 
 from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Requires lakehouse extensions")
 
@@ -13,10 +14,11 @@ def lake_table(spark, tmp_path, request):
     fmt = request.param
     name = f"ddl_columns_{fmt}"
     location = tmp_path / fmt
+    escaped_location = escape_sql_string_literal(str(location))
     properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
     spark.sql(
         f"CREATE TABLE {name} (id INT NOT NULL, value STRING, nested STRUCT<a: INT, b: STRING>) "
-        f"USING {fmt} LOCATION '{location.as_uri()}' {properties}"
+        f"USING {fmt} LOCATION '{escaped_location}' {properties}"
     )
     spark.sql(f"INSERT INTO {name} VALUES (1, 'old', named_struct('a', 10, 'b', 'nested'))")
     try:
@@ -126,9 +128,11 @@ def test_column_comments_remain_strings(spark, lake_table):
 
 def test_partition_column_rename_preserves_reads_and_writes(spark, tmp_path):
     table = "partition_rename"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT, part STRING) USING delta PARTITIONED BY (part) LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('delta.columnMapping.mode'='name')"
+            f"CREATE TABLE {table} (id INT, part STRING) USING delta PARTITIONED BY (part) "
+            f"LOCATION '{location}' TBLPROPERTIES ('delta.columnMapping.mode'='name')"
         )
         spark.sql(f"INSERT INTO {table} VALUES (1, 'a')")
         spark.sql(f"ALTER TABLE {table} RENAME COLUMN part TO renamed")
@@ -141,9 +145,11 @@ def test_partition_column_rename_preserves_reads_and_writes(spark, tmp_path):
 
 def test_iceberg_nested_column_type_promotion(spark, tmp_path):
     table = "nested_type_promotion"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
-            f"CREATE TABLE {table} (payload STRUCT<value:INT>, items ARRAY<STRUCT<value:INT>>) USING iceberg LOCATION '{tmp_path.as_uri()}'"
+            f"CREATE TABLE {table} (payload STRUCT<value:INT>, items ARRAY<STRUCT<value:INT>>) "
+            f"USING iceberg LOCATION '{location}'"
         )
         spark.sql(f"INSERT INTO {table} SELECT named_struct('value', 1), array(named_struct('value', 2))")
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN payload.value TYPE BIGINT")
@@ -160,9 +166,10 @@ def test_iceberg_nested_column_type_promotion(spark, tmp_path):
 def test_iceberg_name_mapping_tracks_renames_and_reused_names(spark, tmp_path):
     table = "mapping_evolution"
     mapping = json.dumps([{"field-id": 1, "names": ["id", "old_id"]}])
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT) USING iceberg LOCATION '{tmp_path.as_uri()}' "
+            f"CREATE TABLE {table} (id INT) USING iceberg LOCATION '{location}' "
             f"TBLPROPERTIES ('schema.name-mapping.default'='{mapping}')"
         )
         spark.sql(f"INSERT INTO {table} VALUES (1)")
@@ -190,7 +197,10 @@ def test_table_rename_preserves_storage_and_schema(spark, lake_table):
         assert not spark.catalog.tableExists(table)
         assert spark.table(renamed).first().value == "old"
         assert metadata_schema(location, fmt) == before
-        spark.sql(f"CREATE TABLE {table} (id INT) USING {fmt} LOCATION '{(location.parent / 'collision').as_uri()}'")
+        spark.sql(
+            f"CREATE TABLE {table} (id INT) USING {fmt} "
+            f"LOCATION '{escape_sql_string_literal(str(location.parent / 'collision'))}'"
+        )
         with pytest.raises(Exception, match="already exists"):
             spark.sql(f"ALTER TABLE {renamed} RENAME TO {table}")
         assert spark.table(renamed).count() == 1
@@ -212,7 +222,7 @@ def test_managed_table_rename_keeps_recreated_name_isolated(spark, tmp_path, fmt
     original = f"{database}.original"
     renamed = f"{database}.renamed"
     try:
-        spark.sql(f"CREATE DATABASE {database} LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"CREATE DATABASE {database} LOCATION '{escape_sql_string_literal(str(tmp_path))}'")
         spark.sql(f"CREATE TABLE {original} (id INT) USING {fmt}")
         spark.sql(f"INSERT INTO {original} VALUES (1)")
         spark.sql(f"ALTER TABLE {original} RENAME TO {renamed}")
@@ -230,7 +240,7 @@ def test_delta_statistics_columns_follow_renames_and_drops(spark, tmp_path):
     try:
         spark.sql(
             f"CREATE TABLE {table} (id INT, payload STRUCT<value:INT>, other STRING) USING delta "
-            f"LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('delta.columnMapping.mode'='name', "
+            f"LOCATION '{escape_sql_string_literal(str(tmp_path))}' TBLPROPERTIES ('delta.columnMapping.mode'='name', "
             "'delta.dataSkippingStatsColumns'='id,payload.value,other')"
         )
         spark.sql(f"INSERT INTO {table} VALUES (1, named_struct('value', 10), 'old')")
@@ -260,11 +270,10 @@ def test_drop_column_respects_case_sensitive_resolution(spark, tmp_path, fmt, de
     table = "case_sensitive_drop"
     key = "spark.sql.caseSensitive"
     previous = spark.conf.get(key)
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
-        spark.sql(
-            f"CREATE TABLE {table} (id INT, {definition}) USING {fmt} LOCATION '{tmp_path.as_uri()}' {properties}"
-        )
+        spark.sql(f"CREATE TABLE {table} (id INT, {definition}) USING {fmt} LOCATION '{location}' {properties}")
         spark.sql(f"INSERT INTO {table} VALUES (1, {value})")
         before = metadata_schema(tmp_path, fmt)
         rows = spark.table(table).collect()
@@ -300,7 +309,7 @@ def test_column_name_uniqueness_uses_format_rules(spark, tmp_path, fmt, case_sen
         properties = "TBLPROPERTIES ('delta.columnMapping.mode'='name')" if fmt == "delta" else ""
         spark.sql(
             f"CREATE TABLE {table} (id INT, a INT, nested STRUCT<leaf: INT>) "
-            f"USING {fmt} LOCATION '{tmp_path.as_uri()}' {properties}"
+            f"USING {fmt} LOCATION '{escape_sql_string_literal(str(tmp_path))}' {properties}"
         )
         spark.sql(f"INSERT INTO {table} VALUES (1, 2, named_struct('leaf', 3))")
         before = metadata_schema(tmp_path, fmt)
@@ -324,9 +333,10 @@ def test_nested_type_change_resolves_exact_case(spark, tmp_path):
     table = "nested_type_case"
     key = "spark.sql.caseSensitive"
     previous = spark.conf.get(key)
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.conf.set(key, "true")
-        spark.sql(f"CREATE TABLE {table} (s STRUCT<Val: INT, val: INT>) USING iceberg LOCATION '{tmp_path.as_uri()}'")
+        spark.sql(f"CREATE TABLE {table} (s STRUCT<Val: INT, val: INT>) USING iceberg LOCATION '{location}'")
         spark.sql(f"INSERT INTO {table} SELECT named_struct('Val', 1, 'val', 2)")
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN s.val TYPE BIGINT")
         assert spark.table(table).schema["s"].dataType.simpleString() == "struct<Val:int,val:bigint>"

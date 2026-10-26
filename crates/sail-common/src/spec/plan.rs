@@ -284,6 +284,13 @@ pub enum QueryNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LakehouseCommandTarget {
+    Table(ObjectName),
+    Path(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CommandNode {
     ShowString(ShowString),
@@ -306,7 +313,7 @@ pub enum CommandNode {
     CallTableProcedure {
         format: String,
         procedure: String,
-        table: ObjectName,
+        target: LakehouseCommandTarget,
         arguments: Vec<(Identifier, Expr)>,
     },
     // catalog operations
@@ -441,6 +448,9 @@ pub enum CommandNode {
         table: ObjectName,
         if_exists: bool,
         purge: bool,
+    },
+    TruncateTable {
+        table: ObjectName,
     },
     CreateView {
         view: ObjectName,
@@ -1469,4 +1479,34 @@ pub struct ExprWithSource {
     /// may not be an exact representation of the expression
     /// if the expression is not created from SQL.
     pub source: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lakehouse_target_serialization_preserves_path_intent() -> serde_json::Result<()> {
+        for (target, expected) in [
+            (
+                LakehouseCommandTarget::Path("relative-table".to_string()),
+                serde_json::json!({"path": "relative-table"}),
+            ),
+            (
+                LakehouseCommandTarget::Table(ObjectName::from(["delta", "relative-table"])),
+                serde_json::json!({"table": ["delta", "relative-table"]}),
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&target)?, expected);
+            let plan = Plan::Command(CommandPlan::new(CommandNode::CallTableProcedure {
+                format: "delta".to_string(),
+                procedure: "describe_detail".to_string(),
+                target,
+                arguments: vec![],
+            }));
+            let encoded = serde_json::to_string(&plan)?;
+            assert_eq!(serde_json::from_str::<Plan>(&encoded)?, plan);
+        }
+        Ok(())
+    }
 }

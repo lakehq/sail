@@ -6,6 +6,8 @@ import json
 from urllib.parse import unquote
 
 import pyarrow.parquet as pq
+import pyspark.sql.functions as F  # noqa: N812
+import pytest
 from pyspark.sql.types import Row
 
 
@@ -168,3 +170,31 @@ def test_delta_rotated_files_match_log_sizes_and_statistics(spark, tmp_path):
         total += metadata.num_rows
     assert total == rows
     assert [row.id for row in spark.read.format("delta").load(str(path)).orderBy("id").collect()] == list(range(rows))
+
+
+@pytest.mark.parametrize("global_sort", [False, True], ids=["local-sort", "global-sort"])
+@pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
+def test_delta_write_preserves_input_sort(spark, tmp_path, global_sort, partitioned):
+    size = 20000
+    df = spark.range(size, numPartitions=4).select(
+        ((F.col("id") * 7919) % size).alias("k"),
+        (F.col("id") % 3).alias("p"),
+    )
+    # Include the table partition keys in the requested ordering when writing a partitioned table.
+    ordering = [F.col("p").asc_nulls_last(), F.col("k").desc()] if partitioned else [F.col("k").desc()]
+    ordered = df.orderBy(*ordering) if global_sort else df.repartition(4, "p").sortWithinPartitions(*ordering)
+    writer = ordered.write.format("delta")
+    if partitioned:
+        writer = writer.partitionBy("p")
+    path = tmp_path / "sorted_delta"
+    writer.save(str(path))
+
+    files = list(path.rglob("*.parquet"))
+    assert files
+    count = 0
+    for file in files:
+        values = pq.ParquetFile(file).read(columns=["k"]).column(0).to_pylist()
+        assert values == sorted(values, reverse=True)
+        count += len(values)
+    assert count == size
+    assert spark.read.format("delta").load(str(path)).count() == size

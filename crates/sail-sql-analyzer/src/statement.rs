@@ -405,6 +405,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::TruncateTable {
+            truncate: _,
+            table: _,
+            name,
+        } => {
+            let node = spec::CommandNode::TruncateTable {
+                table: from_ast_object_name(name)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::ShowTableProperties { name, property, .. } => {
             let property = property
                 .map(|(_, key, _)| {
@@ -2870,15 +2880,15 @@ fn delta_table_procedure(
     >,
     arguments: Vec<(spec::Identifier, spec::Expr)>,
 ) -> SqlResult<spec::Plan> {
-    let table = match target {
-        Either::Left(path) => spec::ObjectName::from(["delta".to_string(), from_ast_string(path)?]),
-        Either::Right(table) => from_ast_object_name(table)?,
+    let target = match target {
+        Either::Left(path) => spec::LakehouseCommandTarget::Path(from_ast_string(path)?),
+        Either::Right(table) => spec::LakehouseCommandTarget::Table(from_ast_object_name(table)?),
     };
     Ok(spec::Plan::Command(spec::CommandPlan::new(
         spec::CommandNode::CallTableProcedure {
             format: "delta".to_string(),
             procedure: procedure.to_string(),
-            table,
+            target,
             arguments,
         },
     )))

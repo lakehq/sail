@@ -13,12 +13,15 @@ use sail_data_source::options::ResolveOptions;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::maintenance::{DeltaMaintenanceExec, DeltaMaintenanceNode, DeltaMaintenancePredicate};
+use super::maintenance::{
+    DeltaMaintenanceExec, DeltaMaintenanceNode, DeltaMaintenancePredicate,
+    resolve_maintenance_read_options,
+};
 use super::rewrite_exec::DeltaOptimizeRewriteExec;
 use super::{optional_bool, optional_string};
 use crate::DeltaLakeSource;
 use crate::delta_log::LogStoreRef;
-use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
+use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::{
     DeltaScanByAddsExec, DeltaWriterExec, DeltaWriterExecOptions, delta_action_schema,
     encode_actions, prepare_delta_write_context,
@@ -50,7 +53,7 @@ pub(crate) async fn plan(
     let invocation = &node.call.invocation;
     let options = &node.options;
     let table_url = DeltaLakeSource::parse_table_url(session, node.paths.clone()).await?;
-    let read_options = DeltaReadOptions::resolve(session, node.read_options.clone())?;
+    let read_options = resolve_maintenance_read_options(session, node.read_options.clone(), None)?;
     let (snapshot, _, scan_config) = load_delta_read_state(
         session,
         table_url,

@@ -47,7 +47,7 @@ def test_artifact_files_are_available_in_workers_and_isolated_by_session(artifac
             path = directory / f"{name}.zip"
             with zipfile.ZipFile(path, "w") as output:
                 output.writestr("nested/value.txt", contents)
-            session.addArtifacts(f"{path}#{name}", archive=True)
+            session.addArtifacts(f"{path.as_uri()}#{name}", archive=True)
         else:
             path = directory / worker_path
             path.write_text(contents)

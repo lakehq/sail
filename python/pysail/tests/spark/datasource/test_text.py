@@ -134,7 +134,7 @@ def test_text_read_large_file(spark, tmp_path):
     path.mkdir()
     lines = [f"line {i}" for i in range(300_000)]
     content = "".join(f"{line}\n" for line in lines)
-    (path / "large.txt").write_text(content, encoding="utf-8")
+    (path / "large.txt").write_bytes(content.encode("utf-8"))
 
     assert spark.read.text(str(path), wholetext=True).collect() == [Row(value=content)]
     assert sorted(r.value for r in spark.read.text(str(path)).collect()) == sorted(lines)

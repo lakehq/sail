@@ -224,6 +224,43 @@ mod tests {
     }
 
     #[test]
+    fn test_lakehouse_command_targets() -> SqlResult<()> {
+        use sail_common::spec::{CommandNode, LakehouseCommandTarget, ObjectName, Plan};
+
+        for command in ["DESCRIBE DETAIL", "DESCRIBE HISTORY", "OPTIMIZE", "VACUUM"] {
+            for (target, expected) in [
+                (
+                    "'relative-table'",
+                    LakehouseCommandTarget::Path("relative-table".to_string()),
+                ),
+                (
+                    "'./relative-table'",
+                    LakehouseCommandTarget::Path("./relative-table".to_string()),
+                ),
+                (
+                    "delta.`relative-table`",
+                    LakehouseCommandTarget::Table(ObjectName::from(["delta", "relative-table"])),
+                ),
+                (
+                    "delta.`/absolute-table`",
+                    LakehouseCommandTarget::Table(ObjectName::from(["delta", "/absolute-table"])),
+                ),
+            ] {
+                let sql = format!("{command} {target}");
+                let plan = crate::statement::from_ast_statement(parse_one_statement(&sql)?)?;
+                assert!(matches!(
+                    &plan,
+                    Plan::Command(plan) if matches!(
+                        &plan.node,
+                        CommandNode::CallTableProcedure { target, .. } if target == &expected
+                    )
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_describe_table_and_query_disambiguation() -> SqlResult<()> {
         for sql in [
             "DESCRIBE t",
