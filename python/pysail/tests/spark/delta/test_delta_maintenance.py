@@ -171,30 +171,108 @@ def test_optimize_partition_compaction_and_idempotence(spark, maintenance_table,
         spark.sql(f"OPTIMIZE {name} WHERE id = 0").collect()
 
 
+@pytest.mark.parametrize(
+    ("predicate", "selected_partitions"),
+    [
+        ("p = 1", (("1", "10"), ("1", "20"))),
+        ("q = 10", (("1", "10"), ("2", "10"))),
+        ("p = 1 AND q = 20", (("1", "20"),)),
+        ("p = 2 OR q = 20", (("1", "20"), ("2", "10"), (None, "20"))),
+        ("p IS NULL", ((None, "20"),)),
+        ("p = 99", ()),
+        ("p = NULL", ()),
+    ],
+)
+def test_optimize_partition_predicates(spark, tmp_path, predicate, selected_partitions):
+    # select partitions and preserve every other file.
+    path = tmp_path / "predicates"
+    name = "optimize_predicates"
+    spark.sql(
+        f"CREATE TABLE {name} (value BIGINT, p INT, q INT) USING delta PARTITIONED BY (p, q) "
+        f"LOCATION '{escape_sql_string_literal(str(path))}'"
+    ).collect()
+    try:
+        empty = _commits(path)
+        assert spark.sql(f"OPTIMIZE {name} WHERE {predicate}").first().metrics.totalConsideredFiles == 0
+        assert _commits(path) == empty
+        for value in range(2):
+            spark.sql(
+                f"INSERT INTO {name} VALUES ({value}, 1, 10), ({value}, 1, 20), "  # noqa: S608
+                f"({value}, 2, 10), ({value}, NULL, 20)"
+            ).collect()
+        before = spark.table(name).orderBy("value", "p", "q").collect()
+        files = _active_files(path)
+        selected = {
+            file.path for file in files if (file.partitionValues["p"], file.partitionValues["q"]) in selected_partitions
+        }
+        untouched = {file.path for file in files} - selected
+        version = max(_commits(path))
+        metrics = spark.sql(f"OPTIMIZE {name} WHERE {predicate}").first().metrics
+        assert metrics.numFilesRemoved == len(selected)
+        assert metrics.totalConsideredFiles == len(selected)
+        assert metrics.numFilesAdded == len(selected_partitions)
+        assert metrics.partitionsOptimized == len(selected_partitions)
+        after = {file.path for file in _active_files(path)}
+        assert untouched <= after
+        assert not selected & after
+        assert max(_commits(path)) == version + bool(selected)
+        assert spark.table(name).orderBy("value", "p", "q").collect() == before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
+def test_optimize_constant_predicates_without_partitions(spark, tmp_path):
+    path = tmp_path / "constant"
+    name = "optimize_constants"
+    spark.sql(
+        f"CREATE TABLE {name} (value BIGINT) USING delta LOCATION '{escape_sql_string_literal(str(path))}'"
+    ).collect()
+    try:
+        before = _commits(path)
+        assert spark.sql(f"OPTIMIZE {name} WHERE TRUE").first().metrics.totalConsideredFiles == 0
+        assert _commits(path) == before
+        for value in range(2):
+            spark.sql(f"INSERT INTO {name} VALUES ({value})").collect()  # noqa: S608
+        before = _commits(path)
+        for predicate in ["FALSE", "CAST(NULL AS BOOLEAN)"]:
+            metrics = spark.sql(f"OPTIMIZE {name} WHERE {predicate}").first().metrics
+            assert metrics.totalConsideredFiles == metrics.numFilesRemoved == metrics.numFilesAdded == 0
+            assert _commits(path) == before
+        metrics = spark.sql(f"OPTIMIZE {name} WHERE TRUE").first().metrics
+        assert metrics.totalConsideredFiles == metrics.numFilesRemoved == 2  # noqa: PLR2004
+        assert metrics.numFilesAdded == 1
+        assert spark.table(name).orderBy("value").collect() == [Row(value=0), Row(value=1)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
 @pytest.mark.parametrize("column", ["sp ace", "a.b", "a-b", "a`b"])
 def test_optimize_preserves_quoted_partition_columns(spark, tmp_path, column):
     name = "optimize_quoted_partition"
     path = tmp_path / "table"
     quoted = f"`{column.replace('`', '``')}`"
     spark.sql(
-        f"CREATE TABLE {name} (id BIGINT, {quoted} STRING) USING delta "
-        f"PARTITIONED BY ({quoted}) LOCATION '{escape_sql_string_literal(str(path))}' "
+        f"CREATE TABLE {name} (value BIGINT, {quoted} STRING, q STRING) USING delta "
+        f"PARTITIONED BY ({quoted}, q) LOCATION '{escape_sql_string_literal(str(path))}' "
         "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
     ).collect()
     try:
         for i in range(2):
-            spark.sql(f"INSERT INTO {name} VALUES ({i}, 'selected'), ({i}, 'other')").collect()  # noqa: S608
-        before = spark.table(name).orderBy("id", quoted).collect()
+            spark.sql(
+                f"INSERT INTO {name} VALUES ({i}, 'selected', 'target'), "  # noqa: S608
+                f"({i}, 'selected', 'other'), ({i}, 'other', 'target')"
+            ).collect()
+        before = spark.table(name).orderBy("value", quoted, "q").collect()
         files = _active_files(path)
-        selected = {file.path for file in files if "selected" in file.partitionValues.values()}
+        selected = {file.path for file in files if set(file.partitionValues.values()) == {"selected", "target"}}
         untouched = {file.path for file in files} - selected
-        result = spark.sql(f"OPTIMIZE {name} WHERE {quoted} = 'selected'").first()
+        result = spark.sql(f"OPTIMIZE {name} WHERE {quoted} = 'selected' AND q = 'target'").first()
         assert result.metrics.numFilesRemoved == len(selected)
         assert result.metrics.numFilesAdded == 1
         assert result.metrics.partitionsOptimized == 1
         assert untouched <= {file.path for file in _active_files(path)}
         assert not selected & {file.path for file in _active_files(path)}
-        assert spark.table(name).orderBy("id", quoted).collect() == before
+        assert spark.table(name).orderBy("value", quoted, "q").collect() == before
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 

@@ -542,18 +542,51 @@ pub async fn resolve_listing_urls(
     Ok(urls)
 }
 
+fn fill_directory_root_path(mut path: String) -> Result<String> {
+    // GlobUrl requires a nonempty path. Supply only a missing root path here,
+    // keeping raw glob expressions intact until GlobUrl validates them.
+    if path.is_empty() {
+        path.push('/');
+    } else if !std::path::Path::new(&path).is_absolute() {
+        let raw_url = RawGlobUrl::parser()
+            .parse(&path)
+            .into_result()
+            .map_err(|_| plan_datafusion_err!("URL: {path}"))?;
+        if let RawGlobUrl::Hierarchical {
+            scheme,
+            authority,
+            path: raw_path,
+            ..
+        } = raw_url
+        {
+            // The permissive raw parser may include a root URL's query or
+            // fragment in its authority, stopping only at the first slash.
+            let authority_end =
+                if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
+                    authority.find(['?', '#']).unwrap_or(authority.len())
+                } else {
+                    authority.len()
+                };
+            if raw_path.is_empty() || authority_end < authority.len() {
+                path.insert(scheme.len() + 3 + authority_end, '/');
+            }
+        }
+    }
+    Ok(path)
+}
+
 pub fn resolve_listing_writer_url(path: String) -> Result<Url> {
-    // Listing writes always target a directory of output files.
-    let path = if path.ends_with(object_store::path::DELIMITER) {
-        path
-    } else {
-        format!("{path}{}", object_store::path::DELIMITER)
-    };
-    let Ok(GlobUrl { base, glob }) = GlobUrl::parse(&path)?.one() else {
+    let path = fill_directory_root_path(path)?;
+    let Ok(GlobUrl { mut base, glob }) = GlobUrl::parse(&path)?.one() else {
         return plan_err!("exactly one URL should be provided for writing: {path}");
     };
     if glob.is_some() {
         return plan_err!("glob pattern is not allowed in the output URL: {path}");
+    }
+    // Listing writes always target a directory of output files. Change only
+    // the URL path, not a trailing query or fragment.
+    if !base.path().ends_with(object_store::path::DELIMITER) {
+        base.set_path(&format!("{}{}", base.path(), object_store::path::DELIMITER));
     }
     Ok(base)
 }
@@ -563,6 +596,7 @@ pub fn resolve_table_url(path: String) -> Result<Url> {
     if path.is_empty() {
         return plan_err!("table path cannot be empty");
     }
+    let path = fill_directory_root_path(path)?;
     let raw_path = if std::path::Path::new(&path).is_absolute() {
         path.as_str()
     } else {
@@ -822,6 +856,115 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_directory_url_preserves_components() {
+        for resolve in [resolve_listing_writer_url, resolve_table_url] {
+            for scheme in ["http", "https"] {
+                for authority in ["host", "[::1]:8443"] {
+                    for path in ["/container/table", "/container/table/"] {
+                        for (suffix, query, fragment) in [
+                            ("?token=abc", Some("token=abc"), None),
+                            ("#fragment", None, Some("fragment")),
+                            ("?token=abc#fragment", Some("token=abc"), Some("fragment")),
+                            ("?token=abc/", Some("token=abc/"), None),
+                            ("#fragment/", None, Some("fragment/")),
+                            (
+                                "?token=a%2Fb+%25&x={a,b}#part%2Fone",
+                                Some("token=a%2Fb+%25&x={a,b}"),
+                                Some("part%2Fone"),
+                            ),
+                        ] {
+                            let input = format!("{scheme}://{authority}{path}{suffix}");
+                            let result = resolve(input.clone()).unwrap();
+                            assert_eq!(result.path(), "/container/table/", "{input}");
+                            assert_eq!(result.query(), query, "{input}");
+                            assert_eq!(result.fragment(), fragment, "{input}");
+                            assert_eq!(
+                                result.join("./active.parquet").unwrap().as_str(),
+                                format!("{scheme}://{authority}/container/table/active.parquet"),
+                                "{input}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_directory_url_roots() {
+        for resolve in [resolve_listing_writer_url, resolve_table_url] {
+            for root in [
+                "https://host",
+                "https://[::1]",
+                "http://host",
+                "s3://bucket",
+            ] {
+                for suffix in ["", "/"] {
+                    let input = format!("{root}{suffix}");
+                    let result = resolve(input.clone()).unwrap();
+                    assert_eq!(result.as_str(), format!("{root}/"), "{input}");
+                    assert_eq!(
+                        result.join("./active.parquet").unwrap().as_str(),
+                        format!("{root}/active.parquet"),
+                        "{input}"
+                    );
+                }
+            }
+            for input in [
+                "https://host?token=abc#fragment",
+                "https://[::1]?token=abc#fragment",
+                "https://host?token=abc/",
+                "https://host?token=abc/{a,b}",
+                "http://host?token=abc/*?[]{}#fragment/{a,b}",
+                "https://[::1]#fragment/*?[]{a,b}",
+            ] {
+                let original = Url::parse(input).unwrap();
+                let result = resolve(input.to_string()).unwrap();
+                assert_eq!(result.path(), "/", "{input}");
+                assert_eq!(result.query(), original.query(), "{input}");
+                assert_eq!(result.fragment(), original.fragment(), "{input}");
+                assert_eq!(
+                    result.join("./active.parquet").unwrap().path(),
+                    "/active.parquet",
+                    "{input}"
+                );
+            }
+            for input in [
+                "https://host/{a,b}?token=abc/*?[]{}",
+                "https://[::1]/*#fragment/[]{}",
+            ] {
+                assert!(resolve(input.to_string()).is_err(), "{input}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_listing_writer_url_rejects_globs() {
+        let absolute = std::env::temp_dir().join("table");
+        for root in [
+            "https://host/table",
+            "s3://bucket/table",
+            "file:///tmp/table",
+            "table",
+            absolute.to_str().unwrap(),
+        ] {
+            for pattern in ["*", "[ab]", "{a,b}", "{a,b*}", "{*}"] {
+                let input = format!("{root}/{pattern}");
+                assert!(
+                    resolve_listing_writer_url(input.clone()).is_err(),
+                    "{input}"
+                );
+            }
+        }
+        for input in ["s3://bucket/table/a?", "table/a?"] {
+            assert!(
+                resolve_listing_writer_url(input.to_string()).is_err(),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
     fn test_resolve_table_url_rejects_empty_path() {
         assert!(matches!(
             resolve_table_url(String::new()),
@@ -845,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_table_url_preserves_literal_paths() {
+    fn test_resolve_directory_url_preserves_literal_paths() {
         let cwd = Url::from_directory_path(std::env::current_dir().unwrap()).unwrap();
         let absolute = std::env::temp_dir().join("table");
         let literal = std::env::temp_dir().join("table%7Ba%7D");
@@ -855,6 +998,7 @@ mod tests {
                 Url::from_directory_path(&absolute).unwrap().to_string(),
             ),
             ("table", format!("{cwd}table/")),
+            ("table%7Ba%7D", format!("{cwd}table%257Ba%257D/")),
             ("./nested/../table/", format!("{cwd}table/")),
             ("file:///tmp/table", "file:///tmp/table/".to_string()),
             ("s3://bucket/table", "s3://bucket/table/".to_string()),
@@ -865,18 +1009,24 @@ mod tests {
                 Url::from_directory_path(&literal).unwrap().to_string(),
             ),
         ] {
-            assert_eq!(
-                resolve_table_url(path.to_string()).unwrap().as_str(),
-                expected,
-                "{path}"
-            );
+            for resolve in [resolve_listing_writer_url, resolve_table_url] {
+                assert_eq!(
+                    resolve(path.to_string()).unwrap().as_str(),
+                    expected,
+                    "{path}"
+                );
+            }
         }
-        for root in ["file:///tmp/", "s3://bucket/"] {
-            let path = format!("{root}literal%2A%3F%5B%5D%7Ba%7D%23%25");
-            assert_eq!(
-                resolve_table_url(path.clone()).unwrap().as_str(),
-                format!("{path}/")
-            );
+        for root in ["file:///tmp/", "s3://bucket/", "https://host/"] {
+            let path = format!("{root}literal%2A%3F%5B%5D%7Ba%7D%23%25%2F");
+            for resolve in [resolve_listing_writer_url, resolve_table_url] {
+                let result = resolve(path.clone()).unwrap();
+                assert_eq!(result.as_str(), format!("{path}/"));
+                assert_eq!(
+                    result.join("./active.parquet").unwrap().as_str(),
+                    format!("{path}/active.parquet")
+                );
+            }
         }
     }
 

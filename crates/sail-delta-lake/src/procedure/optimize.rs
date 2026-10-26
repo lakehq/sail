@@ -3,10 +3,12 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::arrow::array::{Array, RecordBatch};
+use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, not_impl_err, plan_err};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion_physical_expr::utils::reassign_expr_columns;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::lakeprocedure::LakeProcedureInvocation;
 use sail_data_source::options::ResolveOptions;
@@ -383,56 +385,9 @@ fn select_files(
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
-    let mut columns = vec![];
-    for field in filter.schema.fields() {
-        if snapshot
-            .metadata()
-            .partition_columns()
-            .contains(field.name())
-        {
-            let physical = crate::schema::arrow_field_physical_name(
-                field,
-                snapshot.effective_column_mapping_mode(),
-            );
-            let values = snapshot
-                .adds()
-                .iter()
-                .map(|add| {
-                    crate::conversion::parse_optional_partition_value(
-                        add.partition_values
-                            .get(physical)
-                            .and_then(Option::as_deref),
-                        field.data_type(),
-                    )
-                })
-                .collect::<crate::spec::DeltaResult<Vec<_>>>()?;
-            columns.push(if values.is_empty() {
-                datafusion::arrow::array::new_empty_array(field.data_type())
-            } else {
-                datafusion_common::ScalarValue::iter_to_array(values)?
-            });
-        } else {
-            columns.push(datafusion::arrow::array::new_null_array(
-                field.data_type(),
-                snapshot.adds().len(),
-            ));
-        }
-    }
-    let schema = Arc::new(datafusion::arrow::datatypes::Schema::new(
-        filter
-            .schema
-            .fields()
-            .iter()
-            .map(|field| field.as_ref().clone().with_nullable(true))
-            .collect::<Vec<_>>(),
-    ));
-    let batch = RecordBatch::try_new_with_options(
-        schema,
-        columns,
-        &datafusion::arrow::record_batch::RecordBatchOptions::new()
-            .with_row_count(Some(snapshot.adds().len())),
-    )?;
-    let values = filter.expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+    let batch = partition_values_batch(snapshot, &filter.schema)?;
+    let expr = reassign_expr_columns(filter.expr.clone(), &batch.schema())?;
+    let values = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
     let mask = values
         .as_any()
         .downcast_ref::<datafusion::arrow::array::BooleanArray>()
@@ -444,6 +399,52 @@ fn select_files(
         .filter(|(i, _)| mask.is_valid(*i) && mask.value(*i))
         .map(|(_, add)| add.clone())
         .collect())
+}
+
+fn partition_values_batch(snapshot: &DeltaSnapshot, schema: &Schema) -> Result<RecordBatch> {
+    let schema = Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .filter(|field| {
+                snapshot
+                    .metadata()
+                    .partition_columns()
+                    .contains(field.name())
+            })
+            .map(|field| field.as_ref().clone().with_nullable(true))
+            .collect::<Vec<_>>(),
+    ));
+    let mut columns = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let physical = crate::schema::arrow_field_physical_name(
+            field,
+            snapshot.effective_column_mapping_mode(),
+        );
+        let values = snapshot
+            .adds()
+            .iter()
+            .map(|add| {
+                crate::conversion::parse_optional_partition_value(
+                    add.partition_values
+                        .get(physical)
+                        .and_then(Option::as_deref),
+                    field.data_type(),
+                )
+            })
+            .collect::<crate::spec::DeltaResult<Vec<_>>>()?;
+        columns.push(if values.is_empty() {
+            datafusion::arrow::array::new_empty_array(field.data_type())
+        } else {
+            datafusion_common::ScalarValue::iter_to_array(values)?
+        });
+    }
+    Ok(RecordBatch::try_new_with_options(
+        schema,
+        columns,
+        &datafusion::arrow::record_batch::RecordBatchOptions::new()
+            .with_row_count(Some(snapshot.adds().len())),
+    )?)
 }
 
 fn total_size(files: &[Add]) -> Result<i64> {
@@ -464,6 +465,10 @@ fn sizes(files: &[Add]) -> Result<Value> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion_common::{DataFusionError, ScalarValue};
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
     use object_store::ObjectStore;
     use object_store::memory::InMemory;
 
@@ -472,6 +477,171 @@ mod tests {
     use crate::snapshot::DeltaSnapshotConfig;
     use crate::spec::inspection::DeltaCommandType;
     use crate::spec::{DataType, Metadata, Protocol, SaveMode, StructField, StructType};
+
+    async fn predicate_snapshot(
+        data_columns: usize,
+        partitioned: bool,
+        num_files: usize,
+    ) -> Result<DeltaSnapshot> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let url = url::Url::parse("memory:///").unwrap();
+        let log_store = default_logstore(store.clone(), store, &url, &StorageConfig);
+        let protocol = Protocol::new(1, 2, None, None);
+        let fields = (0..data_columns)
+            .map(|i| StructField::not_null(format!("value{i}"), DataType::LONG))
+            .chain([
+                StructField::not_null("p", DataType::LONG),
+                StructField::not_null("q", DataType::LONG),
+            ]);
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new(fields)?,
+            if partitioned {
+                vec!["p".into(), "q".into()]
+            } else {
+                vec![]
+            },
+            0,
+            HashMap::new(),
+        )?;
+        let mut actions = vec![
+            CommitAction::Protocol(protocol.clone()),
+            CommitAction::Metadata(metadata.clone()),
+        ];
+        actions.extend((0..num_files).map(|i| {
+            CommitAction::Add(Add {
+                path: format!("{i}.parquet"),
+                partition_values: if partitioned {
+                    HashMap::from([
+                        ("p".into(), Some((i + 1).to_string())),
+                        ("q".into(), Some("10".into())),
+                    ])
+                } else {
+                    HashMap::new()
+                },
+                size: 10,
+                data_change: true,
+                ..Default::default()
+            })
+        }));
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                None,
+                log_store.clone(),
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: url.to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+        Ok(DeltaSnapshot::try_new(
+            log_store.as_ref(),
+            DeltaSnapshotConfig::default(),
+            None,
+            None,
+        )
+        .await?)
+    }
+
+    #[tokio::test]
+    async fn predicate_batch_allocates_only_partition_columns() -> Result<()> {
+        let mut memory = None;
+        for data_columns in [1, 32] {
+            let snapshot = predicate_snapshot(data_columns, true, 2).await?;
+            let batch = partition_values_batch(&snapshot, snapshot.schema())?;
+            assert_eq!(batch.num_rows(), 2);
+            assert_eq!(batch.num_columns(), 2);
+            assert_eq!(batch.schema().field(0).name(), "p");
+            assert_eq!(batch.schema().field(1).name(), "q");
+            assert!(
+                batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .all(|field| field.is_nullable())
+            );
+            assert_eq!(
+                batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap(),
+                &Int64Array::from(vec![1, 2])
+            );
+            assert_eq!(
+                batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .unwrap(),
+                &Int64Array::from(vec![10, 10])
+            );
+            let allocated = batch.get_array_memory_size();
+            assert_eq!(*memory.get_or_insert(allocated), allocated);
+            // p's old index either names q or is out of bounds in the projected batch.
+            let filter = DeltaMaintenancePredicate {
+                schema: Arc::new(snapshot.schema().clone()),
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("p", data_columns)),
+                    Operator::Eq,
+                    lit(1_i64),
+                )),
+            };
+            let selected = select_files(&snapshot, Some(&filter))?;
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].path, "0.parquet");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn predicate_batch_preserves_zero_column_row_count() -> Result<()> {
+        for num_files in [0, 2] {
+            let snapshot = predicate_snapshot(1, false, num_files).await?;
+            let batch = partition_values_batch(&snapshot, snapshot.schema())?;
+            assert_eq!(batch.num_columns(), 0);
+            assert_eq!(batch.num_rows(), num_files);
+            assert_eq!(batch.get_array_memory_size(), 0);
+            for (value, expected) in [(Some(true), num_files), (Some(false), 0), (None, 0)] {
+                let filter = DeltaMaintenancePredicate {
+                    schema: Arc::new(snapshot.schema().clone()),
+                    expr: lit(ScalarValue::Boolean(value)),
+                };
+                assert_eq!(select_files(&snapshot, Some(&filter))?.len(), expected);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn predicate_projection_preserves_validation() -> Result<()> {
+        let snapshot = predicate_snapshot(1, true, 2).await?;
+        let mut filter = DeltaMaintenancePredicate {
+            schema: Arc::new(snapshot.schema().clone()),
+            expr: Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("value0", 0)),
+                Operator::Eq,
+                lit(1_i64),
+            )),
+        };
+        assert!(
+            matches!(select_files(&snapshot, Some(&filter)), Err(DataFusionError::Plan(message))
+            if message == "OPTIMIZE predicates may reference only partition columns")
+        );
+        filter.expr = lit(true);
+        let mut fields = filter.schema.fields().to_vec();
+        fields[0] = Arc::new(fields[0].as_ref().clone().with_nullable(true));
+        filter.schema = Arc::new(Schema::new(fields));
+        assert!(
+            matches!(select_files(&snapshot, Some(&filter)), Err(DataFusionError::Plan(message))
+            if message == "OPTIMIZE table schema changed after predicate planning")
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn commit_uses_planned_snapshot_for_concurrent_changes() -> Result<()> {
