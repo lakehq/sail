@@ -37,7 +37,7 @@ use crate::physical_plan::{
     DeltaDiscoveryExec, DeltaScanByAddsExec, delta_action_schema, encode_actions,
 };
 use crate::schema::get_physical_schema;
-use crate::spec::{Action, Add, StructType};
+use crate::spec::{Action, Add, ColumnMappingMode, StructType};
 use crate::table::DeltaSnapshot;
 
 #[derive(Debug, Clone)]
