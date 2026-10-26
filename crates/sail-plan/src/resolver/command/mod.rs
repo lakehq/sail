@@ -24,6 +24,7 @@ mod procedure;
 mod row_level;
 mod show;
 mod table_properties;
+mod truncate;
 mod update;
 mod variable;
 mod with_relations;
@@ -334,6 +335,9 @@ impl PlanResolver<'_> {
                     condition,
                 };
                 self.resolve_command_delete(delete, state).await
+            }
+            CommandNode::TruncateTable { table } => {
+                self.resolve_command_truncate(table, state).await
             }
             CommandNode::AlterTable {
                 table,

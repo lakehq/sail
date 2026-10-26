@@ -473,6 +473,21 @@ impl LakeSource for DeltaLakeSource {
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
         match operation {
+            RowLevelOperation::Truncate {
+                target_plan,
+                target,
+            } => {
+                let mode = sail_common_datafusion::datasource::RowLevelWriteMode::CopyOnWrite;
+                Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+                    node: Arc::new(
+                        sail_logical_plan::row_level::RowLevelWriteNode::new_truncate(
+                            target_plan,
+                            mode,
+                            *target,
+                        )?,
+                    ),
+                }))
+            }
             RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
             RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
             RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),

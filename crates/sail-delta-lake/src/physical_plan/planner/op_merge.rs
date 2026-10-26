@@ -481,8 +481,10 @@ fn build_targeted_writer_input(
             let insert_rows = build_insert_rows_input(expanded)?;
             UnionExec::try_new(vec![insert_rows, touched_rows])
         }
-        RowLevelCommand::Delete => {
-            internal_err!("DELETE does not use the targeted row-level writer input assembly path")
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => {
+            internal_err!(
+                "DELETE/TRUNCATE does not use the targeted row-level writer input assembly path"
+            )
         }
     }
 }

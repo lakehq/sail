@@ -17,8 +17,7 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest_list.rs
 
-use apache_avro::types::Value as AvroValue;
-use apache_avro::{Reader as AvroReader, from_value as avro_from_value};
+use apache_avro::{Reader as AvroReader, Schema as AvroSchema, from_value as avro_from_value};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
@@ -27,24 +26,6 @@ use crate::spec::avro_utils::create_avro_writer;
 mod schema;
 
 pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
-
-fn optional_avro_int(value: &AvroValue) -> Result<Option<i32>, String> {
-    match value {
-        AvroValue::Int(value) => Ok(Some(*value)),
-        AvroValue::Union(_, value) => optional_avro_int(value.as_ref()),
-        AvroValue::Null => Ok(None),
-        _ => Err("int or null".to_string()),
-    }
-}
-
-fn optional_avro_long(value: &AvroValue) -> Result<Option<i64>, String> {
-    match value {
-        AvroValue::Long(value) => Ok(Some(*value)),
-        AvroValue::Union(_, value) => optional_avro_long(value.as_ref()),
-        AvroValue::Null => Ok(None),
-        _ => Err("long or null".to_string()),
-    }
-}
 
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
@@ -81,72 +62,59 @@ impl ManifestList {
         self.entries
     }
 
-    /// Parse manifest list from bytes with a specified version.
-    pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList, String> {
-        match version {
-            FormatVersion::V1 => {
-                let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
-                let mut entries = Vec::new();
-                for value in reader {
-                    let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-                    match avro_from_value::<_serde::ManifestFileV1>(&value) {
-                        Ok(v1) => entries.push(ManifestFile::from(v1)),
-                        Err(v1_error) => {
-                            let v2 = avro_from_value::<_serde::ManifestFileV2>(&value)
-                                .map_err(|_| format!("Avro decode error: {v1_error}"))?;
-                            entries.push(ManifestFile::from(v2));
-                        }
+    /// Parse using the file's writer schema, independently of the current table version.
+    /// Historical lists and legacy Sail lists may have a different format from the table.
+    pub fn parse_with_version(bs: &[u8], _version: FormatVersion) -> Result<ManifestList, String> {
+        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+        let AvroSchema::Record(record) = reader.writer_schema() else {
+            return Err("Manifest list writer schema must be a record".into());
+        };
+        let has_field = |name: &str| record.fields.iter().any(|field| field.name == name);
+        let version = match (
+            has_field("content"),
+            has_field("sequence_number"),
+            has_field("min_sequence_number"),
+            has_field("first_row_id"),
+        ) {
+            (_, false, false, false) => FormatVersion::V1,
+            (true, true, true, false) => FormatVersion::V2,
+            (true, true, true, true) => FormatVersion::V3,
+            _ => return Err("Incomplete V2 manifest list tracking fields".into()),
+        };
+        let entries = reader
+            .map(|value| {
+                let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
+                match version {
+                    FormatVersion::V1 => {
+                        let file = avro_from_value::<_serde::ManifestFileV1>(&value)
+                            .map_err(|e| format!("Avro V1 manifest list decode error: {e}"))?;
+                        ManifestFile::try_from(file)
+                    }
+                    FormatVersion::V2 => {
+                        let file = avro_from_value::<_serde::ManifestFileV2>(&value)
+                            .map_err(|e| format!("Avro V2 manifest list decode error: {e}"))?;
+                        ManifestFile::try_from(file)
+                    }
+                    FormatVersion::V3 => {
+                        let file = avro_from_value::<_serde::ManifestFileV3>(&value)
+                            .map_err(|e| format!("Avro V3 manifest list decode error: {e}"))?;
+                        ManifestFile::try_from(file)
                     }
                 }
-                Ok(ManifestList::new(entries))
-            }
-            FormatVersion::V2 => {
-                let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
-                let mut entries = Vec::new();
-                for value in reader {
-                    let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-                    match avro_from_value::<_serde::ManifestFileV2>(&value) {
-                        Ok(v2) => entries.push(ManifestFile::from(v2)),
-                        Err(_) => {
-                            if let Ok(mf) = Self::parse_manifest_v2_fallback(&value) {
-                                entries.push(mf);
-                            } else {
-                                let err = format!(
-                                    "Avro decode error: Failed to deserialize Avro value into value: {value:?}"
-                                );
-                                return Err(err);
-                            }
-                        }
-                    }
-                }
-                Ok(ManifestList::new(entries))
-            }
-            FormatVersion::V3 => {
-                let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
-                let mut entries = Vec::new();
-                for value in reader {
-                    let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-                    match avro_from_value::<_serde::ManifestFileV3>(&value) {
-                        Ok(v3) => entries.push(ManifestFile::from(v3)),
-                        Err(_) => match avro_from_value::<_serde::ManifestFileV2>(&value) {
-                            Ok(v2) => entries.push(ManifestFile::from(v2)),
-                            Err(_) => {
-                                if let Ok(mf) = Self::parse_manifest_v2_fallback(&value) {
-                                    entries.push(mf);
-                                } else {
-                                    let err = format!(
-                                        "Avro decode error: Failed to deserialize Avro value into value: {value:?}"
-                                    );
-                                    return Err(err);
-                                }
-                            }
-                        },
-                    }
-                }
-                Ok(ManifestList::new(entries))
-            }
-        }
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(ManifestList::new(entries))
     }
+}
+
+/// Snapshot-level metadata for a manifest list write; not inferred from its entries.
+#[derive(Debug, Clone, Copy)]
+pub struct ManifestListWriteContext {
+    pub version: FormatVersion,
+    pub snapshot_id: i64,
+    pub parent_snapshot_id: Option<i64>,
+    pub sequence_number: i64,
+    pub first_row_id: Option<i64>,
 }
 
 pub struct ManifestListWriter {
@@ -174,7 +142,22 @@ impl ManifestListWriter {
         ManifestList::new(self.entries)
     }
 
-    pub fn to_bytes(&self, version: FormatVersion) -> Result<Vec<u8>, String> {
+    #[cfg(test)]
+    pub(crate) fn to_bytes(&self, version: FormatVersion) -> Result<Vec<u8>, String> {
+        self.to_bytes_with_context(ManifestListWriteContext {
+            version,
+            snapshot_id: 7,
+            parent_snapshot_id: None,
+            sequence_number: 0,
+            first_row_id: (version == FormatVersion::V3).then_some(0),
+        })
+    }
+
+    pub fn to_bytes_with_context(
+        &self,
+        context: ManifestListWriteContext,
+    ) -> Result<Vec<u8>, String> {
+        let version = context.version;
         use crate::spec::manifest_list::schema::{
             MANIFEST_LIST_AVRO_SCHEMA_V1, MANIFEST_LIST_AVRO_SCHEMA_V2,
             MANIFEST_LIST_AVRO_SCHEMA_V3,
@@ -187,6 +170,32 @@ impl ManifestListWriter {
         };
         let mut writer = create_avro_writer(schema, Vec::new())
             .map_err(|error| format!("Avro writer creation error: {error}"))?;
+        let mut metadata = vec![
+            ("format-version", (version as u8).to_string()),
+            ("snapshot-id", context.snapshot_id.to_string()),
+            (
+                "parent-snapshot-id",
+                context
+                    .parent_snapshot_id
+                    .map_or_else(|| "null".into(), |id| id.to_string()),
+            ),
+        ];
+        if version >= FormatVersion::V2 {
+            metadata.push(("sequence-number", context.sequence_number.to_string()));
+        }
+        if version >= FormatVersion::V3 {
+            metadata.push((
+                "first-row-id",
+                context
+                    .first_row_id
+                    .map_or_else(|| "null".into(), |id| id.to_string()),
+            ));
+        }
+        for (name, value) in metadata {
+            writer
+                .add_user_metadata(name.into(), value)
+                .map_err(|error| format!("Avro metadata error: {error}"))?;
+        }
 
         for mf in &self.entries {
             if version >= FormatVersion::V2
@@ -216,6 +225,7 @@ impl ManifestListWriter {
             match version {
                 FormatVersion::V1 => {
                     let v1 = _serde::ManifestFileV1 {
+                        content,
                         manifest_path: mf.manifest_path.clone(),
                         manifest_length: mf.manifest_length,
                         partition_spec_id: mf.partition_spec_id,
@@ -287,18 +297,56 @@ impl ManifestListWriter {
     }
 }
 
-// removed duplicate early _serde block; see single _serde module below
+// apache-avro's Option deserializer requires a union, but older writers may use
+// a bare value for an optional field. deserialize_any handles both encodings.
+fn deserialize_optional<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Optional<T> {
+        Value(T),
+        Null(()),
+    }
+    Optional::<T>::deserialize(deserializer).map(|value| match value {
+        Optional::Value(value) => Some(value),
+        Optional::Null(()) => None,
+    })
+}
+
+fn deserialize_optional_bytes<'de, D>(deserializer: D) -> Result<Option<ByteBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptionalBytesVisitor;
+    impl<'de> serde::de::Visitor<'de> for OptionalBytesVisitor {
+        type Value = Option<ByteBuf>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("bytes or null")
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_bytes<E: serde::de::Error>(self, value: &[u8]) -> Result<Self::Value, E> {
+            Ok(Some(ByteBuf::from(value)))
+        }
+    }
+    deserializer.deserialize_any(OptionalBytesVisitor)
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "kebab-case")]
 pub struct FieldSummaryAvro {
-    #[serde(rename = "contains_null")]
     contains_null: bool,
-    #[serde(rename = "contains_nan")]
+    #[serde(default, deserialize_with = "deserialize_optional")]
     contains_nan: Option<bool>,
-    #[serde(rename = "lower_bound")]
+    #[serde(default, deserialize_with = "deserialize_optional_bytes")]
     lower_bound: Option<ByteBuf>,
-    #[serde(rename = "upper_bound")]
+    #[serde(default, deserialize_with = "deserialize_optional_bytes")]
     upper_bound: Option<ByteBuf>,
 }
 
@@ -314,209 +362,17 @@ impl From<FieldSummaryAvro> for FieldSummary {
     }
 }
 
-impl ManifestList {
-    fn parse_manifest_v2_fallback(value: &AvroValue) -> Result<ManifestFile, String> {
-        match value {
-            AvroValue::Record(fields) => {
-                let get = |name: &str| -> Option<&AvroValue> {
-                    fields.iter().find(|(k, _)| k == name).map(|(_, v)| v)
-                };
+impl TryFrom<_serde::ManifestFileV2> for ManifestFile {
+    type Error = String;
 
-                let string = |v: &AvroValue| -> Result<String, String> {
-                    if let AvroValue::String(s) = v {
-                        Ok(s.clone())
-                    } else {
-                        Err("string".into())
-                    }
-                };
-                let long = |v: &AvroValue| -> Result<i64, String> {
-                    if let AvroValue::Long(x) = v {
-                        Ok(*x)
-                    } else {
-                        Err("long".into())
-                    }
-                };
-                let int = |v: &AvroValue| -> Result<i32, String> {
-                    if let AvroValue::Int(x) = v {
-                        Ok(*x)
-                    } else {
-                        Err("int".into())
-                    }
-                };
-
-                let manifest_path = string(get("manifest_path").ok_or("manifest_path")?)?;
-                let manifest_length = long(get("manifest_length").ok_or("manifest_length")?)?;
-                let partition_spec_id = int(get("partition_spec_id").ok_or("partition_spec_id")?)?;
-                let v2_field_presence = [
-                    get("content").is_some(),
-                    get("sequence_number").is_some(),
-                    get("min_sequence_number").is_some(),
-                ];
-                let is_v1_shape = v2_field_presence.iter().all(|present| !present);
-                if !is_v1_shape && !v2_field_presence.iter().all(|present| *present) {
-                    return Err("incomplete V2 manifest list tracking fields".to_string());
-                }
-                let content = match get("content") {
-                    Some(value) => optional_avro_int(value)?.ok_or("content cannot be null")?,
-                    None => 0,
-                };
-                let sequence_number = match get("sequence_number") {
-                    Some(value) => {
-                        optional_avro_long(value)?.ok_or("sequence_number cannot be null")?
-                    }
-                    None => 0,
-                };
-                let min_sequence_number = match get("min_sequence_number") {
-                    Some(value) => {
-                        optional_avro_long(value)?.ok_or("min_sequence_number cannot be null")?
-                    }
-                    None => 0,
-                };
-                let added_snapshot_id = long(get("added_snapshot_id").ok_or("added_snapshot_id")?)?;
-                let added_files_count = get("added_files_count")
-                    .or_else(|| get("added_data_files_count"))
-                    .map(optional_avro_int)
-                    .transpose()?
-                    .flatten();
-                let existing_files_count = get("existing_files_count")
-                    .or_else(|| get("existing_data_files_count"))
-                    .map(optional_avro_int)
-                    .transpose()?
-                    .flatten();
-                let deleted_files_count = get("deleted_files_count")
-                    .or_else(|| get("deleted_data_files_count"))
-                    .map(optional_avro_int)
-                    .transpose()?
-                    .flatten();
-                let added_rows_count = get("added_rows_count")
-                    .map(optional_avro_long)
-                    .transpose()?
-                    .flatten();
-                let existing_rows_count = get("existing_rows_count")
-                    .map(optional_avro_long)
-                    .transpose()?
-                    .flatten();
-                let deleted_rows_count = get("deleted_rows_count")
-                    .map(optional_avro_long)
-                    .transpose()?
-                    .flatten();
-                if !is_v1_shape
-                    && [
-                        added_files_count.is_some(),
-                        existing_files_count.is_some(),
-                        deleted_files_count.is_some(),
-                        added_rows_count.is_some(),
-                        existing_rows_count.is_some(),
-                        deleted_rows_count.is_some(),
-                    ]
-                    .iter()
-                    .any(|present| !present)
-                {
-                    return Err("missing required V2 manifest list counts or rows".to_string());
-                }
-
-                let partitions = match get("partitions") {
-                    Some(AvroValue::Union(_, inner)) => match inner.as_ref() {
-                        AvroValue::Array(items) => {
-                            let mut out = Vec::new();
-                            for it in items {
-                                if let AvroValue::Record(fs) = it {
-                                    let getf =
-                                        |n: &str| fs.iter().find(|(k, _)| k == n).map(|(_, v)| v);
-                                    let contains_null = matches!(getf("contains_null"), Some(AvroValue::Boolean(b)) if *b);
-                                    let contains_nan = match getf("contains_nan") {
-                                        Some(AvroValue::Boolean(b)) => Some(*b),
-                                        _ => None,
-                                    };
-                                    let lower_bound_bytes = match getf("lower_bound") {
-                                        Some(AvroValue::Bytes(b)) => Some(b.clone()),
-                                        _ => None,
-                                    };
-                                    let upper_bound_bytes = match getf("upper_bound") {
-                                        Some(AvroValue::Bytes(b)) => Some(b.clone()),
-                                        _ => None,
-                                    };
-                                    let mut fs = FieldSummary::new(contains_null);
-                                    if let Some(b) = contains_nan {
-                                        fs = fs.with_contains_nan(b);
-                                    }
-                                    fs.lower_bound_bytes = lower_bound_bytes;
-                                    fs.upper_bound_bytes = upper_bound_bytes;
-                                    out.push(fs);
-                                }
-                            }
-                            Some(out)
-                        }
-                        AvroValue::Null => None,
-                        _ => None,
-                    },
-                    // Some writers may encode unexpected types; ignore invalid values
-                    _ => None,
-                };
-
-                let key_metadata = match get("key_metadata") {
-                    Some(AvroValue::Union(_, inner)) => match inner.as_ref() {
-                        AvroValue::Bytes(b) => Some(b.clone()),
-                        AvroValue::Null => None,
-                        _ => None,
-                    },
-                    Some(AvroValue::Bytes(b)) => Some(b.clone()),
-                    _ => None,
-                };
-
-                let first_row_id = match get("first_row_id") {
-                    Some(AvroValue::Union(_, inner)) => match inner.as_ref() {
-                        AvroValue::Long(value) => Some(*value),
-                        AvroValue::Null => None,
-                        _ => None,
-                    },
-                    Some(AvroValue::Long(value)) => Some(*value),
-                    _ => None,
-                };
-
-                let content = match content {
-                    0 => ManifestContentType::Data,
-                    1 => ManifestContentType::Deletes,
-                    _ => ManifestContentType::Data,
-                };
-
-                Ok(ManifestFile {
-                    manifest_path,
-                    manifest_length,
-                    partition_spec_id,
-                    content,
-                    sequence_number,
-                    min_sequence_number,
-                    added_snapshot_id,
-                    added_files_count,
-                    existing_files_count,
-                    deleted_files_count,
-                    added_rows_count,
-                    existing_rows_count,
-                    deleted_rows_count,
-                    partitions,
-                    key_metadata,
-                    first_row_id,
-                })
-            }
-            _ => Err("not a record".into()),
-        }
-    }
-}
-
-impl From<_serde::ManifestFileV2> for ManifestFile {
-    fn from(avro: _serde::ManifestFileV2) -> Self {
-        let content = match avro.content {
-            0 => ManifestContentType::Data,
-            1 => ManifestContentType::Deletes,
-            _ => ManifestContentType::Data,
-        };
+    fn try_from(avro: _serde::ManifestFileV2) -> Result<Self, Self::Error> {
+        let content = ManifestContentType::try_from(avro.content)?;
 
         let partitions = avro
             .partitions
             .map(|summaries| summaries.into_iter().map(FieldSummary::from).collect());
 
-        ManifestFile {
+        Ok(ManifestFile {
             manifest_path: avro.manifest_path,
             manifest_length: avro.manifest_length,
             partition_spec_id: avro.partition_spec_id,
@@ -533,23 +389,21 @@ impl From<_serde::ManifestFileV2> for ManifestFile {
             partitions,
             key_metadata: avro.key_metadata.map(ByteBuf::into_vec),
             first_row_id: None,
-        }
+        })
     }
 }
 
-impl From<_serde::ManifestFileV3> for ManifestFile {
-    fn from(avro: _serde::ManifestFileV3) -> Self {
-        let content = match avro.content {
-            0 => ManifestContentType::Data,
-            1 => ManifestContentType::Deletes,
-            _ => ManifestContentType::Data,
-        };
+impl TryFrom<_serde::ManifestFileV3> for ManifestFile {
+    type Error = String;
+
+    fn try_from(avro: _serde::ManifestFileV3) -> Result<Self, Self::Error> {
+        let content = ManifestContentType::try_from(avro.content)?;
 
         let partitions = avro
             .partitions
             .map(|summaries| summaries.into_iter().map(FieldSummary::from).collect());
 
-        ManifestFile {
+        Ok(ManifestFile {
             manifest_path: avro.manifest_path,
             manifest_length: avro.manifest_length,
             partition_spec_id: avro.partition_spec_id,
@@ -566,7 +420,7 @@ impl From<_serde::ManifestFileV3> for ManifestFile {
             partitions,
             key_metadata: avro.key_metadata.map(ByteBuf::into_vec),
             first_row_id: avro.first_row_id,
-        }
+        })
     }
 }
 
@@ -590,6 +444,18 @@ pub enum ManifestContentType {
     Data,
     /// The manifest contains delete files.
     Deletes,
+}
+
+impl TryFrom<i32> for ManifestContentType {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Data),
+            1 => Ok(Self::Deletes),
+            _ => Err(format!("Invalid Iceberg manifest content: {value}")),
+        }
+    }
 }
 
 /// A manifest file in a manifest list.
@@ -875,110 +741,102 @@ pub(super) mod _serde {
     use super::*;
 
     #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
     pub struct ManifestFileV1 {
-        #[serde(rename = "manifest_path")]
+        #[serde(default, skip_serializing)]
+        pub content: i32,
         pub manifest_path: String,
-        #[serde(rename = "manifest_length")]
         pub manifest_length: i64,
-        #[serde(rename = "partition_spec_id")]
         pub partition_spec_id: i32,
-        #[serde(rename = "added_snapshot_id")]
         pub added_snapshot_id: i64,
-        #[serde(rename = "added_files_count", alias = "added_data_files_count")]
+        #[serde(
+            default,
+            alias = "added_data_files_count",
+            deserialize_with = "deserialize_optional"
+        )]
         pub added_files_count: Option<i32>,
-        #[serde(rename = "existing_files_count", alias = "existing_data_files_count")]
+        #[serde(
+            default,
+            alias = "existing_data_files_count",
+            deserialize_with = "deserialize_optional"
+        )]
         pub existing_files_count: Option<i32>,
-        #[serde(rename = "deleted_files_count", alias = "deleted_data_files_count")]
+        #[serde(
+            default,
+            alias = "deleted_data_files_count",
+            deserialize_with = "deserialize_optional"
+        )]
         pub deleted_files_count: Option<i32>,
-        #[serde(rename = "added_rows_count")]
+        #[serde(default, deserialize_with = "deserialize_optional")]
         pub added_rows_count: Option<i64>,
-        #[serde(rename = "existing_rows_count")]
+        #[serde(default, deserialize_with = "deserialize_optional")]
         pub existing_rows_count: Option<i64>,
-        #[serde(rename = "deleted_rows_count")]
+        #[serde(default, deserialize_with = "deserialize_optional")]
         pub deleted_rows_count: Option<i64>,
-        #[serde(rename = "partitions")]
-        pub partitions: Option<Vec<FieldSummaryAvro>>, // V1 uses same summary encoding
-        #[serde(rename = "key_metadata")]
+        #[serde(default, deserialize_with = "deserialize_optional")]
+        pub partitions: Option<Vec<FieldSummaryAvro>>,
+        #[serde(default, deserialize_with = "deserialize_optional_bytes")]
         pub key_metadata: Option<ByteBuf>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
     pub struct ManifestFileV2 {
-        #[serde(rename = "manifest_path")]
         pub manifest_path: String,
-        #[serde(rename = "manifest_length")]
         pub manifest_length: i64,
-        #[serde(rename = "partition_spec_id")]
         pub partition_spec_id: i32,
-        #[serde(rename = "content")]
         pub content: i32,
-        #[serde(rename = "sequence_number")]
         pub sequence_number: i64,
-        #[serde(rename = "min_sequence_number")]
         pub min_sequence_number: i64,
-        #[serde(rename = "added_snapshot_id")]
         pub added_snapshot_id: i64,
-        #[serde(rename = "added_files_count", alias = "added_data_files_count")]
+        #[serde(alias = "added_data_files_count")]
         pub added_files_count: i32,
-        #[serde(rename = "existing_files_count", alias = "existing_data_files_count")]
+        #[serde(alias = "existing_data_files_count")]
         pub existing_files_count: i32,
-        #[serde(rename = "deleted_files_count", alias = "deleted_data_files_count")]
+        #[serde(alias = "deleted_data_files_count")]
         pub deleted_files_count: i32,
-        #[serde(rename = "added_rows_count")]
         pub added_rows_count: i64,
-        #[serde(rename = "existing_rows_count")]
         pub existing_rows_count: i64,
-        #[serde(rename = "deleted_rows_count")]
         pub deleted_rows_count: i64,
-        #[serde(rename = "partitions")]
+        #[serde(default, deserialize_with = "deserialize_optional")]
         pub partitions: Option<Vec<FieldSummaryAvro>>,
-        #[serde(rename = "key_metadata")]
+        #[serde(default, deserialize_with = "deserialize_optional_bytes")]
         pub key_metadata: Option<ByteBuf>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    #[serde(rename_all = "kebab-case")]
     pub struct ManifestFileV3 {
-        #[serde(rename = "manifest_path")]
         pub manifest_path: String,
-        #[serde(rename = "manifest_length")]
         pub manifest_length: i64,
-        #[serde(rename = "partition_spec_id")]
         pub partition_spec_id: i32,
-        #[serde(rename = "content")]
         pub content: i32,
-        #[serde(rename = "sequence_number")]
         pub sequence_number: i64,
-        #[serde(rename = "min_sequence_number")]
         pub min_sequence_number: i64,
-        #[serde(rename = "added_snapshot_id")]
         pub added_snapshot_id: i64,
-        #[serde(rename = "added_files_count", alias = "added_data_files_count")]
+        #[serde(alias = "added_data_files_count")]
         pub added_files_count: i32,
-        #[serde(rename = "existing_files_count", alias = "existing_data_files_count")]
+        #[serde(alias = "existing_data_files_count")]
         pub existing_files_count: i32,
-        #[serde(rename = "deleted_files_count", alias = "deleted_data_files_count")]
+        #[serde(alias = "deleted_data_files_count")]
         pub deleted_files_count: i32,
-        #[serde(rename = "added_rows_count")]
         pub added_rows_count: i64,
-        #[serde(rename = "existing_rows_count")]
         pub existing_rows_count: i64,
-        #[serde(rename = "deleted_rows_count")]
         pub deleted_rows_count: i64,
-        #[serde(rename = "partitions")]
+        #[serde(default, deserialize_with = "deserialize_optional")]
         pub partitions: Option<Vec<FieldSummaryAvro>>,
-        #[serde(rename = "key_metadata")]
+        #[serde(default, deserialize_with = "deserialize_optional_bytes")]
         pub key_metadata: Option<ByteBuf>,
-        #[serde(rename = "first_row_id", default)]
+        #[serde(default, deserialize_with = "deserialize_optional")]
         pub first_row_id: Option<i64>,
     }
 }
 
-impl From<_serde::ManifestFileV1> for ManifestFile {
-    fn from(v1: _serde::ManifestFileV1) -> Self {
-        ManifestFile {
+impl TryFrom<_serde::ManifestFileV1> for ManifestFile {
+    type Error = String;
+
+    fn try_from(v1: _serde::ManifestFileV1) -> Result<Self, Self::Error> {
+        if v1.content != 0 {
+            return Err(format!("Invalid V1 manifest content: {}", v1.content));
+        }
+        Ok(ManifestFile {
             manifest_path: v1.manifest_path,
             manifest_length: v1.manifest_length,
             partition_spec_id: v1.partition_spec_id,
@@ -997,14 +855,19 @@ impl From<_serde::ManifestFileV1> for ManifestFile {
                 .map(|v| v.into_iter().map(FieldSummary::from).collect()),
             key_metadata: v1.key_metadata.map(ByteBuf::into_vec),
             first_row_id: None,
-        }
+        })
     }
 }
 
 #[cfg(test)]
 #[expect(clippy::expect_used)]
 mod tests {
+    use apache_avro::types::Value as AvroValue;
+    use serde_json::{Value as JsonValue, json};
+
     use super::*;
+
+    const VERSIONS: [FormatVersion; 3] = [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3];
 
     fn manifest_file() -> ManifestFile {
         ManifestFile {
@@ -1027,86 +890,545 @@ mod tests {
         }
     }
 
-    fn v1_manifest_list_record_with_unknown_counts() -> AvroValue {
-        AvroValue::Record(vec![
-            (
-                "manifest_path".to_string(),
-                AvroValue::String("metadata/manifest.avro".to_string()),
-            ),
-            ("manifest_length".to_string(), AvroValue::Long(10)),
-            ("partition_spec_id".to_string(), AvroValue::Int(0)),
-            ("added_snapshot_id".to_string(), AvroValue::Long(7)),
-            (
-                "added_data_files_count".to_string(),
-                AvroValue::Union(0, Box::new(AvroValue::Null)),
-            ),
-            (
-                "existing_data_files_count".to_string(),
-                AvroValue::Union(0, Box::new(AvroValue::Null)),
-            ),
-            (
-                "deleted_data_files_count".to_string(),
-                AvroValue::Union(0, Box::new(AvroValue::Null)),
-            ),
-            (
-                "added_rows_count".to_string(),
-                AvroValue::Union(0, Box::new(AvroValue::Null)),
-            ),
-            (
-                "existing_rows_count".to_string(),
-                AvroValue::Union(0, Box::new(AvroValue::Null)),
-            ),
-            (
-                "deleted_rows_count".to_string(),
-                AvroValue::Union(0, Box::new(AvroValue::Null)),
-            ),
-        ])
-    }
-
-    #[test]
-    fn v2_fallback_preserves_unknown_v1_counts() {
-        let manifest = ManifestList::parse_manifest_v2_fallback(
-            &v1_manifest_list_record_with_unknown_counts(),
+    // Independent wire fixtures: not generated by ManifestListWriter or its schemas.
+    fn record(
+        name: &str,
+        fields: Vec<(&str, JsonValue, AvroValue, bool)>,
+    ) -> (JsonValue, AvroValue) {
+        let (schemas, values): (Vec<_>, Vec<_>) = fields
+            .into_iter()
+            .map(|(name, ty, value, optional)| {
+                let (ty, value) = if optional {
+                    (json!(["null", ty]), AvroValue::Union(1, Box::new(value)))
+                } else {
+                    (ty, value)
+                };
+                (json!({"name": name, "type": ty}), (name.to_string(), value))
+            })
+            .unzip();
+        (
+            json!({"type": "record", "name": name, "fields": schemas}),
+            AvroValue::Record(values),
         )
-        .expect("V1 manifest list entry");
+    }
 
-        assert_eq!(manifest.content, ManifestContentType::Data);
-        assert_eq!(manifest.sequence_number, 0);
-        assert_eq!(manifest.min_sequence_number, 0);
-        assert_eq!(manifest.added_files_count, None);
-        assert_eq!(manifest.existing_files_count, None);
-        assert_eq!(manifest.deleted_files_count, None);
-        assert_eq!(manifest.added_rows_count, None);
-        assert_eq!(manifest.existing_rows_count, None);
-        assert_eq!(manifest.deleted_rows_count, None);
+    fn fixture(version: FormatVersion, unions: bool) -> (JsonValue, AvroValue, ManifestFile) {
+        let (summary_schema, summary) = record(
+            "field_summary",
+            vec![
+                (
+                    "contains_null",
+                    json!("boolean"),
+                    AvroValue::Boolean(true),
+                    false,
+                ),
+                (
+                    "contains_nan",
+                    json!("boolean"),
+                    AvroValue::Boolean(false),
+                    unions,
+                ),
+                (
+                    "lower_bound",
+                    json!("bytes"),
+                    AvroValue::Bytes(vec![0, 255, 1]),
+                    unions,
+                ),
+                (
+                    "upper_bound",
+                    json!("bytes"),
+                    AvroValue::Bytes(vec![128, 0, 2]),
+                    unions,
+                ),
+            ],
+        );
+        let mut fields = vec![
+            (
+                "manifest_path",
+                json!("string"),
+                AvroValue::String("metadata/manifest.avro".into()),
+                false,
+            ),
+            ("manifest_length", json!("long"), AvroValue::Long(10), false),
+            ("partition_spec_id", json!("int"), AvroValue::Int(0), false),
+            (
+                "added_snapshot_id",
+                json!("long"),
+                AvroValue::Long(7),
+                false,
+            ),
+        ];
+        if version != FormatVersion::V1 {
+            fields.extend([
+                ("content", json!("int"), AvroValue::Int(1), false),
+                ("sequence_number", json!("long"), AvroValue::Long(3), false),
+                (
+                    "min_sequence_number",
+                    json!("long"),
+                    AvroValue::Long(2),
+                    false,
+                ),
+            ]);
+        }
+        let optional_counts = version == FormatVersion::V1 && unions;
+        fields.extend([
+            (
+                "added_data_files_count",
+                json!("int"),
+                AvroValue::Int(1),
+                optional_counts,
+            ),
+            (
+                "existing_data_files_count",
+                json!("int"),
+                AvroValue::Int(0),
+                optional_counts,
+            ),
+            (
+                "deleted_data_files_count",
+                json!("int"),
+                AvroValue::Int(0),
+                optional_counts,
+            ),
+            (
+                "added_rows_count",
+                json!("long"),
+                AvroValue::Long(2),
+                optional_counts,
+            ),
+            (
+                "existing_rows_count",
+                json!("long"),
+                AvroValue::Long(0),
+                optional_counts,
+            ),
+            (
+                "deleted_rows_count",
+                json!("long"),
+                AvroValue::Long(0),
+                optional_counts,
+            ),
+            (
+                "partitions",
+                json!({"type": "array", "items": summary_schema}),
+                AvroValue::Array(vec![summary]),
+                unions,
+            ),
+            (
+                "key_metadata",
+                json!("bytes"),
+                AvroValue::Bytes(vec![255, 0, 128]),
+                unions,
+            ),
+        ]);
+        if version == FormatVersion::V3 {
+            fields.push(("first_row_id", json!("long"), AvroValue::Long(1234), unions));
+        }
+        let mut expected = manifest_file();
+        expected.content = if version == FormatVersion::V1 {
+            ManifestContentType::Data
+        } else {
+            ManifestContentType::Deletes
+        };
+        expected.sequence_number = if version == FormatVersion::V1 { 0 } else { 3 };
+        expected.min_sequence_number = if version == FormatVersion::V1 { 0 } else { 2 };
+        expected.partitions = Some(vec![
+            FieldSummary::new(true)
+                .with_contains_nan(false)
+                .with_lower_bound_bytes(vec![0, 255, 1])
+                .with_upper_bound_bytes(vec![128, 0, 2]),
+        ]);
+        expected.key_metadata = Some(vec![255, 0, 128]);
+        expected.first_row_id = (version == FormatVersion::V3).then_some(1234);
+        let (schema, value) = record("manifest_file", fields);
+        (schema, value, expected)
+    }
+
+    fn encode(schema: &JsonValue, values: &[AvroValue]) -> Vec<u8> {
+        let schema = AvroSchema::parse_str(&schema.to_string()).expect("fixture schema");
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new()).expect("fixture writer");
+        for value in values {
+            writer.append_value(value.clone()).expect("fixture record");
+        }
+        writer.into_inner().expect("fixture bytes")
+    }
+
+    fn replace_field(
+        schema: &mut JsonValue,
+        value: &mut AvroValue,
+        name: &str,
+        replacement: Option<(JsonValue, AvroValue)>,
+    ) {
+        let fields = schema["fields"].as_array_mut().expect("schema fields");
+        let AvroValue::Record(values) = value else {
+            unreachable!("record fixture")
+        };
+        fields.retain(|field| field["name"] != name);
+        values.retain(|(field, _)| field != name);
+        if let Some((ty, value)) = replacement {
+            fields.push(json!({"name": name, "type": ty}));
+            values.push((name.into(), value));
+        }
+    }
+
+    fn assert_rejected(schema: &JsonValue, value: AvroValue) {
+        let bytes = encode(schema, &[value]);
+        for hint in VERSIONS {
+            assert!(
+                ManifestList::parse_with_version(&bytes, hint).is_err(),
+                "hint {hint:?}"
+            );
+        }
     }
 
     #[test]
-    fn v2_fallback_rejects_malformed_present_fields() {
-        let AvroValue::Record(mut fields) = v1_manifest_list_record_with_unknown_counts() else {
-            unreachable!("fixture is a record")
-        };
-        fields.push((
-            "sequence_number".to_string(),
-            AvroValue::String("not-a-sequence".to_string()),
-        ));
+    fn reader_uses_writer_schema_for_all_version_hints() {
+        for version in VERSIONS {
+            for unions in [false, true] {
+                let (schema, value, expected) = fixture(version, unions);
+                let bytes = encode(&schema, &[value]);
+                for hint in VERSIONS {
+                    let parsed =
+                        ManifestList::parse_with_version(&bytes, hint).expect("typed decode");
+                    assert_eq!(
+                        parsed.entries,
+                        vec![expected.clone()],
+                        "writer {version:?}, hint {hint:?}, unions {unions}"
+                    );
+                }
+            }
+        }
+    }
 
-        assert!(ManifestList::parse_manifest_v2_fallback(&AvroValue::Record(fields)).is_err());
+    #[test]
+    fn writer_uses_r508_and_preserves_optional_values() {
+        for version in VERSIONS {
+            let (_, _, mut expected) = fixture(version, true);
+            expected.content = ManifestContentType::Data;
+            expected.partitions.as_mut().expect("summaries").extend([
+                FieldSummary::new(false).with_contains_nan(true),
+                FieldSummary::new(true),
+            ]);
+            let mut writer = ManifestListWriter::new();
+            writer.append(expected.clone());
+            let bytes = writer.to_bytes(version).expect("write manifest list");
+            let reader = AvroReader::new(bytes.as_slice()).expect("reader");
+            let schema = serde_json::to_value(reader.writer_schema()).expect("schema JSON");
+            let partitions = schema["fields"]
+                .as_array()
+                .expect("fields")
+                .iter()
+                .find(|field| field["name"] == "partitions")
+                .expect("partitions");
+            assert_eq!(partitions["type"][1]["items"]["name"], "r508");
+            if version == FormatVersion::V1 {
+                assert!(
+                    schema["fields"]
+                        .as_array()
+                        .expect("fields")
+                        .iter()
+                        .all(|field| field["name"] != "content")
+                );
+            }
+            for hint in VERSIONS {
+                assert_eq!(
+                    ManifestList::parse_with_version(&bytes, hint)
+                        .expect("read")
+                        .entries,
+                    vec![expected.clone()]
+                );
+            }
+        }
+    }
 
-        let AvroValue::Record(mut nullable_v2_fields) =
-            v1_manifest_list_record_with_unknown_counts()
-        else {
-            unreachable!("fixture is a record")
-        };
-        nullable_v2_fields.extend([
-            ("content".to_string(), AvroValue::Int(0)),
-            ("sequence_number".to_string(), AvroValue::Long(3)),
-            ("min_sequence_number".to_string(), AvroValue::Long(3)),
-        ]);
-        assert!(
-            ManifestList::parse_manifest_v2_fallback(&AvroValue::Record(nullable_v2_fields))
-                .is_err()
+    #[test]
+    fn v1_reader_accepts_explicit_data_content() {
+        for unions in [false, true] {
+            let (mut schema, mut value, expected) = fixture(FormatVersion::V1, unions);
+            replace_field(
+                &mut schema,
+                &mut value,
+                "content",
+                Some((json!("int"), AvroValue::Int(0))),
+            );
+            let bytes = encode(&schema, &[value]);
+            for hint in VERSIONS {
+                assert_eq!(
+                    ManifestList::parse_with_version(&bytes, hint)
+                        .expect("V1 explicit data content")
+                        .entries,
+                    vec![expected.clone()],
+                    "hint {hint:?}, unions {unions}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn v1_reader_rejects_invalid_explicit_content() {
+        for replacement in [
+            (json!("int"), AvroValue::Int(1)),
+            (json!("int"), AvroValue::Int(-1)),
+            (json!("int"), AvroValue::Int(2)),
+            (json!("null"), AvroValue::Null),
+            (
+                json!(["null", "int"]),
+                AvroValue::Union(0, Box::new(AvroValue::Null)),
+            ),
+            (json!("string"), AvroValue::String("0".into())),
+            (json!("boolean"), AvroValue::Boolean(false)),
+        ] {
+            let (mut schema, mut value, _) = fixture(FormatVersion::V1, false);
+            replace_field(&mut schema, &mut value, "content", Some(replacement));
+            assert_rejected(&schema, value);
+        }
+    }
+
+    #[test]
+    fn v1_reader_preserves_missing_and_null_counts() {
+        for missing in [false, true] {
+            let (mut schema, mut value, mut expected) = fixture(FormatVersion::V1, true);
+            for name in [
+                "added_data_files_count",
+                "existing_data_files_count",
+                "deleted_data_files_count",
+                "added_rows_count",
+                "existing_rows_count",
+                "deleted_rows_count",
+            ] {
+                let ty = if name.ends_with("files_count") {
+                    "int"
+                } else {
+                    "long"
+                };
+                let replacement = (!missing).then(|| {
+                    (
+                        json!(["null", ty]),
+                        AvroValue::Union(0, Box::new(AvroValue::Null)),
+                    )
+                });
+                replace_field(&mut schema, &mut value, name, replacement);
+            }
+            expected.added_files_count = None;
+            expected.existing_files_count = None;
+            expected.deleted_files_count = None;
+            expected.added_rows_count = None;
+            expected.existing_rows_count = None;
+            expected.deleted_rows_count = None;
+            let bytes = encode(&schema, &[value]);
+            for hint in VERSIONS {
+                assert_eq!(
+                    ManifestList::parse_with_version(&bytes, hint)
+                        .expect("V1 unknown counts")
+                        .entries,
+                    vec![expected.clone()]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reader_preserves_absent_or_null_optional_fields() {
+        for version in VERSIONS {
+            for missing in [false, true] {
+                let (mut schema, mut value, mut expected) = fixture(version, true);
+                for name in ["partitions", "key_metadata", "first_row_id"] {
+                    if name == "first_row_id" && version != FormatVersion::V3 {
+                        continue;
+                    }
+                    let replacement = (!missing).then(|| (json!("null"), AvroValue::Null));
+                    replace_field(&mut schema, &mut value, name, replacement);
+                }
+                expected.partitions = None;
+                expected.key_metadata = None;
+                expected.first_row_id = None;
+                let bytes = encode(&schema, &[value]);
+                for hint in VERSIONS {
+                    assert_eq!(
+                        ManifestList::parse_with_version(&bytes, hint)
+                            .expect("optional fields")
+                            .entries,
+                        vec![expected.clone()]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reader_rejects_incomplete_tracking_shapes() {
+        for name in ["content", "sequence_number", "min_sequence_number"] {
+            let (mut schema, mut value, _) = fixture(FormatVersion::V2, false);
+            replace_field(&mut schema, &mut value, name, None);
+            assert_rejected(&schema, value);
+        }
+        let (mut schema, mut value, _) = fixture(FormatVersion::V1, false);
+        replace_field(
+            &mut schema,
+            &mut value,
+            "first_row_id",
+            Some((json!("long"), AvroValue::Long(1))),
         );
+        assert_rejected(&schema, value);
+    }
+
+    #[test]
+    fn reader_rejects_unknown_content_and_malformed_fields() {
+        for version in [FormatVersion::V2, FormatVersion::V3] {
+            for content in [-1, 2, i32::MAX] {
+                let (mut schema, mut value, _) = fixture(version, false);
+                replace_field(
+                    &mut schema,
+                    &mut value,
+                    "content",
+                    Some((json!("int"), AvroValue::Int(content))),
+                );
+                assert_rejected(&schema, value);
+            }
+        }
+        for name in [
+            "content",
+            "sequence_number",
+            "min_sequence_number",
+            "added_data_files_count",
+            "added_rows_count",
+            "key_metadata",
+            "first_row_id",
+        ] {
+            let (mut schema, mut value, _) = fixture(FormatVersion::V3, false);
+            replace_field(
+                &mut schema,
+                &mut value,
+                name,
+                Some((json!("string"), AvroValue::String("invalid".into()))),
+            );
+            assert_rejected(&schema, value);
+        }
+        for replacement in [None, Some((json!("null"), AvroValue::Null))] {
+            let (mut schema, mut value, _) = fixture(FormatVersion::V2, false);
+            replace_field(
+                &mut schema,
+                &mut value,
+                "added_data_files_count",
+                replacement,
+            );
+            assert_rejected(&schema, value);
+        }
+    }
+
+    #[test]
+    fn reader_rejects_malformed_partition_summaries() {
+        for version in VERSIONS {
+            for name in [
+                "contains_null",
+                "contains_nan",
+                "lower_bound",
+                "upper_bound",
+            ] {
+                let (mut schema, mut value, _) = fixture(version, false);
+                let partition_schema = schema["fields"]
+                    .as_array_mut()
+                    .expect("fields")
+                    .iter_mut()
+                    .find(|field| field["name"] == "partitions")
+                    .expect("partitions");
+                let AvroValue::Record(fields) = &mut value else {
+                    unreachable!("record")
+                };
+                let (_, AvroValue::Array(summaries)) = fields
+                    .iter_mut()
+                    .find(|(name, _)| name == "partitions")
+                    .expect("partitions")
+                else {
+                    unreachable!("array")
+                };
+                replace_field(
+                    &mut partition_schema["type"]["items"],
+                    &mut summaries[0],
+                    name,
+                    Some((json!("string"), AvroValue::String("invalid".into()))),
+                );
+                assert_rejected(&schema, value);
+            }
+            let (mut schema, mut value, _) = fixture(version, false);
+            let (empty_schema, empty_summary) = record("empty_summary", vec![]);
+            replace_field(
+                &mut schema,
+                &mut value,
+                "partitions",
+                Some((
+                    json!({"type": "array", "items": empty_schema}),
+                    AvroValue::Array(vec![empty_summary]),
+                )),
+            );
+            assert_rejected(&schema, value);
+            for (ty, bad_value) in [
+                (json!("int"), AvroValue::Int(3)),
+                (
+                    json!({"type": "array", "items": "int"}),
+                    AvroValue::Array(vec![AvroValue::Int(3)]),
+                ),
+            ] {
+                let (mut schema, mut value, _) = fixture(version, false);
+                replace_field(&mut schema, &mut value, "partitions", Some((ty, bad_value)));
+                assert_rejected(&schema, value);
+            }
+        }
+    }
+
+    #[test]
+    fn write_context_headers_are_independent_of_entries_including_empty_lists() {
+        for version in VERSIONS {
+            for parent_snapshot_id in [None, Some(88)] {
+                for empty in [false, true] {
+                    let mut writer = ManifestListWriter::new();
+                    if !empty {
+                        writer.append(manifest_file());
+                    }
+                    let context = ManifestListWriteContext {
+                        version,
+                        snapshot_id: 999,
+                        parent_snapshot_id,
+                        sequence_number: if version == FormatVersion::V1 { 0 } else { 42 },
+                        first_row_id: (version == FormatVersion::V3).then_some(123),
+                    };
+                    let bytes = writer
+                        .to_bytes_with_context(context)
+                        .expect("context write");
+                    let reader =
+                        AvroReader::new(bytes.as_slice()).expect("header even for empty list");
+                    let meta = reader.user_metadata();
+                    assert_eq!(
+                        meta.get("format-version"),
+                        Some(&(version as u8).to_string().into_bytes())
+                    );
+                    assert_eq!(meta.get("snapshot-id"), Some(&b"999".to_vec()));
+                    assert_eq!(
+                        meta.get("parent-snapshot-id"),
+                        Some(
+                            &parent_snapshot_id
+                                .map_or_else(|| b"null".to_vec(), |id| id.to_string().into_bytes())
+                        )
+                    );
+                    assert_eq!(
+                        meta.get("sequence-number"),
+                        (version >= FormatVersion::V2).then_some(&b"42".to_vec())
+                    );
+                    assert_eq!(
+                        meta.get("first-row-id"),
+                        (version == FormatVersion::V3).then_some(&b"123".to_vec())
+                    );
+                    assert_eq!(reader.count(), usize::from(!empty));
+                    assert_eq!(
+                        ManifestList::parse_with_version(&bytes, version)
+                            .expect("decode list")
+                            .entries
+                            .len(),
+                        usize::from(!empty)
+                    );
+                }
+            }
+        }
     }
 
     #[test]

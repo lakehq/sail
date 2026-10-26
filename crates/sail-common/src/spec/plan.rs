@@ -442,6 +442,9 @@ pub enum CommandNode {
         if_exists: bool,
         purge: bool,
     },
+    TruncateTable {
+        table: ObjectName,
+    },
     CreateView {
         view: ObjectName,
         #[serde(flatten)]

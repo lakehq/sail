@@ -197,6 +197,27 @@ impl PlanResolver<'_> {
         Ok((rewriter.into_plan(), expr))
     }
 
+    /// Materialize partition-dependent functions before evaluating an operator's expressions.
+    pub(super) fn rewrite_partition_expressions(
+        &self,
+        input: LogicalPlan,
+        expressions: Vec<Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<Expr>)> {
+        let mut rewriter = MonotonicIdRewriter::new_from_plan(input, state);
+        let expressions = expressions
+            .into_iter()
+            .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data))
+            .collect::<PlanResult<Vec<_>>>()?;
+        let input = rewriter.into_plan();
+        let mut rewriter = SparkPartitionIdRewriter::new_from_plan(input, state);
+        let expressions = expressions
+            .into_iter()
+            .map(|expr| Ok(expr.rewrite(&mut rewriter)?.data))
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok((rewriter.into_plan(), expressions))
+    }
+
     pub(super) fn rewrite_multi_expr(&self, expr: Vec<NamedExpr>) -> PlanResult<Vec<NamedExpr>> {
         let mut out = vec![];
         for e in expr {
