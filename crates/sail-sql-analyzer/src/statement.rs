@@ -156,7 +156,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             if let Some(predicate) = predicate {
                 arguments.push((
                     "predicate".into(),
-                    lakehouse_string(predicate.condition.text()),
+                    lakehouse_string(predicate.condition_sql),
                 ));
             }
             if let Some(zorder) = zorder {

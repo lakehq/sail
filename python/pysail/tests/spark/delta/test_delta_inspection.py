@@ -86,6 +86,34 @@ def test_native_detail_and_history(spark, inspection_table):
     assert spark.sql(f"DESCRIBE HISTORY {name} LIMIT 1").first().version == 2  # noqa: PLR2004
 
 
+@pytest.mark.parametrize(
+    "options",
+    [
+        "metadataAsDataRead 'true'",
+        "readChangeFeed 'true'",
+        "metadataAsDataRead 'true', readChangeFeed 'true'",
+    ],
+    ids=["metadata-read", "change-feed-read", "both-read-modes"],
+)
+def test_inspection_ignores_data_read_modes(spark, tmp_path, options):
+    name = "delta_inspection_read_mode"
+    path = tmp_path / "table"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT) USING delta "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' OPTIONS ({options})"
+    ).collect()
+    try:
+        spark.range(3).coalesce(1).write.format("delta").mode("append").save(str(path))
+        adds = [action["add"] for action in _actions(path, 1) if "add" in action]
+        assert adds
+        detail = spark.sql(f"DESCRIBE DETAIL {name}").first()
+        assert detail.numFiles == len(adds)
+        assert detail.sizeInBytes == sum(add["size"] for add in adds)
+        assert [row.version for row in spark.sql(f"DESCRIBE HISTORY {name}").collect()] == [1, 0]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
 @pytest.mark.parametrize("checkpoint_policy", ["classic", "v2"])
 def test_checkpoint_state_and_retained_history(spark, inspection_table, checkpoint_policy):
     name, path = inspection_table

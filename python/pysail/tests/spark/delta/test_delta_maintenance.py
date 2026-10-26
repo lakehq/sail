@@ -168,6 +168,34 @@ def test_optimize_partition_compaction_and_idempotence(spark, maintenance_table,
         spark.sql(f"OPTIMIZE {name} WHERE id = 0").collect()
 
 
+@pytest.mark.parametrize("column", ["sp ace", "a.b", "a-b", "a`b"])
+def test_optimize_preserves_quoted_partition_columns(spark, tmp_path, column):
+    name = "optimize_quoted_partition"
+    path = tmp_path / "table"
+    quoted = f"`{column.replace('`', '``')}`"
+    spark.sql(
+        f"CREATE TABLE {name} (id BIGINT, {quoted} STRING) USING delta "
+        f"PARTITIONED BY ({quoted}) LOCATION '{escape_sql_string_literal(str(path))}' "
+        "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
+    ).collect()
+    try:
+        for i in range(2):
+            spark.sql(f"INSERT INTO {name} VALUES ({i}, 'selected'), ({i}, 'other')").collect()  # noqa: S608
+        before = spark.table(name).orderBy("id", quoted).collect()
+        files = _active_files(path)
+        selected = {file.path for file in files if "selected" in file.partitionValues.values()}
+        untouched = {file.path for file in files} - selected
+        result = spark.sql(f"OPTIMIZE {name} WHERE {quoted} = 'selected'").first()
+        assert result.metrics.numFilesRemoved == len(selected)
+        assert result.metrics.numFilesAdded == 1
+        assert result.metrics.partitionsOptimized == 1
+        assert untouched <= {file.path for file in _active_files(path)}
+        assert not selected & {file.path for file in _active_files(path)}
+        assert spark.table(name).orderBy("id", quoted).collect() == before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
+
+
 def test_optimize_matches_jvm_schema_and_artifacts(spark, delta_jvm_spark, tmp_path):
     jvm = delta_jvm_spark
     reference = tmp_path / "reference"

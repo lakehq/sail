@@ -42,10 +42,13 @@ pub(crate) async fn load_state(
         None => None,
     };
     let table_url = DeltaLakeSource::parse_table_url(ctx, info.paths).await?;
-    let options = DeltaReadOptions::resolve(ctx, info.options)?;
+    let mut options = DeltaReadOptions::resolve(ctx, info.options)?;
     if options.version_as_of.is_some() || options.timestamp_as_of.is_some() {
         return plan_err!("time travel is not supported for DESCRIBE DETAIL or DESCRIBE HISTORY");
     }
+    // Inspection needs table state rather than a data-read mode.
+    options.metadata_as_data_read = false;
+    options.read_change_feed = false;
     // DETAIL needs active files and domain metadata, which optional CRC fields cannot guarantee.
     let metadata_only = matches!(kind, DeltaInspectionType::History);
     // Reuse the read path so catalog-ratified, unpublished commits participate in the snapshot.
