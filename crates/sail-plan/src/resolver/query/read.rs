@@ -112,7 +112,14 @@ impl PlanResolver<'_> {
                     }
                     let base_status = match manager.get_table_or_view(base_reference).await {
                         Ok(status) => status,
-                        Err(CatalogError::NotFound(_, _) | CatalogError::NotSupported(_)) => {
+                        // A base that names no table, such as `catalog.database` left by
+                        // `catalog.database.table`, is not a lake relation either: the
+                        // table is what is missing.
+                        Err(
+                            CatalogError::NotFound(_, _)
+                            | CatalogError::NotSupported(_)
+                            | CatalogError::InvalidArgument(_),
+                        ) => {
                             return Err(error.into());
                         }
                         Err(base_error) => return Err(base_error.into()),

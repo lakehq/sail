@@ -6,8 +6,10 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 use crate::error::{
@@ -87,7 +89,7 @@ impl SparkIntervalDiv {
 
 impl ScalarUDFImpl for SparkIntervalDiv {
     fn name(&self) -> &str {
-        "spark_interval_div"
+        "spark_div"
     }
 
     fn signature(&self) -> &Signature {
@@ -100,7 +102,7 @@ impl ScalarUDFImpl for SparkIntervalDiv {
         )
     }
 
-    /// Spark: `div` on intervals is `IntegralDivide`, which extends `DivModLike`:
+    /// Spark: `div` is `IntegralDivide`, which extends `DivModLike`:
     /// `nullable = true`, unconditional (ANSI does not narrow it).
     /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/arithmetic.scala#L658>
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -115,7 +117,7 @@ impl ScalarUDFImpl for SparkIntervalDiv {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let [dividend, divisor] = arg_types else {
             return Err(invalid_arg_count_exec_err(
-                "spark_interval_div",
+                "spark_div",
                 (2, 2),
                 arg_types.len(),
             ));
@@ -190,17 +192,49 @@ impl ScalarUDFImpl for SparkIntegerDiv {
             ));
         }
         // Spark does NOT bring the two DECIMAL operands to a common type for `div` — the
-        // analyzed plan keeps both — so the pair is passed through untouched and the kernel
-        // divides at 256-bit. Integral operands still widen to LONG, per
+        // analyzed plan keeps both — so a decimal pair is passed through untouched and the
+        // kernel divides at 256-bit. Integral operands still widen to LONG, per
         // `IntegralDivisionTypeCoercion` (which casts BYTE/SHORT/INT and leaves the rest).
+        //
+        // A MIXED pair goes through DataFusion's own binary coercion (as #2822 does) rather
+        // than `DecimalType.forType`. The builder promotes a mixed pair with `forType`, which
+        // is Spark's rule and gives scale 0 — correct when the operand really is integral. But
+        // this function also sees pairs the builder could not classify, because it decides from
+        // the type `get_type` reports at PLAN time and that can disagree with the resolved one:
+        // Sail types `CASE WHEN false THEN 0 ELSE 1.5 END` from its first branch as INT
+        // (measured: `typeof` says `int`, the value is 1.5), so the builder takes the integral
+        // arm and hands this function INT / DECIMAL. Promoting that to scale 0 would round 1.5
+        // to 2 and answer 4 where Spark and `main` answer 3; resolving the common type keeps
+        // the scale and the value.
         match arg_types {
             [l, r] if l.is_integer() && r.is_integer() => {
                 Ok(vec![DataType::Int64, DataType::Int64])
             }
             [DataType::Decimal128(..), DataType::Decimal128(..)] => Ok(arg_types.to_vec()),
+            [l, r] if is_mixed_integral_decimal(l, r) => {
+                // Two rules, because neither covers the pair alone.
+                //
+                // DataFusion's binary coercion first: it resolves a common decimal that keeps
+                // the SCALE, which matters because the declared type can understate the value.
+                // Sail types `CASE WHEN false THEN 0 ELSE 1.5 END` from its first branch as INT
+                // (measured: `typeof` says `int`, the value is 1.5), so this function is handed
+                // INT / DECIMAL for an operand that is really decimal; rounding it to scale 0
+                // answers 4 where Spark and `main` answer 3 (#2822 pins that shape).
+                //
+                // It cannot always succeed: `Int64 / DECIMAL(38,37)` has no common type, since
+                // the integral side needs 20 digits and only 1 is left. There Spark's own rule
+                // applies — `DecimalType.forType` (DecimalType.scala:133-140), scale 0 — and the
+                // kernel divides the unaligned pair at 256 bits. Losing nothing: an integral
+                // operand has no fractional part for scale 0 to drop, and the resulting
+                // `resultDecimalType` precision is unobservable (its bound cannot be reached).
+                match BinaryTypeCoercer::new(l, &Operator::Divide, r).get_input_types() {
+                    Ok((l, r)) => Ok(vec![l, r]),
+                    Err(_) => Ok(vec![decimal_for_integral(l)?, decimal_for_integral(r)?]),
+                }
+            }
             _ => Err(unsupported_data_types_exec_err(
                 "spark_integer_div",
-                "integral / integral or DECIMAL / DECIMAL",
+                "integral / integral, DECIMAL / DECIMAL, or integral / DECIMAL",
                 arg_types,
             )),
         }
@@ -233,6 +267,37 @@ impl ScalarUDFImpl for SparkIntegerDiv {
 ///
 /// `a/10^s1 / (b/10^s2)` is computed as `a*10^s2 / (b*10^s1)` in 256-bit: each factor is below
 /// 10^38, so neither product can leave `i256`.
+/// `DecimalType.forType` (DecimalType.scala:133-140): the minimal decimal that holds an integral
+/// type. A decimal argument is returned untouched, so the pair can be mapped in one pass.
+fn decimal_for_integral(data_type: &DataType) -> Result<DataType> {
+    let precision = match data_type {
+        DataType::Int8 | DataType::UInt8 => 3,
+        DataType::Int16 | DataType::UInt16 => 5,
+        DataType::Int32 | DataType::UInt32 => 10,
+        DataType::Int64 | DataType::UInt64 => 20,
+        other @ DataType::Decimal128(..) => return Ok(other.clone()),
+        other => {
+            return Err(unsupported_data_type_exec_err(
+                "spark_integer_div",
+                "an integral or DECIMAL type",
+                other,
+            ));
+        }
+    };
+    Ok(DataType::Decimal128(precision, 0))
+}
+
+/// One side integral and the other `Decimal128`, in either order.
+fn is_mixed_integral_decimal(left: &DataType, right: &DataType) -> bool {
+    matches!(
+        (left, right),
+        (l, DataType::Decimal128(..)) if l.is_integer()
+    ) || matches!(
+        (left, right),
+        (DataType::Decimal128(..), r) if r.is_integer()
+    )
+}
+
 fn decimal_div_inner(args: &[ArrayRef], ansi: bool) -> Result<ArrayRef> {
     let [dividend, divisor] = args else {
         return Err(invalid_arg_count_exec_err(

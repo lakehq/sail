@@ -123,7 +123,8 @@ impl MemoryCatalogProvider {
                     location,
                     ..
                 } => match options {
-                    AlterTableOptions::AlterIdentifierFields { .. }
+                    AlterTableOptions::AlterSnapshotReference { .. }
+                    | AlterTableOptions::AlterIdentifierFields { .. }
                     | AlterTableOptions::AlterPartitionSpec { .. } => Ok(()),
                     AlterTableOptions::SetPartitioning {
                         partition_by: updated,

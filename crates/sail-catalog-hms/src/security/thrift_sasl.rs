@@ -1,5 +1,4 @@
 use std::io;
-use std::time::Duration;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
 
@@ -7,12 +6,8 @@ use sail_catalog::error::{CatalogError, CatalogResult};
 /// Matches the negotiated max buffer from the SASL security layer exchange
 /// (`0x00FF_FFFF` cap in `select_security_layer`).
 const MAX_SASL_FRAME_SIZE: usize = 0x00FF_FFFF;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, Ready};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::tcp;
-use volo::net::Address;
-use volo::net::conn::{OwnedReadHalf, OwnedWriteHalf};
-use volo::net::dial::{DefaultMakeTransport, MakeTransport};
-use volo::net::ext::AsyncExt;
 
 use super::gssapi::{GssapiFrameProtector, GssapiSession, SaslQop};
 
@@ -50,76 +45,29 @@ impl NegotiationStatus {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct KerberosMakeTransport {
-    target: String,
+/// Upgrade an already connected Tokio stream, preserving the negotiated SASL layer.
+pub(crate) async fn kerberos_transport(
+    mut stream: tokio::net::TcpStream,
+    target: &str,
     qop_min: SaslQop,
-    inner: DefaultMakeTransport,
+) -> io::Result<(SaslReadHalf, SaslWriteHalf)> {
+    let mut session =
+        GssapiSession::new(target, qop_min).map_err(|error| io::Error::other(error.to_string()))?;
+    perform_thrift_sasl_handshake(&mut stream, &mut session)
+        .await
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let protector = session
+        .take_frame_protector()
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let (reader, writer) = stream.into_split();
+    Ok((
+        SaslReadHalf::new(reader, protector.clone()),
+        SaslWriteHalf::new(writer, protector),
+    ))
 }
 
-impl KerberosMakeTransport {
-    pub(crate) fn new(target: String, qop_min: SaslQop) -> Self {
-        Self {
-            target,
-            qop_min,
-            inner: DefaultMakeTransport::new(),
-        }
-    }
-}
-
-impl MakeTransport for KerberosMakeTransport {
-    type ReadHalf = SaslReadHalf;
-    type WriteHalf = SaslWriteHalf;
-
-    async fn make_transport(&self, addr: Address) -> io::Result<(Self::ReadHalf, Self::WriteHalf)> {
-        let (read_half, write_half) = self.inner.make_transport(addr).await?;
-        let (read_half, write_half) = match (read_half, write_half) {
-            (OwnedReadHalf::Tcp(read_half), OwnedWriteHalf::Tcp(write_half)) => {
-                let mut stream = read_half.reunite(write_half).map_err(|error| {
-                    io::Error::other(format!(
-                        "Failed to reunite Kerberos HMS TCP transport: {error}"
-                    ))
-                })?;
-                let mut session = GssapiSession::new(&self.target, self.qop_min)
-                    .map_err(|error| io::Error::other(error.to_string()))?;
-                perform_thrift_sasl_handshake(&mut stream, &mut session)
-                    .await
-                    .map_err(|error| io::Error::other(error.to_string()))?;
-                let frame_protector = session
-                    .take_frame_protector()
-                    .map_err(|error| io::Error::other(error.to_string()))?;
-                let (read_half, write_half) = stream.into_split();
-                (
-                    SaslReadHalf::new(read_half, frame_protector.clone()),
-                    SaslWriteHalf::new(write_half, frame_protector),
-                )
-            }
-            _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "Kerberos HMS transport only supports TCP connections",
-                ));
-            }
-        };
-
-        Ok((read_half, write_half))
-    }
-
-    fn set_connect_timeout(&mut self, timeout: Option<Duration>) {
-        self.inner.set_connect_timeout(timeout);
-    }
-
-    fn set_read_timeout(&mut self, timeout: Option<Duration>) {
-        self.inner.set_read_timeout(timeout);
-    }
-
-    fn set_write_timeout(&mut self, timeout: Option<Duration>) {
-        self.inner.set_write_timeout(timeout);
-    }
-}
-
-pub(crate) struct SaslReadHalf {
-    inner: tcp::OwnedReadHalf,
+pub(crate) struct SaslReadHalf<R = tcp::OwnedReadHalf> {
+    inner: R,
     frame_protector: Option<GssapiFrameProtector>,
     state: ReadState,
 }
@@ -130,8 +78,8 @@ enum ReadState {
     Ready { buf: Vec<u8>, offset: usize },
 }
 
-impl SaslReadHalf {
-    fn new(inner: tcp::OwnedReadHalf, frame_protector: Option<GssapiFrameProtector>) -> Self {
+impl<R> SaslReadHalf<R> {
+    fn new(inner: R, frame_protector: Option<GssapiFrameProtector>) -> Self {
         Self {
             inner,
             frame_protector,
@@ -143,12 +91,15 @@ impl SaslReadHalf {
     }
 }
 
-impl AsyncRead for SaslReadHalf {
+impl<R: AsyncRead + Unpin> AsyncRead for SaslReadHalf<R> {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<io::Result<()>> {
+        if buf.remaining() == 0 {
+            return std::task::Poll::Ready(Ok(()));
+        }
         loop {
             let state = std::mem::replace(
                 &mut self.state,
@@ -178,7 +129,14 @@ impl AsyncRead for SaslReadHalf {
                         std::task::Poll::Ready(Ok(())) => {
                             let filled = read_buf.filled().len();
                             if filled == 0 {
-                                return std::task::Poll::Ready(Ok(()));
+                                return if read == 0 {
+                                    std::task::Poll::Ready(Ok(()))
+                                } else {
+                                    std::task::Poll::Ready(Err(io::Error::new(
+                                        io::ErrorKind::UnexpectedEof,
+                                        "truncated SASL frame header",
+                                    )))
+                                };
                             }
                             read += filled;
                             if read == buf.len() {
@@ -222,7 +180,10 @@ impl AsyncRead for SaslReadHalf {
                         std::task::Poll::Ready(Ok(())) => {
                             let filled = read_buf.filled().len();
                             if filled == 0 {
-                                return std::task::Poll::Ready(Ok(()));
+                                return std::task::Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::UnexpectedEof,
+                                    "truncated SASL frame payload",
+                                )));
                             }
                             read += filled;
                             if read == buf.len() {
@@ -255,22 +216,16 @@ impl AsyncRead for SaslReadHalf {
     }
 }
 
-impl AsyncExt for SaslReadHalf {
-    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
-        self.inner.ready(interest).await
-    }
-}
-
-pub(crate) struct SaslWriteHalf {
-    inner: tcp::OwnedWriteHalf,
+pub(crate) struct SaslWriteHalf<W = tcp::OwnedWriteHalf> {
+    inner: W,
     frame_protector: Option<GssapiFrameProtector>,
     buffered: Vec<u8>,
     frame: Option<(Vec<u8>, usize)>,
     flushing_inner: bool,
 }
 
-impl SaslWriteHalf {
-    fn new(inner: tcp::OwnedWriteHalf, frame_protector: Option<GssapiFrameProtector>) -> Self {
+impl<W> SaslWriteHalf<W> {
+    fn new(inner: W, frame_protector: Option<GssapiFrameProtector>) -> Self {
         Self {
             inner,
             frame_protector,
@@ -293,6 +248,12 @@ impl SaslWriteHalf {
         } else {
             buffered
         };
+        if payload.len() > MAX_SASL_FRAME_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "SASL frame exceeds size limit",
+            ));
+        }
         let payload_len = payload.len() as u32;
         if kerb_trace_enabled() {
             eprintln!("kerberos thrift sasl data write frame_len={payload_len}");
@@ -305,7 +266,7 @@ impl SaslWriteHalf {
     }
 }
 
-impl AsyncWrite for SaslWriteHalf {
+impl<W: AsyncWrite + Unpin> AsyncWrite for SaslWriteHalf<W> {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
@@ -369,12 +330,6 @@ impl AsyncWrite for SaslWriteHalf {
             std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(error)),
             std::task::Poll::Pending => std::task::Poll::Pending,
         }
-    }
-}
-
-impl AsyncExt for SaslWriteHalf {
-    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
-        self.inner.ready(interest).await
     }
 }
 
@@ -501,6 +456,11 @@ where
             "Failed to read Thrift SASL payload length: {error}"
         ))
     })?;
+    if payload_len as usize > MAX_SASL_FRAME_SIZE {
+        return Err(CatalogError::External(
+            "SASL negotiation frame exceeds size limit".into(),
+        ));
+    }
     let mut payload = vec![0; payload_len as usize];
     stream.read_exact(&mut payload).await.map_err(|error| {
         CatalogError::External(format!("Failed to read Thrift SASL payload: {error}"))
@@ -707,5 +667,41 @@ mod tests {
         server_task.await.unwrap();
         assert!(matches!(error, CatalogError::External(_)));
         assert!(error.to_string().contains("boom"));
+    }
+    #[tokio::test]
+    async fn test_sasl_data_frames_handle_fragmentation_and_truncation() {
+        let (client, mut peer) = duplex(32);
+        let mut reader = super::SaslReadHalf::new(client, None);
+        let server = tokio::spawn(async move {
+            for byte in [0, 0, 0, 3, b'a', b'b', b'c', 0, 0, 0, 2, b'd', b'e'] {
+                peer.write_all(&[byte]).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+        });
+        let mut payload = [0; 5];
+        reader.read_exact(&mut payload).await.unwrap();
+        assert_eq!(&payload, b"abcde");
+        server.await.unwrap();
+        for wire in [vec![0, 0], vec![0, 0, 0, 3, b'a']] {
+            let mut reader = super::SaslReadHalf::new(wire.as_slice(), None);
+            let error = reader.read_to_end(&mut Vec::new()).await.unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sasl_writer_flushes_one_frame_across_partial_writes() {
+        let (client, mut peer) = duplex(2);
+        let mut writer = super::SaslWriteHalf::new(client, None);
+        let server = tokio::spawn(async move {
+            let mut wire = Vec::new();
+            peer.read_to_end(&mut wire).await.unwrap();
+            wire
+        });
+        writer.write_all(b"abc").await.unwrap();
+        writer.write_all(b"de").await.unwrap();
+        writer.flush().await.unwrap();
+        writer.shutdown().await.unwrap();
+        assert_eq!(server.await.unwrap(), b"\0\0\0\x05abcde");
     }
 }

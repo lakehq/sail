@@ -289,20 +289,6 @@ fn is_spark_decimal(data_type: &DataType) -> bool {
     matches!(data_type, DataType::Decimal128(_, _))
 }
 
-/// `DecimalType.forType` (DecimalType.scala:133-140): Spark widens an integral operand to its
-/// minimal decimal before an arithmetic op whose other side is DECIMAL. A non-integral operand
-/// is returned untouched, so a DECIMAL pair keeps both of its own types.
-fn promote_integral_to_decimal(arg: Expr, data_type: &DataType) -> Expr {
-    let precision = match data_type {
-        DataType::Int8 | DataType::UInt8 => 3,
-        DataType::Int16 | DataType::UInt16 => 5,
-        DataType::Int32 | DataType::UInt32 => 10,
-        DataType::Int64 | DataType::UInt64 => 20,
-        _ => return arg,
-    };
-    cast(arg, DataType::Decimal128(precision, 0))
-}
-
 /// The four types `IntegralDivide.inputType` accepts (arithmetic.scala:890), checked on the pair.
 fn accepts_div_input(data_type: &DataType) -> bool {
     data_type.is_integer()
@@ -725,7 +711,8 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             let divisor = kernel_guarded_divisor(cast(divisor, DataType::Int64), &DataType::Int64);
             ScalarUDF::from(SparkIntegerDiv::new(ansi_mode, false)).call(vec![dividend, divisor])
         }
-        // The UDF owns its zero policy.
+        // The UDF owns its zero policy. Each arm hands the UDF the ORIGINAL operands, so
+        // grouping and aggregate extraction still see the expression the user wrote (#2822).
         (
             Ok(DataType::Interval(IntervalUnit::YearMonth)),
             Ok(DataType::Interval(IntervalUnit::YearMonth)),
@@ -748,8 +735,11 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 || (is_spark_decimal(d) && s.is_integer())
                 || (d.is_integer() && is_spark_decimal(s)) =>
         {
-            let dividend = promote_integral_to_decimal(dividend, d);
-            let divisor = promote_integral_to_decimal(divisor, s);
+            // The operands are passed through UNPROMOTED: `SparkIntegerDiv::coerce_types`
+            // resolves a mixed pair, because promoting here with `DecimalType.forType` (scale 0)
+            // destroys the value whenever the declared type understates it — Sail types
+            // `CASE WHEN false THEN 0 ELSE 1.5 END` as INT, and rounding it to a scale-0 decimal
+            // answers 4 where Spark answers 3 (measured; #2822 pins this shape).
             // `checkDivideOverflow` is LONG-dividend-only (arithmetic.scala:885-888), so a DECIMAL
             // dividend is never overflow-checked.
             ScalarUDF::from(SparkIntegerDiv::new(ansi_mode, false)).call(vec![dividend, divisor])

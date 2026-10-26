@@ -34,6 +34,7 @@ use sail_common_datafusion::datasource::{
     BucketBy, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
     create_sort_order, find_path_in_options,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::LakeProcedureProvider;
 use sail_common_datafusion::lakerelation::{
     LakeRelation, LakeRelationAccess, LakeRelationProvider, LakeRelationResolution,
@@ -56,6 +57,7 @@ use crate::metadata_relation::{IcebergMetadataRelationType, metadata_relation_pr
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, bootstrap_empty_table_metadata, replace_empty_table_metadata,
 };
+use crate::operations::metadata_commit::{PreviousMetadataFile, previous_metadata_log_entry};
 use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
@@ -64,8 +66,7 @@ use crate::physical_plan::write_context::{
 };
 use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{
-    MetadataLog, NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder,
-    TableMetadata, Transform,
+    NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder, TableMetadata, Transform,
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -291,6 +292,24 @@ impl LakeSource for IcebergLakeSource {
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
         match operation {
+            RowLevelOperation::Truncate {
+                target_plan,
+                target,
+            } => {
+                let (mode, snapshot_id) = crate::logical::row_level::target_write_state(
+                    &target_plan,
+                    sail_common_datafusion::datasource::RowLevelCommand::Truncate,
+                )?;
+                let node = sail_logical_plan::row_level::RowLevelWriteNode::new_truncate(
+                    target_plan,
+                    mode,
+                    *target,
+                )?
+                .with_expected_snapshot_id(Some(snapshot_id));
+                Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+                    node: Arc::new(node),
+                }))
+            }
             RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
             RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
             RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),
@@ -431,6 +450,41 @@ impl LakeSource for IcebergLakeSource {
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+        if let LakeSourceAlterTableOperation::AlterSnapshotReference { operation } = operation {
+            let properties = if let Some(context) = lakehouse_table.as_ref() {
+                let manager = ctx.extension::<sail_catalog::manager::CatalogManager>()?;
+                let status = manager
+                    .get_table(context.catalog_table())
+                    .await
+                    .map_err(|error| {
+                        datafusion_common::DataFusionError::External(Box::new(error))
+                    })?;
+                match status.kind {
+                    sail_common_datafusion::catalog::TableKind::Table { properties, .. } => {
+                        properties
+                    }
+                    _ => return plan_err!("Snapshot references require an Iceberg table"),
+                }
+            } else {
+                vec![]
+            };
+            let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
+            crate::procedure::snapshot::commit_snapshot_operation(
+                ctx,
+                &table_url,
+                &properties,
+                lakehouse_table.as_ref(),
+                crate::procedure::snapshot::SnapshotOperation::AlterReference(operation),
+                Arc::new(datafusion::arrow::datatypes::Schema::empty()),
+            )
+            .await?;
+            return Ok(
+                sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+                    catalog_updated: true,
+                    ..Default::default()
+                },
+            );
+        }
         if let Some(context) = lakehouse_table.as_ref()
             && context.commit != CommitAuthority::Filesystem
         {
@@ -826,6 +880,12 @@ impl IcebergLakeSource {
             let mut table_meta = TableMetadata::from_json(&metadata_bytes)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
 
+            let previous_entry = previous_metadata_log_entry(
+                &table_url,
+                PreviousMetadataFile::ObjectPath(&latest_metadata_file),
+                table_meta.last_updated_ms,
+            )?;
+
             match operation {
                 LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                     crate::properties::apply_table_property_changes(
@@ -863,13 +923,9 @@ impl IcebergLakeSource {
                 continue;
             }
 
-            let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
             let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
             table_meta.last_updated_ms = timestamp_ms;
-            table_meta.metadata_log.push(MetadataLog {
-                timestamp_ms: previous_metadata_timestamp_ms,
-                metadata_file: latest_metadata_file.clone(),
-            });
+            table_meta.metadata_log.push(previous_entry);
 
             let metadata_json = table_meta
                 .to_json()

@@ -47,7 +47,8 @@ use crate::operations::bootstrap::{
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::metadata_commit::{
-    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, apply_snapshot_updates,
+    MetadataFileCommit, MetadataFileStyle, MetadataWriteOutcome, PreviousMetadataFile,
+    apply_snapshot_updates,
 };
 use crate::operations::{SnapshotProducer, SnapshotUpdateKind, Transaction};
 use crate::physical_plan::action_schema::{CommitMeta, decode_actions_and_meta_from_batch};
@@ -1327,9 +1328,13 @@ impl ExecutionPlan for IcebergCommitExec {
                     MetadataFileStyle::Versioned
                 };
                 let prepared_metadata = apply_snapshot_updates(
+                    &table_url,
                     &mut table_meta,
                     &action_updates,
-                    catalog_metadata_location.as_deref().unwrap_or(&latest_meta),
+                    catalog_metadata_location.as_deref().map_or(
+                        PreviousMetadataFile::ObjectPath(&latest_meta),
+                        PreviousMetadataFile::CatalogLocation,
+                    ),
                 )
                 .and_then(|()| {
                     MetadataFileCommit::prepare(&table_url, &table_meta, next_version, style)
