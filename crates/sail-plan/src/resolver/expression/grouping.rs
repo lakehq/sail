@@ -177,7 +177,7 @@ impl PlanResolver<'_> {
         }
         let index = keys.len();
         if crate::resolver::query::aggregate_request::ordinal(&request).is_none() {
-            // Repeated grouping requests share the analyzed kernel identity,
+            // Repeated grouping requests share the analyzed function identity,
             // including stateful functions that allocate an instance per call.
             self.expression_replacements.push((
                 request,

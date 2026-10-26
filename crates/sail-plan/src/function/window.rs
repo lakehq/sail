@@ -223,7 +223,7 @@ type WindowResolver = fn(
 pub(crate) struct WindowFunction {
     name: &'static str,
     resolver: WindowResolver,
-    kernel: Arc<WindowUDF>,
+    function: Arc<WindowUDF>,
 }
 impl WindowFunction {
     fn with_resolver(mut self, resolver: WindowResolver) -> Self {
@@ -231,14 +231,14 @@ impl WindowFunction {
         self
     }
 
-    pub(crate) fn kernel(&self) -> Arc<WindowUDF> {
-        Arc::clone(&self.kernel)
+    pub(crate) fn udf(&self) -> Arc<WindowUDF> {
+        Arc::clone(&self.function)
     }
     pub(crate) fn call(&self, mut input: WindowFunctionInput<'_>) -> PlanResult<Expr> {
         (self.resolver)(
             &mut input.context,
             self.name,
-            self.kernel(),
+            self.udf(),
             input.arguments,
             input.options,
         )
@@ -248,22 +248,26 @@ pub(crate) struct WindowFunctionBuilder;
 impl WindowFunctionBuilder {
     pub fn window_udf(
         name: &'static str,
-        kernel: impl FnOnce() -> Arc<WindowUDF>,
+        function: impl FnOnce() -> Arc<WindowUDF>,
     ) -> WindowFunction {
         WindowFunction {
             name,
             resolver: resolve_window,
-            kernel: kernel(),
+            function: function(),
         }
     }
 }
 
-pub(crate) fn window_kernel(name: &str) -> Option<Arc<WindowUDF>> {
-    crate::function::get_built_in_window_function(name).map(|function| function.kernel())
-}
-
 pub(crate) fn list_built_in_window_functions() -> Vec<(&'static str, WindowFunction)> {
     vec![
+        (
+            "cume_dist",
+            F::window_udf("cume_dist", cume_dist::cume_dist_udwf),
+        ),
+        (
+            "dense_rank",
+            F::window_udf("dense_rank", rank::dense_rank_udwf),
+        ),
         (
             "first",
             F::window_udf("first", nth_value::first_value_udwf).with_resolver(resolve_first),
@@ -272,10 +276,7 @@ pub(crate) fn list_built_in_window_functions() -> Vec<(&'static str, WindowFunct
             "first_value",
             F::window_udf("first_value", nth_value::first_value_udwf).with_resolver(resolve_first),
         ),
-        (
-            "any_value",
-            F::window_udf("any_value", nth_value::first_value_udwf).with_resolver(resolve_first),
-        ),
+        ("lag", F::window_udf("lag", lead_lag::lag_udwf)),
         (
             "last",
             F::window_udf("last", nth_value::last_value_udwf).with_resolver(resolve_first),
@@ -284,32 +285,27 @@ pub(crate) fn list_built_in_window_functions() -> Vec<(&'static str, WindowFunct
             "last_value",
             F::window_udf("last_value", nth_value::last_value_udwf).with_resolver(resolve_first),
         ),
+        ("lead", F::window_udf("lead", lead_lag::lead_udwf)),
         (
             "nth_value",
             F::window_udf("nth_value", nth_value::nth_value_udwf).with_resolver(resolve_nth),
         ),
-        ("lag", F::window_udf("lag", lead_lag::lag_udwf)),
-        ("lead", F::window_udf("lead", lead_lag::lead_udwf)),
+        (
+            "ntile",
+            F::window_udf("ntile", sail_function::window::spark_ntile_udwf),
+        ),
         ("rank", F::window_udf("rank", rank::rank_udwf)),
         (
-            "dense_rank",
-            F::window_udf("dense_rank", rank::dense_rank_udwf),
+            "row_number",
+            F::window_udf("row_number", row_number::row_number_udwf),
         ),
         (
             "percent_rank",
             F::window_udf("percent_rank", rank::percent_rank_udwf),
         ),
         (
-            "row_number",
-            F::window_udf("row_number", row_number::row_number_udwf),
-        ),
-        (
-            "cume_dist",
-            F::window_udf("cume_dist", cume_dist::cume_dist_udwf),
-        ),
-        (
-            "ntile",
-            F::window_udf("ntile", sail_function::window::spark_ntile_udwf),
+            "any_value",
+            F::window_udf("any_value", nth_value::first_value_udwf).with_resolver(resolve_first),
         ),
     ]
 }

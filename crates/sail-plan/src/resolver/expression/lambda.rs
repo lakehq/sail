@@ -401,7 +401,7 @@ impl PlanResolver<'_> {
                         ));
                         // Physical lambda evaluation only materializes used
                         // parameter columns. Choose the existing index-first
-                        // kernel when an array lambda captures only its index.
+                        // function when an array lambda captures only its index.
                         if (matches!(name.as_str(), "filter" | "transform" | "array_sort")
                             || (matches!(name.as_str(), "aggregate" | "reduce") && index == 2))
                             && parameters.attributes.len() == 2

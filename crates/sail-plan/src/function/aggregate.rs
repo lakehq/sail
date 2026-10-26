@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field};
+use datafusion::functions::core;
 use datafusion::functions_aggregate::{
     approx_distinct, approx_median, approx_percentile_cont, array_agg, average, bit_and_or_xor,
     bool_and_or, correlation, count, covariance, first_last, grouping, min_max, percentile_cont,
     stddev, sum, variance,
 };
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::NullTreatment;
 use datafusion_expr::{AggregateUDF, Operator, ScalarUDF};
@@ -106,6 +108,38 @@ fn resolve_aggregate(
 ) -> PlanResult<Expr> {
     aggregate_call_with_options(context, function, args, options)
 }
+fn avg(
+    context: &mut FunctionContextInput<'_>,
+    name: &str,
+    function: Arc<AggregateUDF>,
+    mut args: Vec<Expr>,
+    mut options: AggregateOptions,
+) -> PlanResult<Expr> {
+    if args.len() == 2 {
+        if options.ignore_nulls.is_some() {
+            return Err(PlanError::invalid(
+                "arguments conflict with IGNORE NULLS clause",
+            ));
+        }
+        let flag = args
+            .pop()
+            .ok_or_else(|| PlanError::internal("missing null treatment"))?;
+        options.ignore_nulls = Some(match flag.kind.into_resolved("null treatment")? {
+            ExprKind::Literal(ScalarValue::Boolean(Some(flag))) => flag,
+            _ => {
+                return Err(PlanError::invalid(
+                    "requires a boolean literal as the second argument",
+                ));
+            }
+        });
+    }
+    crate::analyzer::typing::coercion::validate_arity(name, args.len(), 1)?;
+    if args[0].result_type.resolved("average argument")?.data_type == DataType::Null {
+        return Ok(context.literal(ScalarValue::Null));
+    }
+    aggregate_call_with_options(context, function, args, options)
+}
+
 fn spark_sum(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
@@ -117,6 +151,81 @@ fn spark_sum(
 
     aggregate_call_with_options(context, function, args, options)
 }
+
+pub(crate) fn coerce_string_sum_arguments(
+    context: &mut FunctionContextInput<'_>,
+    args: Vec<Expr>,
+    filter: Option<&Expr>,
+) -> PlanResult<Vec<Expr>> {
+    args.into_iter()
+        .map(|mut arg| {
+            let kind = arg.result_type.resolved("sum argument")?.data_type.clone();
+            if !kind.is_string() {
+                return Ok(arg);
+            }
+            if context.config.ansi_mode {
+                if let Some(filter) = filter {
+                    let filter = context.copy_expression(filter)?;
+                    let null = context.literal(ScalarValue::try_from(&kind)?);
+                    arg = context.case(vec![(filter, arg)], Some(null))?;
+                }
+                context.cast(arg, DataType::Float64)
+            } else {
+                context.try_cast(arg, DataType::Float64)
+            }
+        })
+        .collect()
+}
+
+fn grouping_id(
+    context: &mut FunctionContextInput<'_>,
+    _name: &str,
+    function: Arc<AggregateUDF>,
+    args: Vec<Expr>,
+    options: AggregateOptions,
+) -> PlanResult<Expr> {
+    if options.distinct
+        || options.ignore_nulls.is_some()
+        || options.filter.is_some()
+        || !options.order_by.is_empty()
+    {
+        return Err(PlanError::invalid("invalid grouping_id function clause"));
+    }
+    aggregate_call_with_options(context, function, args, options)
+}
+
+fn first_value(
+    context: &mut FunctionContextInput<'_>,
+    name: &str,
+    function: Arc<AggregateUDF>,
+    mut args: Vec<Expr>,
+    mut options: AggregateOptions,
+) -> PlanResult<Expr> {
+    if args.len() == 2 {
+        if options.ignore_nulls.is_some() {
+            return Err(PlanError::invalid(
+                "arguments conflict with IGNORE NULLS clause",
+            ));
+        }
+        let flag = args
+            .pop()
+            .ok_or_else(|| PlanError::internal("missing null treatment"))?;
+        options.ignore_nulls = Some(match flag.kind.into_resolved("null treatment")? {
+            ExprKind::Literal(ScalarValue::Boolean(Some(flag))) => flag,
+            _ => {
+                return Err(PlanError::invalid(
+                    "requires a boolean literal as the second argument",
+                ));
+            }
+        });
+    }
+    crate::analyzer::typing::coercion::validate_arity(name, args.len(), 1)?;
+    if !options.window {
+        options.distinct = false;
+    }
+    aggregate_call_with_options(context, function, args, options)
+}
+
 fn kurtosis(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
@@ -131,24 +240,25 @@ fn kurtosis(
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn median(
+
+fn mode(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
     mut args: Vec<Expr>,
     options: AggregateOptions,
 ) -> PlanResult<Expr> {
-    if !options.window {
-        args.push(context.literal(ScalarValue::Float64(Some(0.5))));
+    if args.is_empty() {
+        let [sort] = options.order_by.as_slice() else {
+            return Err(PlanError::analysis(
+                "mode requires one WITHIN_GROUP ordering expression",
+            ));
+        };
+        args.push(context.copy_expression(&sort.expression)?);
     }
-    let window = options.window;
-    let result = aggregate_call_with_options(context, function, args, options)?;
-    if window {
-        context.cast(result, DataType::Float64)
-    } else {
-        Ok(result)
-    }
+    aggregate_call_with_options(context, function, args, options)
 }
+
 fn percentile_cont(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
@@ -169,63 +279,7 @@ fn percentile_cont(
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn hll_sketch_agg(
-    context: &mut FunctionContextInput<'_>,
-    name: &str,
-    function: Arc<AggregateUDF>,
-    mut args: Vec<Expr>,
-    options: AggregateOptions,
-) -> PlanResult<Expr> {
-    if args.len() == 1 {
-        args.push(context.literal(match name {
-            "hll_sketch_agg" => ScalarValue::Int32(Some(DEFAULT_HLL_LG_CONFIG_K)),
-            "hll_union_agg" => ScalarValue::Boolean(Some(false)),
-            _ => ScalarValue::Int32(Some(DEFAULT_THETA_LG_NOM_ENTRIES)),
-        }));
-    }
-    let (value, config) = args.two()?;
-    let config = context.cast(
-        config,
-        if name == "hll_union_agg" {
-            DataType::Boolean
-        } else {
-            DataType::Int32
-        },
-    )?;
-    args = vec![value, config];
 
-    aggregate_call_with_options(context, function, args, options)
-}
-fn count_min_sketch(
-    context: &mut FunctionContextInput<'_>,
-    name: &str,
-    function: Arc<AggregateUDF>,
-    args: Vec<Expr>,
-    options: AggregateOptions,
-) -> PlanResult<Expr> {
-    crate::analyzer::typing::coercion::validate_arity(name, args.len(), 4)?;
-
-    aggregate_call_with_options(context, function, args, options)
-}
-fn count_if(
-    context: &mut FunctionContextInput<'_>,
-    _name: &str,
-    function: Arc<AggregateUDF>,
-    mut args: Vec<Expr>,
-    mut options: AggregateOptions,
-) -> PlanResult<Expr> {
-    let predicate = args.one()?;
-    let zero = context.literal(ScalarValue::Int32(Some(0)));
-    if options.window {
-        let null = context.literal(ScalarValue::Int32(None));
-        args = vec![context.case(vec![(predicate, zero)], Some(null))?];
-    } else {
-        options.filter = Some(Box::new(predicate));
-        args = vec![zero];
-    }
-
-    aggregate_call_with_options(context, function, args, options)
-}
 fn count(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
@@ -272,6 +326,50 @@ fn count(
 
     aggregate_call_with_options(context, function, args, options)
 }
+
+fn is_typed_null_literal(value: &Expr) -> bool {
+    match &value.kind {
+        Deferred::Resolved(ExprKind::Literal(value)) => value.is_null(),
+        Deferred::Resolved(
+            ExprKind::Cast { expression, .. } | ExprKind::WithMetadata(expression),
+        ) => is_typed_null_literal(expression),
+        _ => false,
+    }
+}
+
+fn duplicate_agnostic_extreme(
+    context: &mut FunctionContextInput<'_>,
+    _name: &str,
+    function: Arc<AggregateUDF>,
+    args: Vec<Expr>,
+    mut options: AggregateOptions,
+) -> PlanResult<Expr> {
+    if !options.window {
+        options.distinct = false;
+    }
+    aggregate_call_with_options(context, function, args, options)
+}
+
+fn count_if(
+    context: &mut FunctionContextInput<'_>,
+    _name: &str,
+    function: Arc<AggregateUDF>,
+    mut args: Vec<Expr>,
+    mut options: AggregateOptions,
+) -> PlanResult<Expr> {
+    let predicate = args.one()?;
+    let zero = context.literal(ScalarValue::Int32(Some(0)));
+    if options.window {
+        let null = context.literal(ScalarValue::Int32(None));
+        args = vec![context.case(vec![(predicate, zero)], Some(null))?];
+    } else {
+        options.filter = Some(Box::new(predicate));
+        args = vec![zero];
+    }
+
+    aggregate_call_with_options(context, function, args, options)
+}
+
 fn array_agg_compacted(
     context: &mut FunctionContextInput<'_>,
     name: &str,
@@ -312,8 +410,9 @@ fn array_agg_compacted(
         &[],
         &element_type,
     )));
-    context.scalar("coalesce", vec![agg, empty])
+    context.scalar_udf(core::coalesce(), vec![agg, empty])
 }
+
 fn listagg(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
@@ -352,7 +451,10 @@ fn listagg(
         ))),
     )?;
     let delimiter = context.cast(delimiter, DataType::Utf8)?;
-    let result = context.scalar("array_to_string", vec![result, delimiter])?;
+    let result = context.scalar_udf(
+        functions_nested::string::array_to_string_udf(),
+        vec![result, delimiter],
+    )?;
     let result = match kind {
         DataType::Binary | DataType::BinaryView => context.cast(result, DataType::Binary)?,
         DataType::LargeBinary => context.cast(result, DataType::LargeBinary)?,
@@ -364,113 +466,26 @@ fn listagg(
     let null = context.literal(ScalarValue::Null);
     context.case(vec![(test, result), (yes, null)], None)
 }
-fn mode(
+
+fn median(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
     mut args: Vec<Expr>,
     options: AggregateOptions,
 ) -> PlanResult<Expr> {
-    if args.is_empty() {
-        let [sort] = options.order_by.as_slice() else {
-            return Err(PlanError::analysis(
-                "mode requires one WITHIN_GROUP ordering expression",
-            ));
-        };
-        args.push(context.copy_expression(&sort.expression)?);
-    }
-    aggregate_call_with_options(context, function, args, options)
-}
-fn avg(
-    context: &mut FunctionContextInput<'_>,
-    name: &str,
-    function: Arc<AggregateUDF>,
-    mut args: Vec<Expr>,
-    mut options: AggregateOptions,
-) -> PlanResult<Expr> {
-    if args.len() == 2 {
-        if options.ignore_nulls.is_some() {
-            return Err(PlanError::invalid(
-                "arguments conflict with IGNORE NULLS clause",
-            ));
-        }
-        let flag = args
-            .pop()
-            .ok_or_else(|| PlanError::internal("missing null treatment"))?;
-        options.ignore_nulls = Some(match flag.kind.into_resolved("null treatment")? {
-            ExprKind::Literal(ScalarValue::Boolean(Some(flag))) => flag,
-            _ => {
-                return Err(PlanError::invalid(
-                    "requires a boolean literal as the second argument",
-                ));
-            }
-        });
-    }
-    crate::analyzer::typing::coercion::validate_arity(name, args.len(), 1)?;
-    if args[0].result_type.resolved("average argument")?.data_type == DataType::Null {
-        return Ok(context.literal(ScalarValue::Null));
-    }
-    aggregate_call_with_options(context, function, args, options)
-}
-fn first_value(
-    context: &mut FunctionContextInput<'_>,
-    name: &str,
-    function: Arc<AggregateUDF>,
-    mut args: Vec<Expr>,
-    mut options: AggregateOptions,
-) -> PlanResult<Expr> {
-    if args.len() == 2 {
-        if options.ignore_nulls.is_some() {
-            return Err(PlanError::invalid(
-                "arguments conflict with IGNORE NULLS clause",
-            ));
-        }
-        let flag = args
-            .pop()
-            .ok_or_else(|| PlanError::internal("missing null treatment"))?;
-        options.ignore_nulls = Some(match flag.kind.into_resolved("null treatment")? {
-            ExprKind::Literal(ScalarValue::Boolean(Some(flag))) => flag,
-            _ => {
-                return Err(PlanError::invalid(
-                    "requires a boolean literal as the second argument",
-                ));
-            }
-        });
-    }
-    crate::analyzer::typing::coercion::validate_arity(name, args.len(), 1)?;
     if !options.window {
-        options.distinct = false;
+        args.push(context.literal(ScalarValue::Float64(Some(0.5))));
     }
-    aggregate_call_with_options(context, function, args, options)
-}
-fn duplicate_agnostic_extreme(
-    context: &mut FunctionContextInput<'_>,
-    _name: &str,
-    function: Arc<AggregateUDF>,
-    args: Vec<Expr>,
-    mut options: AggregateOptions,
-) -> PlanResult<Expr> {
-    if !options.window {
-        options.distinct = false;
+    let window = options.window;
+    let result = aggregate_call_with_options(context, function, args, options)?;
+    if window {
+        context.cast(result, DataType::Float64)
+    } else {
+        Ok(result)
     }
-    aggregate_call_with_options(context, function, args, options)
 }
-fn grouping_id(
-    context: &mut FunctionContextInput<'_>,
-    _name: &str,
-    function: Arc<AggregateUDF>,
-    args: Vec<Expr>,
-    options: AggregateOptions,
-) -> PlanResult<Expr> {
-    if options.distinct
-        || options.ignore_nulls.is_some()
-        || options.filter.is_some()
-        || !options.order_by.is_empty()
-    {
-        return Err(PlanError::invalid("invalid grouping_id function clause"));
-    }
-    aggregate_call_with_options(context, function, args, options)
-}
+
 fn approx_count_distinct(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
@@ -482,39 +497,44 @@ fn approx_count_distinct(
     context.cast(result, DataType::Int64)
 }
 
-pub(crate) fn coerce_string_sum_arguments(
+fn hll_sketch_agg(
     context: &mut FunctionContextInput<'_>,
-    args: Vec<Expr>,
-    filter: Option<&Expr>,
-) -> PlanResult<Vec<Expr>> {
-    args.into_iter()
-        .map(|mut arg| {
-            let kind = arg.result_type.resolved("sum argument")?.data_type.clone();
-            if !kind.is_string() {
-                return Ok(arg);
-            }
-            if context.config.ansi_mode {
-                if let Some(filter) = filter {
-                    let filter = context.copy_expression(filter)?;
-                    let null = context.literal(ScalarValue::try_from(&kind)?);
-                    arg = context.case(vec![(filter, arg)], Some(null))?;
-                }
-                context.cast(arg, DataType::Float64)
-            } else {
-                context.try_cast(arg, DataType::Float64)
-            }
-        })
-        .collect()
+    name: &str,
+    function: Arc<AggregateUDF>,
+    mut args: Vec<Expr>,
+    options: AggregateOptions,
+) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        args.push(context.literal(match name {
+            "hll_sketch_agg" => ScalarValue::Int32(Some(DEFAULT_HLL_LG_CONFIG_K)),
+            "hll_union_agg" => ScalarValue::Boolean(Some(false)),
+            _ => ScalarValue::Int32(Some(DEFAULT_THETA_LG_NOM_ENTRIES)),
+        }));
+    }
+    let (value, config) = args.two()?;
+    let config = context.cast(
+        config,
+        if name == "hll_union_agg" {
+            DataType::Boolean
+        } else {
+            DataType::Int32
+        },
+    )?;
+    args = vec![value, config];
+
+    aggregate_call_with_options(context, function, args, options)
 }
 
-fn is_typed_null_literal(value: &Expr) -> bool {
-    match &value.kind {
-        Deferred::Resolved(ExprKind::Literal(value)) => value.is_null(),
-        Deferred::Resolved(
-            ExprKind::Cast { expression, .. } | ExprKind::WithMetadata(expression),
-        ) => is_typed_null_literal(expression),
-        _ => false,
-    }
+fn count_min_sketch(
+    context: &mut FunctionContextInput<'_>,
+    name: &str,
+    function: Arc<AggregateUDF>,
+    args: Vec<Expr>,
+    options: AggregateOptions,
+) -> PlanResult<Expr> {
+    crate::analyzer::typing::coercion::validate_arity(name, args.len(), 4)?;
+
+    aggregate_call_with_options(context, function, args, options)
 }
 
 pub(crate) struct AggregateFunctionInput<'a> {
@@ -523,7 +543,7 @@ pub(crate) struct AggregateFunctionInput<'a> {
     pub context: FunctionContextInput<'a>,
 }
 
-type AggregateKernel =
+type AggregateUdfFactory =
     Arc<dyn Fn(&FunctionContextInput<'_>) -> PlanResult<Arc<AggregateUDF>> + Send + Sync>;
 
 type AggregateResolver = fn(
@@ -538,7 +558,7 @@ type AggregateResolver = fn(
 pub(crate) struct AggregateFunction {
     name: String,
     resolver: AggregateResolver,
-    kernel: AggregateKernel,
+    function: AggregateUdfFactory,
 }
 
 impl AggregateFunction {
@@ -547,19 +567,16 @@ impl AggregateFunction {
         self
     }
 
-    pub(crate) fn kernel(
-        &self,
-        context: &FunctionContextInput<'_>,
-    ) -> PlanResult<Arc<AggregateUDF>> {
-        (self.kernel)(context)
+    pub(crate) fn udf(&self, context: &FunctionContextInput<'_>) -> PlanResult<Arc<AggregateUDF>> {
+        (self.function)(context)
     }
 
     pub(crate) fn call(&self, mut input: AggregateFunctionInput<'_>) -> PlanResult<Expr> {
-        let kernel = self.kernel(&input.context)?;
+        let function = self.udf(&input.context)?;
         (self.resolver)(
             &mut input.context,
             &self.name,
-            kernel,
+            function,
             input.arguments,
             input.options,
         )
@@ -570,7 +587,7 @@ pub(crate) struct AggregateFunctionBuilder;
 impl AggregateFunctionBuilder {
     pub fn custom(
         name: impl Into<String>,
-        kernel: impl Fn(&FunctionContextInput<'_>) -> PlanResult<Arc<AggregateUDF>>
+        function: impl Fn(&FunctionContextInput<'_>) -> PlanResult<Arc<AggregateUDF>>
         + Send
         + Sync
         + 'static,
@@ -578,135 +595,29 @@ impl AggregateFunctionBuilder {
         AggregateFunction {
             name: name.into(),
             resolver: resolve_aggregate,
-            kernel: Arc::new(kernel),
+            function: Arc::new(function),
         }
     }
     pub fn aggregate_udf(
         name: impl Into<String>,
-        kernel: impl Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,
+        function: impl Fn() -> Arc<AggregateUDF> + Send + Sync + 'static,
     ) -> AggregateFunction {
-        Self::custom(name, move |_| Ok(kernel()))
+        Self::custom(name, move |_| Ok(function()))
     }
-    pub fn kernel(name: &'static str) -> AggregateFunction {
-        use datafusion_expr::registry::FunctionRegistry;
-        Self::custom(name, move |context| Ok(context.session.udaf(name)?))
+    pub fn unknown(name: &str) -> AggregateFunction {
+        let name = name.to_string();
+        Self::custom(name.clone(), move |_| {
+            Err(PlanError::todo(format!("function: {name}")))
+        })
     }
 }
 
 pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggregateFunction)> {
     vec![
-        ("kll_merge_agg_bigint", F::kernel("kll_merge_agg_bigint")),
-        ("kll_merge_agg_double", F::kernel("kll_merge_agg_double")),
-        ("kll_merge_agg_float", F::kernel("kll_merge_agg_float")),
-        ("measure", F::kernel("measure")),
-        (
-            "tuple_intersection_agg_double",
-            F::kernel("tuple_intersection_agg_double"),
-        ),
-        (
-            "tuple_intersection_agg_integer",
-            F::kernel("tuple_intersection_agg_integer"),
-        ),
-        (
-            "tuple_sketch_agg_double",
-            F::kernel("tuple_sketch_agg_double"),
-        ),
-        (
-            "tuple_sketch_agg_integer",
-            F::kernel("tuple_sketch_agg_integer"),
-        ),
-        (
-            "tuple_union_agg_double",
-            F::kernel("tuple_union_agg_double"),
-        ),
-        (
-            "tuple_union_agg_integer",
-            F::kernel("tuple_union_agg_integer"),
-        ),
-        ("vector_avg", F::kernel("vector_avg")),
-        ("vector_sum", F::kernel("vector_sum")),
         ("any", F::aggregate_udf("any", bool_and_or::bool_or_udaf)),
-        ("some", F::aggregate_udf("some", bool_and_or::bool_or_udaf)),
-        (
-            "bool_or",
-            F::aggregate_udf("bool_or", bool_and_or::bool_or_udaf),
-        ),
-        (
-            "every",
-            F::aggregate_udf("every", bool_and_or::bool_and_udaf),
-        ),
-        (
-            "bool_and",
-            F::aggregate_udf("bool_and", bool_and_or::bool_and_udaf),
-        ),
-        (
-            "avg",
-            F::aggregate_udf("avg", average::avg_udaf).with_resolver(avg),
-        ),
-        ("mean", F::aggregate_udf("mean", average::avg_udaf)),
-        (
-            "array_agg",
-            F::aggregate_udf("array_agg", array_agg::array_agg_udaf)
-                .with_resolver(array_agg_compacted),
-        ),
-        (
-            "collect_list",
-            F::aggregate_udf("collect_list", array_agg::array_agg_udaf)
-                .with_resolver(array_agg_compacted),
-        ),
-        (
-            "collect_set",
-            F::aggregate_udf("collect_set", array_agg::array_agg_udaf)
-                .with_resolver(array_agg_compacted),
-        ),
-        (
-            "listagg",
-            F::aggregate_udf("listagg", array_agg::array_agg_udaf).with_resolver(listagg),
-        ),
-        (
-            "string_agg",
-            F::aggregate_udf("string_agg", array_agg::array_agg_udaf).with_resolver(listagg),
-        ),
-        (
-            "count",
-            F::aggregate_udf("count", count::count_udaf).with_resolver(count),
-        ),
-        (
-            "count_if",
-            F::aggregate_udf("count_if", count::count_udaf).with_resolver(count_if),
-        ),
-        (
-            "sum",
-            F::aggregate_udf("sum", sum::sum_udaf).with_resolver(spark_sum),
-        ),
-        (
-            "first",
-            F::aggregate_udf("first", first_last::first_value_udaf).with_resolver(first_value),
-        ),
-        (
-            "first_value",
-            F::aggregate_udf("first_value", first_last::first_value_udaf)
-                .with_resolver(first_value),
-        ),
         (
             "any_value",
             F::aggregate_udf("any_value", first_last::first_value_udaf).with_resolver(first_value),
-        ),
-        (
-            "last",
-            F::aggregate_udf("last", first_last::last_value_udaf).with_resolver(first_value),
-        ),
-        (
-            "last_value",
-            F::aggregate_udf("last_value", first_last::last_value_udaf).with_resolver(first_value),
-        ),
-        (
-            "min",
-            F::aggregate_udf("min", min_max::min_udaf).with_resolver(duplicate_agnostic_extreme),
-        ),
-        (
-            "max",
-            F::aggregate_udf("max", min_max::max_udaf).with_resolver(duplicate_agnostic_extreme),
         ),
         (
             "approx_count_distinct",
@@ -722,27 +633,13 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             }),
         ),
         (
-            "percentile_approx",
-            F::aggregate_udf("percentile_approx", || {
-                approx_percentile_cont::approx_percentile_cont_udaf()
-            }),
+            "array_agg",
+            F::aggregate_udf("array_agg", array_agg::array_agg_udaf)
+                .with_resolver(array_agg_compacted),
         ),
         (
-            "approx_percentile_cont",
-            F::aggregate_udf("approx_percentile_cont", || {
-                approx_percentile_cont::approx_percentile_cont_udaf()
-            }),
-        ),
-        (
-            "approx_median",
-            F::aggregate_udf("approx_median", approx_median::approx_median_udaf),
-        ),
-        (
-            "percentile_cont",
-            F::aggregate_udf("percentile_cont", || {
-                percentile_cont::percentile_cont_udaf()
-            })
-            .with_resolver(percentile_cont),
+            "avg",
+            F::aggregate_udf("avg", average::avg_udaf).with_resolver(avg),
         ),
         (
             "bit_and",
@@ -755,41 +652,6 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
         (
             "bit_xor",
             F::aggregate_udf("bit_xor", bit_and_or_xor::bit_xor_udaf),
-        ),
-        ("corr", F::aggregate_udf("corr", correlation::corr_udaf)),
-        (
-            "covar_pop",
-            F::aggregate_udf("covar_pop", covariance::covar_pop_udaf),
-        ),
-        (
-            "covar_samp",
-            F::aggregate_udf("covar_samp", covariance::covar_samp_udaf),
-        ),
-        (
-            "grouping",
-            F::aggregate_udf("grouping", grouping::grouping_udaf),
-        ),
-        ("std", F::aggregate_udf("std", stddev::stddev_udaf)),
-        ("stddev", F::aggregate_udf("stddev", stddev::stddev_udaf)),
-        (
-            "stddev_samp",
-            F::aggregate_udf("stddev_samp", stddev::stddev_udaf),
-        ),
-        (
-            "stddev_pop",
-            F::aggregate_udf("stddev_pop", stddev::stddev_pop_udaf),
-        ),
-        (
-            "var_pop",
-            F::aggregate_udf("var_pop", variance::var_pop_udaf),
-        ),
-        (
-            "var_samp",
-            F::aggregate_udf("var_samp", variance::var_samp_udaf),
-        ),
-        (
-            "variance",
-            F::aggregate_udf("variance", variance::var_samp_udaf),
         ),
         (
             "bitmap_and_agg",
@@ -810,11 +672,63 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             }),
         ),
         (
+            "bool_and",
+            F::aggregate_udf("bool_and", bool_and_or::bool_and_udaf),
+        ),
+        (
+            "bool_or",
+            F::aggregate_udf("bool_or", bool_and_or::bool_or_udaf),
+        ),
+        (
+            "collect_list",
+            F::aggregate_udf("collect_list", array_agg::array_agg_udaf)
+                .with_resolver(array_agg_compacted),
+        ),
+        (
+            "collect_set",
+            F::aggregate_udf("collect_set", array_agg::array_agg_udaf)
+                .with_resolver(array_agg_compacted),
+        ),
+        ("corr", F::aggregate_udf("corr", correlation::corr_udaf)),
+        (
+            "count",
+            F::aggregate_udf("count", count::count_udaf).with_resolver(count),
+        ),
+        (
+            "count_if",
+            F::aggregate_udf("count_if", count::count_udaf).with_resolver(count_if),
+        ),
+        (
             "count_min_sketch",
             F::aggregate_udf("count_min_sketch", || {
                 Arc::new(AggregateUDF::from(CountMinSketchFunction::new()))
             })
             .with_resolver(count_min_sketch),
+        ),
+        (
+            "covar_pop",
+            F::aggregate_udf("covar_pop", covariance::covar_pop_udaf),
+        ),
+        (
+            "covar_samp",
+            F::aggregate_udf("covar_samp", covariance::covar_samp_udaf),
+        ),
+        (
+            "every",
+            F::aggregate_udf("every", bool_and_or::bool_and_udaf),
+        ),
+        (
+            "first",
+            F::aggregate_udf("first", first_last::first_value_udaf).with_resolver(first_value),
+        ),
+        (
+            "first_value",
+            F::aggregate_udf("first_value", first_last::first_value_udaf)
+                .with_resolver(first_value),
+        ),
+        (
+            "grouping",
+            F::aggregate_udf("grouping", grouping::grouping_udaf),
         ),
         (
             "grouping_id",
@@ -843,63 +757,9 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             })
             .with_resolver(hll_sketch_agg),
         ),
-        (
-            "kurtosis",
-            F::aggregate_udf("kurtosis", || {
-                Arc::new(AggregateUDF::from(KurtosisFunction::new()))
-            })
-            .with_resolver(kurtosis),
-        ),
-        (
-            "max_by",
-            F::aggregate_udf("max_by", || {
-                Arc::new(AggregateUDF::from(MaxByFunction::new()))
-            }),
-        ),
-        (
-            "min_by",
-            F::aggregate_udf("min_by", || {
-                Arc::new(AggregateUDF::from(MinByFunction::new()))
-            }),
-        ),
-        (
-            "mode",
-            F::aggregate_udf("mode", || Arc::new(AggregateUDF::from(ModeFunction::new())))
-                .with_resolver(mode),
-        ),
-        (
-            "percentile",
-            F::aggregate_udf("percentile", || {
-                Arc::new(AggregateUDF::from(PercentileFunction::new()))
-            }),
-        ),
-        (
-            "median",
-            F::aggregate_udf("median", || {
-                Arc::new(AggregateUDF::from(PercentileFunction::new()))
-            })
-            .with_resolver(median),
-        ),
-        (
-            "product",
-            F::aggregate_udf("product", || {
-                Arc::new(AggregateUDF::from(ProductFunction::new()))
-            })
-            .with_resolver(kurtosis),
-        ),
-        (
-            "schema_of_variant_agg",
-            F::aggregate_udf("schema_of_variant_agg", || {
-                Arc::new(AggregateUDF::from(SchemaOfVariantAggFunction::new()))
-            }),
-        ),
-        (
-            "skewness",
-            F::aggregate_udf("skewness", || {
-                Arc::new(AggregateUDF::from(SkewnessFunc::new()))
-            })
-            .with_resolver(kurtosis),
-        ),
+        ("kll_merge_agg_bigint", F::unknown("kll_merge_agg_bigint")),
+        ("kll_merge_agg_double", F::unknown("kll_merge_agg_double")),
+        ("kll_merge_agg_float", F::unknown("kll_merge_agg_float")),
         (
             "theta_intersection_agg",
             F::aggregate_udf("theta_intersection_agg", || {
@@ -921,16 +781,90 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             .with_resolver(hll_sketch_agg),
         ),
         (
-            "try_avg",
-            F::aggregate_udf("try_avg", || {
-                Arc::new(AggregateUDF::from(TryAvgFunction::new()))
+            "kurtosis",
+            F::aggregate_udf("kurtosis", || {
+                Arc::new(AggregateUDF::from(KurtosisFunction::new()))
+            })
+            .with_resolver(kurtosis),
+        ),
+        (
+            "last",
+            F::aggregate_udf("last", first_last::last_value_udaf).with_resolver(first_value),
+        ),
+        (
+            "last_value",
+            F::aggregate_udf("last_value", first_last::last_value_udaf).with_resolver(first_value),
+        ),
+        (
+            "listagg",
+            F::aggregate_udf("listagg", array_agg::array_agg_udaf).with_resolver(listagg),
+        ),
+        (
+            "max",
+            F::aggregate_udf("max", min_max::max_udaf).with_resolver(duplicate_agnostic_extreme),
+        ),
+        (
+            "max_by",
+            F::aggregate_udf("max_by", || {
+                Arc::new(AggregateUDF::from(MaxByFunction::new()))
+            }),
+        ),
+        ("mean", F::aggregate_udf("mean", average::avg_udaf)),
+        ("measure", F::unknown("measure")),
+        (
+            "median",
+            F::aggregate_udf("median", || {
+                Arc::new(AggregateUDF::from(PercentileFunction::new()))
+            })
+            .with_resolver(median),
+        ),
+        (
+            "min",
+            F::aggregate_udf("min", min_max::min_udaf).with_resolver(duplicate_agnostic_extreme),
+        ),
+        (
+            "min_by",
+            F::aggregate_udf("min_by", || {
+                Arc::new(AggregateUDF::from(MinByFunction::new()))
             }),
         ),
         (
-            "try_sum",
-            F::aggregate_udf("try_sum", || {
-                Arc::new(AggregateUDF::from(SparkTrySum::new()))
+            "mode",
+            F::aggregate_udf("mode", || Arc::new(AggregateUDF::from(ModeFunction::new())))
+                .with_resolver(mode),
+        ),
+        (
+            "percentile",
+            F::aggregate_udf("percentile", || {
+                Arc::new(AggregateUDF::from(PercentileFunction::new()))
             }),
+        ),
+        (
+            "percentile_approx",
+            F::aggregate_udf("percentile_approx", || {
+                approx_percentile_cont::approx_percentile_cont_udaf()
+            }),
+        ),
+        (
+            "percentile_cont",
+            F::aggregate_udf("percentile_cont", || {
+                percentile_cont::percentile_cont_udaf()
+            })
+            .with_resolver(percentile_cont),
+        ),
+        (
+            "percentile_disc",
+            F::custom("percentile_disc", |context| {
+                Ok(percentile_disc_udaf(context.config.ansi_mode))
+            })
+            .with_resolver(percentile_cont),
+        ),
+        (
+            "product",
+            F::aggregate_udf("product", || {
+                Arc::new(AggregateUDF::from(ProductFunction::new()))
+            })
+            .with_resolver(kurtosis),
         ),
         (
             "regr_avgx",
@@ -990,11 +924,96 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             }),
         ),
         (
-            "percentile_disc",
-            F::custom("percentile_disc", |context| {
-                Ok(percentile_disc_udaf(context.config.ansi_mode))
+            "schema_of_variant_agg",
+            F::aggregate_udf("schema_of_variant_agg", || {
+                Arc::new(AggregateUDF::from(SchemaOfVariantAggFunction::new()))
+            }),
+        ),
+        (
+            "skewness",
+            F::aggregate_udf("skewness", || {
+                Arc::new(AggregateUDF::from(SkewnessFunc::new()))
             })
-            .with_resolver(percentile_cont),
+            .with_resolver(kurtosis),
+        ),
+        ("some", F::aggregate_udf("some", bool_and_or::bool_or_udaf)),
+        ("std", F::aggregate_udf("std", stddev::stddev_udaf)),
+        ("stddev", F::aggregate_udf("stddev", stddev::stddev_udaf)),
+        (
+            "stddev_pop",
+            F::aggregate_udf("stddev_pop", stddev::stddev_pop_udaf),
+        ),
+        (
+            "stddev_samp",
+            F::aggregate_udf("stddev_samp", stddev::stddev_udaf),
+        ),
+        (
+            "string_agg",
+            F::aggregate_udf("string_agg", array_agg::array_agg_udaf).with_resolver(listagg),
+        ),
+        (
+            "sum",
+            F::aggregate_udf("sum", sum::sum_udaf).with_resolver(spark_sum),
+        ),
+        (
+            "tuple_intersection_agg_double",
+            F::unknown("tuple_intersection_agg_double"),
+        ),
+        (
+            "tuple_intersection_agg_integer",
+            F::unknown("tuple_intersection_agg_integer"),
+        ),
+        (
+            "tuple_sketch_agg_double",
+            F::unknown("tuple_sketch_agg_double"),
+        ),
+        (
+            "tuple_sketch_agg_integer",
+            F::unknown("tuple_sketch_agg_integer"),
+        ),
+        (
+            "tuple_union_agg_double",
+            F::unknown("tuple_union_agg_double"),
+        ),
+        (
+            "tuple_union_agg_integer",
+            F::unknown("tuple_union_agg_integer"),
+        ),
+        (
+            "try_avg",
+            F::aggregate_udf("try_avg", || {
+                Arc::new(AggregateUDF::from(TryAvgFunction::new()))
+            }),
+        ),
+        (
+            "try_sum",
+            F::aggregate_udf("try_sum", || {
+                Arc::new(AggregateUDF::from(SparkTrySum::new()))
+            }),
+        ),
+        (
+            "var_pop",
+            F::aggregate_udf("var_pop", variance::var_pop_udaf),
+        ),
+        (
+            "var_samp",
+            F::aggregate_udf("var_samp", variance::var_samp_udaf),
+        ),
+        (
+            "variance",
+            F::aggregate_udf("variance", variance::var_samp_udaf),
+        ),
+        ("vector_avg", F::unknown("vector_avg")),
+        ("vector_sum", F::unknown("vector_sum")),
+        (
+            "approx_percentile_cont",
+            F::aggregate_udf("approx_percentile_cont", || {
+                approx_percentile_cont::approx_percentile_cont_udaf()
+            }),
+        ),
+        (
+            "approx_median",
+            F::aggregate_udf("approx_median", approx_median::approx_median_udaf),
         ),
     ]
 }

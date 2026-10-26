@@ -104,6 +104,10 @@ impl PlanResolver<'_> {
                     .await
             }
             FunctionResolution::Native => {
+                // Unsupported higher-order functions cannot resolve their lambda arguments.
+                if registered.is_none() && matches!(name.as_str(), "map_zip_with" | "zip_with") {
+                    return Err(PlanError::todo(format!("function: {name}")));
+                }
                 if !named_arguments.is_empty() {
                     return Err(PlanError::unsupported("native named function arguments"));
                 }

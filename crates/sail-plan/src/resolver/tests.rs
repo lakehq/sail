@@ -22,7 +22,8 @@ use crate::formatter::SparkPlanFormatter;
 use crate::resolver::PlanResolver;
 
 fn session() -> SessionContext {
-    let mut state = SessionStateBuilder::new().with_default_features().build();
+    // Production planning sessions do not register DataFusion default functions.
+    let mut state = SessionStateBuilder::new().build();
     state.config_mut().set_extension(Arc::new(PlanService::new(
         Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
         Box::new(SparkPlanFormatter),
@@ -817,7 +818,7 @@ async fn additional_layers_receive_resolved_model_and_cannot_bypass_lowering() -
 }
 
 #[tokio::test]
-async fn collection_and_string_kernels_receive_normalized_arguments() -> PlanResult<()> {
+async fn collection_and_string_functions_receive_normalized_arguments() -> PlanResult<()> {
     for sql in [
         "SELECT concat(1, 'x', TIMESTAMP '2024-01-02 03:04:05')",
         "SELECT concat(array(), array(1, 2))",

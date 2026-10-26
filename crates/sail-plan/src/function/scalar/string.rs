@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion::functions::{core, regex, string, unicode};
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{HigherOrderUDF, Operator, ScalarUDF, ValueOrLambda};
 use datafusion_spark::function::string::elt::SparkElt;
@@ -78,7 +80,7 @@ fn regexp_replace(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
             context.literal(ScalarValue::Utf8(Some("g".into()))),
         ]
     };
-    context.scalar("regexp_replace", args)
+    context.scalar_udf(regex::regexp_replace(), args)
 }
 
 fn regexp_substr(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -89,10 +91,13 @@ fn regexp_substr(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let empty = context.literal(ScalarValue::Utf8(Some("".into())));
     let open = context.literal(ScalarValue::Utf8(Some("(".into())));
     let close = context.literal(ScalarValue::Utf8(Some(")".into())));
-    let pattern = context.scalar("concat_ws", vec![empty, open, pattern, close])?;
-    let matches = context.scalar("regexp_match", vec![value, pattern])?;
+    let pattern = context.scalar_udf(string::concat_ws(), vec![empty, open, pattern, close])?;
+    let matches = context.scalar_udf(regex::regexp_match(), vec![value, pattern])?;
     let one = context.literal(ScalarValue::Int64(Some(1)));
-    context.scalar("array_element", vec![matches, one])
+    context.scalar_udf(
+        functions_nested::extract::array_element_udf(),
+        vec![matches, one],
+    )
 }
 
 fn regexp_instr(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -173,14 +178,14 @@ fn substr(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
             let zero = context.literal(ScalarValue::Int64(Some(0)));
             let at_start = context.binary(copy, Operator::Eq, zero)?;
             let copy = context.copy_expression(&string)?;
-            let length = context.scalar("char_length", vec![copy])?;
+            let length = context.scalar_udf(unicode::character_length(), vec![copy])?;
             let length = context.cast(length, DataType::Int64)?;
             let copy = context.copy_expression(&position)?;
             let offset = context.binary(length, Operator::Plus, copy)?;
             let one = context.literal(ScalarValue::Int64(Some(1)));
             let offset = context.binary(offset, Operator::Plus, one)?;
             let one = context.literal(ScalarValue::Int64(Some(1)));
-            let offset = context.scalar("greatest", vec![offset, one])?;
+            let offset = context.scalar_udf(core::greatest(), vec![offset, one])?;
             let one = context.literal(ScalarValue::Int64(Some(1)));
             context.case(vec![(positive, position), (at_start, one)], Some(offset))?
         }
@@ -189,7 +194,7 @@ fn substr(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     if let Some(length) = length {
         arguments.push(length);
     }
-    let result = context.scalar("substr", arguments)?;
+    let result = context.scalar_udf(unicode::substr(), arguments)?;
     context.cast(result, DataType::Utf8)
 }
 
@@ -207,7 +212,7 @@ fn overlay(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     {
         values.pop();
     }
-    context.scalar("overlay", values)
+    context.scalar_udf(core::overlay(), values)
 }
 
 fn position(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -223,11 +228,11 @@ fn position(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let needle = logical_string(context, needle, false)?;
     let string = logical_string(context, string, false)?;
     let Some(start) = start else {
-        return context.scalar("strpos", vec![string, needle]);
+        return context.scalar_udf(unicode::strpos(), vec![string, needle]);
     };
     let copy = context.copy_expression(&start)?;
-    let string = context.scalar("substr", vec![string, copy])?;
-    let position = context.scalar("strpos", vec![string, needle])?;
+    let string = context.scalar_udf(unicode::substr(), vec![string, copy])?;
+    let position = context.scalar_udf(unicode::strpos(), vec![string, needle])?;
     let copy = context.copy_expression(&start)?;
     let zero = context.literal(ScalarValue::Int32(Some(0)));
     let invalid = context.binary(copy, Operator::LtEq, zero)?;
@@ -254,7 +259,7 @@ fn space(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
 
     let value = values.one()?;
     let space = context.literal(ScalarValue::Utf8(Some(" ".into())));
-    context.scalar("repeat", vec![space, value])
+    context.scalar_udf(string::repeat(), vec![space, value])
 }
 
 fn replace(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
@@ -265,7 +270,7 @@ fn replace(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
         values.push(context.literal(ScalarValue::Utf8(Some("".into()))));
     }
     crate::analyzer::typing::coercion::validate_arity(name, values.len(), 3)?;
-    context.scalar("replace", values)
+    context.scalar_udf(string::replace(), values)
 }
 
 fn lower(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
@@ -273,11 +278,11 @@ fn lower(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
     let values = input.arguments;
 
     let value = logical_string(context, values.one()?, false)?;
-    context.scalar(
+    context.scalar_udf(
         if matches!(name, "lower" | "lcase") {
-            "lower"
+            string::lower()
         } else {
-            "upper"
+            string::upper()
         },
         vec![value],
     )
@@ -290,11 +295,11 @@ fn startswith(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr
     let (left, right) = values.two()?;
     let left = logical_string(context, left, false)?;
     let right = logical_string(context, right, false)?;
-    context.scalar(
+    context.scalar_udf(
         match name {
-            "startswith" => "starts_with",
-            "endswith" => "ends_with",
-            _ => "contains",
+            "startswith" => string::starts_with(),
+            "endswith" => string::ends_with(),
+            _ => string::contains(),
         },
         vec![left, right],
     )
@@ -339,7 +344,7 @@ fn ascii(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let values = input.arguments;
 
     let value = logical_string(context, values.one()?, false)?;
-    let value = context.scalar("ascii", vec![value])?;
+    let value = context.scalar_udf(string::ascii(), vec![value])?;
     context.cast(value, DataType::Int32)
 }
 
@@ -361,7 +366,7 @@ fn btrim(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
             }
         })
         .collect::<PlanResult<Vec<_>>>()?;
-    context.scalar("btrim", values)
+    context.scalar_udf(string::btrim(), values)
 }
 
 fn validate_utf8(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
@@ -433,15 +438,15 @@ fn resolve_char(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
-    context.scalar("chr", vec![values.one()?])
+    context.scalar_udf(string::chr(), vec![values.one()?])
 }
 
-fn resolve_trim(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+fn resolve_trim(mut input: ScalarFunctionInput<'_>, function: Arc<ScalarUDF>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let mut values = input.arguments;
 
     values.reverse();
-    context.scalar(name, values)
+    context.scalar_udf(function, values)
 }
 
 fn resolve_substring_index(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -449,7 +454,7 @@ fn resolve_substring_index(mut input: ScalarFunctionInput<'_>) -> PlanResult<Exp
     let values = input.arguments;
 
     let (a, b, c) = values.three()?;
-    context.scalar("substr_index", vec![a, b, c])
+    context.scalar_udf(unicode::substr_index(), vec![a, b, c])
 }
 
 pub(crate) fn logical_string(
@@ -486,33 +491,36 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
             "character_length",
             F::custom(|input| length(input, "character_length")),
         ),
-        ("chr", F::kernel("chr")),
-        ("collate", F::kernel("collate")),
-        ("collation", F::kernel("collation")),
+        ("chr", F::scalar_udf(string::chr)),
+        ("collate", F::unknown("collate")),
+        ("collation", F::unknown("collation")),
         ("concat_ws", F::udf(SparkConcatWs::new())),
         ("contains", F::custom(|input| startswith(input, "contains"))),
         ("decode", F::udf(SparkDecode::new())),
         ("elt", F::udf(SparkElt::new())),
         ("encode", F::udf(SparkEncode::new())),
         ("endswith", F::custom(|input| startswith(input, "endswith"))),
-        ("find_in_set", F::kernel("find_in_set")),
+        ("find_in_set", F::scalar_udf(unicode::find_in_set)),
         ("format_number", F::udf(FormatNumber::new())),
         ("format_string", F::udf(FormatStringFunc::new())),
-        ("initcap", F::kernel("initcap")),
-        ("instr", F::kernel("instr")),
+        ("initcap", F::scalar_udf(unicode::initcap)),
+        ("instr", F::scalar_udf(unicode::strpos)),
         (
             "is_valid_utf8",
             F::custom(|input| validate_utf8(input, "is_valid_utf8")),
         ),
         ("lcase", F::custom(|input| lower(input, "lcase"))),
-        ("left", F::kernel("left")),
+        ("left", F::scalar_udf(unicode::left)),
         ("len", F::custom(|input| length(input, "len"))),
         ("length", F::custom(|input| length(input, "length"))),
         ("levenshtein", F::udf(Levenshtein::new())),
         ("locate", F::custom(position)),
         ("lower", F::custom(|input| lower(input, "lower"))),
-        ("lpad", F::kernel("lpad")),
-        ("ltrim", F::custom(|input| resolve_trim(input, "ltrim"))),
+        ("lpad", F::scalar_udf(unicode::lpad)),
+        (
+            "ltrim",
+            F::custom(|input| resolve_trim(input, string::ltrim())),
+        ),
         (
             "luhn_check",
             F::scalar_udf(datafusion_spark::function::string::luhn_check),
@@ -530,23 +538,26 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("randstr", F::udf(Randstr::new())),
         (
             "regexp_count",
-            F::udf(datafusion::functions::regex::regexpcount::RegexpCountFunc::new()),
+            F::udf(regex::regexpcount::RegexpCountFunc::new()),
         ),
         ("regexp_extract", F::udf(SparkRegexpExtract::new())),
         ("regexp_extract_all", F::udf(SparkRegexpExtractAll::new())),
         ("regexp_instr", F::custom(regexp_instr)),
         ("regexp_replace", F::custom(regexp_replace)),
         ("regexp_substr", F::custom(regexp_substr)),
-        ("repeat", F::kernel("repeat")),
+        ("repeat", F::scalar_udf(string::repeat)),
         ("replace", F::custom(|input| replace(input, "replace"))),
-        ("right", F::kernel("right")),
-        ("rpad", F::kernel("rpad")),
-        ("rtrim", F::custom(|input| resolve_trim(input, "rtrim"))),
+        ("right", F::scalar_udf(unicode::right)),
+        ("rpad", F::scalar_udf(unicode::rpad)),
+        (
+            "rtrim",
+            F::custom(|input| resolve_trim(input, string::rtrim())),
+        ),
         ("sentences", F::udf(SparkSentences::new())),
         ("soundex", F::udf(Soundex::new())),
         ("space", F::custom(space)),
         ("split", F::udf(SparkSplit::new())),
-        ("split_part", F::kernel("split_part")),
+        ("split_part", F::scalar_udf(string::split_part)),
         (
             "startswith",
             F::custom(|input| startswith(input, "startswith")),
@@ -558,8 +569,11 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("to_char", F::custom(to_char)),
         ("to_number", F::udf(SparkToNumber::new(false))),
         ("to_varchar", F::custom(to_char)),
-        ("translate", F::kernel("translate")),
-        ("trim", F::custom(|input| resolve_trim(input, "trim"))),
+        ("translate", F::scalar_udf(unicode::translate)),
+        (
+            "trim",
+            F::custom(|input| resolve_trim(input, string::btrim())),
+        ),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
         ("try_to_number", F::udf(SparkToNumber::new(true))),
         (
@@ -573,6 +587,6 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
             "validate_utf8",
             F::custom(|input| validate_utf8(input, "validate_utf8")),
         ),
-        ("strpos", F::kernel("strpos")),
+        ("strpos", F::scalar_udf(unicode::strpos)),
     ]
 }

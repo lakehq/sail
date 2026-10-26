@@ -1,4 +1,5 @@
 use arrow_schema::DataType;
+use datafusion::functions::math;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -31,7 +32,7 @@ fn shiftrightunsigned(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let zero = context.literal(ScalarValue::Int32(Some(0)));
     let negative = context.binary(copy, Operator::Lt, zero)?;
     let copy = context.copy_expression(&value)?;
-    let absolute = context.scalar("abs", vec![copy])?;
+    let absolute = context.scalar_udf(math::abs(), vec![copy])?;
     let one = context.literal(ScalarValue::Int32(Some(1)));
     let distance = context.binary(absolute, Operator::Minus, one)?;
     let maximum = context.literal(ScalarValue::UInt64(Some(max)));

@@ -104,17 +104,20 @@ impl PlanResolver<'_> {
             if !call.named_arguments.is_empty() {
                 return Err(PlanError::unsupported("window named arguments"));
             }
-            let function = crate::function::window::window_kernel(&name)
+            let function = crate::function::get_built_in_window_function(&name)
+                .map(|function| function.udf())
                 .or_else(|| self.context.session.udwf(&name).ok())
                 .map(WindowFunctionDefinition::WindowUDF)
                 .map(Ok)
                 .unwrap_or_else(|| {
-                    let kernel = match name.as_str() {
+                    let function = match name.as_str() {
                         "median" => Ok(datafusion::functions_aggregate::median::median_udaf()),
-                        "array_join" => self.context.function_context().aggregate_kernel("listagg"),
-                        _ => self.context.function_context().aggregate_kernel(&name),
+                        "array_join" => {
+                            self.context.function_context().get_aggregate_udf("listagg")
+                        }
+                        _ => self.context.function_context().get_aggregate_udf(&name),
                     }?;
-                    Ok::<_, PlanError>(WindowFunctionDefinition::AggregateUDF(kernel))
+                    Ok::<_, PlanError>(WindowFunctionDefinition::AggregateUDF(function))
                 })?;
             let mut arguments = vec![];
             let mut names = vec![];

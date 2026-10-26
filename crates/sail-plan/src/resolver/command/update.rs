@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion::functions::core;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ScalarUDF;
 use sail_catalog::manager::CatalogManager;
@@ -222,7 +223,7 @@ impl PlanResolver<'_> {
         target: &DataType,
         name: &str,
     ) -> PlanResult<()> {
-        if crate::analyzer::typing::store_assignment::compatible(
+        if crate::resolver::command::merge::store_assignment_compatible(
             source,
             target,
             self.context.config.store_assignment_policy,
@@ -276,7 +277,7 @@ impl PlanResolver<'_> {
                     let child = self
                         .context
                         .function_context()
-                        .scalar("get_field", vec![child, name])?;
+                        .scalar_udf(core::get_field(), vec![child, name])?;
                     self.align_store_value(child, target_field.data_type(), fill_missing)?
                 }
                 None if fill_missing => self

@@ -11,7 +11,7 @@ pub(super) fn list_built_in_geo_functions() -> Vec<(&'static str, ScalarFunction
         ("st_asbinary", F::udf(StAsBinary::new())),
         ("st_geomfromwkb", F::udf(StGeomFromWKB::new())),
         ("st_geogfromwkb", F::udf(StGeogFromWKB::new())),
-        ("st_setsrid", F::kernel("st_setsrid")),
-        ("st_srid", F::kernel("st_srid")),
+        ("st_setsrid", F::unknown("st_setsrid")),
+        ("st_srid", F::unknown("st_srid")),
     ]
 }

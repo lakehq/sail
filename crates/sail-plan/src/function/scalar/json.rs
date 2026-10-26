@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arrow_schema::DataType;
 use chumsky::prelude::*;
+use datafusion::functions::unicode;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -76,7 +77,7 @@ fn get_json_object(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
                 context, copy, pattern, false, false, None,
             )?;
             let three = context.literal(ScalarValue::Int64(Some(3)));
-            let key = context.scalar("substr", vec![path, three])?;
+            let key = context.scalar_udf(unicode::substr(), vec![path, three])?;
             let yes = context.literal(ScalarValue::Boolean(Some(true)));
             let empty = context.literal(ScalarValue::Utf8(Some("".into())));
             vec![context.case(vec![(matches, key), (yes, empty)], None)?]
@@ -136,7 +137,7 @@ pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunctio
         ("get_json_object", F::custom(get_json_object)),
         ("json_array_length", F::custom(json_array_length)),
         ("json_object_keys", F::custom(json_object_keys)),
-        ("json_tuple", F::kernel("json_tuple")),
+        ("json_tuple", F::unknown("json_tuple")),
         ("schema_of_json", F::udf(SparkSchemaOfJson::new())),
         ("to_json", F::custom(to_json)),
     ]

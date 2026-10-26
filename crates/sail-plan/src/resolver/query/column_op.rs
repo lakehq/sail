@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use datafusion::functions::core;
 use indexmap::IndexMap;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -119,7 +120,7 @@ impl PlanResolver<'_> {
                 let value = self
                     .context
                     .function_context()
-                    .scalar("get_field", vec![source, key])?;
+                    .scalar_udf(core::get_field(), vec![source, key])?;
                 let attribute = self.context.function_context().attribute(
                     field.name().clone(),
                     value.result_type.resolved("wildcard field")?.clone(),

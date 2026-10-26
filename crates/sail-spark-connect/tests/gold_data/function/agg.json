@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_agg_double"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_agg_double"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_agg_float"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_agg_float"
       }
     },
     {
@@ -421,7 +421,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: approx_top_k"
+        "failure": "not supported: unknown function: approx_top_k"
       }
     },
     {
@@ -463,7 +463,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: approx_top_k"
+        "failure": "not supported: unknown function: approx_top_k"
       }
     },
     {
@@ -505,7 +505,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: approx_top_k"
+        "failure": "not supported: unknown function: approx_top_k"
       }
     },
     {
@@ -547,7 +547,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: approx_top_k_accumulate"
+        "failure": "not supported: unknown function: approx_top_k_accumulate"
       }
     },
     {
@@ -589,7 +589,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: approx_top_k_accumulate"
+        "failure": "not supported: unknown function: approx_top_k_accumulate"
       }
     },
     {
@@ -631,7 +631,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: approx_top_k_accumulate"
+        "failure": "not supported: unknown function: approx_top_k_accumulate"
       }
     },
     {
@@ -1473,7 +1473,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
       }
     },
     {
@@ -1495,7 +1495,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_agg_double"
       }
     },
     {
@@ -1517,7 +1517,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_agg_float"
       }
     },
     {
@@ -4395,7 +4395,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -4417,7 +4417,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -4439,7 +4439,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: tuple_sketch_agg_double"
+        "failure": "not implemented: function: tuple_sketch_agg_double"
       }
     },
     {
@@ -4461,7 +4461,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -4483,7 +4483,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {
@@ -4505,7 +4505,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: tuple_sketch_agg_integer"
+        "failure": "not implemented: function: tuple_sketch_agg_integer"
       }
     },
     {

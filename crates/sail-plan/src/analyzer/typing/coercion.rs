@@ -152,13 +152,3 @@ pub fn validate_arity(name: &str, actual: usize, expected: usize) -> Result<()> 
     }
     Ok(())
 }
-
-/// INT zero contributes ten integer digits while the decimal remains bounded
-/// by Spark's maximum precision of 38 digits.
-pub fn zeroifnull_decimal_type(precision: u8, scale: i8) -> DataType {
-    let integer_digits = (i16::from(precision) - i16::from(scale)).max(10);
-    let scale = i16::from(scale).max(0);
-    let precision = (integer_digits + scale).min(38) as u8;
-    let scale = scale.min((38 - integer_digits).max(0)) as i8;
-    DataType::Decimal128(precision, scale)
-}

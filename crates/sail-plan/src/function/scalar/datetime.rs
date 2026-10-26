@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use datafusion::functions::{core, datetime, math};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{HigherOrderUDF, Operator, ScalarUDF};
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
@@ -53,7 +54,7 @@ pub(crate) fn integer_part(
     part: &str,
 ) -> PlanResult<Expr> {
     let part = context.literal(ScalarValue::Utf8(Some(part.to_uppercase())));
-    let result = context.scalar("date_part", vec![part, value])?;
+    let result = context.scalar_udf(datetime::date_part(), vec![part, value])?;
     context.cast(result, DataType::Int32)
 }
 
@@ -97,7 +98,7 @@ fn date_trunc(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr
     };
     let part = trunc_part_conversion(context, part)?;
     let result = if name == "trunc" {
-        context.scalar("date_trunc", vec![part, value])?
+        context.scalar_udf(datetime::date_trunc(), vec![part, value])?
     } else {
         context.scalar_udf(
             Arc::new(ScalarUDF::from(SparkDateTrunc::new())),
@@ -251,7 +252,7 @@ fn make_date(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr>
         }) {
             context.literal(ScalarValue::Null)
         } else {
-            context.scalar("make_date", values)?
+            context.scalar_udf(datetime::make_date(), values)?
         },
     )
 }
@@ -270,7 +271,7 @@ pub(crate) fn timestamp_time_micros(
 ) -> PlanResult<Expr> {
     let copy = context.copy_expression(&value)?;
     let day = context.literal(ScalarValue::Utf8(Some("DAY".into())));
-    let midnight = context.scalar("date_trunc", vec![day, value])?;
+    let midnight = context.scalar_udf(datetime::date_trunc(), vec![day, value])?;
     let midnight = timestamp_micros(context, midnight)?;
     let value = timestamp_micros(context, copy)?;
     context.binary(value, Operator::Minus, midnight)
@@ -457,7 +458,7 @@ fn to_date(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
             || source.nullable
             || format.result_type.resolved("date format")?.nullable;
         let value = if matches!(kind, DataType::Timestamp(..)) {
-            context.scalar("to_local_time", vec![value])?
+            context.scalar_udf(datetime::to_local_time(), vec![value])?
         } else {
             value
         };
@@ -583,7 +584,7 @@ fn to_timestamp(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Ex
             );
         }
         let value = if matches!(kind, DataType::Timestamp(_, Some(_))) {
-            context.scalar("to_local_time", vec![value])?
+            context.scalar_udf(datetime::to_local_time(), vec![value])?
         } else {
             value
         };
@@ -663,7 +664,7 @@ pub(crate) fn ntz_timestamp_and_unit(
     let timezone = relative_to_utc.then(|| context.config.session_timezone.clone());
     let result = match kind {
         DataType::Timestamp(_, Some(_)) if !relative_to_utc => {
-            context.scalar("to_local_time", vec![value])?
+            context.scalar_udf(datetime::to_local_time(), vec![value])?
         }
         DataType::Timestamp(_, Some(_)) => value,
         DataType::Timestamp(_, None) | DataType::Date32 | DataType::Date64 => {
@@ -884,7 +885,7 @@ fn months_between(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let result = context.case(vec![(condition, months), (yes, fractional)], None)?;
     let copy = context.copy_expression(&result)?;
     let precision = context.literal(ScalarValue::Int32(Some(8)));
-    let rounded = context.scalar("round", vec![copy, precision])?;
+    let rounded = context.scalar_udf(math::round(), vec![copy, precision])?;
     let yes = context.literal(ScalarValue::Boolean(Some(true)));
     context.case(vec![(round, rounded), (yes, result)], None)
 }
@@ -1028,7 +1029,7 @@ fn window_time(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
         }
     };
     let key = context.literal(ScalarValue::Utf8(Some("end".into())));
-    let end = context.scalar("get_field", vec![value, key])?;
+    let end = context.scalar_udf(core::get_field(), vec![value, key])?;
     let end = context.cast(end, DataType::Int64)?;
     let one = context.literal(ScalarValue::Int64(Some(1)));
     let result = context.binary(end, Operator::Minus, one)?;
@@ -1040,7 +1041,7 @@ fn resolve_curdate(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let values = input.arguments;
 
     values.zero()?;
-    context.scalar("current_date", vec![])
+    context.scalar_udf(datetime::current_date(), vec![])
 }
 
 fn resolve_current_timestamp(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
@@ -1056,7 +1057,7 @@ fn resolve_current_timestamp(mut input: ScalarFunctionInput<'_>, name: &str) -> 
         vec![],
     )?;
     Ok(if name == "localtimestamp" {
-        context.scalar("to_local_time", vec![result])?
+        context.scalar_udf(datetime::to_local_time(), vec![result])?
     } else {
         result
     })
@@ -1075,7 +1076,7 @@ fn resolve_dayname(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult
         }
         .into(),
     )));
-    let result = context.scalar("to_char", vec![value, pattern])?;
+    let result = context.scalar_udf(datetime::to_char(), vec![value, pattern])?;
     Ok(if name == "weekofyear" {
         context.cast(result, DataType::Int32)?
     } else {
@@ -1219,8 +1220,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("convert_timezone", F::custom(convert_timezone)),
         ("curdate", F::custom(resolve_curdate)),
-        ("current_date", F::kernel("current_date")),
-        ("current_time", F::kernel("current_time")),
+        ("current_date", F::scalar_udf(datetime::current_date)),
+        ("current_time", F::scalar_udf(datetime::current_time)),
         (
             "current_timestamp",
             F::custom(|input| resolve_current_timestamp(input, "current_timestamp")),
@@ -1357,14 +1358,14 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 Ok(result)
             }),
         ),
-        ("session_window", F::kernel("session_window")),
-        ("time_bucket", F::kernel("time_bucket")),
-        ("time_from_micros", F::kernel("time_from_micros")),
-        ("time_from_millis", F::kernel("time_from_millis")),
-        ("time_from_seconds", F::kernel("time_from_seconds")),
-        ("time_to_micros", F::kernel("time_to_micros")),
-        ("time_to_millis", F::kernel("time_to_millis")),
-        ("time_to_seconds", F::kernel("time_to_seconds")),
+        ("session_window", F::unknown("session_window")),
+        ("time_bucket", F::unknown("time_bucket")),
+        ("time_from_micros", F::unknown("time_from_micros")),
+        ("time_from_millis", F::unknown("time_from_millis")),
+        ("time_from_seconds", F::unknown("time_from_seconds")),
+        ("time_to_micros", F::unknown("time_to_micros")),
+        ("time_to_millis", F::unknown("time_to_millis")),
+        ("time_to_seconds", F::unknown("time_to_seconds")),
         (
             "timestamp_micros",
             F::custom(|input| resolve_timestamp_micros(input, "timestamp_micros")),
@@ -1462,7 +1463,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "weekofyear",
             F::custom(|input| resolve_dayname(input, "weekofyear")),
         ),
-        ("window", F::kernel("window")),
+        ("window", F::unknown("window")),
         ("window_time", F::custom(window_time)),
         ("year", F::udf(SparkYear::new())),
         (

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
 use datafusion_expr::HigherOrderUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -174,16 +175,23 @@ fn array_sort(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
             let nulls = input
                 .context
                 .literal(ScalarValue::Utf8(Some("NULLS LAST".into())));
-            input
-                .context
-                .scalar("array_sort", vec![array, direction, nulls])
+            input.context.scalar_udf(
+                functions_nested::sort::array_sort_udf(),
+                vec![array, direction, nulls],
+            )
         }
-        _ => input.context.scalar("array_sort", input.arguments),
+        _ => input
+            .context
+            .scalar_udf(functions_nested::sort::array_sort_udf(), input.arguments),
     }
 }
 
 pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
-    vec![("array_sort", F::custom(array_sort))]
+    vec![
+        ("array_sort", F::custom(array_sort)),
+        ("map_zip_with", F::unknown("map_zip_with")),
+        ("zip_with", F::unknown("zip_with")),
+    ]
 }

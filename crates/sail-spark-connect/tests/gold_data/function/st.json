@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: st_srid"
+        "failure": "not implemented: function: st_srid"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: st_srid"
+        "failure": "not implemented: function: st_srid"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: st_srid"
+        "failure": "not implemented: function: st_srid"
       }
     },
     {
@@ -195,7 +195,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: st_setsrid"
+        "failure": "not implemented: function: st_setsrid"
       }
     },
     {
@@ -217,7 +217,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: st_setsrid"
+        "failure": "not implemented: function: st_setsrid"
       }
     }
   ]

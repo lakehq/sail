@@ -89,36 +89,21 @@ impl FunctionContextInput<'_> {
         operator: Operator,
         right: Expr,
     ) -> PlanResult<Expr> {
-        let (left, right) =
-            crate::function::scalar::predicate::predicate_pair(self, left, operator, right)?;
+        let (left, right) = crate::resolver::coerce_timestamp_pair(self, left, operator, right)?;
         typing::resolve_binary(self.ids.expression(), left, operator, right, self.ids)
     }
 
-    pub(crate) fn scalar_kernel(&self, name: &str) -> PlanResult<Arc<ScalarUDF>> {
-        self.session
-            .udf(name)
-            .ok()
-            .or_else(|| crate::function::scalar::kernel::default_scalar_kernel(name))
-            .ok_or_else(|| {
-                crate::error::PlanError::unsupported(format!("unknown scalar kernel: {name}"))
-            })
-    }
-
-    pub(crate) fn aggregate_kernel(
+    pub(crate) fn get_aggregate_udf(
         &self,
         name: &str,
     ) -> PlanResult<Arc<datafusion_expr::AggregateUDF>> {
         crate::function::get_built_in_aggregate_function(name)
-            .map(|function| function.kernel(self))
+            .map(|function| function.udf(self))
             .transpose()?
             .or_else(|| self.session.udaf(name).ok())
             .ok_or_else(|| {
-                crate::error::PlanError::unsupported(format!("unknown aggregate kernel: {name}"))
+                crate::error::PlanError::unsupported(format!("unknown aggregate function: {name}"))
             })
-    }
-
-    pub(crate) fn scalar(&mut self, name: &str, arguments: Vec<Expr>) -> PlanResult<Expr> {
-        self.scalar_udf(self.scalar_kernel(name)?, arguments)
     }
 
     pub(crate) fn scalar_udf(
@@ -130,7 +115,7 @@ impl FunctionContextInput<'_> {
     }
 
     pub(crate) fn aggregate(&mut self, name: &str, arguments: Vec<Expr>) -> PlanResult<Expr> {
-        self.aggregate_call(self.aggregate_kernel(name)?, arguments)
+        self.aggregate_call(self.get_aggregate_udf(name)?, arguments)
     }
 
     pub(crate) fn aggregate_call(
@@ -220,8 +205,9 @@ impl ScalarFunctionBuilder {
         Self::scalar_udf(move || Arc::clone(&function))
     }
 
-    pub fn kernel(name: &'static str) -> ScalarFunction {
-        Self::custom(move |mut input| input.context.scalar(name, input.arguments))
+    pub fn unknown(name: &str) -> ScalarFunction {
+        let name = name.to_string();
+        Arc::new(move |_| Err(PlanError::todo(format!("function: {name}"))))
     }
 
     pub fn cast(data_type: DataType) -> ScalarFunction {

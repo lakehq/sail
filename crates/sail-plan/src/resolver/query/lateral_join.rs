@@ -144,7 +144,7 @@ impl PlanResolver<'_> {
         let mut condition = None;
         for (outer, inner) in outer.into_iter().zip(&output.attributes) {
             let inner = self.reference(inner)?;
-            let (inner, outer) = crate::function::scalar::predicate::in_arguments(
+            let (inner, outer) = crate::resolver::in_arguments(
                 &mut self.context.function_context(),
                 vec![inner, outer],
             )?

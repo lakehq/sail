@@ -449,7 +449,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native expression resolution: LambdaFunction { function: UnresolvedFunction(UnresolvedFunction { function_name: ObjectName([Identifier(\"+\")]), arguments: [UnresolvedFunction(UnresolvedFunction { function_name: ObjectName([Identifier(\"coalesce\")]), arguments: [UnresolvedAttribute { name: ObjectName([Identifier(\"v1\")]), plan_id: None, is_metadata_column: false }, Literal(Int32 { value: Some(0) })], named_arguments: [], is_distinct: false, is_user_defined_function: false, is_internal: None, ignore_nulls: None, filter: None, order_by: None }), UnresolvedFunction(UnresolvedFunction { function_name: ObjectName([Identifier(\"coalesce\")]), arguments: [UnresolvedAttribute { name: ObjectName([Identifier(\"v2\")]), plan_id: None, is_metadata_column: false }, Literal(Int32 { value: Some(0) })], named_arguments: [], is_distinct: false, is_user_defined_function: false, is_internal: None, ignore_nulls: None, filter: None, order_by: None })], named_arguments: [], is_distinct: false, is_user_defined_function: false, is_internal: None, ignore_nulls: None, filter: None, order_by: None }), arguments: [UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"k\")]) }, UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"v1\")]) }, UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"v2\")]) }] }"
+        "failure": "not implemented: function: map_zip_with"
       }
     },
     {
@@ -476,7 +476,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native expression resolution: LambdaFunction { function: UnresolvedFunction(UnresolvedFunction { function_name: ObjectName([Identifier(\"concat\")]), arguments: [UnresolvedAttribute { name: ObjectName([Identifier(\"v1\")]), plan_id: None, is_metadata_column: false }, UnresolvedAttribute { name: ObjectName([Identifier(\"v2\")]), plan_id: None, is_metadata_column: false }], named_arguments: [], is_distinct: false, is_user_defined_function: false, is_internal: None, ignore_nulls: None, filter: None, order_by: None }), arguments: [UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"k\")]) }, UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"v1\")]) }, UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"v2\")]) }] }"
+        "failure": "not implemented: function: map_zip_with"
       }
     },
     {
@@ -706,7 +706,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native expression resolution: LambdaFunction { function: UnresolvedFunction(UnresolvedFunction { function_name: ObjectName([Identifier(\"concat\")]), arguments: [UnresolvedAttribute { name: ObjectName([Identifier(\"x\")]), plan_id: None, is_metadata_column: false }, UnresolvedAttribute { name: ObjectName([Identifier(\"y\")]), plan_id: None, is_metadata_column: false }], named_arguments: [], is_distinct: false, is_user_defined_function: false, is_internal: None, ignore_nulls: None, filter: None, order_by: None }), arguments: [UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"x\")]) }, UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"y\")]) }] }"
+        "failure": "not implemented: function: zip_with"
       }
     },
     {
@@ -732,7 +732,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native expression resolution: LambdaFunction { function: UnresolvedFunction(UnresolvedFunction { function_name: ObjectName([Identifier(\"+\")]), arguments: [UnresolvedAttribute { name: ObjectName([Identifier(\"x\")]), plan_id: None, is_metadata_column: false }, UnresolvedAttribute { name: ObjectName([Identifier(\"y\")]), plan_id: None, is_metadata_column: false }], named_arguments: [], is_distinct: false, is_user_defined_function: false, is_internal: None, ignore_nulls: None, filter: None, order_by: None }), arguments: [UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"x\")]) }, UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"y\")]) }] }"
+        "failure": "not implemented: function: zip_with"
       }
     },
     {
@@ -774,7 +774,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native expression resolution: LambdaFunction { function: UnresolvedFunction(UnresolvedFunction { function_name: ObjectName([Identifier(\"struct\")]), arguments: [UnresolvedAttribute { name: ObjectName([Identifier(\"y\")]), plan_id: None, is_metadata_column: false }, UnresolvedAttribute { name: ObjectName([Identifier(\"x\")]), plan_id: None, is_metadata_column: false }], named_arguments: [], is_distinct: false, is_user_defined_function: false, is_internal: None, ignore_nulls: None, filter: None, order_by: None }), arguments: [UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"x\")]) }, UnresolvedNamedLambdaVariable { name: ObjectName([Identifier(\"y\")]) }] }"
+        "failure": "not implemented: function: zip_with"
       }
     }
   ]

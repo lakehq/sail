@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::prelude::SessionContext;
+pub(crate) use expression::predicate::{coerce_timestamp_pair, in_arguments, in_list};
 use sail_common::spec;
 
 use crate::analyzer::deferred::Deferred;

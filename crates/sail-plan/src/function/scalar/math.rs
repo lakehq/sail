@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use datafusion::functions::{core, math};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -119,7 +120,7 @@ fn power(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
-    let result = context.scalar("power", values)?;
+    let result = context.scalar_udf(math::power(), values)?;
     context.cast(result, DataType::Float64)
 }
 
@@ -133,7 +134,7 @@ fn hypot(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let a = context.binary(a, Operator::Multiply, a_copy)?;
     let b = context.binary(b, Operator::Multiply, b_copy)?;
     let value = context.binary(a, Operator::Plus, b)?;
-    let result = context.scalar("sqrt", vec![value])?;
+    let result = context.scalar_udf(math::sqrt(), vec![value])?;
     context.cast(result, DataType::Float64)
 }
 
@@ -145,7 +146,7 @@ fn rint(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
-    let result = context.scalar("round", vec![values.one()?])?;
+    let result = context.scalar_udf(math::round(), vec![values.one()?])?;
     context.cast(result, DataType::Float64)
 }
 
@@ -238,7 +239,7 @@ fn spark_round(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
         let value = context.try_cast(value, DataType::Float64)?;
         values.insert(0, value);
     }
-    context.scalar("round", values)
+    context.scalar_udf(math::round(), values)
 }
 
 pub(crate) fn spark_unary_negate(
@@ -298,7 +299,11 @@ fn spark_negative(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     spark_unary_negate(&mut input.context, input.arguments.one()?)
 }
 
-fn resolve_acos(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+fn resolve_acos(
+    mut input: ScalarFunctionInput<'_>,
+    name: &str,
+    function: Arc<ScalarUDF>,
+) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
@@ -315,7 +320,7 @@ fn resolve_acos(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Ex
     Ok(match name {
         "sqrt" => context.scalar_udf(Arc::new(ScalarUDF::from(SparkSqrt::new())), values)?,
         "csc" | "sec" => {
-            let denominator = context.scalar(if name == "csc" { "sin" } else { "cos" }, values)?;
+            let denominator = context.scalar_udf(function, values)?;
             let one = context.literal(ScalarValue::Float64(Some(1.0)));
             context.binary(one, Operator::Divide, denominator)?
         }
@@ -331,9 +336,9 @@ fn resolve_acos(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Ex
             let zero = context.literal(ScalarValue::Float64(Some(0.0)));
             let positive = context.binary(copy, Operator::Gt, zero)?;
             values.push(context.case(vec![(positive, value)], None)?);
-            context.scalar(if name == "log1p" { "ln" } else { name }, values)?
+            context.scalar_udf(function, values)?
         }
-        _ => context.scalar(name, values)?,
+        _ => context.scalar_udf(function, values)?,
     })
 }
 
@@ -491,68 +496,146 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
             "abs",
             F::custom(|mut input| {
                 let config = input.context.config;
-                let kernel = Arc::new(ScalarUDF::from(SparkAbs::new(config.ansi_mode)));
-                input.context.scalar_udf(kernel, input.arguments)
+                let function = Arc::new(ScalarUDF::from(SparkAbs::new(config.ansi_mode)));
+                input.context.scalar_udf(function, input.arguments)
             }),
         ),
-        ("acos", F::custom(|input| resolve_acos(input, "acos"))),
-        ("acosh", F::custom(|input| resolve_acos(input, "acosh"))),
-        ("asin", F::custom(|input| resolve_acos(input, "asin"))),
-        ("asinh", F::custom(|input| resolve_acos(input, "asinh"))),
-        ("atan", F::custom(|input| resolve_acos(input, "atan"))),
-        ("atan2", F::custom(|input| resolve_acos(input, "atan2"))),
-        ("atanh", F::custom(|input| resolve_acos(input, "atanh"))),
+        (
+            "acos",
+            F::custom(|input| resolve_acos(input, "acos", math::acos())),
+        ),
+        (
+            "acosh",
+            F::custom(|input| resolve_acos(input, "acosh", math::acosh())),
+        ),
+        (
+            "asin",
+            F::custom(|input| resolve_acos(input, "asin", math::asin())),
+        ),
+        (
+            "asinh",
+            F::custom(|input| resolve_acos(input, "asinh", math::asinh())),
+        ),
+        (
+            "atan",
+            F::custom(|input| resolve_acos(input, "atan", math::atan())),
+        ),
+        (
+            "atan2",
+            F::custom(|input| resolve_acos(input, "atan2", math::atan2())),
+        ),
+        (
+            "atanh",
+            F::custom(|input| resolve_acos(input, "atanh", math::atanh())),
+        ),
         ("bin", F::custom(spark_bin)),
         ("bround", F::udf(SparkBRound::new())),
-        ("cbrt", F::custom(|input| resolve_acos(input, "cbrt"))),
+        (
+            "cbrt",
+            F::custom(|input| resolve_acos(input, "cbrt", math::cbrt())),
+        ),
         ("ceil", F::custom(|input| ceil_floor(input, "ceil"))),
         ("ceiling", F::custom(|input| ceil_floor(input, "ceiling"))),
         ("conv", F::udf(SparkConv::new())),
-        ("cos", F::custom(|input| resolve_acos(input, "cos"))),
-        ("cosh", F::custom(|input| resolve_acos(input, "cosh"))),
-        ("cot", F::custom(|input| resolve_acos(input, "cot"))),
-        ("csc", F::custom(|input| resolve_acos(input, "csc"))),
-        ("degrees", F::custom(|input| resolve_acos(input, "degrees"))),
+        (
+            "cos",
+            F::custom(|input| resolve_acos(input, "cos", math::cos())),
+        ),
+        (
+            "cosh",
+            F::custom(|input| resolve_acos(input, "cosh", math::cosh())),
+        ),
+        (
+            "cot",
+            F::custom(|input| resolve_acos(input, "cot", math::cot())),
+        ),
+        (
+            "csc",
+            F::custom(|input| resolve_acos(input, "csc", math::sin())),
+        ),
+        (
+            "degrees",
+            F::custom(|input| resolve_acos(input, "degrees", math::degrees())),
+        ),
         ("div", F::custom(|input| spark_multiply(input, "div"))),
         ("e", F::custom(eulers_constant)),
-        ("exp", F::custom(|input| resolve_acos(input, "exp"))),
+        (
+            "exp",
+            F::custom(|input| resolve_acos(input, "exp", math::exp())),
+        ),
         (
             "expm1",
             F::scalar_udf(datafusion_spark::function::math::expm1),
         ),
-        ("factorial", F::kernel("factorial")),
+        ("factorial", F::scalar_udf(math::factorial)),
         ("floor", F::custom(|input| ceil_floor(input, "floor"))),
-        ("greatest", F::kernel("greatest")),
+        ("greatest", F::scalar_udf(core::greatest)),
         ("hex", F::scalar_udf(datafusion_spark::function::math::hex)),
         ("hypot", F::custom(hypot)),
-        ("least", F::kernel("least")),
-        ("ln", F::custom(|input| resolve_acos(input, "ln"))),
-        ("log", F::custom(|input| resolve_acos(input, "log"))),
-        ("log10", F::custom(|input| resolve_acos(input, "log10"))),
-        ("log1p", F::custom(|input| resolve_acos(input, "log1p"))),
-        ("log2", F::custom(|input| resolve_acos(input, "log2"))),
+        ("least", F::scalar_udf(core::least)),
+        (
+            "ln",
+            F::custom(|input| resolve_acos(input, "ln", math::ln())),
+        ),
+        (
+            "log",
+            F::custom(|input| resolve_acos(input, "log", math::log())),
+        ),
+        (
+            "log10",
+            F::custom(|input| resolve_acos(input, "log10", math::log10())),
+        ),
+        (
+            "log1p",
+            F::custom(|input| resolve_acos(input, "log1p", math::ln())),
+        ),
+        (
+            "log2",
+            F::custom(|input| resolve_acos(input, "log2", math::log2())),
+        ),
         ("mod", F::custom(|input| spark_multiply(input, "mod"))),
         ("negative", F::custom(spark_negative)),
-        ("pi", F::kernel("pi")),
+        ("pi", F::scalar_udf(math::pi)),
         ("pmod", F::custom(spark_pmod)),
         ("positive", F::custom(positive)),
         ("pow", F::custom(power)),
         ("power", F::custom(power)),
-        ("radians", F::custom(|input| resolve_acos(input, "radians"))),
+        (
+            "radians",
+            F::custom(|input| resolve_acos(input, "radians", math::radians())),
+        ),
         ("rand", F::udf(Random::new())),
         ("random_poisson", F::udf(RandPoisson::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
         ("rint", F::custom(rint)),
         ("round", F::custom(spark_round)),
-        ("sec", F::custom(|input| resolve_acos(input, "sec"))),
+        (
+            "sec",
+            F::custom(|input| resolve_acos(input, "sec", math::cos())),
+        ),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
-        ("sin", F::custom(|input| resolve_acos(input, "sin"))),
-        ("sinh", F::custom(|input| resolve_acos(input, "sinh"))),
-        ("sqrt", F::custom(|input| resolve_acos(input, "sqrt"))),
-        ("tan", F::custom(|input| resolve_acos(input, "tan"))),
-        ("tanh", F::custom(|input| resolve_acos(input, "tanh"))),
+        (
+            "sin",
+            F::custom(|input| resolve_acos(input, "sin", math::sin())),
+        ),
+        (
+            "sinh",
+            F::custom(|input| resolve_acos(input, "sinh", math::sinh())),
+        ),
+        (
+            "sqrt",
+            F::custom(|input| resolve_acos(input, "sqrt", math::sqrt())),
+        ),
+        (
+            "tan",
+            F::custom(|input| resolve_acos(input, "tan", math::tan())),
+        ),
+        (
+            "tanh",
+            F::custom(|input| resolve_acos(input, "tanh", math::tanh())),
+        ),
         ("try_add", F::udf(SparkTryAdd::new())),
         ("try_divide", F::udf(SparkTryDiv::new())),
         ("try_multiply", F::udf(SparkTryMult::new())),

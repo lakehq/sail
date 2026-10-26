@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion::functions::{core, string};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF};
 use sail_catalog::manager::CatalogManager;
@@ -99,9 +100,9 @@ fn input_file_name(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let values = input.arguments;
 
     values.zero()?;
-    let value = context.scalar("input_file_name", vec![])?;
+    let value = context.scalar_udf(core::input_file_name(), vec![])?;
     let empty = context.literal(ScalarValue::Utf8(Some("".into())));
-    context.scalar("coalesce", vec![value, empty])
+    context.scalar_udf(core::coalesce(), vec![value, empty])
 }
 
 fn type_of(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -216,11 +217,11 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ),
         ("current_catalog", F::custom(current_catalog)),
         ("current_database", F::custom(current_database)),
-        ("current_path", F::kernel("current_path")),
+        ("current_path", F::unknown("current_path")),
         ("current_schema", F::custom(current_database)),
         ("current_user", F::custom(current_user)),
-        ("from_avro", F::kernel("from_avro")),
-        ("from_protobuf", F::kernel("from_protobuf")),
+        ("from_avro", F::unknown("from_avro")),
+        ("from_protobuf", F::unknown("from_protobuf")),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
         (
             "hll_sketch_estimate",
@@ -245,69 +246,69 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ),
         (
             "tuple_difference_double",
-            F::kernel("tuple_difference_double"),
+            F::unknown("tuple_difference_double"),
         ),
         (
             "tuple_difference_integer",
-            F::kernel("tuple_difference_integer"),
+            F::unknown("tuple_difference_integer"),
         ),
         (
             "tuple_difference_theta_double",
-            F::kernel("tuple_difference_theta_double"),
+            F::unknown("tuple_difference_theta_double"),
         ),
         (
             "tuple_difference_theta_integer",
-            F::kernel("tuple_difference_theta_integer"),
+            F::unknown("tuple_difference_theta_integer"),
         ),
         (
             "tuple_intersection_double",
-            F::kernel("tuple_intersection_double"),
+            F::unknown("tuple_intersection_double"),
         ),
         (
             "tuple_intersection_integer",
-            F::kernel("tuple_intersection_integer"),
+            F::unknown("tuple_intersection_integer"),
         ),
         (
             "tuple_intersection_theta_double",
-            F::kernel("tuple_intersection_theta_double"),
+            F::unknown("tuple_intersection_theta_double"),
         ),
         (
             "tuple_intersection_theta_integer",
-            F::kernel("tuple_intersection_theta_integer"),
+            F::unknown("tuple_intersection_theta_integer"),
         ),
         (
             "tuple_sketch_estimate_double",
-            F::kernel("tuple_sketch_estimate_double"),
+            F::unknown("tuple_sketch_estimate_double"),
         ),
         (
             "tuple_sketch_estimate_integer",
-            F::kernel("tuple_sketch_estimate_integer"),
+            F::unknown("tuple_sketch_estimate_integer"),
         ),
         (
             "tuple_sketch_summary_double",
-            F::kernel("tuple_sketch_summary_double"),
+            F::unknown("tuple_sketch_summary_double"),
         ),
         (
             "tuple_sketch_summary_integer",
-            F::kernel("tuple_sketch_summary_integer"),
+            F::unknown("tuple_sketch_summary_integer"),
         ),
         (
             "tuple_sketch_theta_double",
-            F::kernel("tuple_sketch_theta_double"),
+            F::unknown("tuple_sketch_theta_double"),
         ),
         (
             "tuple_sketch_theta_integer",
-            F::kernel("tuple_sketch_theta_integer"),
+            F::unknown("tuple_sketch_theta_integer"),
         ),
-        ("tuple_union_double", F::kernel("tuple_union_double")),
-        ("tuple_union_integer", F::kernel("tuple_union_integer")),
+        ("tuple_union_double", F::unknown("tuple_union_double")),
+        ("tuple_union_integer", F::unknown("tuple_union_integer")),
         (
             "tuple_union_theta_double",
-            F::kernel("tuple_union_theta_double"),
+            F::unknown("tuple_union_theta_double"),
         ),
         (
             "tuple_union_theta_integer",
-            F::kernel("tuple_union_theta_integer"),
+            F::unknown("tuple_union_theta_integer"),
         ),
         (
             "input_file_block_length",
@@ -318,24 +319,24 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
             F::udf(InputFileBlockStartFunc::new()),
         ),
         ("input_file_name", F::custom(input_file_name)),
-        ("java_method", F::kernel("java_method")),
+        ("java_method", F::unknown("java_method")),
         (
             "monotonically_increasing_id",
             F::udf(SparkMonotonicallyIncreasingId::new()),
         ),
         ("raise_error", F::udf(RaiseError::new())),
-        ("reflect", F::kernel("reflect")),
-        ("schema_of_avro", F::kernel("schema_of_avro")),
+        ("reflect", F::unknown("reflect")),
+        ("schema_of_avro", F::unknown("schema_of_avro")),
         ("session_user", F::custom(current_user)),
         ("spark_partition_id", F::udf(SparkPartitionId::new())),
-        ("to_avro", F::kernel("to_avro")),
-        ("to_protobuf", F::kernel("to_protobuf")),
+        ("to_avro", F::unknown("to_avro")),
+        ("to_protobuf", F::unknown("to_protobuf")),
         ("try_aes_encrypt", F::udf(SparkTryAESEncrypt::new())),
         ("try_aes_decrypt", F::udf(SparkTryAESDecrypt::new())),
-        ("try_reflect", F::kernel("try_reflect")),
+        ("try_reflect", F::unknown("try_reflect")),
         ("typeof", F::custom(type_of)),
         ("user", F::custom(current_user)),
-        ("uuid", F::kernel("uuid")),
+        ("uuid", F::scalar_udf(string::uuid)),
         ("version", F::udf(SparkVersion::new())),
     ]
 }

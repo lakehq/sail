@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion::functions::{core, math};
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -19,20 +21,20 @@ fn size(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let value = values.one()?;
     let data_type = &value.result_type.resolved("size input")?.data_type;
     let function = if data_type.is_list() {
-        "array_length"
+        functions_nested::length::array_length_udf()
     } else if matches!(data_type, DataType::Map(..)) {
-        "cardinality"
+        functions_nested::cardinality::cardinality_udf()
     } else {
         return Err(PlanError::invalid(format!(
             "size expects List or Map as argument, got {data_type:?}"
         )));
     };
-    let result = context.scalar(function, vec![value])?;
+    let result = context.scalar_udf(function, vec![value])?;
     let result = context.cast(result, DataType::Int32)?;
     Ok(
         if context.config.legacy_size_of_null && !context.config.ansi_mode {
             let fallback = context.literal(ScalarValue::Int32(Some(-1)));
-            context.scalar("coalesce", vec![result, fallback])?
+            context.scalar_udf(core::coalesce(), vec![result, fallback])?
         } else {
             result
         },
@@ -59,12 +61,13 @@ fn element_at(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr
             ),
         )?;
         let index = context.copy_expression(&element)?;
-        let absolute = context.scalar("abs", vec![index])?;
+        let absolute = context.scalar_udf(math::abs(), vec![index])?;
         let absolute_copy = context.copy_expression(&absolute)?;
         let one = context.literal(ScalarValue::Int64(Some(1)));
         let below = context.binary(absolute_copy, Operator::Lt, one)?;
         let array = context.copy_expression(&collection)?;
-        let length = context.scalar("array_length", vec![array])?;
+        let length =
+            context.scalar_udf(functions_nested::length::array_length_udf(), vec![array])?;
         let above = context.binary(absolute, Operator::Gt, length)?;
         let outside = context.binary(below, Operator::Or, above)?;
         let fallback = if name == "try_element_at" {
@@ -72,16 +75,25 @@ fn element_at(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr
         } else {
             raise_error(context, "element_at: the index is out of bounds".into())?
         };
-        let value = context.scalar("array_element", vec![collection, element])?;
+        let value = context.scalar_udf(
+            functions_nested::extract::array_element_udf(),
+            vec![collection, element],
+        )?;
         let always = context.literal(ScalarValue::Boolean(Some(true)));
         context.case(
             vec![(invalid, error), (outside, fallback), (always, value)],
             None,
         )?
     } else if matches!(data_type, DataType::Map(..)) {
-        let values = context.scalar("map_extract", vec![collection, element])?;
+        let values = context.scalar_udf(
+            functions_nested::map_extract::map_extract_udf(),
+            vec![collection, element],
+        )?;
         let first = context.literal(ScalarValue::Int64(Some(1)));
-        context.scalar("array_element", vec![values, first])?
+        context.scalar_udf(
+            functions_nested::extract::array_element_udf(),
+            vec![values, first],
+        )?
     } else {
         raise_error(
             context,
@@ -94,7 +106,10 @@ fn resolve_deep_size(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
-    context.scalar("cardinality", vec![values.one()?])
+    context.scalar_udf(
+        functions_nested::cardinality::cardinality_udf(),
+        vec![values.one()?],
+    )
 }
 
 pub(crate) fn raise_error(
@@ -123,6 +138,6 @@ pub(super) fn list_built_in_collection_functions() -> Vec<(&'static str, ScalarF
             "try_element_at",
             F::custom(|input| element_at(input, "try_element_at")),
         ),
-        ("||", F::kernel("||")),
+        ("||", F::unknown("||")),
     ]
 }

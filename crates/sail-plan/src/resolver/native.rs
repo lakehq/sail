@@ -288,7 +288,7 @@ impl PlanResolver<'_> {
                 values,
                 negated,
             } => {
-                let mut result = crate::function::scalar::predicate::in_list(
+                let mut result = crate::resolver::in_list(
                     &mut self.context.function_context(),
                     *expression.clone(),
                     std::mem::take(values),
@@ -491,7 +491,7 @@ impl PlanResolver<'_> {
                     return Err(PlanError::analysis("IN subquery must return one column"));
                 };
                 let right = self.reference(attribute)?;
-                let mut values = crate::function::scalar::predicate::in_arguments(
+                let mut values = crate::resolver::in_arguments(
                     &mut self.context.function_context(),
                     vec![*expression.clone(), right],
                 )?

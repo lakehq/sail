@@ -1,4 +1,5 @@
 use arrow_schema::DataType;
+use datafusion::functions::core;
 use sail_common::spec;
 
 use super::IMPLICIT_CARTESIAN_PRODUCT_MSG;
@@ -205,7 +206,7 @@ impl PlanResolver<'_> {
                 )?;
                 typing::resolve_scalar_call(
                     self.context.ids.expression(),
-                    self.context.function_context().scalar_kernel("coalesce")?,
+                    core::coalesce(),
                     arguments,
                     &mut self.context.ids,
                 )?

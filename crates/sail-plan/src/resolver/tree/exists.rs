@@ -2,6 +2,7 @@
 use std::collections::{HashMap, HashSet};
 
 use arrow_schema::DataType;
+use datafusion::functions::core;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{JoinType, Operator};
 use sail_common_plan::rewrite::{QueryRewriter, walk_expression, walk_query};
@@ -165,7 +166,7 @@ impl PlanResolver<'_> {
             .literal(ScalarValue::Boolean(Some(false)));
         self.context
             .function_context()
-            .scalar("coalesce", vec![value, no])
+            .scalar_udf(core::coalesce(), vec![value, no])
     }
 }
 

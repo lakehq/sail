@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF};
 use rand::{RngExt, rng};
@@ -212,10 +213,10 @@ impl PlanResolver<'_> {
                 .function_context()
                 .literal(ScalarValue::Int64(Some(1)));
             let count = self.reference(&random)?;
-            let repeat = self
-                .context
-                .function_context()
-                .scalar("array_repeat", vec![one, count])?;
+            let repeat = self.context.function_context().scalar_udf(
+                functions_nested::repeat::array_repeat_udf(),
+                vec![one, count],
+            )?;
             let (input, repeat) = self.append(input, repeat, "sample_repetitions".into())?;
             self.unnest(input, &repeat, false)?.0
         } else {

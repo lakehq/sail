@@ -316,20 +316,18 @@ impl PlanResolver<'_> {
                 let value_name = value.name;
                 let low_name = low.name;
                 let high_name = high.name;
-                let (value_expression, low_expression) =
-                    crate::function::scalar::predicate::predicate_pair(
-                        &mut self.context.function_context(),
-                        value.expression,
-                        Operator::GtEq,
-                        low.expression,
-                    )?;
-                let (value_expression, high_expression) =
-                    crate::function::scalar::predicate::predicate_pair(
-                        &mut self.context.function_context(),
-                        value_expression,
-                        Operator::LtEq,
-                        high.expression,
-                    )?;
+                let (value_expression, low_expression) = crate::resolver::coerce_timestamp_pair(
+                    &mut self.context.function_context(),
+                    value.expression,
+                    Operator::GtEq,
+                    low.expression,
+                )?;
+                let (value_expression, high_expression) = crate::resolver::coerce_timestamp_pair(
+                    &mut self.context.function_context(),
+                    value_expression,
+                    Operator::LtEq,
+                    high.expression,
+                )?;
                 let value = NamedExpression {
                     name: value_name,
                     expression: value_expression,
@@ -466,7 +464,7 @@ impl PlanResolver<'_> {
                 };
                 let right_name = attribute.name.clone();
                 let right = self.reference(attribute)?;
-                let (left, right) = crate::function::scalar::predicate::in_arguments(
+                let (left, right) = crate::resolver::in_arguments(
                     &mut self.context.function_context(),
                     vec![value.expression, right],
                 )?
@@ -521,7 +519,7 @@ impl PlanResolver<'_> {
                         if negated { "NOT " } else { "" },
                         names.join(", ")
                     ),
-                    expression: crate::function::scalar::predicate::in_list(
+                    expression: crate::resolver::in_list(
                         &mut self.context.function_context(),
                         value.expression,
                         values,

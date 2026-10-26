@@ -42,7 +42,7 @@ pub(super) fn list_built_in_xml_functions() -> Vec<(&'static str, ScalarFunction
 
     vec![
         ("from_xml", F::custom(from_xml)),
-        ("schema_of_xml", F::kernel("schema_of_xml")),
+        ("schema_of_xml", F::unknown("schema_of_xml")),
         ("to_xml", F::custom(to_xml)),
         ("xpath", F::udf(Xpath::new())),
         (

@@ -1,4 +1,5 @@
 use arrow_schema::DataType;
+use datafusion::functions::math;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
 use sail_common::spec;
@@ -51,7 +52,7 @@ impl PlanResolver<'_> {
             let nan = self
                 .context
                 .function_context()
-                .scalar("isnan", vec![reference])?;
+                .scalar_udf(math::isnan(), vec![reference])?;
             self.context
                 .function_context()
                 .binary(null, Operator::Or, nan)

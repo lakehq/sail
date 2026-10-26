@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::FixedOffset;
+use datafusion_common::arrow::array::timezone::Tz;
 use datafusion_expr::expr::Expr;
+use datafusion_expr::registry::FunctionRegistry;
 use sail_common_datafusion::catalog::FunctionStatus;
 pub(crate) mod aggregate;
 pub mod common;
@@ -254,7 +257,20 @@ pub(crate) fn list_built_in_function_statuses() -> Vec<FunctionStatus> {
         .filter_map(metadata::built_in_public_function_status)
         .collect()
 }
-pub use crate::analyzer::typing::temporal::is_spark_compatible_arrow_fixed_offset;
+pub fn is_spark_compatible_arrow_fixed_offset(timezone: &str) -> bool {
+    if !timezone.starts_with('+') && !timezone.starts_with('-') {
+        return false;
+    }
+    if timezone.parse::<Tz>().is_err() {
+        return false;
+    }
+    let normalized = (timezone.len() == 3).then(|| format!("{timezone}:00"));
+    normalized
+        .as_deref()
+        .unwrap_or(timezone)
+        .parse::<FixedOffset>()
+        .is_ok_and(|offset| offset.local_minus_utc().unsigned_abs() <= 18 * 60 * 60)
+}
 
 static BUILT_IN_AGGREGATE_FUNCTIONS: std::sync::LazyLock<
     HashMap<&'static str, aggregate::AggregateFunction>,
@@ -302,23 +318,21 @@ pub(crate) fn resolve_function(
         })
         .or_else(|| get_built_in_function(name).map(Function::Scalar))
         .or_else(|| {
-            let function = context.scalar_kernel(name).ok()?;
+            let function = context.session.udf(name).ok()?;
             Some(Function::Scalar(F::scalar_udf(move || {
                 Arc::clone(&function)
             })))
         })
         .or_else(|| get_built_in_aggregate_function(name).map(Function::Aggregate))
         .or_else(|| {
-            let function = context.aggregate_kernel(name).ok()?;
+            let function = context.session.udaf(name).ok()?;
             Some(Function::Aggregate(
                 aggregate::AggregateFunctionBuilder::aggregate_udf(name, move || {
                     Arc::clone(&function)
                 }),
             ))
         })
-        .ok_or_else(|| {
-            crate::error::PlanError::unsupported(format!("native function resolution: {name}"))
-        })
+        .ok_or_else(|| crate::error::PlanError::unsupported(format!("unknown function: {name}")))
 }
 
 #[cfg(test)]

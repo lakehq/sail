@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion::functions::{core, string};
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ScalarUDF;
 
@@ -232,14 +234,12 @@ impl PlanResolver<'_> {
                 extraction.expression.kind = Deferred::Resolved(ExprKind::Literal(
                     ScalarValue::Utf8(Some(field.name().clone())),
                 ));
-                self.context.function_context().scalar_kernel("get_field")?
+                core::get_field()
             }
             DataType::Map(_, _) => {
                 let extracted = typing::resolve_scalar_call(
                     self.context.ids.expression(),
-                    self.context
-                        .function_context()
-                        .scalar_kernel("map_extract")?,
+                    functions_nested::map_extract::map_extract_udf(),
                     vec![child.expression, extraction.expression],
                     &mut self.context.ids,
                 )?;
@@ -249,9 +249,7 @@ impl PlanResolver<'_> {
                     name,
                     expression: typing::resolve_scalar_call(
                         id,
-                        self.context
-                            .function_context()
-                            .scalar_kernel("array_element")?,
+                        functions_nested::extract::array_element_udf(),
                         vec![extracted, first],
                         &mut self.context.ids,
                     )?,
@@ -316,16 +314,16 @@ impl PlanResolver<'_> {
                     one,
                 )?;
                 let array_copy = self.context.function_context().copy_expression(&array)?;
-                let element = self
-                    .context
-                    .function_context()
-                    .scalar("array_element", vec![array_copy, position])?;
+                let element = self.context.function_context().scalar_udf(
+                    functions_nested::extract::array_element_udf(),
+                    vec![array_copy, position],
+                )?;
                 let expression = if self.context.config.ansi_mode {
                     let array_copy = self.context.function_context().copy_expression(&array)?;
-                    let length = self
-                        .context
-                        .function_context()
-                        .scalar("array_length", vec![array_copy])?;
+                    let length = self.context.function_context().scalar_udf(
+                        functions_nested::length::array_length_udf(),
+                        vec![array_copy],
+                    )?;
                     let length = self
                         .context
                         .function_context()
@@ -379,10 +377,10 @@ impl PlanResolver<'_> {
                         .function_context()
                         .cast(length, DataType::Utf8)?;
                     let suffix = self.context.function_context().literal(ScalarValue::Utf8(Some(" elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead.".into())));
-                    let message = self
-                        .context
-                        .function_context()
-                        .scalar("concat", vec![prefix, index, middle, length, suffix])?;
+                    let message = self.context.function_context().scalar_udf(
+                        string::concat(),
+                        vec![prefix, index, middle, length, suffix],
+                    )?;
                     let error = self.context.function_context().scalar_udf(
                         Arc::new(ScalarUDF::from(
                             sail_function::scalar::misc::raise_error::RaiseError::new(),

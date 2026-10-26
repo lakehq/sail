@@ -1,4 +1,5 @@
 use arrow_schema::DataType;
+use datafusion::functions::core;
 use datafusion_common::ScalarValue;
 use sail_common::spec;
 
@@ -204,7 +205,7 @@ impl PlanResolver<'_> {
                         expression = self
                             .context
                             .function_context()
-                            .scalar("get_field", vec![expression, selector])?;
+                            .scalar_udf(core::get_field(), vec![expression, selector])?;
                     }
                     if inline {
                         let parent = self.reference(&element)?;

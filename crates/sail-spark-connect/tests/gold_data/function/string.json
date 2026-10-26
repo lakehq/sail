@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: collation"
+        "failure": "not implemented: function: collation"
       }
     },
     {

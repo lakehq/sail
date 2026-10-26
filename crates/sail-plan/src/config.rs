@@ -12,7 +12,12 @@ pub enum DefaultTimestampType {
     TimestampNtz,
 }
 
-pub use crate::analyzer::typing::store_assignment::StoreAssignmentPolicy;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
+pub enum StoreAssignmentPolicy {
+    Ansi,
+    Strict,
+    Legacy,
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
 pub enum MapKeyDedupPolicy {

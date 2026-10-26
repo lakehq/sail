@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, FieldRef};
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
+use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{Operator, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array::SparkArray;
@@ -64,7 +66,7 @@ pub(crate) fn coerce_ansi_map_strings(
     let target = types
         .iter()
         .try_fold(DataType::Null, |previous, data_type| {
-            crate::analyzer::typing::collection::ansi_map_common_type(&previous, data_type)
+            ansi_map_common_type(&previous, data_type)
         })
         .ok_or_else(|| PlanError::analysis("map arguments have incompatible types"))?;
     arguments
@@ -83,6 +85,33 @@ pub(crate) fn coerce_ansi_map_strings(
             }
         })
         .collect()
+}
+
+fn ansi_map_common_type(left: &DataType, right: &DataType) -> Option<DataType> {
+    if left == right || right.is_null() {
+        return Some(left.clone());
+    }
+    if left.is_null() {
+        return Some(right.clone());
+    }
+    if left.is_string() != right.is_string() {
+        let atomic = if left.is_string() { right } else { left };
+        return if atomic.is_integer() {
+            Some(DataType::Int64)
+        } else if atomic.is_numeric() {
+            Some(DataType::Float64)
+        } else if atomic.is_nested()
+            || matches!(atomic, DataType::Interval(_) | DataType::Duration(_))
+        {
+            None
+        } else {
+            Some(atomic.clone())
+        };
+    }
+    if left.is_numeric() && right.is_numeric() && (left.is_floating() || right.is_floating()) {
+        return Some(DataType::Float64);
+    }
+    comparison_coercion(left, right)
 }
 
 fn map_from_arrays(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -108,8 +137,8 @@ fn map_from_entries(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let last_wins = context.config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
     let entries = values.one()?;
     let data_type = &entries.result_type.resolved("map entries")?.data_type;
-    let nullable = crate::analyzer::typing::collection::map_entries_value_contains_null(data_type);
-    let target = crate::analyzer::typing::collection::map_entries_nullability(data_type, true);
+    let nullable = map_entries_value_contains_null(data_type);
+    let target = map_entries_nullability(data_type, true);
     let entries = context.cast(entries, target)?;
     let result = context.scalar_udf(
         Arc::new(ScalarUDF::from(SparkMapFromEntries::new(last_wins))),
@@ -133,12 +162,48 @@ fn map_values(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let values = input.arguments;
 
     let value = values.one()?;
-    let nullable = crate::analyzer::typing::collection::map_value_contains_null(
-        &value.result_type.resolved("map value")?.data_type,
-    );
+    let nullable = map_value_contains_null(&value.result_type.resolved("map value")?.data_type);
     let value = cast_map_value_nullability(context, value, true)?;
-    let value = context.scalar("map_values", vec![value])?;
+    let value = context.scalar_udf(functions_nested::map_values::map_values_udf(), vec![value])?;
     cast_list_value_nullability(context, value, nullable)
+}
+
+fn map_value_contains_null(data_type: &DataType) -> bool {
+    let DataType::Map(entries, _) = data_type else {
+        return true;
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return true;
+    };
+    fields
+        .get(1)
+        .map(|field| field.is_nullable())
+        .unwrap_or(true)
+}
+
+fn map_entries_value_contains_null(data_type: &DataType) -> bool {
+    let (DataType::List(field) | DataType::LargeList(field)) = data_type else {
+        return true;
+    };
+    let DataType::Struct(fields) = field.data_type() else {
+        return true;
+    };
+    fields
+        .get(1)
+        .map(|field| field.is_nullable())
+        .unwrap_or(true)
+}
+
+fn cast_map_entry_field_value_nullability(field: &FieldRef, nullable: bool) -> FieldRef {
+    let DataType::Struct(fields) = field.data_type() else {
+        return field.clone();
+    };
+    if fields.len() != 2 || fields[1].is_nullable() == nullable {
+        return field.clone();
+    }
+    Arc::new(field.as_ref().clone().with_data_type(DataType::Struct(
+        vec![fields[0].clone(), with_nullable(&fields[1], nullable)].into(),
+    )))
 }
 
 pub(crate) fn cast_map_value_nullability(
@@ -146,11 +211,19 @@ pub(crate) fn cast_map_value_nullability(
     value: Expr,
     nullable: bool,
 ) -> PlanResult<Expr> {
-    let target = crate::analyzer::typing::collection::map_nullability(
+    let target = map_nullability(
         &value.result_type.resolved("map input")?.data_type,
         nullable,
     );
     context.cast(value, target)
+}
+
+fn with_nullable(field: &FieldRef, nullable: bool) -> FieldRef {
+    if field.is_nullable() == nullable {
+        field.clone()
+    } else {
+        Arc::new(field.as_ref().clone().with_nullable(nullable))
+    }
 }
 
 fn map_concat(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -165,17 +238,18 @@ fn map_concat(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let mut null = None;
     for map in values {
         let copy = context.copy_expression(&map)?;
-        keys.push(context.scalar("map_keys", vec![copy])?);
+        keys.push(context.scalar_udf(functions_nested::map_keys::map_keys_udf(), vec![copy])?);
         let copy = context.copy_expression(&map)?;
-        entries.push(context.scalar("map_values", vec![copy])?);
+        entries
+            .push(context.scalar_udf(functions_nested::map_values::map_values_udf(), vec![copy])?);
         let check = context.is_null(map);
         null = Some(match null {
             Some(previous) => context.binary(previous, Operator::Or, check)?,
             None => check,
         });
     }
-    let keys = context.scalar("array_concat", keys)?;
-    let entries = context.scalar("array_concat", entries)?;
+    let keys = context.scalar_udf(functions_nested::concat::array_concat_udf(), keys)?;
+    let entries = context.scalar_udf(functions_nested::concat::array_concat_udf(), entries)?;
     let value = context.scalar_udf(
         Arc::new(ScalarUDF::from(SparkMapFromArrays::new(last_wins))),
         vec![keys, entries],
@@ -190,8 +264,11 @@ fn map_contains_key(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let values = input.arguments;
 
     let (map, key) = values.two()?;
-    let keys = context.scalar("map_keys", vec![map])?;
-    context.scalar("array_has", vec![keys, key])
+    let keys = context.scalar_udf(functions_nested::map_keys::map_keys_udf(), vec![map])?;
+    context.scalar_udf(
+        functions_nested::array_has::array_has_udf(),
+        vec![keys, key],
+    )
 }
 
 fn str_to_map(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -212,6 +289,28 @@ fn str_to_map(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     )
 }
 
+fn map_entries_nullability(data_type: &DataType, nullable: bool) -> DataType {
+    match data_type {
+        DataType::List(field) => {
+            DataType::List(cast_map_entry_field_value_nullability(field, nullable))
+        }
+        DataType::LargeList(field) => {
+            DataType::LargeList(cast_map_entry_field_value_nullability(field, nullable))
+        }
+        _ => data_type.clone(),
+    }
+}
+
+fn map_nullability(data_type: &DataType, nullable: bool) -> DataType {
+    match data_type {
+        DataType::Map(field, sorted) => DataType::Map(
+            cast_map_entry_field_value_nullability(field, nullable),
+            *sorted,
+        ),
+        _ => data_type.clone(),
+    }
+}
+
 pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -222,7 +321,10 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
         ("map_entries", F::custom(map_entries)),
         ("map_from_arrays", F::custom(map_from_arrays)),
         ("map_from_entries", F::custom(map_from_entries)),
-        ("map_keys", F::kernel("map_keys")),
+        (
+            "map_keys",
+            F::scalar_udf(functions_nested::map_keys::map_keys_udf),
+        ),
         ("map_values", F::custom(map_values)),
         ("str_to_map", F::custom(str_to_map)),
     ]

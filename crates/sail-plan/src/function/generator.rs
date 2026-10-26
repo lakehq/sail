@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -31,7 +32,10 @@ fn explode_argument(
         return Err(PlanError::analysis("inline requires an array of structs"));
     }
     if map {
-        argument = context.scalar("map_entries", vec![argument])?;
+        argument = context.scalar_udf(
+            functions_nested::map_entries::map_entries_udf(),
+            vec![argument],
+        )?;
     }
     if position {
         argument = context.scalar_udf(

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, TimeUnit};
+use datafusion::functions::{core, math};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -50,7 +51,7 @@ fn coalesce(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> 
         return Err(PlanError::analysis(format!("{name} requires 2 parameters")));
     }
     let values = temporal_branches(context, values)?;
-    context.scalar("coalesce", values)
+    context.scalar_udf(core::coalesce(), values)
 }
 
 fn nullifzero(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
@@ -106,8 +107,11 @@ fn zeroifnull(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
             value
         }
         DataType::Decimal128(precision, scale) => {
-            let target =
-                crate::analyzer::typing::coercion::zeroifnull_decimal_type(precision, scale);
+            let integer_digits = (i16::from(precision) - i16::from(scale)).max(10);
+            let scale = i16::from(scale).max(0);
+            let precision = (integer_digits + scale).min(38) as u8;
+            let scale = scale.min((38 - integer_digits).max(0)) as i8;
+            let target = DataType::Decimal128(precision, scale);
             if ansi {
                 context.cast(value, target)?
             } else {
@@ -121,7 +125,7 @@ fn zeroifnull(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
             )));
         }
     };
-    context.scalar("coalesce", vec![value, zero])
+    context.scalar_udf(core::coalesce(), vec![value, zero])
 }
 
 pub(crate) fn temporal_branches(
@@ -140,10 +144,7 @@ pub(crate) fn temporal_branches(
     if !types.iter().any(DataType::is_string) {
         return Ok(values);
     }
-    let Some(target) = crate::analyzer::typing::temporal::common_temporal_type(
-        &types,
-        &context.config.session_timezone,
-    ) else {
+    let Some(target) = common_temporal_type(&types, &context.config.session_timezone) else {
         return Ok(values);
     };
     values
@@ -181,6 +182,28 @@ pub(crate) fn temporal_branches(
         .collect()
 }
 
+fn common_temporal_type(types: &[DataType], timezone: &Arc<str>) -> Option<DataType> {
+    if types
+        .iter()
+        .any(|t| matches!(t, DataType::Timestamp(_, Some(_))))
+    {
+        Some(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(timezone.clone()),
+        ))
+    } else if types
+        .iter()
+        .any(|t| matches!(t, DataType::Timestamp(_, None)))
+    {
+        Some(DataType::Timestamp(TimeUnit::Microsecond, None))
+    } else {
+        types
+            .iter()
+            .any(|t| matches!(t, DataType::Date32 | DataType::Date64))
+            .then_some(DataType::Date32)
+    }
+}
+
 pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -188,11 +211,11 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("coalesce", F::custom(|input| coalesce(input, "coalesce"))),
         ("if", F::custom(if_expr)),
         ("ifnull", F::custom(|input| coalesce(input, "ifnull"))),
-        ("nanvl", F::kernel("nanvl")),
-        ("nullif", F::kernel("nullif")),
+        ("nanvl", F::scalar_udf(math::nanvl)),
+        ("nullif", F::scalar_udf(core::nullif)),
         ("nullifzero", F::custom(nullifzero)),
         ("nvl", F::custom(|input| coalesce(input, "nvl"))),
-        ("nvl2", F::kernel("nvl2")),
+        ("nvl2", F::scalar_udf(core::nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),

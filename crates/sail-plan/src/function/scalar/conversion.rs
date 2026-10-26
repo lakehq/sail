@@ -58,7 +58,7 @@ pub(super) fn list_built_in_conversion_functions() -> Vec<(&'static str, ScalarF
         ("bigint", F::cast(DataType::Int64)),
         ("binary", F::cast(DataType::Binary)),
         ("boolean", F::cast(DataType::Boolean)),
-        ("cast", F::kernel("cast")),
+        ("cast", F::unknown("cast")),
         ("date", F::custom(cast_to_date)),
         ("decimal", F::cast(DataType::Decimal128(10, 0))),
         ("double", F::cast(DataType::Float64)),

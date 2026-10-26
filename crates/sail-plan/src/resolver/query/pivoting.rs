@@ -2,6 +2,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_schema::DataType;
+use datafusion::functions::core;
+use datafusion::functions_nested;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF};
 use sail_common::spec;
@@ -398,7 +400,7 @@ impl PlanResolver<'_> {
         let array = self
             .context
             .function_context()
-            .scalar("make_array", records)?;
+            .scalar_udf(functions_nested::make_array::make_array_udf(), records)?;
         let (input, array) = self.append(input, array, "unpivot_values".into())?;
         let (mut input, element) = self.unnest(input, &array, false)?;
         if !unpivot.include_nulls {
@@ -415,7 +417,7 @@ impl PlanResolver<'_> {
                 let value = self
                     .context
                     .function_context()
-                    .scalar("get_field", vec![reference, selector])?;
+                    .scalar_udf(core::get_field(), vec![reference, selector])?;
                 let present = Expr {
                     id: self.context.ids.expression(),
                     kind: Deferred::Resolved(ExprKind::IsNotNull(Box::new(value))),
@@ -437,7 +439,7 @@ impl PlanResolver<'_> {
             let expression = self
                 .context
                 .function_context()
-                .scalar("get_field", vec![reference, selector])?;
+                .scalar_udf(core::get_field(), vec![reference, selector])?;
             ids.push(NamedExpression { name, expression });
         }
         let input = self.project(input, ids)?;

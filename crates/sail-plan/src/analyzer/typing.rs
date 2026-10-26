@@ -3,13 +3,9 @@
 pub(crate) mod aggregate;
 pub(crate) mod cast;
 pub(crate) mod coercion;
-pub(crate) mod collection;
 pub(crate) mod higher_order;
-pub(crate) mod predicate;
 pub(crate) mod relational;
 pub(crate) mod scalar;
-pub(crate) mod store_assignment;
-pub(crate) mod temporal;
 pub(crate) mod window;
 
 use datafusion_common::arrow::compute::can_cast_types;

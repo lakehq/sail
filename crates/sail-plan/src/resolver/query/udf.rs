@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Fields};
+use datafusion::functions::core;
 use datafusion_common::{JoinType, ScalarValue};
 use datafusion_expr::{AggregateUDF, Operator, ScalarUDF};
 use sail_common::spec;
@@ -121,7 +122,7 @@ impl PlanResolver<'_> {
             let expression = self
                 .context
                 .function_context()
-                .scalar("get_field", vec![element, name])?;
+                .scalar_udf(core::get_field(), vec![element, name])?;
             output.push(NamedExpression {
                 name: field.name().clone(),
                 expression,

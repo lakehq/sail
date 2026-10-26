@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: current_path"
+        "failure": "not implemented: function: current_path"
       }
     },
     {
@@ -633,7 +633,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: java_method"
+        "failure": "not implemented: function: java_method"
       }
     },
     {
@@ -655,7 +655,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: java_method"
+        "failure": "not implemented: function: java_method"
       }
     },
     {
@@ -721,7 +721,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: reflect"
+        "failure": "not implemented: function: reflect"
       }
     },
     {
@@ -743,7 +743,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: reflect"
+        "failure": "not implemented: function: reflect"
       }
     },
     {
@@ -853,7 +853,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: try_reflect"
+        "failure": "not implemented: function: try_reflect"
       }
     },
     {
@@ -875,7 +875,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: try_reflect"
+        "failure": "not implemented: function: try_reflect"
       }
     },
     {
@@ -897,7 +897,7 @@
         }
       },
       "output": {
-        "failure": "not supported: native function resolution: try_reflect"
+        "failure": "not implemented: function: try_reflect"
       }
     },
     {
