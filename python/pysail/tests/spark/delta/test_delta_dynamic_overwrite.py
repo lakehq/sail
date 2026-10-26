@@ -27,8 +27,6 @@ def partition_table(spark, tmp_path):
         yield create
     finally:
         try:
-            spark.catalog.dropTempView(table)
-            spark.catalog.dropGlobalTempView(table)
             spark.sql(f"DROP TABLE IF EXISTS {table}")
         finally:
             for key, value in previous.items():
@@ -126,10 +124,16 @@ def test_insert_partition_clause_rejects_temporary_views(spark, tmp_path, partit
         else "AS SELECT 0 AS id, 'view' AS msg"
     )
     spark.sql(f"CREATE {'GLOBAL ' if global_view else ''}TEMPORARY VIEW {table} {definition}")
-    target = f"global_temp.{table}" if global_view else table
-    with _reject_unchanged(spark, target, tmp_path, "PARTITION for writes to temporary views"):
-        spark.sql(f"INSERT OVERWRITE {target} PARTITION (id) SELECT 2, 'new'")
-    assert spark.read.format("delta").load(str(tmp_path)).collect() == [(1, "old")]
+    try:
+        target = f"global_temp.{table}" if global_view else table
+        with _reject_unchanged(spark, target, tmp_path, "PARTITION for writes to temporary views"):
+            spark.sql(f"INSERT OVERWRITE {target} PARTITION (id) SELECT 2, 'new'")
+        assert spark.read.format("delta").load(str(tmp_path)).collect() == [(1, "old")]
+    finally:
+        if global_view:
+            spark.catalog.dropGlobalTempView(table)
+        else:
+            spark.catalog.dropTempView(table)
 
 
 def test_insert_partition_clause_uses_registered_delta_metadata(spark, tmp_path, partition_table):
