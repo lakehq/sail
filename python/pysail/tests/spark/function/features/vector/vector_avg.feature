@@ -79,6 +79,25 @@ Feature: vector_avg
         | result            |
         | [5.0500016, 50.5] |
 
+    Scenario: a sliding window recomputes the running mean over the frame
+      # Removing the rows that leave the frame from the mean would round
+      # differently. A sum / count mean would give 15.05.
+      When query
+        """
+        SELECT result FROM (
+          SELECT
+            id,
+            vector_avg(array(CAST(id AS FLOAT) * 0.1F)) OVER (
+              ORDER BY id ROWS BETWEEN 99 PRECEDING AND CURRENT ROW
+            ) AS result
+          FROM range(1, 201)
+        )
+        WHERE id = 200
+        """
+      Then query result
+        | result      |
+        | [15.050018] |
+
   Rule: Null handling
 
     Scenario: null vectors and vectors with null elements are skipped
@@ -132,6 +151,78 @@ Feature: vector_avg
         | 1  | [1.0, 2.0] |
         | 2  | [2.0, 3.0] |
         | 3  | [3.0, 4.0] |
+
+    Scenario: average over a window of the previous and current rows
+      When query
+        """
+        SELECT id, vector_avg(v) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES (1, array(1.0F, 2.0F)), (2, array(3.0F, 4.0F)), (3, array(5.0F, 6.0F)) AS t(id, v)
+        ORDER BY id
+        """
+      Then query result
+        | id | result     |
+        | 1  | [1.0, 2.0] |
+        | 2  | [2.0, 3.0] |
+        | 3  | [4.0, 5.0] |
+
+    Scenario: average over a window that shrinks from the front
+      When query
+        """
+        SELECT id, vector_avg(v) OVER (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS result
+        FROM VALUES (1, array(1.0F, 2.0F)), (2, array(3.0F, 4.0F)), (3, array(5.0F, 6.0F)) AS t(id, v)
+        ORDER BY id
+        """
+      Then query result
+        | id | result     |
+        | 1  | [3.0, 4.0] |
+        | 2  | [4.0, 5.0] |
+        | 3  | [5.0, 6.0] |
+
+    Scenario: skipped vectors enter and leave a sliding window
+      When query
+        """
+        SELECT id, vector_avg(v) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS result
+        FROM VALUES
+          (1, array(1.0F, 2.0F)),
+          (2, CAST(NULL AS ARRAY<FLOAT>)),
+          (3, array(10.0F, CAST(NULL AS FLOAT))),
+          (4, array(3.0F, 4.0F)),
+          (5, array(5.0F, 6.0F))
+        AS t(id, v)
+        ORDER BY id
+        """
+      Then query result
+        | id | result     |
+        | 1  | [1.0, 2.0] |
+        | 2  | [1.0, 2.0] |
+        | 3  | NULL       |
+        | 4  | [3.0, 4.0] |
+        | 5  | [4.0, 5.0] |
+
+    Scenario: an empty range frame returns NULL
+      When query
+        """
+        SELECT id, vector_avg(v) OVER (ORDER BY id RANGE BETWEEN 2 PRECEDING AND 1 PRECEDING) AS result
+        FROM VALUES (1, array(1.0F, 2.0F)), (2, array(3.0F, 4.0F)), (5, array(5.0F, 6.0F)) AS t(id, v)
+        ORDER BY id
+        """
+      Then query result
+        | id | result     |
+        | 1  | NULL       |
+        | 2  | [1.0, 2.0] |
+        | 5  | NULL       |
+
+    Scenario: vectors with different dimensions in separate frames are accepted
+      When query
+        """
+        SELECT id, vector_avg(v) OVER (ORDER BY id ROWS BETWEEN CURRENT ROW AND CURRENT ROW) AS result
+        FROM VALUES (1, array(1.0F, 2.0F)), (2, array(3.0F)) AS t(id, v)
+        ORDER BY id
+        """
+      Then query result
+        | id | result     |
+        | 1  | [1.0, 2.0] |
+        | 2  | [3.0]      |
 
   Rule: Output schema
 

@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -8,7 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{
     as_float32_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{AggregateUDFImpl, Signature, Volatility};
@@ -48,6 +49,37 @@ fn check_dimension(expected: usize, actual: usize) -> Result<()> {
     }
 }
 
+fn for_each_valid_vector(
+    values: &[ArrayRef],
+    mut f: impl FnMut(&[f32]) -> Result<()>,
+) -> Result<()> {
+    let [vectors] = values else {
+        return exec_err!("vector_avg expects one argument, got {}", values.len());
+    };
+    match vectors.data_type() {
+        DataType::List(_) => for_each_valid_list_vector(as_list_array(vectors)?, &mut f),
+        DataType::LargeList(_) => for_each_valid_list_vector(as_large_list_array(vectors)?, &mut f),
+        data_type => {
+            exec_err!("vector_avg expects an ARRAY<FLOAT> argument, got {data_type:?}")
+        }
+    }
+}
+
+fn for_each_valid_list_vector<O: OffsetSizeTrait>(
+    vectors: &GenericListArray<O>,
+    f: &mut impl FnMut(&[f32]) -> Result<()>,
+) -> Result<()> {
+    for vector in vectors.iter().flatten() {
+        let vector = as_float32_array(&vector)?;
+        // Spark skips the whole vector when any element is null.
+        if vector.null_count() > 0 {
+            continue;
+        }
+        f(vector.values())?;
+    }
+    Ok(())
+}
+
 /// Accumulator for `vector_avg`.
 ///
 /// Spark keeps a single-precision running mean rather than a sum and a count,
@@ -61,18 +93,6 @@ struct VectorAvgAccumulator {
 }
 
 impl VectorAvgAccumulator {
-    fn update_vectors<O: OffsetSizeTrait>(&mut self, vectors: &GenericListArray<O>) -> Result<()> {
-        for vector in vectors.iter().flatten() {
-            let vector = as_float32_array(&vector)?;
-            // Spark skips the whole vector when any element is null.
-            if vector.null_count() > 0 {
-                continue;
-            }
-            self.update_vector(vector.values())?;
-        }
-        Ok(())
-    }
-
     fn update_vector(&mut self, input: &[f32]) -> Result<()> {
         let Some(avg) = &mut self.avg else {
             self.avg = Some(input.to_vec());
@@ -109,16 +129,7 @@ impl VectorAvgAccumulator {
 
 impl Accumulator for VectorAvgAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let [vectors] = values else {
-            return exec_err!("vector_avg expects one argument, got {}", values.len());
-        };
-        match vectors.data_type() {
-            DataType::List(_) => self.update_vectors(as_list_array(vectors)?),
-            DataType::LargeList(_) => self.update_vectors(as_large_list_array(vectors)?),
-            data_type => {
-                exec_err!("vector_avg expects an ARRAY<FLOAT> argument, got {data_type:?}")
-            }
-        }
+        for_each_valid_vector(values, |vector| self.update_vector(vector))
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -148,6 +159,70 @@ impl Accumulator for VectorAvgAccumulator {
             }
         }
         Ok(())
+    }
+}
+
+/// Accumulator for `vector_avg` over window frames whose start moves.
+///
+/// Spark evaluates such frames by aggregating every row in the frame again,
+/// and removing a vector from a single-precision running mean would not round
+/// the same way. So the vectors of the frame are kept, and the running mean
+/// is computed over them in order on each evaluation.
+#[derive(Debug, Default)]
+struct VectorAvgSlidingAccumulator {
+    frame: VecDeque<Vec<f32>>,
+}
+
+impl VectorAvgSlidingAccumulator {
+    fn frame_accumulator(&self) -> Result<VectorAvgAccumulator> {
+        // Dimensions are checked here rather than on update, since DataFusion adds
+        // the rows entering the frame before it retracts the rows leaving it.
+        let mut accumulator = VectorAvgAccumulator::default();
+        for vector in &self.frame {
+            accumulator.update_vector(vector)?;
+        }
+        Ok(accumulator)
+    }
+}
+
+impl Accumulator for VectorAvgSlidingAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for_each_valid_vector(values, |vector| {
+            self.frame.push_back(vector.to_vec());
+            Ok(())
+        })
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        // DataFusion retracts the oldest rows of the frame in the order they were
+        // added, so the retracted vectors are the ones at the front of the frame.
+        for_each_valid_vector(values, |_| match self.frame.pop_front() {
+            Some(_) => Ok(()),
+            None => internal_err!("vector_avg cannot retract a vector from an empty frame"),
+        })
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.frame_accumulator()?.evaluate()
+    }
+
+    fn size(&self) -> usize {
+        let vectors = self.frame.iter().map(Vec::capacity).sum::<usize>();
+        std::mem::size_of_val(self)
+            + self.frame.capacity() * std::mem::size_of::<Vec<f32>>()
+            + vectors * std::mem::size_of::<f32>()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.frame_accumulator()?.state()
+    }
+
+    fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+        internal_err!("vector_avg sliding accumulator does not merge partial states")
     }
 }
 
@@ -190,6 +265,10 @@ impl AggregateUDFImpl for VectorAvg {
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(VectorAvgAccumulator::default()))
+    }
+
+    fn create_sliding_accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(VectorAvgSlidingAccumulator::default()))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -349,6 +428,77 @@ mod tests {
             result,
             Err(error) if error.to_string().contains("matching dimensions, got 2 and 1")
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_frame_averages_the_vectors_in_the_frame() -> Result<()> {
+        let mut acc = VectorAvgSlidingAccumulator::default();
+        assert!(acc.supports_retract_batch());
+        acc.update_batch(&[vectors(vec![
+            Some(vec![Some(1.0), Some(2.0)]),
+            Some(vec![Some(3.0), Some(4.0)]),
+        ])])?;
+        assert_eq!(result_vector(&acc.evaluate()?)?, Some(vec![2.0, 3.0]));
+        acc.update_batch(&[vectors(vec![Some(vec![Some(5.0), Some(6.0)])])])?;
+        acc.retract_batch(&[vectors(vec![Some(vec![Some(1.0), Some(2.0)])])])?;
+        assert_eq!(result_vector(&acc.evaluate()?)?, Some(vec![4.0, 5.0]));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_frame_retracts_the_vectors_it_skipped_on_update() -> Result<()> {
+        let skipped = || {
+            vectors(vec![
+                None,
+                Some(vec![Some(1.0), None]),
+                Some(vec![Some(2.0), Some(4.0)]),
+            ])
+        };
+        let mut acc = VectorAvgSlidingAccumulator::default();
+        acc.update_batch(&[skipped()])?;
+        acc.update_batch(&[vectors(vec![Some(vec![Some(6.0), Some(8.0)])])])?;
+        acc.retract_batch(&[skipped()])?;
+        assert_eq!(result_vector(&acc.evaluate()?)?, Some(vec![6.0, 8.0]));
+        acc.retract_batch(&[vectors(vec![Some(vec![Some(6.0), Some(8.0)])])])?;
+        assert_eq!(result_vector(&acc.evaluate()?)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_frame_rejects_dimension_mismatch_within_a_frame_only() -> Result<()> {
+        let mut acc = VectorAvgSlidingAccumulator::default();
+        acc.update_batch(&[vectors(vec![Some(vec![Some(1.0), Some(2.0)])])])?;
+        acc.update_batch(&[vectors(vec![Some(vec![Some(3.0)])])])?;
+        assert!(matches!(
+            acc.evaluate(),
+            Err(error) if error.to_string().contains("matching dimensions, got 2 and 1")
+        ));
+        acc.retract_batch(&[vectors(vec![Some(vec![Some(1.0), Some(2.0)])])])?;
+        assert_eq!(result_vector(&acc.evaluate()?)?, Some(vec![3.0]));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_frame_matches_a_fresh_running_mean() -> Result<()> {
+        // A frame of 100 rows slides over 1..=200, and the result must round the
+        // same way as a running mean started over the last 100 rows.
+        let row = |i: usize| vectors(vec![Some(vec![Some(i as f32 * 0.1)])]);
+        let mut sliding = VectorAvgSlidingAccumulator::default();
+        for i in 1..=200 {
+            sliding.update_batch(&[row(i)])?;
+            if i > 100 {
+                sliding.retract_batch(&[row(i - 100)])?;
+            }
+        }
+        let mut fresh = VectorAvgAccumulator::default();
+        for i in 101..=200 {
+            fresh.update_batch(&[row(i)])?;
+        }
+        assert_eq!(sliding.evaluate()?, fresh.evaluate()?);
+        // The same input as the `vector_avg.feature` sliding precision scenario,
+        // where sum / count would give 15.05.
+        assert_eq!(result_vector(&sliding.evaluate()?)?, Some(vec![15.050_018]));
         Ok(())
     }
 
