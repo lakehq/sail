@@ -560,6 +560,9 @@ pub fn resolve_listing_writer_url(path: String) -> Result<Url> {
 
 /// Resolve a single table directory without caller-supplied glob patterns.
 pub fn resolve_table_url(path: String) -> Result<Url> {
+    if path.is_empty() {
+        return plan_err!("table path cannot be empty");
+    }
     let raw_path = if std::path::Path::new(&path).is_absolute() {
         path.as_str()
     } else {
@@ -816,6 +819,14 @@ mod tests {
 
         let error = PathGlobFilter::parse("[").unwrap_err();
         assert!(error.to_string().contains("invalid path glob filter"));
+    }
+
+    #[test]
+    fn test_resolve_table_url_rejects_empty_path() {
+        assert!(matches!(
+            resolve_table_url(String::new()),
+            Err(DataFusionError::Plan(message)) if message == "table path cannot be empty"
+        ));
     }
 
     #[test]

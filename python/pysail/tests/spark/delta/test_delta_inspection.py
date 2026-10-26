@@ -288,6 +288,13 @@ def test_native_delta_commands_resolve_delta_namespace_table(spark, tmp_path):
         spark.sql("DROP DATABASE delta CASCADE")
 
 
+@pytest.mark.parametrize("command", ["DESCRIBE DETAIL", "DESCRIBE HISTORY", "EXPLAIN OPTIMIZE", "EXPLAIN VACUUM"])
+def test_native_delta_commands_reject_empty_path(spark, command):
+    # Explain maintenance commands so a validation regression cannot mutate the filesystem root.
+    with pytest.raises(Exception, match="table path cannot be empty"):
+        spark.sql(f"{command} ''").collect()
+
+
 def test_native_target_resolution(spark, inspection_table):
     name, _ = inspection_table
     spark.sql("CREATE TEMPORARY VIEW inspection_view AS SELECT 1 AS id")
