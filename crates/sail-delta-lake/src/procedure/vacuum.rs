@@ -106,7 +106,6 @@ pub(super) async fn execute(
             .map(|file| absolute_path(root, &file.location))
             .collect::<Result<Vec<_>>>()?;
         paths.sort();
-        paths.truncate(1000);
         return result(invocation, paths);
     }
     let bytes = candidates.iter().try_fold(0_u64, |total, file| {

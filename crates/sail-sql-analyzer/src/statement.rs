@@ -2880,15 +2880,15 @@ fn lakehouse_command(
     >,
     arguments: Vec<(spec::Identifier, spec::Expr)>,
 ) -> SqlResult<spec::Plan> {
-    let table = match target {
-        Either::Left(path) => spec::ObjectName::from(["delta".to_string(), from_ast_string(path)?]),
-        Either::Right(table) => from_ast_object_name(table)?,
+    let target = match target {
+        Either::Left(path) => spec::LakehouseCommandTarget::Path(from_ast_string(path)?),
+        Either::Right(table) => spec::LakehouseCommandTarget::Table(from_ast_object_name(table)?),
     };
     Ok(spec::Plan::Command(spec::CommandPlan::new(
         spec::CommandNode::LakehouseCommand {
             format: "delta".to_string(),
             procedure: procedure.to_string(),
-            table,
+            target,
             arguments,
         },
     )))

@@ -61,10 +61,10 @@ impl PlanResolver<'_> {
             CommandNode::LakehouseCommand {
                 format,
                 procedure,
-                table,
+                target,
                 arguments,
             } => {
-                self.resolve_lakehouse_command(format, procedure, table, arguments, state)
+                self.resolve_lakehouse_command(format, procedure, target, arguments, state)
                     .await
             }
             CommandNode::CurrentDatabase => {
