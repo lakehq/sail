@@ -303,6 +303,87 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn uncached_in_commit_timestamp_uses_checksum_without_commit_json() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store.clone());
+        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
+        put_checksum(&store, 1, &protocol, &metadata, Some(123)).await?;
+
+        let timestamp =
+            resolve_version_timestamp(log_store.as_ref(), 1, None, &protocol, &metadata).await?;
+        assert_eq!(timestamp, 123);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uncached_in_commit_timestamp_falls_back_to_commit_json() -> DeltaResult<()> {
+        // Delta InCommitTimestampSuite: missing CRC or CRC without ICT requires the commit.
+        for checksum_present in [false, true] {
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let log_store = test_log_store(store.clone());
+            let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+            let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
+            put_commit(
+                &store,
+                1,
+                &[Action::CommitInfo(CommitInfo {
+                    in_commit_timestamp: Some(123),
+                    ..Default::default()
+                })],
+            )
+            .await?;
+            if checksum_present {
+                put_checksum(&store, 1, &protocol, &metadata, None).await?;
+            }
+
+            let timestamp =
+                resolve_version_timestamp(log_store.as_ref(), 1, None, &protocol, &metadata)
+                    .await?;
+            assert_eq!(timestamp, 123);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uncached_timestamp_requires_authoritative_source() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store.clone());
+        let legacy_protocol = Protocol::new(1, 2, None, None);
+        let legacy_metadata = test_metadata([]);
+        assert!(matches!(
+            resolve_version_timestamp(
+                log_store.as_ref(),
+                1,
+                None,
+                &legacy_protocol,
+                &legacy_metadata,
+            )
+            .await,
+            Err(DeltaError::ObjectStore(
+                object_store::Error::NotFound { .. }
+            ))
+        ));
+
+        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));
+        let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
+        for commit_present in [false, true] {
+            if commit_present {
+                // A real object mtime must not substitute for missing ICT.
+                put_commit(&store, 1, &[Action::CommitInfo(CommitInfo::default())]).await?;
+                put_checksum(&store, 1, &protocol, &metadata, None).await?;
+            }
+            let error =
+                resolve_version_timestamp(log_store.as_ref(), 1, None, &protocol, &metadata)
+                    .await
+                    .unwrap_err();
+            assert!(matches!(error, DeltaError::Generic(message) if message ==
+                "commit 1 requires inCommitTimestamp, but neither the checksum nor the commit JSON provided one"));
+        }
+        Ok(())
+    }
+
     #[test]
     fn version_uses_in_commit_timestamps_honors_enablement_boundary() {
         let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::InCommitTimestamp]));

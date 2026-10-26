@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pyarrow as pa
@@ -171,6 +173,196 @@ def _assert_struct_tree_nullable(field: pa.Field, path: str) -> None:
     if pa.types.is_struct(field.type):
         for child in field.type:
             _assert_struct_tree_nullable(child, f"{path}.{child.name}")
+
+
+def _write_checkpoint_with_compacted_tail(
+    table_path: Path, tail: str, *, ict_enablement_version: int | None = None
+) -> int:
+    log_path = table_path / "_delta_log"
+    log_path.mkdir(parents=True)
+    latest = {"checkpoint-only": 0, "compaction-only": 2}.get(tail, 3)
+    names = ["old", "first", "middle", "new"]
+    schema = StructType([StructField("id", LongType()), StructField("value", StringType())])
+    protocol = {"minReaderVersion": 1, "minWriterVersion": 2}
+    metadata = {
+        "id": "checkpoint-compacted-tail",
+        "format": {"provider": "parquet", "options": {}},
+        "schemaString": schema.json(),
+        "partitionColumns": [],
+        "configuration": {},
+        "createdTime": 0,
+    }
+    base_time = 1_700_000_000
+    ict_protocol = {"minReaderVersion": 1, "minWriterVersion": 7, "writerFeatures": ["inCommitTimestamp"]}
+    ict_configuration = {"delta.enableInCommitTimestamps": "true"}
+    if ict_enablement_version is not None and ict_enablement_version > 0:
+        ict_configuration.update(
+            {
+                "delta.inCommitTimestampEnablementVersion": str(ict_enablement_version),
+                "delta.inCommitTimestampEnablementTimestamp": str((base_time + 10 * ict_enablement_version) * 1000),
+            }
+        )
+    ict_metadata = {**metadata, "configuration": ict_configuration}
+    if ict_enablement_version == 0:
+        protocol, metadata = ict_protocol, ict_metadata
+    commits = []
+    for version in range(latest + 1):
+        file = table_path / f"{names[version]}.parquet"
+        pq.write_table(pa.table({"id": [version], "value": [names[version]]}), file)
+        actions = (
+            [{"protocol": protocol}, {"metaData": metadata}]
+            if version == 0
+            else [{"remove": {"path": f"{names[version - 1]}.parquet", "dataChange": True}}]
+        )
+        uses_ict = ict_enablement_version is not None and version >= ict_enablement_version
+        if uses_ict:
+            actions.insert(0, {"commitInfo": {"inCommitTimestamp": (base_time + 10 * version) * 1000}})
+            if version == ict_enablement_version and version > 0:
+                actions.extend([{"protocol": ict_protocol}, {"metaData": ict_metadata}])
+        actions.append(
+            {
+                "add": {
+                    "path": file.name,
+                    "partitionValues": {},
+                    "size": file.stat().st_size,
+                    "modificationTime": 0,
+                    "dataChange": True,
+                    "stats": json.dumps({"numRecords": 1}),
+                }
+            }
+        )
+        commits.append(actions)
+        commit_path = log_path / f"{version:020d}.json"
+        commit_path.write_text("".join(json.dumps(action) + "\n" for action in actions), encoding="utf-8")
+        # ICT, ordinary commit mtime, and compaction mtime are deliberately distinct.
+        timestamp = base_time + 10 * version + (200 if uses_ict else 0)
+        os.utime(commit_path, (timestamp, timestamp))
+
+    string_map = pa.map_(pa.string(), pa.string())
+    checkpoint_schema = pa.schema(
+        [
+            (
+                "protocol",
+                pa.struct(
+                    [
+                        ("minReaderVersion", pa.int32()),
+                        ("minWriterVersion", pa.int32()),
+                        ("writerFeatures", pa.list_(pa.string())),
+                    ]
+                ),
+            ),
+            (
+                "metaData",
+                pa.struct(
+                    [
+                        ("id", pa.string()),
+                        ("format", pa.struct([("provider", pa.string()), ("options", string_map)])),
+                        ("schemaString", pa.string()),
+                        ("partitionColumns", pa.list_(pa.string())),
+                        ("configuration", string_map),
+                        ("createdTime", pa.int64()),
+                    ]
+                ),
+            ),
+            (
+                "add",
+                pa.struct(
+                    [
+                        ("path", pa.string()),
+                        ("partitionValues", string_map),
+                        ("size", pa.int64()),
+                        ("modificationTime", pa.int64()),
+                        ("dataChange", pa.bool_()),
+                        ("stats", pa.string()),
+                    ]
+                ),
+            ),
+        ]
+    )
+    pq.write_table(
+        pa.Table.from_pylist([action for action in commits[0] if "commitInfo" not in action], schema=checkpoint_schema),
+        log_path / "00000000000000000000.checkpoint.parquet",
+    )
+    (log_path / "_last_checkpoint").write_text(json.dumps({"version": 0, "size": 3}), encoding="utf-8")
+    if "compaction" in tail:
+        start, end = (2, 3) if tail == "commit-then-compaction" else (1, 2)
+        # Reconcile the covered commits, retaining tombstones but only the final add.
+        covered_actions = [action for version in range(start, end + 1) for action in commits[version]]
+        compacted = [action for action in covered_actions if "remove" in action]
+        for key in ["protocol", "metaData"]:
+            last_action = next((action for action in reversed(covered_actions) if key in action), None)
+            if last_action is not None:
+                compacted.append(last_action)
+        compacted.append(commits[end][-1])
+        compaction_path = log_path / f"{start:020d}.{end:020d}.compacted.json"
+        compaction_path.write_text("".join(json.dumps(action) + "\n" for action in compacted), encoding="utf-8")
+        os.utime(compaction_path, (base_time + 100, base_time + 100))
+    return latest
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize(
+    "tail",
+    ["compaction-then-commit", "commit-then-compaction", "checkpoint-only", "commit-only", "compaction-only"],
+)
+def test_checkpoint_replays_compacted_and_ordinary_tail(spark, tmp_path: Path, tail: str, metadata_as_data: str):
+    # DeltaLogMinorCompactionSuite (Delta v4.4.0): compacted deltas at either end after a checkpoint.
+    latest = _write_checkpoint_with_compacted_tail(tmp_path, tail)
+    names = ["old", "first", "middle", "new"]
+    # Retained JSON supports reads inside a compaction; obsolete data files expose skipped removes.
+    for version in [*range(latest + 1), None]:
+        reader = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data)
+        if version is not None:
+            reader = reader.option("versionAsOf", version)
+        expected_version = latest if version is None else version
+        assert reader.load(str(tmp_path)).orderBy("id").collect() == [
+            Row(id=expected_version, value=names[expected_version])
+        ], f"tail={tail}, version={version}, metadataAsDataRead={metadata_as_data}"
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize("tail", ["compaction-then-commit", "commit-then-compaction"])
+@pytest.mark.parametrize(
+    "ict_enablement_version",
+    [pytest.param(None, id="mtime"), pytest.param(0, id="ict"), pytest.param(2, id="ict-transition")],
+)
+def test_checkpoint_compacted_tail_uses_original_commit_timestamps(
+    spark, tmp_path: Path, tail: str, metadata_as_data: str, ict_enablement_version: int | None
+):
+    # Delta v4.4.0 DeltaTimeTravelSuite: exact and between-commit timestamps;
+    # InCommitTimestampSuite: use ICT rather than mtime, including the enablement boundary.
+    _write_checkpoint_with_compacted_tail(tmp_path, tail, ict_enablement_version=ict_enablement_version)
+    names = ["old", "first", "middle", "new"]
+    for after_latest in [False, True]:
+        if after_latest:
+            latest = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data).load(str(tmp_path))
+            assert latest.collect() == [Row(id=3, value="new")]
+        # Timestamp reads precede any explicit latest/version read of this table.
+        for offset in [15, 10, 20, 25, 30]:
+            timestamp = datetime.fromtimestamp(1_700_000_000 + offset, tz=timezone.utc).isoformat()
+            expected_version = offset // 10
+            reader = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data)
+            assert reader.option("timestampAsOf", timestamp).load(str(tmp_path)).collect() == [
+                Row(id=expected_version, value=names[expected_version])
+            ], f"tail={tail}, timestamp={timestamp}, after_latest={after_latest}"
+
+
+@pytest.mark.parametrize("metadata_as_data", ["false", "true"])
+@pytest.mark.parametrize("tail", ["compaction-then-commit", "commit-then-compaction"])
+def test_checkpoint_compacted_tail_version_reads_do_not_require_original_commits(
+    spark, tmp_path: Path, tail: str, metadata_as_data: str
+):
+    _write_checkpoint_with_compacted_tail(tmp_path, tail)
+    start, end = (1, 2) if tail == "compaction-then-commit" else (2, 3)
+    for version in range(start, end + 1):
+        (tmp_path / "_delta_log" / f"{version:020d}.json").unlink()
+    names = ["old", "first", "middle", "new"]
+    for version in [end, 3, None]:
+        reader = spark.read.format("delta").option("metadataAsDataRead", metadata_as_data)
+        if version is not None:
+            reader = reader.option("versionAsOf", version)
+        expected_version = 3 if version is None else version
+        assert reader.load(str(tmp_path)).collect() == [Row(id=expected_version, value=names[expected_version])]
 
 
 def test_delta_write_to_table_properties_materialize_metadata(spark, tmp_path: Path):
