@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes as adt;
 use datafusion_common::Column;
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, UNNAMED_TABLE, cast, col, lit,
@@ -8,6 +9,7 @@ use datafusion_expr::{
 use indexmap::IndexMap;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_variant_storage_field;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -17,6 +19,46 @@ use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
+
+/// Compares two types the way the reconciliation of `DataFrame.to` needs to: nested field names
+/// and nullability are part of the type, but field METADATA is not. Sail carries markers such as
+/// the UDT and interval identity in that metadata, and the same Spark type can reach this point
+/// with and without them, so comparing it would report a struct as changed against itself.
+fn same_spark_type(left: &adt::DataType, right: &adt::DataType) -> bool {
+    match (left, right) {
+        (adt::DataType::Struct(left), adt::DataType::Struct(right)) => {
+            same_spark_fields(left, right)
+        }
+        (adt::DataType::List(left), adt::DataType::List(right))
+        | (adt::DataType::LargeList(left), adt::DataType::LargeList(right))
+        | (adt::DataType::ListView(left), adt::DataType::ListView(right))
+        | (adt::DataType::LargeListView(left), adt::DataType::LargeListView(right)) => {
+            same_spark_field(left, right)
+        }
+        (
+            adt::DataType::FixedSizeList(left, left_size),
+            adt::DataType::FixedSizeList(right, right_size),
+        ) => left_size == right_size && same_spark_field(left, right),
+        (adt::DataType::Map(left, left_sorted), adt::DataType::Map(right, right_sorted)) => {
+            left_sorted == right_sorted && same_spark_field(left, right)
+        }
+        (left, right) => left == right,
+    }
+}
+
+fn same_spark_field(left: &adt::Field, right: &adt::Field) -> bool {
+    left.name() == right.name()
+        && left.is_nullable() == right.is_nullable()
+        && same_spark_type(left.data_type(), right.data_type())
+}
+
+fn same_spark_fields(left: &adt::Fields, right: &adt::Fields) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .all(|(left, right)| same_spark_field(left, right))
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_to_df(
@@ -41,21 +83,102 @@ impl PlanResolver<'_> {
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
             let target_name = target_field.name();
-            let input_idx = input_names
+            // Spark matches the input column by `conf.resolver`, which honors
+            // `spark.sql.caseSensitive`, and the ambiguity check below counts the same matches.
+            // TODO: this is the third copy of the rule, with `merge_names_equal` and
+            //   `merge_name_key` in `command/merge.rs`. They must stay in step, in particular
+            //   when the ASCII-only folding is replaced by Spark's Unicode `equalsIgnoreCase`.
+            let name_matches = |input_name: &str| {
+                if self.config.case_sensitive {
+                    input_name == target_name
+                } else {
+                    input_name.eq_ignore_ascii_case(target_name)
+                }
+            };
+            let matched = input_names
                 .iter()
-                .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
-                .ok_or_else(|| {
-                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
-                })?;
+                .enumerate()
+                .filter(|(_, input_name)| name_matches(input_name));
+            // Spark counts every match rather than stopping at the first one, since the count is
+            // part of the error, but it does not need the matches themselves.
+            let mut matches = 0usize;
+            let mut first_match = None;
+            for (index, _) in matched {
+                matches += 1;
+                first_match.get_or_insert(index);
+            }
+            // Spark rejects an input that has more than one column of this name rather than
+            // reading the first one: `Project.matchSchema` raises `AMBIGUOUS_COLUMN_OR_FIELD`.
+            if matches > 1 {
+                return Err(PlanError::AnalysisError(format!(
+                    "[AMBIGUOUS_COLUMN_OR_FIELD] Column or field `{target_name}` is ambiguous and has {matches} matches."
+                )));
+            }
+            // TODO: Spark only rejects an unmatched target field when it is not nullable, and
+            //   fills a nullable one with `Literal.create(null, f.dataType)` (`reorderFields`),
+            //   raising `UNRESOLVED_COLUMN` otherwise. Honoring `spark.sql.caseSensitive` above
+            //   makes this branch reachable for a field that only differs in case.
+            let input_idx = first_match.ok_or_else(|| {
+                PlanError::invalid(format!("field not found in input schema: {target_name}"))
+            })?;
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
             let expr = Expr::Column(Column::from((input_qualifier, input_field)));
-            let expr = if input_field.data_type() == target_field.data_type() {
-                expr
-            } else {
-                expr.cast_to(target_field.data_type(), &input.schema())?
-                    .alias_qualified(input_qualifier.cloned(), input_field.name())
-            };
-            projected_exprs.push(expr);
+            // A column that needs no reconciliation keeps the qualifier of the relation it
+            // reads, so `t.col` still resolves. A column that is cast becomes a new expression
+            // and loses it, which is what Spark does: `Project.matchSchema` renames a
+            // pass-through column with `Attribute.withName`, which carries the qualifier over,
+            // and wraps a reconciled one in an `Alias`, which is built without one.
+            //
+            // A container is never a pass-through for Spark: `reconcileColumnType` rebuilds
+            // every struct, array and map with `CreateStruct`, `ArrayTransform` or
+            // `MapFromArrays` even when the type already matches, so the column always ends up
+            // in an `Alias` and always loses the qualifier. VARIANT is stored as an Arrow struct
+            // but is not a container for Spark.
+            let (expr, qualifier) =
+                if same_spark_type(input_field.data_type(), target_field.data_type()) {
+                    let is_spark_container = input_field.data_type().is_nested()
+                        && !is_variant_storage_field(input_field)
+                        && !input_field
+                            .metadata()
+                            .contains_key(spec::SAIL_SPARK_UDT_METADATA_KEY);
+                    let qualifier = if is_spark_container {
+                        None
+                    } else {
+                        // DataFusion's placeholder for unnamed sources is not a Spark qualifier,
+                        // so an unaliased relation must not stamp it onto the output.
+                        input_qualifier
+                            .filter(|relation| relation.table() != UNNAMED_TABLE)
+                            .cloned()
+                    };
+                    (expr, qualifier)
+                } else {
+                    (
+                        expr.cast_to(target_field.data_type(), &input.schema())?,
+                        None,
+                    )
+                };
+            // The reconciled column is a new column rather than the one it reads, so it gets a
+            // field ID of its own. Naming it after the field it reads leaves the projection with
+            // an output field that has the same ID as the one below it, and rebasing a sort key
+            // onto such a projection does not terminate: `rebase_sort_to_projection_input`
+            // replaces the column with the aliased expression, which contains the very column it
+            // just replaced. It also makes the output carry the name of the input rather than
+            // the name of the target schema, which is the one Spark reports.
+            //
+            // The plan IDs of the input are kept, since they are what a `df["col"]` reference
+            // resolves against.
+            // TODO: `query/join.rs` spells out the same sequence. `state.rs` already has both
+            //   halves (`register_field_with_origin` and `next_origin`) for a helper that
+            //   registers a new attribute carrying the plan IDs of a source field.
+            let plan_ids = state
+                .get_field_info(input_field.name())?
+                .plan_ids()
+                .collect::<Vec<_>>();
+            let field_id = state.register_field_name(target_name.clone());
+            for plan_id in plan_ids {
+                state.register_plan_id_for_field(&field_id, plan_id)?;
+            }
+            projected_exprs.push(expr.alias_qualified(qualifier, field_id));
         }
         let projected_plan =
             LogicalPlan::Projection(Projection::try_new(projected_exprs, Arc::new(input))?);
