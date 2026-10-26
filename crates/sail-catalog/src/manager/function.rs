@@ -15,7 +15,7 @@ impl CatalogManager {
     }
 
     pub fn register_function(&self, udf: ScalarUDF) -> CatalogResult<()> {
-        let mut state = self.state()?;
+        let mut state = self.state_mut()?;
         let name = Self::canonical_function_name(udf.name());
         state.functions.insert(name, udf);
         Ok(())
@@ -112,7 +112,7 @@ impl CatalogManager {
                 "qualified function name".to_string(),
             ));
         };
-        let mut state = self.state()?;
+        let mut state = self.state_mut()?;
         let name = Self::canonical_function_name(name.as_ref());
         let found = state.functions.remove(&name).is_some();
         if !found && !if_exists {

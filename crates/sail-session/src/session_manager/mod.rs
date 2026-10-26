@@ -2,7 +2,7 @@ mod actor;
 mod session;
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::prelude::SessionContext;
@@ -23,9 +23,20 @@ pub use crate::session_manager::actor::{SessionManagerComponents, SessionManager
 pub type ServerSessionFactoryFn =
     fn(Arc<AppConfig>, RuntimeHandle) -> Box<dyn SessionFactory<ServerSessionInfo>>;
 
+pub type SessionCleanup = Box<dyn Fn(&str) + Send + Sync>;
+
+pub(crate) fn run_session_cleanup(cleanup: &Mutex<Vec<SessionCleanup>>, session_id: &str) {
+    // Cleanup must still run if an earlier callback panicked while holding the lock.
+    let callbacks = cleanup.lock().unwrap_or_else(|error| error.into_inner());
+    for callback in callbacks.iter() {
+        callback(session_id);
+    }
+}
+
 #[derive(Clone)]
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
+    cleanup: Arc<Mutex<Vec<SessionCleanup>>>,
 }
 
 impl fmt::Debug for SessionManager {
@@ -40,8 +51,34 @@ impl SessionManager {
         components: SessionManagerComponents,
         system: &mut ActorSystem,
     ) -> SessionResult<Self> {
-        let handle = system.spawn::<SessionManagerActor>((options, components));
-        Ok(Self { handle })
+        let cleanup = Arc::new(Mutex::new(Vec::new()));
+        let handle = system.spawn::<SessionManagerActor>((options, components, cleanup.clone()));
+        Ok(Self { handle, cleanup })
+    }
+
+    /// Register protocol-owned resources to release on expiry, deletion, or failure.
+    /// Callbacks run synchronously and must not call back into the session manager.
+    pub fn add_session_cleanup(&self, cleanup: impl Fn(&str) + Send + Sync + 'static) {
+        self.cleanup
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(Box::new(cleanup));
+    }
+
+    /// Look up and touch an existing session without creating or reviving it.
+    pub async fn get_session_context(
+        &self,
+        session_id: String,
+    ) -> SessionResult<Option<SessionContext>> {
+        let (tx, rx) = oneshot::channel();
+        self.handle
+            .send(SessionManagerMessage::GetSession {
+                session_id,
+                result: tx,
+            })
+            .await?;
+        rx.await
+            .map_err(|e| SessionError::internal(format!("failed to get session: {e}")))
     }
 
     pub async fn get_or_create_session_context(

@@ -64,9 +64,19 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_placeholder(
         &self,
         placeholder: String,
-        state: &PlanResolverState,
+        state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let name = placeholder.clone();
+        if let Some(parameters) = &state.bound_parameters {
+            let value = placeholder
+                .strip_prefix('$')
+                .and_then(|key| key.parse::<usize>().ok())
+                .and_then(|index| index.checked_sub(1))
+                .and_then(|index| parameters.get(index))
+                .ok_or_else(|| PlanError::invalid(format!("missing parameter {placeholder}")))?;
+            return Ok(NamedExpr::new(vec![name], lit(value.clone())));
+        }
+        state.placeholders.insert(placeholder.clone());
         let field = placeholder.get(1..).and_then(|key| {
             state
                 .get_param_value(key)

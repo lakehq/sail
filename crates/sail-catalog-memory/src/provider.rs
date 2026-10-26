@@ -52,10 +52,34 @@ impl MemoryCatalogProvider {
                 views: HashMap::new(),
             },
         );
-        Self {
+        let provider = Self {
             name,
             databases,
             default_namespace: initial_database,
+        };
+        provider.create_parent_databases(&provider.default_namespace);
+        provider
+    }
+
+    fn create_parent_databases(&self, database: &Namespace) {
+        for length in 0..database.tail.len() {
+            let parent = Namespace {
+                head: database.head.clone(),
+                tail: database.tail[..length].to_vec(),
+            };
+            self.databases
+                .entry(parent.clone())
+                .or_insert_with(|| MemoryDatabase {
+                    status: DatabaseStatus {
+                        catalog: self.name.clone(),
+                        database: parent.into(),
+                        comment: None,
+                        location: None,
+                        properties: vec![],
+                    },
+                    tables: HashMap::new(),
+                    views: HashMap::new(),
+                });
         }
     }
 
@@ -285,6 +309,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             location,
             properties,
         } = options;
+        self.create_parent_databases(database);
         let entry = self.databases.entry(database.clone());
         match entry {
             Entry::Occupied(entry) => {
@@ -350,15 +375,28 @@ impl CatalogProvider for MemoryCatalogProvider {
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
         let DropDatabaseOptions { if_exists, cascade } = options;
+        let has_children = !cascade
+            && self
+                .databases
+                .iter()
+                .any(|item| item.key() != database && item.key().starts_with(database));
         match self.databases.entry(database.clone()) {
             Entry::Occupied(entry) => {
-                if !cascade && (!entry.get().tables.is_empty() || !entry.get().views.is_empty()) {
+                if !cascade
+                    && (has_children
+                        || !entry.get().tables.is_empty()
+                        || !entry.get().views.is_empty())
+                {
                     return Err(CatalogError::InvalidArgument(format!(
                         "Cannot drop non-empty database '{}', use CASCADE",
                         quote_namespace_if_needed(database),
                     )));
                 }
                 let _ = entry.remove_entry();
+                if cascade {
+                    self.databases
+                        .retain(|namespace, _| !namespace.starts_with(database));
+                }
                 Ok(())
             }
             Entry::Vacant(_) => {

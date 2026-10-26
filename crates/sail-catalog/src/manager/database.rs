@@ -41,7 +41,7 @@ impl CatalogManager {
             state.get_catalog(&default_catalog)?
         };
         let _ = provider.get_database(&database).await?;
-        self.state()?.default_database = database;
+        self.state_mut()?.default_database = database;
         Ok(())
     }
 

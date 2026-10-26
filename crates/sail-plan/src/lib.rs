@@ -37,9 +37,19 @@ pub async fn resolve_and_execute_plan(
     config: Arc<PlanConfig>,
     plan: spec::Plan,
 ) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
-    let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    let plan = resolver.resolve_named_plan(plan).await?;
+    execute_named_plan(ctx, plan).await
+}
+
+/// Plans an already resolved statement for execution. Protocols that prepare
+/// logical plans separately still use the shared optimization and streaming path.
+pub async fn execute_named_plan(
+    ctx: &SessionContext,
+    plan: NamedPlan,
+) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
+    let mut info = vec![];
+    let NamedPlan { plan, fields } = plan;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();

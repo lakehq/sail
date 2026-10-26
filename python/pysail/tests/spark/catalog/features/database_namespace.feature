@@ -1,5 +1,74 @@
 Feature: Database, schema, and namespace aliases
 
+  @sail-only
+  Scenario: Creating a nested memory database creates intermediate databases
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS implicit_parent CASCADE
+      """
+    Given statement
+      """
+      CREATE DATABASE implicit_parent.child.leaf COMMENT 'leaf database'
+      """
+    When query
+      """
+      SHOW DATABASES LIKE 'implicit_parent'
+      """
+    Then query result
+      | name            | catalog | description | locationUri |
+      | implicit_parent | sail    | NULL        | NULL        |
+    When query
+      """
+      SHOW DATABASES IN implicit_parent
+      """
+    Then query result
+      | name                  | catalog | description | locationUri |
+      | implicit_parent.child | sail    | NULL        | NULL        |
+    When query
+      """
+      SHOW DATABASES IN implicit_parent.child
+      """
+    Then query result
+      | name                       | catalog | description   | locationUri |
+      | implicit_parent.child.leaf | sail    | leaf database | NULL        |
+
+  @sail-only
+  Scenario: Creating intermediate databases preserves existing database metadata
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS existing_parent CASCADE
+      """
+    Given statement
+      """
+      CREATE DATABASE existing_parent COMMENT 'original parent'
+      """
+    Given statement
+      """
+      CREATE DATABASE existing_parent.child.leaf COMMENT 'original leaf'
+      """
+    Given statement
+      """
+      CREATE DATABASE IF NOT EXISTS existing_parent.child.leaf COMMENT 'ignored comment'
+      """
+    Given statement with error .*
+      """
+      CREATE DATABASE existing_parent.child.leaf
+      """
+    When query
+      """
+      SHOW DATABASES LIKE 'existing_parent'
+      """
+    Then query result
+      | name            | catalog | description     | locationUri |
+      | existing_parent | sail    | original parent | NULL        |
+    When query
+      """
+      SHOW DATABASES IN existing_parent.child
+      """
+    Then query result
+      | name                       | catalog | description   | locationUri |
+      | existing_parent.child.leaf | sail    | original leaf | NULL        |
+
   Scenario Outline: Database, schema, and namespace keywords are interchangeable
     Given statement
       """

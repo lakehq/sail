@@ -10,6 +10,7 @@ use tokio::net::TcpListener;
 
 use crate::service::SailFlightSqlService;
 use crate::session::create_flight_session_manager;
+use crate::transport::FlightConnection;
 
 pub async fn serve<F>(
     listener: TcpListener,
@@ -31,7 +32,7 @@ where
             .await;
 
         builder
-            .serve(listener, signal)
+            .serve_with_connection(listener, signal, FlightConnection::new)
             .await
             .map_err(|e| std::io::Error::other(e.to_string()))
     };
