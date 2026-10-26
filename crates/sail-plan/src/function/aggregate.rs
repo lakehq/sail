@@ -37,7 +37,7 @@ use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIE
 
 use self::AggregateFunctionBuilder as F;
 use crate::analyzer::deferred::Deferred;
-use crate::analyzer::model::*;
+use crate::analyzer::model::{Expr, ExprKind, ExprType, SortKey};
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::FunctionContextInput;
@@ -106,18 +106,18 @@ fn resolve_aggregate(
 ) -> PlanResult<Expr> {
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_sum(
+fn spark_sum(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
     mut args: Vec<Expr>,
     options: AggregateOptions,
 ) -> PlanResult<Expr> {
-    args = string_sum_arguments(context, args, options.filter.as_deref())?;
+    args = coerce_string_sum_arguments(context, args, options.filter.as_deref())?;
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_kurtosis(
+fn kurtosis(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -131,7 +131,7 @@ fn resolve_kurtosis(
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_median(
+fn median(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -149,7 +149,7 @@ fn resolve_median(
         Ok(result)
     }
 }
-fn resolve_percentile_cont(
+fn percentile_cont(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -169,7 +169,7 @@ fn resolve_percentile_cont(
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_hll_sketch_agg(
+fn hll_sketch_agg(
     context: &mut FunctionContextInput<'_>,
     name: &str,
     function: Arc<AggregateUDF>,
@@ -196,7 +196,7 @@ fn resolve_hll_sketch_agg(
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_count_min_sketch(
+fn count_min_sketch(
     context: &mut FunctionContextInput<'_>,
     name: &str,
     function: Arc<AggregateUDF>,
@@ -207,7 +207,7 @@ fn resolve_count_min_sketch(
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_count_if(
+fn count_if(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -226,7 +226,7 @@ fn resolve_count_if(
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_count(
+fn count(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -241,7 +241,7 @@ fn resolve_count(
         }
         args.push(context.literal(ScalarValue::Null));
     }
-    if args.iter().all(typed_null_literal) {
+    if args.iter().all(is_typed_null_literal) {
         args = vec![context.literal(ScalarValue::Null)];
         options.distinct = false;
     } else if args.len() > 1 {
@@ -272,7 +272,7 @@ fn resolve_count(
 
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_array_agg(
+fn array_agg_compacted(
     context: &mut FunctionContextInput<'_>,
     name: &str,
     function: Arc<AggregateUDF>,
@@ -314,7 +314,7 @@ fn resolve_array_agg(
     )));
     context.scalar("coalesce", vec![agg, empty])
 }
-fn resolve_listagg(
+fn listagg(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -364,7 +364,7 @@ fn resolve_listagg(
     let null = context.literal(ScalarValue::Null);
     context.case(vec![(test, result), (yes, null)], None)
 }
-fn resolve_mode(
+fn mode(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -381,7 +381,7 @@ fn resolve_mode(
     }
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_avg(
+fn avg(
     context: &mut FunctionContextInput<'_>,
     name: &str,
     function: Arc<AggregateUDF>,
@@ -412,7 +412,7 @@ fn resolve_avg(
     }
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_first(
+fn first_value(
     context: &mut FunctionContextInput<'_>,
     name: &str,
     function: Arc<AggregateUDF>,
@@ -443,7 +443,7 @@ fn resolve_first(
     }
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_min_max(
+fn duplicate_agnostic_extreme(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -455,7 +455,7 @@ fn resolve_min_max(
     }
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_grouping_id(
+fn grouping_id(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -471,7 +471,7 @@ fn resolve_grouping_id(
     }
     aggregate_call_with_options(context, function, args, options)
 }
-fn resolve_approx_count_distinct(
+fn approx_count_distinct(
     context: &mut FunctionContextInput<'_>,
     _name: &str,
     function: Arc<AggregateUDF>,
@@ -482,7 +482,7 @@ fn resolve_approx_count_distinct(
     context.cast(result, DataType::Int64)
 }
 
-pub(crate) fn string_sum_arguments(
+pub(crate) fn coerce_string_sum_arguments(
     context: &mut FunctionContextInput<'_>,
     args: Vec<Expr>,
     filter: Option<&Expr>,
@@ -507,12 +507,12 @@ pub(crate) fn string_sum_arguments(
         .collect()
 }
 
-fn typed_null_literal(value: &Expr) -> bool {
+fn is_typed_null_literal(value: &Expr) -> bool {
     match &value.kind {
         Deferred::Resolved(ExprKind::Literal(value)) => value.is_null(),
         Deferred::Resolved(
             ExprKind::Cast { expression, .. } | ExprKind::WithMetadata(expression),
-        ) => typed_null_literal(expression),
+        ) => is_typed_null_literal(expression),
         _ => false,
     }
 }
@@ -641,82 +641,79 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
         ),
         (
             "avg",
-            F::aggregate_udf("avg", average::avg_udaf).with_resolver(resolve_avg),
+            F::aggregate_udf("avg", average::avg_udaf).with_resolver(avg),
         ),
         ("mean", F::aggregate_udf("mean", average::avg_udaf)),
         (
             "array_agg",
             F::aggregate_udf("array_agg", array_agg::array_agg_udaf)
-                .with_resolver(resolve_array_agg),
+                .with_resolver(array_agg_compacted),
         ),
         (
             "collect_list",
             F::aggregate_udf("collect_list", array_agg::array_agg_udaf)
-                .with_resolver(resolve_array_agg),
+                .with_resolver(array_agg_compacted),
         ),
         (
             "collect_set",
             F::aggregate_udf("collect_set", array_agg::array_agg_udaf)
-                .with_resolver(resolve_array_agg),
+                .with_resolver(array_agg_compacted),
         ),
         (
             "listagg",
-            F::aggregate_udf("listagg", array_agg::array_agg_udaf).with_resolver(resolve_listagg),
+            F::aggregate_udf("listagg", array_agg::array_agg_udaf).with_resolver(listagg),
         ),
         (
             "string_agg",
-            F::aggregate_udf("string_agg", array_agg::array_agg_udaf)
-                .with_resolver(resolve_listagg),
+            F::aggregate_udf("string_agg", array_agg::array_agg_udaf).with_resolver(listagg),
         ),
         (
             "count",
-            F::aggregate_udf("count", count::count_udaf).with_resolver(resolve_count),
+            F::aggregate_udf("count", count::count_udaf).with_resolver(count),
         ),
         (
             "count_if",
-            F::aggregate_udf("count_if", count::count_udaf).with_resolver(resolve_count_if),
+            F::aggregate_udf("count_if", count::count_udaf).with_resolver(count_if),
         ),
         (
             "sum",
-            F::aggregate_udf("sum", sum::sum_udaf).with_resolver(resolve_sum),
+            F::aggregate_udf("sum", sum::sum_udaf).with_resolver(spark_sum),
         ),
         (
             "first",
-            F::aggregate_udf("first", first_last::first_value_udaf).with_resolver(resolve_first),
+            F::aggregate_udf("first", first_last::first_value_udaf).with_resolver(first_value),
         ),
         (
             "first_value",
             F::aggregate_udf("first_value", first_last::first_value_udaf)
-                .with_resolver(resolve_first),
+                .with_resolver(first_value),
         ),
         (
             "any_value",
-            F::aggregate_udf("any_value", first_last::first_value_udaf)
-                .with_resolver(resolve_first),
+            F::aggregate_udf("any_value", first_last::first_value_udaf).with_resolver(first_value),
         ),
         (
             "last",
-            F::aggregate_udf("last", first_last::last_value_udaf).with_resolver(resolve_first),
+            F::aggregate_udf("last", first_last::last_value_udaf).with_resolver(first_value),
         ),
         (
             "last_value",
-            F::aggregate_udf("last_value", first_last::last_value_udaf)
-                .with_resolver(resolve_first),
+            F::aggregate_udf("last_value", first_last::last_value_udaf).with_resolver(first_value),
         ),
         (
             "min",
-            F::aggregate_udf("min", min_max::min_udaf).with_resolver(resolve_min_max),
+            F::aggregate_udf("min", min_max::min_udaf).with_resolver(duplicate_agnostic_extreme),
         ),
         (
             "max",
-            F::aggregate_udf("max", min_max::max_udaf).with_resolver(resolve_min_max),
+            F::aggregate_udf("max", min_max::max_udaf).with_resolver(duplicate_agnostic_extreme),
         ),
         (
             "approx_count_distinct",
             F::aggregate_udf("approx_count_distinct", || {
                 approx_distinct::approx_distinct_udaf()
             })
-            .with_resolver(resolve_approx_count_distinct),
+            .with_resolver(approx_count_distinct),
         ),
         (
             "approx_percentile",
@@ -745,7 +742,7 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             F::aggregate_udf("percentile_cont", || {
                 percentile_cont::percentile_cont_udaf()
             })
-            .with_resolver(resolve_percentile_cont),
+            .with_resolver(percentile_cont),
         ),
         (
             "bit_and",
@@ -817,14 +814,14 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             F::aggregate_udf("count_min_sketch", || {
                 Arc::new(AggregateUDF::from(CountMinSketchFunction::new()))
             })
-            .with_resolver(resolve_count_min_sketch),
+            .with_resolver(count_min_sketch),
         ),
         (
             "grouping_id",
             F::aggregate_udf("grouping_id", || {
                 Arc::new(AggregateUDF::from(GroupingIdFunction::new()))
             })
-            .with_resolver(resolve_grouping_id),
+            .with_resolver(grouping_id),
         ),
         (
             "histogram_numeric",
@@ -837,21 +834,21 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             F::aggregate_udf("hll_sketch_agg", || {
                 Arc::new(AggregateUDF::from(HllSketchAggFunction::new()))
             })
-            .with_resolver(resolve_hll_sketch_agg),
+            .with_resolver(hll_sketch_agg),
         ),
         (
             "hll_union_agg",
             F::aggregate_udf("hll_union_agg", || {
                 Arc::new(AggregateUDF::from(HllUnionAggFunction::new()))
             })
-            .with_resolver(resolve_hll_sketch_agg),
+            .with_resolver(hll_sketch_agg),
         ),
         (
             "kurtosis",
             F::aggregate_udf("kurtosis", || {
                 Arc::new(AggregateUDF::from(KurtosisFunction::new()))
             })
-            .with_resolver(resolve_kurtosis),
+            .with_resolver(kurtosis),
         ),
         (
             "max_by",
@@ -868,7 +865,7 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
         (
             "mode",
             F::aggregate_udf("mode", || Arc::new(AggregateUDF::from(ModeFunction::new())))
-                .with_resolver(resolve_mode),
+                .with_resolver(mode),
         ),
         (
             "percentile",
@@ -881,14 +878,14 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             F::aggregate_udf("median", || {
                 Arc::new(AggregateUDF::from(PercentileFunction::new()))
             })
-            .with_resolver(resolve_median),
+            .with_resolver(median),
         ),
         (
             "product",
             F::aggregate_udf("product", || {
                 Arc::new(AggregateUDF::from(ProductFunction::new()))
             })
-            .with_resolver(resolve_kurtosis),
+            .with_resolver(kurtosis),
         ),
         (
             "schema_of_variant_agg",
@@ -901,7 +898,7 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             F::aggregate_udf("skewness", || {
                 Arc::new(AggregateUDF::from(SkewnessFunc::new()))
             })
-            .with_resolver(resolve_kurtosis),
+            .with_resolver(kurtosis),
         ),
         (
             "theta_intersection_agg",
@@ -914,14 +911,14 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             F::aggregate_udf("theta_sketch_agg", || {
                 Arc::new(AggregateUDF::from(ThetaSketchAggFunction::new()))
             })
-            .with_resolver(resolve_hll_sketch_agg),
+            .with_resolver(hll_sketch_agg),
         ),
         (
             "theta_union_agg",
             F::aggregate_udf("theta_union_agg", || {
                 Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new()))
             })
-            .with_resolver(resolve_hll_sketch_agg),
+            .with_resolver(hll_sketch_agg),
         ),
         (
             "try_avg",
@@ -997,7 +994,7 @@ pub(crate) fn list_built_in_aggregate_functions() -> Vec<(&'static str, Aggregat
             F::custom("percentile_disc", |context| {
                 Ok(percentile_disc_udaf(context.config.ansi_mode))
             })
-            .with_resolver(resolve_percentile_cont),
+            .with_resolver(percentile_cont),
         ),
     ]
 }

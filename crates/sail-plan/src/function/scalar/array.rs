@@ -1,315 +1,46 @@
 use std::sync::Arc;
 
-use arrow_schema::DataType;
+use arrow_schema::{DataType, TimeUnit};
 use datafusion_common::ScalarValue;
-use datafusion_expr::{Operator, ScalarUDF};
+use datafusion_expr::{HigherOrderUDF, Operator, ScalarUDF, ScalarUDFImpl};
+use datafusion_functions_nested::string::ArrayToString;
+use sail_common::utils::string::SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::array_intersect::ArrayIntersect;
+use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
+use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
+use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
+use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
+use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 
 use crate::analyzer::deferred::Deferred;
-use crate::analyzer::model::*;
+use crate::analyzer::model::{Expr, ExprKind};
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{
-    FunctionContextInput, ScalarFunctionBuilder as F, ScalarFunctionInput,
-};
+use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 
-fn resolve_sequence(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+fn array_repeat(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
-    crate::function::scalar::sequence::sequence(context, values)
+    let (element, count) = values.two()?;
+    let count = context.cast(count, DataType::Int64)?;
+    let element_copy = context.copy_expression(&element)?;
+    let count_copy = context.copy_expression(&count)?;
+    let prototype = context.scalar("array_repeat", vec![element_copy, count_copy])?;
+    let target = crate::analyzer::typing::collection::nullable_array_type(
+        &prototype
+            .result_type
+            .resolved("array_repeat result")?
+            .data_type,
+    );
+    array_repeat_with_nullable_element(context, element, count, target)
 }
 
-fn resolve_array_insert(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (array, position, value) = values.three()?;
-        insert_array(context, array, position, value)?
-    })
-}
-
-fn resolve_array_repeat(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (element, count) = values.two()?;
-        let count = context.cast(count, DataType::Int64)?;
-        let element_copy = context.copy_expression(&element)?;
-        let count_copy = context.copy_expression(&count)?;
-        let prototype = context.scalar("array_repeat", vec![element_copy, count_copy])?;
-        let target = crate::analyzer::typing::collection::nullable_array_type(
-            &prototype
-                .result_type
-                .resolved("array_repeat result")?
-                .data_type,
-        );
-        repeat_array(context, element, count, target)?
-    })
-}
-
-fn resolve_array_compact(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    compact_array(context, values.one()?)
-}
-
-fn resolve_arrays_zip(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-    let names = input.argument_display_names;
-
-    Ok({
-        let fields = values
-            .iter()
-            .zip(names)
-            .enumerate()
-            .map(|(i, (v, n))| match v.kind {
-                Deferred::Resolved(
-                    ExprKind::Attribute(_)
-                    | ExprKind::OuterAttribute { .. }
-                    | ExprKind::WithMetadata(_),
-                ) => n.clone(),
-                _ => i.to_string(),
-            })
-            .collect();
-        context.scalar_udf(Arc::new(ScalarUDF::from(ArraysZip::new(fields))), values)?
-    })
-}
-
-fn resolve_slice(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (array, start, length) = values.three()?;
-        let output_type = array.result_type.resolved("slice input")?.data_type.clone();
-        let array = crate::function::scalar::collection::list_nullability(context, array, true)?;
-        let start = context.cast(start, DataType::Int64)?;
-        let length = context.cast(length, DataType::Int64)?;
-        let start_copy = context.copy_expression(&start)?;
-        let end = context.binary(start_copy, Operator::Plus, length)?;
-        let one = context.literal(ScalarValue::Int64(Some(1)));
-        let end = context.binary(end, Operator::Minus, one)?;
-        let result = context.scalar("array_slice", vec![array, start, end])?;
-        context.cast(result, output_type)?
-    })
-}
-
-fn resolve_sort_array(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (array, ascending) = match values.len() {
-            1 => (values.one()?, true),
-            2 => {
-                let (array, order) = values.two()?;
-                let ScalarValue::Boolean(Some(order)) =
-                    crate::analyzer::lowering::evaluate_constant(&order)?
-                else {
-                    return Err(PlanError::invalid("Invalid asc value for sort_array"));
-                };
-                (array, order)
-            }
-            n => {
-                return Err(PlanError::invalid(format!(
-                    "sort_array requires 1 or 2 arguments, got {n}"
-                )));
-            }
-        };
-        let direction = context.literal(ScalarValue::Utf8(Some(
-            if ascending { "ASC" } else { "DESC" }.into(),
-        )));
-        let nulls = context.literal(ScalarValue::Utf8(Some(
-            if ascending {
-                "NULLS FIRST"
-            } else {
-                "NULLS LAST"
-            }
-            .into(),
-        )));
-        context.scalar("array_sort", vec![array, direction, nulls])?
-    })
-}
-
-fn resolve_array_append(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (array, element) = values.two()?;
-        let copy = context.copy_expression(&array)?;
-        let condition = context.is_not_null(copy);
-        let array = crate::function::scalar::collection::list_nullability(context, array, true)?;
-        let value = if name == "array_append" {
-            context.scalar(name, vec![array, element])?
-        } else {
-            context.scalar(name, vec![element, array])?
-        };
-        let value = crate::function::scalar::collection::list_nullability(context, value, true)?;
-        context.case(vec![(condition, value)], None)?
-    })
-}
-
-fn resolve_get(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (array, element) = values.two()?;
-        let one = context.literal(ScalarValue::Int64(Some(1)));
-        let element = context.binary(element, Operator::Plus, one)?;
-        context.scalar("array_element", vec![array, element])?
-    })
-}
-
-fn resolve_array_contains(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (array, value) = values.two()?;
-        let copy = context.copy_expression(&array)?;
-        let result = context.scalar("array_has", vec![copy, value])?;
-        let present = context.is_not_null(array);
-        let no = context.literal(ScalarValue::Boolean(Some(false)));
-        let fallback = context.case(vec![(present, no)], None)?;
-        context.scalar("coalesce", vec![result, fallback])?
-    })
-}
-
-fn resolve_array_contains_all(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (array, value) = values.two()?;
-        let result = context.scalar("array_has_all", vec![array, value])?;
-        let no = context.literal(ScalarValue::Boolean(Some(false)));
-        context.scalar("coalesce", vec![result, no])?
-    })
-}
-
-fn resolve_array_size(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let result = context.scalar("array_length", vec![values.one()?])?;
-        context.cast(result, DataType::Int32)?
-    })
-}
-
-fn resolve_array_remove(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (a, b) = values.two()?;
-        context.scalar("array_remove_all", vec![a, b])?
-    })
-}
-
-fn resolve_arrays_overlap(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (left, right) = values.two()?;
-        let target = crate::analyzer::typing::collection::list_nullability(
-            &left.result_type.resolved("array overlap left")?.data_type,
-            true,
-        );
-        let left = context.cast(left, target.clone())?;
-        let right = context.cast(right, target.clone())?;
-        let null = context.literal(ScalarValue::Null);
-        let singleton = context.scalar("make_array", vec![null])?;
-        let singleton = context.cast(singleton, target)?;
-        let singleton_copy = context.copy_expression(&singleton)?;
-        let copy = context.copy_expression(&left)?;
-        let left_nulls = context.scalar("array_has_any", vec![copy, singleton_copy])?;
-        let copy = context.copy_expression(&right)?;
-        let right_nulls = context.scalar("array_has_any", vec![copy, singleton])?;
-        let has_nulls = context.binary(left_nulls, Operator::Or, right_nulls)?;
-        let copy = context.copy_expression(&left)?;
-        let left_null = context.is_null(copy);
-        let copy = context.copy_expression(&right)?;
-        let right_null = context.is_null(copy);
-        let either_null = context.binary(left_null, Operator::Or, right_null)?;
-        let copy = context.copy_expression(&left)?;
-        let compact_left = compact_array(context, copy)?;
-        let copy = context.copy_expression(&right)?;
-        let compact_right = compact_array(context, copy)?;
-        let overlap = context.scalar("array_has_any", vec![compact_left, compact_right])?;
-        let null = context.literal(ScalarValue::Null);
-        let null_overlap = context.binary(overlap, Operator::Or, null)?;
-        let overlap = context.scalar("array_has_any", vec![left, right])?;
-        let null = context.literal(ScalarValue::Null);
-        let yes = context.literal(ScalarValue::Boolean(Some(true)));
-        context.case(
-            vec![
-                (either_null, null),
-                (has_nulls, null_overlap),
-                (yes, overlap),
-            ],
-            None,
-        )?
-    })
-}
-
-fn resolve_flatten(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let array = values.one()?;
-        let target = crate::analyzer::typing::collection::nullable_array_type(
-            &array.result_type.resolved("flatten input")?.data_type,
-        );
-        let array = context.cast(array, target.clone())?;
-        let null = context.literal(ScalarValue::Null);
-        let singleton = context.scalar("make_array", vec![null])?;
-        let singleton = context.cast(singleton, target)?;
-        let copy = context.copy_expression(&array)?;
-        let has_null = context.scalar("array_has_any", vec![copy, singleton])?;
-        let no_null = context.not(has_null)?;
-        let flattened = context.scalar("flatten", vec![array])?;
-        context.case(vec![(no_null, flattened)], None)?
-    })
-}
-
-fn resolve_array_sort(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    match input.arguments.len() {
-        1 => {
-            let array = input.arguments.one()?;
-            let direction = input.context.literal(ScalarValue::Utf8(Some("ASC".into())));
-            let nulls = input
-                .context
-                .literal(ScalarValue::Utf8(Some("NULLS LAST".into())));
-            input
-                .context
-                .scalar("array_sort", vec![array, direction, nulls])
-        }
-        _ => input.context.scalar("array_sort", input.arguments),
-    }
-}
-
-pub(crate) fn compact_array(
-    context: &mut FunctionContextInput<'_>,
-    value: Expr,
-) -> PlanResult<Expr> {
-    context.scalar_udf(
-        Arc::new(ScalarUDF::from(SparkArrayCompact::new())),
-        vec![value],
-    )
-}
-
-pub(crate) fn repeat_array(
+pub(crate) fn array_repeat_with_nullable_element(
     context: &mut FunctionContextInput<'_>,
     element: Expr,
     count: Expr,
@@ -328,14 +59,145 @@ pub(crate) fn repeat_array(
     context.cast(result, target)
 }
 
-pub(crate) fn insert_array(
+pub(crate) fn array_compact(
     context: &mut FunctionContextInput<'_>,
-    array: Expr,
-    position: Expr,
     value: Expr,
 ) -> PlanResult<Expr> {
+    context.scalar_udf(
+        Arc::new(ScalarUDF::from(SparkArrayCompact::new())),
+        vec![value],
+    )
+}
+
+fn arrays_zip(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+    let names = input.argument_display_names;
+
+    let fields = values
+        .iter()
+        .zip(names)
+        .enumerate()
+        .map(|(i, (v, n))| match v.kind {
+            Deferred::Resolved(
+                ExprKind::Attribute(_)
+                | ExprKind::OuterAttribute { .. }
+                | ExprKind::WithMetadata(_),
+            ) => n.clone(),
+            _ => i.to_string(),
+        })
+        .collect();
+    context.scalar_udf(Arc::new(ScalarUDF::from(ArraysZip::new(fields))), values)
+}
+
+fn slice(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (array, start, length) = values.three()?;
+    let output_type = array.result_type.resolved("slice input")?.data_type.clone();
+    let array = cast_list_value_nullability(context, array, true)?;
+    let start = context.cast(start, DataType::Int64)?;
+    let length = context.cast(length, DataType::Int64)?;
+    let start_copy = context.copy_expression(&start)?;
+    let end = context.binary(start_copy, Operator::Plus, length)?;
+    let one = context.literal(ScalarValue::Int64(Some(1)));
+    let end = context.binary(end, Operator::Minus, one)?;
+    let result = context.scalar("array_slice", vec![array, start, end])?;
+    context.cast(result, output_type)
+}
+
+fn sort_array(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (array, ascending) = match values.len() {
+        1 => (values.one()?, true),
+        2 => {
+            let (array, order) = values.two()?;
+            let ScalarValue::Boolean(Some(order)) =
+                crate::analyzer::lowering::evaluate_constant(&order)?
+            else {
+                return Err(PlanError::invalid("Invalid asc value for sort_array"));
+            };
+            (array, order)
+        }
+        n => {
+            return Err(PlanError::invalid(format!(
+                "sort_array requires 1 or 2 arguments, got {n}"
+            )));
+        }
+    };
+    let direction = context.literal(ScalarValue::Utf8(Some(
+        if ascending { "ASC" } else { "DESC" }.into(),
+    )));
+    let nulls = context.literal(ScalarValue::Utf8(Some(
+        if ascending {
+            "NULLS FIRST"
+        } else {
+            "NULLS LAST"
+        }
+        .into(),
+    )));
+    context.scalar("array_sort", vec![array, direction, nulls])
+}
+
+fn array_append(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (array, element) = values.two()?;
     let copy = context.copy_expression(&array)?;
-    let array_input = crate::function::scalar::collection::list_nullability(context, copy, true)?;
+    let condition = context.is_not_null(copy);
+    let array = cast_list_value_nullability(context, array, true)?;
+    let value = if name == "array_append" {
+        context.scalar(name, vec![array, element])?
+    } else {
+        context.scalar(name, vec![element, array])?
+    };
+    let value = cast_list_value_nullability(context, value, true)?;
+    context.case(vec![(condition, value)], None)
+}
+
+fn array_element(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (array, element) = values.two()?;
+    let one = context.literal(ScalarValue::Int64(Some(1)));
+    let element = context.binary(element, Operator::Plus, one)?;
+    context.scalar("array_element", vec![array, element])
+}
+
+fn array_contains(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (array, value) = values.two()?;
+    let copy = context.copy_expression(&array)?;
+    let result = context.scalar("array_has", vec![copy, value])?;
+    let present = context.is_not_null(array);
+    let no = context.literal(ScalarValue::Boolean(Some(false)));
+    let fallback = context.case(vec![(present, no)], None)?;
+    context.scalar("coalesce", vec![result, fallback])
+}
+
+fn array_contains_all(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (array, value) = values.two()?;
+    let result = context.scalar("array_has_all", vec![array, value])?;
+    let no = context.literal(ScalarValue::Boolean(Some(false)));
+    context.scalar("coalesce", vec![result, no])
+}
+
+fn array_insert(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let (array, position, value) = input.arguments.three()?;
+
+    let copy = context.copy_expression(&array)?;
+    let array_input = cast_list_value_nullability(context, copy, true)?;
     let copy = context.copy_expression(&array_input)?;
     let value_copy = context.copy_expression(&value)?;
     let prototype = context.scalar("array_append", vec![copy, value_copy])?;
@@ -381,12 +243,13 @@ pub(crate) fn insert_array(
     let before = context.binary(copy, Operator::Lt, zero)?;
     let copy = context.copy_expression(&value)?;
     let one = context.literal(ScalarValue::Int64(Some(1)));
-    let first = repeat_array(context, copy, one, target.clone())?;
+    let first = array_repeat_with_nullable_element(context, copy, one, target.clone())?;
     let copy = context.copy_expression(&index)?;
     let zero = context.literal(ScalarValue::Int64(Some(0)));
     let padding_length = context.binary(zero, Operator::Minus, copy)?;
     let null = context.literal(ScalarValue::Null);
-    let padding = repeat_array(context, null, padding_length, target.clone())?;
+    let padding =
+        array_repeat_with_nullable_element(context, null, padding_length, target.clone())?;
     let copy = context.copy_expression(&array_input)?;
     let result = context.scalar("array_concat", vec![first, padding, copy])?;
     branches.push((before, result));
@@ -414,7 +277,7 @@ pub(crate) fn insert_array(
     let prefix = context.scalar("array_slice", vec![copy, one, end])?;
     let copy = context.copy_expression(&value)?;
     let one = context.literal(ScalarValue::Int64(Some(1)));
-    let inserted = repeat_array(context, copy, one, target.clone())?;
+    let inserted = array_repeat_with_nullable_element(context, copy, one, target.clone())?;
     let copy = context.copy_expression(&index)?;
     let one = context.literal(ScalarValue::Int64(Some(1)));
     let start = context.binary(copy, Operator::Plus, one)?;
@@ -437,74 +300,251 @@ pub(crate) fn insert_array(
     let beyond = context.binary(copy, Operator::Gt, end)?;
     let padding_length = context.binary(index, Operator::Minus, length)?;
     let null = context.literal(ScalarValue::Null);
-    let padding = repeat_array(context, null, padding_length, target.clone())?;
+    let padding =
+        array_repeat_with_nullable_element(context, null, padding_length, target.clone())?;
     let one = context.literal(ScalarValue::Int64(Some(1)));
-    let last = repeat_array(context, value, one, target)?;
+    let last = array_repeat_with_nullable_element(context, value, one, target)?;
     let result = context.scalar("array_concat", vec![array_input, padding, last])?;
     branches.push((beyond, result));
     context.case(branches, None)
 }
 
-pub(super) fn list_built_in_array_functions()
--> Vec<(&'static str, crate::function::common::ScalarFunction)> {
+fn arrays_overlap(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (left, right) = values.two()?;
+    let target = crate::analyzer::typing::collection::list_nullability(
+        &left.result_type.resolved("array overlap left")?.data_type,
+        true,
+    );
+    let left = context.cast(left, target.clone())?;
+    let right = context.cast(right, target.clone())?;
+    let null = context.literal(ScalarValue::Null);
+    let singleton = context.scalar("make_array", vec![null])?;
+    let singleton = context.cast(singleton, target)?;
+    let singleton_copy = context.copy_expression(&singleton)?;
+    let copy = context.copy_expression(&left)?;
+    let left_nulls = context.scalar("array_has_any", vec![copy, singleton_copy])?;
+    let copy = context.copy_expression(&right)?;
+    let right_nulls = context.scalar("array_has_any", vec![copy, singleton])?;
+    let has_nulls = context.binary(left_nulls, Operator::Or, right_nulls)?;
+    let copy = context.copy_expression(&left)?;
+    let left_null = context.is_null(copy);
+    let copy = context.copy_expression(&right)?;
+    let right_null = context.is_null(copy);
+    let either_null = context.binary(left_null, Operator::Or, right_null)?;
+    let copy = context.copy_expression(&left)?;
+    let compact_left = array_compact(context, copy)?;
+    let copy = context.copy_expression(&right)?;
+    let compact_right = array_compact(context, copy)?;
+    let overlap = context.scalar("array_has_any", vec![compact_left, compact_right])?;
+    let null = context.literal(ScalarValue::Null);
+    let null_overlap = context.binary(overlap, Operator::Or, null)?;
+    let overlap = context.scalar("array_has_any", vec![left, right])?;
+    let null = context.literal(ScalarValue::Null);
+    let yes = context.literal(ScalarValue::Boolean(Some(true)));
+    context.case(
+        vec![
+            (either_null, null),
+            (has_nulls, null_overlap),
+            (yes, overlap),
+        ],
+        None,
+    )
+}
+
+fn flatten(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let array = values.one()?;
+    let target = crate::analyzer::typing::collection::nullable_array_type(
+        &array.result_type.resolved("flatten input")?.data_type,
+    );
+    let array = context.cast(array, target.clone())?;
+    let null = context.literal(ScalarValue::Null);
+    let singleton = context.scalar("make_array", vec![null])?;
+    let singleton = context.cast(singleton, target)?;
+    let copy = context.copy_expression(&array)?;
+    let has_null = context.scalar("array_has_any", vec![copy, singleton])?;
+    let no_null = context.not(has_null)?;
+    let flattened = context.scalar("flatten", vec![array])?;
+    context.case(vec![(no_null, flattened)], None)
+}
+
+fn sequence(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let arguments = input.arguments;
+
+    if !matches!(arguments.len(), 2 | 3) {
+        return Err(PlanError::invalid(format!(
+            "sequence requires 2 or 3 arguments, got {}",
+            arguments.len()
+        )));
+    }
+    let types = arguments
+        .iter()
+        .map(|a| {
+            Ok(a.result_type
+                .resolved("sequence argument")?
+                .data_type
+                .clone())
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    let config = &context.config;
+    let udf = SparkSequence::new(config.session_timezone.clone(), config.ansi_mode);
+    let targets = udf.coerce_types(&types)?;
+    let arguments = arguments
+        .into_iter()
+        .zip(types)
+        .zip(targets)
+        .map(|((argument, source), target)| {
+            if source == target {
+                return Ok(argument);
+            }
+            match (&source, &target) {
+                (source, target) if source.is_string() && target.is_integer() => {
+                    let spaces = context.literal(ScalarValue::Utf8(Some(
+                        SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS.into(),
+                    )));
+                    let argument = context.scalar("btrim", vec![argument, spaces])?;
+                    context.cast(argument, DataType::Int64)
+                }
+                (source, DataType::Date32) if source.is_string() => {
+                    let spaces = context.literal(ScalarValue::Utf8(Some(
+                        SPARK_WHITESPACE_OR_ISO_CONTROL_CHARACTERS.into(),
+                    )));
+                    let argument = context.scalar("btrim", vec![argument, spaces])?;
+                    context.scalar_udf(
+                        Arc::new(ScalarUDF::from(SparkDate::new(false))),
+                        vec![argument],
+                    )
+                }
+                (source, DataType::Timestamp(TimeUnit::Microsecond, timezone))
+                    if source.is_string() =>
+                {
+                    let function = ScalarUDF::from(SparkTimestamp::try_new(
+                        timezone.clone(),
+                        context.config.ansi_mode,
+                        false,
+                    )?);
+                    context.scalar_udf(Arc::new(function), vec![argument])
+                }
+                (
+                    DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, None),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+                ) => {
+                    let ntz =
+                        context.cast(argument, DataType::Timestamp(TimeUnit::Microsecond, None))?;
+                    if crate::analyzer::typing::temporal::is_spark_compatible_arrow_fixed_offset(
+                        timezone.as_ref(),
+                    ) {
+                        return context.cast(ntz, target);
+                    }
+                    let source = context.literal(ScalarValue::Utf8(Some(timezone.to_string())));
+                    let utc = context.literal(ScalarValue::Utf8(Some("UTC".into())));
+                    let value = context.scalar_udf(
+                        Arc::new(ScalarUDF::from(ConvertTz::new(false))),
+                        vec![source, utc, ntz],
+                    )?;
+                    let value = context.cast(value, DataType::Int64)?;
+                    context.cast(value, target)
+                }
+                _ => context.cast(argument, target),
+            }
+        })
+        .collect::<PlanResult<Vec<_>>>()?;
+    let mut has_python = false;
+    for argument in &arguments {
+        has_python |= argument.any(&|node| match node {
+            ExprKind::ScalarFunction { function, .. } => {
+                function
+                    .inner()
+                    .is::<sail_python_udf::udf::pyspark_udf::PySparkUDF>()
+            }
+            _ => false,
+        })?;
+    }
+    if has_python {
+        return context.scalar_udf(Arc::new(ScalarUDF::from(udf)), arguments);
+    }
+    crate::function::scalar::lambda::lazy_arguments(
+        context,
+        Arc::new(HigherOrderUDF::new_from_impl(SparkSequenceLazy::new(udf))),
+        arguments,
+    )
+}
+
+fn resolve_array_size(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let result = context.scalar("array_length", vec![values.one()?])?;
+    context.cast(result, DataType::Int32)
+}
+
+fn resolve_array_remove(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (a, b) = values.two()?;
+    context.scalar("array_remove_all", vec![a, b])
+}
+
+pub(crate) fn cast_list_value_nullability(
+    context: &mut FunctionContextInput<'_>,
+    value: Expr,
+    nullable: bool,
+) -> PlanResult<Expr> {
+    let target = crate::analyzer::typing::collection::list_nullability(
+        &value.result_type.resolved("list input")?.data_type,
+        nullable,
+    );
+    context.cast(value, target)
+}
+
+pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
+
     vec![
+        ("array", F::udf(SparkArray::new())),
         (
-            "array",
-            F::udf(sail_function::scalar::array::spark_array::SparkArray::new()),
+            "array_append",
+            F::custom(|input| array_append(input, "array_append")),
         ),
         (
-            "array_concat",
-            F::udf(sail_function::scalar::collection::spark_concat::SparkConcat::new()),
+            "array_compact",
+            F::custom(|mut input| array_compact(&mut input.context, input.arguments.one()?)),
         ),
+        ("array_contains", F::custom(array_contains)),
+        ("array_contains_all", F::custom(array_contains_all)),
         ("array_distinct", F::kernel("array_distinct")),
         ("array_except", F::kernel("array_except")),
+        ("array_insert", F::custom(array_insert)),
+        ("array_intersect", F::udf(ArrayIntersect::new())),
+        ("array_join", F::udf(ArrayToString::new())),
+        ("array_max", F::udf(ArrayMax::new())),
+        ("array_min", F::udf(ArrayMin::new())),
+        ("array_position", F::udf(SparkArrayPosition::new())),
         (
-            "array_intersect",
-            F::udf(sail_function::scalar::array::array_intersect::ArrayIntersect::new()),
+            "array_prepend",
+            F::custom(|input| array_append(input, "array_prepend")),
         ),
-        (
-            "array_join",
-            F::udf(datafusion_functions_nested::string::ArrayToString::new()),
-        ),
-        (
-            "array_max",
-            F::udf(sail_function::scalar::array::spark_array_min_max::ArrayMax::new()),
-        ),
-        (
-            "array_min",
-            F::udf(sail_function::scalar::array::spark_array_min_max::ArrayMin::new()),
-        ),
-        (
-            "array_position",
-            F::udf(sail_function::scalar::array::array_position::SparkArrayPosition::new()),
-        ),
+        ("array_remove", F::custom(resolve_array_remove)),
+        ("array_repeat", F::custom(array_repeat)),
+        ("array_size", F::custom(resolve_array_size)),
         ("array_union", F::kernel("array_union")),
+        ("arrays_overlap", F::custom(arrays_overlap)),
+        ("arrays_zip", F::custom(arrays_zip)),
+        ("flatten", F::custom(flatten)),
+        ("get", F::custom(array_element)),
+        ("sequence", F::custom(sequence)),
         (
             "shuffle",
             F::scalar_udf(datafusion_spark::function::array::shuffle),
         ),
-        ("sequence", F::custom(resolve_sequence)),
-        ("array_insert", F::custom(resolve_array_insert)),
-        ("array_repeat", F::custom(resolve_array_repeat)),
-        ("array_compact", F::custom(resolve_array_compact)),
-        ("arrays_zip", F::custom(resolve_arrays_zip)),
-        ("slice", F::custom(resolve_slice)),
-        ("sort_array", F::custom(resolve_sort_array)),
-        (
-            "array_append",
-            F::custom(|input| resolve_array_append(input, "array_append")),
-        ),
-        (
-            "array_prepend",
-            F::custom(|input| resolve_array_append(input, "array_prepend")),
-        ),
-        ("get", F::custom(resolve_get)),
-        ("array_contains", F::custom(resolve_array_contains)),
-        ("array_contains_all", F::custom(resolve_array_contains_all)),
-        ("array_size", F::custom(resolve_array_size)),
-        ("array_remove", F::custom(resolve_array_remove)),
-        ("arrays_overlap", F::custom(resolve_arrays_overlap)),
-        ("flatten", F::custom(resolve_flatten)),
-        ("array_sort", F::custom(resolve_array_sort)),
+        ("slice", F::custom(slice)),
+        ("sort_array", F::custom(sort_array)),
     ]
 }

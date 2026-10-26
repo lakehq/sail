@@ -195,7 +195,7 @@ impl PlanResolver<'_> {
                 return Err(PlanError::internal("write column has no value"));
             };
             let value = self.align_store_value(value, &column.data_type, false)?;
-            let value = crate::function::scalar::datetime::declare_nullable(
+            let value = crate::function::scalar::datetime::declare_nullable_result(
                 &mut self.context.function_context(),
                 value,
                 column.nullable,

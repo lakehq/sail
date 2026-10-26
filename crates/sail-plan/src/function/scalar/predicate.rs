@@ -4,17 +4,18 @@ use arrow_schema::{DataType, TimeUnit};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{HigherOrderUDF, Operator, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
+use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::analyzer::deferred::Deferred;
-use crate::analyzer::model::*;
+use crate::analyzer::model::{Expr, ExprKind, ExprType, FunctionArg, QuerySchema};
 use crate::analyzer::typing::predicate::*;
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{
-    FunctionContextInput, ScalarFunctionBuilder as F, ScalarFunctionInput,
-};
+use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 
 fn resolve_pattern(
     mut input: ScalarFunctionInput<'_>,
@@ -281,9 +282,7 @@ pub(crate) fn in_coercion(
                 kind: Deferred::Resolved(ExprKind::LambdaVariable(parameter.id)),
             };
             let body = in_coercion(context, variable, element)?;
-            let function = Arc::new(HigherOrderUDF::new_from_impl(
-                sail_function::scalar::array::spark_array_transform::SparkArrayTransform::new(),
-            ));
+            let function = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new()));
             let fields = vec![
                 datafusion_expr::ValueOrLambda::Value(
                     value.result_type.resolved("IN array")?.to_field(""),
@@ -338,11 +337,9 @@ pub(crate) fn in_coercion(
                 .map(|(f, n)| Arc::new(f.as_ref().clone().with_name(n)))
                 .collect::<Vec<_>>();
             value = context.scalar_udf(
-                Arc::new(ScalarUDF::from(
-                    sail_function::scalar::spark_struct_rename::SparkStructRename::new(
-                        DataType::Struct(fields.into()),
-                    ),
-                )),
+                Arc::new(ScalarUDF::from(SparkStructRename::new(DataType::Struct(
+                    fields.into(),
+                )))),
                 vec![value],
             )?;
             for (name, policy) in names.iter().zip(policies) {
@@ -354,11 +351,7 @@ pub(crate) fn in_coercion(
                 let field = context.scalar("get_field", vec![copied, key])?;
                 let field = in_coercion(context, field, policy)?;
                 value = context.scalar_udf(
-                    Arc::new(ScalarUDF::from(
-                        sail_function::scalar::update_struct_field::UpdateStructField::new(vec![
-                            name.clone(),
-                        ]),
-                    )),
+                    Arc::new(ScalarUDF::from(UpdateStructField::new(vec![name.clone()]))),
                     vec![value, field],
                 )?;
             }
@@ -375,11 +368,9 @@ pub(crate) fn in_coercion(
                 .map(|(f, n)| Arc::new(f.as_ref().clone().with_name(n)))
                 .collect::<Vec<_>>();
             context.scalar_udf(
-                Arc::new(ScalarUDF::from(
-                    sail_function::scalar::spark_struct_rename::SparkStructRename::new(
-                        DataType::Struct(fields.into()),
-                    ),
-                )),
+                Arc::new(ScalarUDF::from(SparkStructRename::new(DataType::Struct(
+                    fields.into(),
+                )))),
                 vec![value],
             )
         }
@@ -467,76 +458,6 @@ fn interval_metadata(
     Ok(combined)
 }
 
-pub(super) fn list_built_in_operator_functions()
--> Vec<(&'static str, crate::function::common::ScalarFunction)> {
-    vec![
-        ("=", F::binary_op(Operator::Eq)),
-        ("==", F::binary_op(Operator::Eq)),
-        ("!=", F::binary_op(Operator::NotEq)),
-        ("<>", F::binary_op(Operator::NotEq)),
-        ("<", F::binary_op(Operator::Lt)),
-        ("<=", F::binary_op(Operator::LtEq)),
-        (">", F::binary_op(Operator::Gt)),
-        (">=", F::binary_op(Operator::GtEq)),
-        ("<=>", F::binary_op(Operator::IsNotDistinctFrom)),
-        ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
-        ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
-        ("<<", F::binary_op(Operator::BitwiseShiftLeft)),
-        ("shiftright", F::binary_op(Operator::BitwiseShiftRight)),
-        (">>", F::binary_op(Operator::BitwiseShiftRight)),
-        ("and", F::binary_op(Operator::And)),
-        ("or", F::binary_op(Operator::Or)),
-        ("&", F::binary_op(Operator::BitwiseAnd)),
-        ("|", F::binary_op(Operator::BitwiseOr)),
-        ("^", F::binary_op(Operator::BitwiseXor)),
-        ("not", F::custom(resolve_not)),
-        ("!", F::custom(resolve_not)),
-        (
-            "isnull",
-            F::custom(|mut input| Ok(input.context.is_null(input.arguments.one()?))),
-        ),
-        (
-            "isnotnull",
-            F::custom(|mut input| Ok(input.context.is_not_null(input.arguments.one()?))),
-        ),
-    ]
-}
-
-pub(super) fn list_built_in_predicate_functions()
--> Vec<(&'static str, crate::function::common::ScalarFunction)> {
-    vec![
-        ("between", F::kernel("between")),
-        ("isnan", F::kernel("isnan")),
-        (
-            "in",
-            F::custom(|mut input| {
-                let (value, list) = input.arguments.at_least_one()?;
-                in_list(&mut input.context, value, list, false)
-            }),
-        ),
-        (
-            "like",
-            F::custom(|input| resolve_pattern(input, "like", false)),
-        ),
-        (
-            "ilike",
-            F::custom(|input| resolve_pattern(input, "ilike", false)),
-        ),
-        (
-            "rlike",
-            F::custom(|input| resolve_pattern(input, "rlike", true)),
-        ),
-        (
-            "regexp",
-            F::custom(|input| resolve_pattern(input, "regexp", true)),
-        ),
-        (
-            "regexp_like",
-            F::custom(|input| resolve_pattern(input, "regexp_like", true)),
-        ),
-    ]
-}
-
 fn resolve_not(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let value = input.arguments.one()?;
     let nullable = value.result_type.resolved("predicate input")?.nullable;
@@ -546,4 +467,61 @@ fn resolve_not(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
         kind: Deferred::Resolved(ExprKind::Not(Box::new(expression))),
         result_type: Deferred::Resolved(ExprType::new(DataType::Boolean, nullable)),
     })
+}
+
+pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
+
+    vec![
+        ("!", F::custom(resolve_not)),
+        ("!=", F::binary_op(Operator::NotEq)),
+        ("<", F::binary_op(Operator::Lt)),
+        ("<=", F::binary_op(Operator::LtEq)),
+        ("<=>", F::binary_op(Operator::IsNotDistinctFrom)),
+        ("=", F::binary_op(Operator::Eq)),
+        ("==", F::binary_op(Operator::Eq)),
+        (">", F::binary_op(Operator::Gt)),
+        (">=", F::binary_op(Operator::GtEq)),
+        ("and", F::binary_op(Operator::And)),
+        (
+            "ilike",
+            F::custom(|input| resolve_pattern(input, "ilike", false)),
+        ),
+        (
+            "in",
+            F::custom(|mut input| {
+                let (value, list) = input.arguments.at_least_one()?;
+                in_list(&mut input.context, value, list, false)
+            }),
+        ),
+        ("isnan", F::kernel("isnan")),
+        (
+            "isnotnull",
+            F::custom(|mut input| Ok(input.context.is_not_null(input.arguments.one()?))),
+        ),
+        (
+            "isnull",
+            F::custom(|mut input| Ok(input.context.is_null(input.arguments.one()?))),
+        ),
+        (
+            "like",
+            F::custom(|input| resolve_pattern(input, "like", false)),
+        ),
+        ("not", F::custom(resolve_not)),
+        ("or", F::binary_op(Operator::Or)),
+        (
+            "regexp",
+            F::custom(|input| resolve_pattern(input, "regexp", true)),
+        ),
+        (
+            "regexp_like",
+            F::custom(|input| resolve_pattern(input, "regexp_like", true)),
+        ),
+        (
+            "rlike",
+            F::custom(|input| resolve_pattern(input, "rlike", true)),
+        ),
+        ("<>", F::binary_op(Operator::NotEq)),
+        ("between", F::kernel("between")),
+    ]
 }

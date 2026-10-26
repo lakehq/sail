@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion_expr::ScalarUDF;
+use sail_function::scalar::jev::JevKind;
 
 /// Backend kernels are handles only; argument and result typing stays in native analysis.
 pub(crate) fn default_scalar_kernel(name: &str) -> Option<Arc<ScalarUDF>> {
@@ -18,7 +19,7 @@ pub(crate) fn default_scalar_kernel(name: &str) -> Option<Arc<ScalarUDF>> {
             }
             functions
         });
-    sail_function::scalar::jev::JevKind::from_name(name)
+    JevKind::from_name(name)
         .map(|kind| Arc::new(sail_function::scalar::jev::jev_udf(kind)))
         .or_else(|| FUNCTIONS.get(name).cloned())
 }

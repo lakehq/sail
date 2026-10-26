@@ -8,7 +8,7 @@ use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 
-use crate::analyzer::model::*;
+use crate::analyzer::model::{Expr, ExprKind};
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     FunctionContextInput, ScalarFunctionBuilder as F, ScalarFunctionInput,
@@ -135,7 +135,7 @@ pub(crate) fn list_built_in_generator_functions()
         (
             "window",
             F::custom(|mut input| {
-                crate::function::scalar::datetime::time_window::window_buckets(
+                crate::function::scalar::datetime::window_buckets(
                     &mut input.context,
                     input.arguments,
                 )

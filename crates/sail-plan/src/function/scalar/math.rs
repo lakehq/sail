@@ -7,23 +7,35 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_interval::SparkDayTimeIntervalToCalendarInterval;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::math::rand_poisson::RandPoisson;
+use sail_function::scalar::math::randn::Randn;
+use sail_function::scalar::math::random::Random;
+use sail_function::scalar::math::spark_abs::SparkAbs;
 use sail_function::scalar::math::spark_bin::SparkBin;
+use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
+use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
+use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_sqrt::SparkSqrt;
+use sail_function::scalar::math::spark_try_add::SparkTryAdd;
+use sail_function::scalar::math::spark_try_div::SparkTryDiv;
+use sail_function::scalar::math::spark_try_mod::SparkTryMod;
+use sail_function::scalar::math::spark_try_mult::SparkTryMult;
+use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
+use sail_function::scalar::math::spark_unhex::SparkUnHex;
+use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::analyzer::deferred::Deferred;
-use crate::analyzer::model::*;
+use crate::analyzer::model::{Expr, ExprKind};
 use crate::error::{PlanError, PlanResult};
-use crate::function::common::{
-    FunctionContextInput, ScalarFunctionBuilder as F, ScalarFunctionInput,
-};
+use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 
-fn resolve_add(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+fn spark_plus(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
@@ -36,12 +48,12 @@ fn resolve_add(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Exp
     })
 }
 
-fn resolve_subtract(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+fn spark_minus(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
     Ok(match values.len() {
-        1 => negate(context, values.one()?)?,
+        1 => spark_unary_negate(context, values.one()?)?,
         _ => {
             let (left, right) = values.two()?;
             arithmetic(context, name, left, right)?
@@ -49,187 +61,146 @@ fn resolve_subtract(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResul
     })
 }
 
-fn resolve_multiply(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+fn spark_multiply(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
-    Ok({
-        let (left, right) = values.two()?;
-        arithmetic(context, name, left, right)?
-    })
+    let (left, right) = values.two()?;
+    arithmetic(context, name, left, right)
 }
 
-fn resolve_negative(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    negate(&mut input.context, input.arguments.one()?)
+fn is_zero_literal(expression: &Expr) -> bool {
+    match &expression.kind {
+        Deferred::Resolved(ExprKind::Literal(value)) => {
+            value.data_type().is_numeric()
+                && !value.is_null()
+                && value
+                    .cast_to(&DataType::Float64)
+                    .is_ok_and(|v| matches!(v, ScalarValue::Float64(Some(value)) if value == 0.0))
+        }
+        Deferred::Resolved(
+            ExprKind::Cast { expression, .. } | ExprKind::WithMetadata(expression),
+        ) => is_zero_literal(expression),
+        _ => false,
+    }
 }
 
-fn resolve_positive(input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+pub(crate) fn make_safe_divisor(
+    context: &mut FunctionContextInput<'_>,
+    value: Expr,
+    data_type: &DataType,
+    message: &str,
+) -> PlanResult<Expr> {
+    if matches!(data_type, DataType::Interval(_) | DataType::Duration(_)) {
+        return Ok(value);
+    }
+    let zero = context.literal(ScalarValue::Int32(Some(0)));
+    let copy = context.copy_expression(&value)?;
+    let mut condition = context.binary(copy, Operator::Eq, zero)?;
+    if matches!(
+        data_type,
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    ) {
+        let negative_zero = context.literal(ScalarValue::Float64(Some(-0.0)).cast_to(data_type)?);
+        let copy = context.copy_expression(&value)?;
+        let negative = context.binary(copy, Operator::Eq, negative_zero)?;
+        condition = context.binary(condition, Operator::Or, negative)?;
+    }
+    let invalid = if context.config.ansi_mode {
+        let message = context.literal(ScalarValue::Utf8(Some(message.into())));
+        context.scalar_udf(Arc::new(ScalarUDF::from(RaiseError::new())), vec![message])?
+    } else {
+        context.literal(ScalarValue::Null)
+    };
+    context.case(vec![(condition, invalid)], Some(value))
+}
+
+fn power(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let result = context.scalar("power", values)?;
+    context.cast(result, DataType::Float64)
+}
+
+fn hypot(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let (a, b) = values.two()?;
+    let a_copy = context.copy_expression(&a)?;
+    let b_copy = context.copy_expression(&b)?;
+    let a = context.binary(a, Operator::Multiply, a_copy)?;
+    let b = context.binary(b, Operator::Multiply, b_copy)?;
+    let value = context.binary(a, Operator::Plus, b)?;
+    let result = context.scalar("sqrt", vec![value])?;
+    context.cast(result, DataType::Float64)
+}
+
+fn positive(input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     Ok(input.arguments.one()?)
 }
 
-fn resolve_acos(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+fn rint(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
 
-    Ok({
-        let expected = if matches!(name, "atan2" | "log") {
-            2
-        } else {
-            1
-        };
-        crate::analyzer::typing::coercion::validate_arity(name, values.len(), expected)?;
-        let mut values = values
-            .into_iter()
-            .map(|value| context.cast(value, DataType::Float64))
-            .collect::<PlanResult<Vec<_>>>()?;
-        match name {
-            "sqrt" => context.scalar_udf(Arc::new(ScalarUDF::from(SparkSqrt::new())), values)?,
-            "csc" | "sec" => {
-                let denominator =
-                    context.scalar(if name == "csc" { "sin" } else { "cos" }, values)?;
-                let one = context.literal(ScalarValue::Float64(Some(1.0)));
-                context.binary(one, Operator::Divide, denominator)?
-            }
-            "ln" | "log" | "log10" | "log1p" | "log2" => {
-                let mut value = values
-                    .pop()
-                    .ok_or_else(|| PlanError::internal("missing logarithm argument"))?;
-                if name == "log1p" {
-                    let one = context.literal(ScalarValue::Float64(Some(1.0)));
-                    value = context.binary(value, Operator::Plus, one)?;
-                }
-                let copy = context.copy_expression(&value)?;
-                let zero = context.literal(ScalarValue::Float64(Some(0.0)));
-                let positive = context.binary(copy, Operator::Gt, zero)?;
-                values.push(context.case(vec![(positive, value)], None)?);
-                context.scalar(if name == "log1p" { "ln" } else { name }, values)?
-            }
-            _ => context.scalar(name, values)?,
-        }
-    })
+    let result = context.scalar("round", vec![values.one()?])?;
+    context.cast(result, DataType::Float64)
 }
 
-fn resolve_ceil(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+fn eulers_constant(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    values.zero()?;
+    Ok(context.literal(ScalarValue::Float64(Some(std::f64::consts::E))))
+}
+
+fn ceil_floor(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
     let ansi = context.config.ansi_mode;
-    Ok({
-        let mut values = values;
-        if values.len() == 1
-            && matches!(
-                values[0].result_type.resolved("rounding input")?.data_type,
-                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-            )
-        {
-            let value = values.one()?;
-            return context.cast(value, DataType::Int64);
+    let mut values = values;
+    if values.len() == 1
+        && matches!(
+            values[0].result_type.resolved("rounding input")?.data_type,
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+        )
+    {
+        let value = values.one()?;
+        return context.cast(value, DataType::Int64);
+    }
+    if values.len() == 2 {
+        let scale = values
+            .pop()
+            .ok_or_else(|| PlanError::internal("missing scale"))?;
+        let value = crate::analyzer::lowering::evaluate_constant(&scale)?;
+        if value.data_type() != DataType::Int32 {
+            return Err(PlanError::invalid("Target scale must be Integer literal"));
         }
-        if values.len() == 2 {
-            let scale = values
-                .pop()
-                .ok_or_else(|| PlanError::internal("missing scale"))?;
-            let value = crate::analyzer::lowering::evaluate_constant(&scale)?;
-            if value.data_type() != DataType::Int32 {
-                return Err(PlanError::invalid("Target scale must be Integer literal"));
-            }
-            values.push(context.literal(value.cast_to(&DataType::Int32)?));
-        }
-        let function = if name == "floor" {
-            ScalarUDF::from(SparkFloor::new(ansi))
-        } else {
-            ScalarUDF::from(SparkCeil::new(ansi))
-        };
-        context.scalar_udf(Arc::new(function), values)?
-    })
+        values.push(context.literal(value.cast_to(&DataType::Int32)?));
+    }
+    let function = if name == "floor" {
+        ScalarUDF::from(SparkFloor::new(ansi))
+    } else {
+        ScalarUDF::from(SparkCeil::new(ansi))
+    };
+    context.scalar_udf(Arc::new(function), values)
 }
 
-fn resolve_bin(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+fn spark_bin(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
     let ansi = context.config.ansi_mode;
     context.scalar_udf(Arc::new(ScalarUDF::from(SparkBin::new(ansi))), values)
 }
 
-fn resolve_pmod(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+fn spark_pmod(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
     let context = &mut input.context;
     let values = input.arguments;
     let ansi = context.config.ansi_mode;
     context.scalar_udf(Arc::new(ScalarUDF::from(SparkPmod::new(ansi))), values)
-}
-
-fn resolve_pow(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let result = context.scalar("power", values)?;
-        context.cast(result, DataType::Float64)?
-    })
-}
-
-fn resolve_hypot(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let (a, b) = values.two()?;
-        let a_copy = context.copy_expression(&a)?;
-        let b_copy = context.copy_expression(&b)?;
-        let a = context.binary(a, Operator::Multiply, a_copy)?;
-        let b = context.binary(b, Operator::Multiply, b_copy)?;
-        let value = context.binary(a, Operator::Plus, b)?;
-        let result = context.scalar("sqrt", vec![value])?;
-        context.cast(result, DataType::Float64)?
-    })
-}
-
-fn resolve_rint(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let result = context.scalar("round", vec![values.one()?])?;
-        context.cast(result, DataType::Float64)?
-    })
-}
-
-fn resolve_round(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        let mut values = values;
-        if let Some(first) = values.first()
-            && first
-                .result_type
-                .resolved("round value")?
-                .data_type
-                .is_string()
-        {
-            let scale = match values.get(1) {
-                Some(scale) => context.copy_expression(scale)?,
-                None => context.literal(ScalarValue::Int32(Some(0))),
-            };
-            let condition = context.is_null(scale);
-            let null = context.literal(ScalarValue::Utf8(None));
-            let value = values.remove(0);
-            let value = context.case(vec![(condition, null)], Some(value))?;
-            let value = string_to_double(context, value)?;
-            let value = context.try_cast(value, DataType::Float64)?;
-            values.insert(0, value);
-        }
-        context.scalar("round", values)?
-    })
-}
-
-fn resolve_e(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
-    let context = &mut input.context;
-    let values = input.arguments;
-
-    Ok({
-        values.zero()?;
-        context.literal(ScalarValue::Float64(Some(std::f64::consts::E)))
-    })
 }
 
 pub(crate) fn string_to_double(
@@ -243,7 +214,37 @@ pub(crate) fn string_to_double(
     }
 }
 
-pub(crate) fn negate(context: &mut FunctionContextInput<'_>, value: Expr) -> PlanResult<Expr> {
+fn spark_round(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let mut values = values;
+    if let Some(first) = values.first()
+        && first
+            .result_type
+            .resolved("round value")?
+            .data_type
+            .is_string()
+    {
+        let scale = match values.get(1) {
+            Some(scale) => context.copy_expression(scale)?,
+            None => context.literal(ScalarValue::Int32(Some(0))),
+        };
+        let condition = context.is_null(scale);
+        let null = context.literal(ScalarValue::Utf8(None));
+        let value = values.remove(0);
+        let value = context.case(vec![(condition, null)], Some(value))?;
+        let value = string_to_double(context, value)?;
+        let value = context.try_cast(value, DataType::Float64)?;
+        values.insert(0, value);
+    }
+    context.scalar("round", values)
+}
+
+pub(crate) fn spark_unary_negate(
+    context: &mut FunctionContextInput<'_>,
+    value: Expr,
+) -> PlanResult<Expr> {
     let data_type = value
         .result_type
         .resolved("negation input")?
@@ -291,6 +292,49 @@ pub(crate) fn negate(context: &mut FunctionContextInput<'_>, value: Expr) -> Pla
         ))),
         vec![value],
     )
+}
+
+fn spark_negative(mut input: ScalarFunctionInput<'_>) -> PlanResult<Expr> {
+    spark_unary_negate(&mut input.context, input.arguments.one()?)
+}
+
+fn resolve_acos(mut input: ScalarFunctionInput<'_>, name: &str) -> PlanResult<Expr> {
+    let context = &mut input.context;
+    let values = input.arguments;
+
+    let expected = if matches!(name, "atan2" | "log") {
+        2
+    } else {
+        1
+    };
+    crate::analyzer::typing::coercion::validate_arity(name, values.len(), expected)?;
+    let mut values = values
+        .into_iter()
+        .map(|value| context.cast(value, DataType::Float64))
+        .collect::<PlanResult<Vec<_>>>()?;
+    Ok(match name {
+        "sqrt" => context.scalar_udf(Arc::new(ScalarUDF::from(SparkSqrt::new())), values)?,
+        "csc" | "sec" => {
+            let denominator = context.scalar(if name == "csc" { "sin" } else { "cos" }, values)?;
+            let one = context.literal(ScalarValue::Float64(Some(1.0)));
+            context.binary(one, Operator::Divide, denominator)?
+        }
+        "ln" | "log" | "log10" | "log1p" | "log2" => {
+            let mut value = values
+                .pop()
+                .ok_or_else(|| PlanError::internal("missing logarithm argument"))?;
+            if name == "log1p" {
+                let one = context.literal(ScalarValue::Float64(Some(1.0)));
+                value = context.binary(value, Operator::Plus, one)?;
+            }
+            let copy = context.copy_expression(&value)?;
+            let zero = context.literal(ScalarValue::Float64(Some(0.0)));
+            let positive = context.binary(copy, Operator::Gt, zero)?;
+            values.push(context.case(vec![(positive, value)], None)?);
+            context.scalar(if name == "log1p" { "ln" } else { name }, values)?
+        }
+        _ => context.scalar(name, values)?,
+    })
 }
 
 pub(crate) fn arithmetic(
@@ -373,7 +417,7 @@ pub(crate) fn arithmetic(
                 arrow::error::ArrowError::DivideByZero
             }));
         }
-        right = safe_divisor(
+        right = make_safe_divisor(
             context,
             right,
             &right_type,
@@ -434,147 +478,23 @@ pub(crate) fn arithmetic(
     }
 }
 
-pub(crate) fn safe_divisor(
-    context: &mut FunctionContextInput<'_>,
-    value: Expr,
-    data_type: &DataType,
-    message: &str,
-) -> PlanResult<Expr> {
-    if matches!(data_type, DataType::Interval(_) | DataType::Duration(_)) {
-        return Ok(value);
-    }
-    let zero = context.literal(ScalarValue::Int32(Some(0)));
-    let copy = context.copy_expression(&value)?;
-    let mut condition = context.binary(copy, Operator::Eq, zero)?;
-    if matches!(
-        data_type,
-        DataType::Float16 | DataType::Float32 | DataType::Float64
-    ) {
-        let negative_zero = context.literal(ScalarValue::Float64(Some(-0.0)).cast_to(data_type)?);
-        let copy = context.copy_expression(&value)?;
-        let negative = context.binary(copy, Operator::Eq, negative_zero)?;
-        condition = context.binary(condition, Operator::Or, negative)?;
-    }
-    let invalid = if context.config.ansi_mode {
-        let message = context.literal(ScalarValue::Utf8(Some(message.into())));
-        context.scalar_udf(Arc::new(ScalarUDF::from(RaiseError::new())), vec![message])?
-    } else {
-        context.literal(ScalarValue::Null)
-    };
-    context.case(vec![(condition, invalid)], Some(value))
-}
+pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
+    use crate::function::common::ScalarFunctionBuilder as F;
 
-fn is_zero_literal(expression: &Expr) -> bool {
-    match &expression.kind {
-        Deferred::Resolved(ExprKind::Literal(value)) => {
-            value.data_type().is_numeric()
-                && !value.is_null()
-                && value
-                    .cast_to(&DataType::Float64)
-                    .is_ok_and(|v| matches!(v, ScalarValue::Float64(Some(value)) if value == 0.0))
-        }
-        Deferred::Resolved(
-            ExprKind::Cast { expression, .. } | ExprKind::WithMetadata(expression),
-        ) => is_zero_literal(expression),
-        _ => false,
-    }
-}
-
-pub(super) fn list_built_in_math_functions()
--> Vec<(&'static str, crate::function::common::ScalarFunction)> {
     vec![
+        ("%", F::custom(|input| spark_multiply(input, "%"))),
+        ("*", F::custom(|input| spark_multiply(input, "*"))),
+        ("+", F::custom(|input| spark_plus(input, "+"))),
+        ("-", F::custom(|input| spark_minus(input, "-"))),
+        ("/", F::custom(|input| spark_multiply(input, "/"))),
         (
             "abs",
             F::custom(|mut input| {
                 let config = input.context.config;
-                let kernel = Arc::new(ScalarUDF::from(
-                    sail_function::scalar::math::spark_abs::SparkAbs::new(config.ansi_mode),
-                ));
+                let kernel = Arc::new(ScalarUDF::from(SparkAbs::new(config.ansi_mode)));
                 input.context.scalar_udf(kernel, input.arguments)
             }),
         ),
-        (
-            "bround",
-            F::udf(sail_function::scalar::math::spark_bround::SparkBRound::new()),
-        ),
-        (
-            "conv",
-            F::udf(sail_function::scalar::math::spark_conv::SparkConv::new()),
-        ),
-        (
-            "expm1",
-            F::scalar_udf(datafusion_spark::function::math::expm1),
-        ),
-        ("factorial", F::kernel("factorial")),
-        ("greatest", F::kernel("greatest")),
-        ("hex", F::scalar_udf(datafusion_spark::function::math::hex)),
-        ("least", F::kernel("least")),
-        ("pi", F::kernel("pi")),
-        (
-            "rand",
-            F::udf(sail_function::scalar::math::random::Random::new()),
-        ),
-        (
-            "randn",
-            F::udf(sail_function::scalar::math::randn::Randn::new()),
-        ),
-        (
-            "random",
-            F::udf(sail_function::scalar::math::random::Random::new()),
-        ),
-        (
-            "random_poisson",
-            F::udf(sail_function::scalar::math::rand_poisson::RandPoisson::new()),
-        ),
-        (
-            "sign",
-            F::udf(sail_function::scalar::math::spark_signum::SparkSignum::new()),
-        ),
-        (
-            "signum",
-            F::udf(sail_function::scalar::math::spark_signum::SparkSignum::new()),
-        ),
-        (
-            "try_add",
-            F::udf(sail_function::scalar::math::spark_try_add::SparkTryAdd::new()),
-        ),
-        (
-            "try_divide",
-            F::udf(sail_function::scalar::math::spark_try_div::SparkTryDiv::new()),
-        ),
-        (
-            "try_mod",
-            F::udf(sail_function::scalar::math::spark_try_mod::SparkTryMod::new()),
-        ),
-        (
-            "try_multiply",
-            F::udf(sail_function::scalar::math::spark_try_mult::SparkTryMult::new()),
-        ),
-        (
-            "try_subtract",
-            F::udf(sail_function::scalar::math::spark_try_subtract::SparkTrySubtract::new()),
-        ),
-        (
-            "unhex",
-            F::udf(sail_function::scalar::math::spark_unhex::SparkUnHex::new()),
-        ),
-        (
-            "uniform",
-            F::udf(sail_function::scalar::math::spark_uniform::SparkUniform::new()),
-        ),
-        (
-            "width_bucket",
-            F::scalar_udf(datafusion_spark::function::math::width_bucket),
-        ),
-        ("+", F::custom(|input| resolve_add(input, "+"))),
-        ("-", F::custom(|input| resolve_subtract(input, "-"))),
-        ("*", F::custom(|input| resolve_multiply(input, "*"))),
-        ("/", F::custom(|input| resolve_multiply(input, "/"))),
-        ("%", F::custom(|input| resolve_multiply(input, "%"))),
-        ("mod", F::custom(|input| resolve_multiply(input, "mod"))),
-        ("div", F::custom(|input| resolve_multiply(input, "div"))),
-        ("negative", F::custom(resolve_negative)),
-        ("positive", F::custom(resolve_positive)),
         ("acos", F::custom(|input| resolve_acos(input, "acos"))),
         ("acosh", F::custom(|input| resolve_acos(input, "acosh"))),
         ("asin", F::custom(|input| resolve_acos(input, "asin"))),
@@ -582,35 +502,67 @@ pub(super) fn list_built_in_math_functions()
         ("atan", F::custom(|input| resolve_acos(input, "atan"))),
         ("atan2", F::custom(|input| resolve_acos(input, "atan2"))),
         ("atanh", F::custom(|input| resolve_acos(input, "atanh"))),
+        ("bin", F::custom(spark_bin)),
+        ("bround", F::udf(SparkBRound::new())),
         ("cbrt", F::custom(|input| resolve_acos(input, "cbrt"))),
+        ("ceil", F::custom(|input| ceil_floor(input, "ceil"))),
+        ("ceiling", F::custom(|input| ceil_floor(input, "ceiling"))),
+        ("conv", F::udf(SparkConv::new())),
         ("cos", F::custom(|input| resolve_acos(input, "cos"))),
         ("cosh", F::custom(|input| resolve_acos(input, "cosh"))),
         ("cot", F::custom(|input| resolve_acos(input, "cot"))),
+        ("csc", F::custom(|input| resolve_acos(input, "csc"))),
         ("degrees", F::custom(|input| resolve_acos(input, "degrees"))),
+        ("div", F::custom(|input| spark_multiply(input, "div"))),
+        ("e", F::custom(eulers_constant)),
         ("exp", F::custom(|input| resolve_acos(input, "exp"))),
-        ("radians", F::custom(|input| resolve_acos(input, "radians"))),
-        ("sin", F::custom(|input| resolve_acos(input, "sin"))),
-        ("sinh", F::custom(|input| resolve_acos(input, "sinh"))),
-        ("tan", F::custom(|input| resolve_acos(input, "tan"))),
-        ("tanh", F::custom(|input| resolve_acos(input, "tanh"))),
+        (
+            "expm1",
+            F::scalar_udf(datafusion_spark::function::math::expm1),
+        ),
+        ("factorial", F::kernel("factorial")),
+        ("floor", F::custom(|input| ceil_floor(input, "floor"))),
+        ("greatest", F::kernel("greatest")),
+        ("hex", F::scalar_udf(datafusion_spark::function::math::hex)),
+        ("hypot", F::custom(hypot)),
+        ("least", F::kernel("least")),
         ("ln", F::custom(|input| resolve_acos(input, "ln"))),
         ("log", F::custom(|input| resolve_acos(input, "log"))),
         ("log10", F::custom(|input| resolve_acos(input, "log10"))),
         ("log1p", F::custom(|input| resolve_acos(input, "log1p"))),
         ("log2", F::custom(|input| resolve_acos(input, "log2"))),
-        ("sqrt", F::custom(|input| resolve_acos(input, "sqrt"))),
-        ("csc", F::custom(|input| resolve_acos(input, "csc"))),
+        ("mod", F::custom(|input| spark_multiply(input, "mod"))),
+        ("negative", F::custom(spark_negative)),
+        ("pi", F::kernel("pi")),
+        ("pmod", F::custom(spark_pmod)),
+        ("positive", F::custom(positive)),
+        ("pow", F::custom(power)),
+        ("power", F::custom(power)),
+        ("radians", F::custom(|input| resolve_acos(input, "radians"))),
+        ("rand", F::udf(Random::new())),
+        ("random_poisson", F::udf(RandPoisson::new())),
+        ("randn", F::udf(Randn::new())),
+        ("random", F::udf(Random::new())),
+        ("rint", F::custom(rint)),
+        ("round", F::custom(spark_round)),
         ("sec", F::custom(|input| resolve_acos(input, "sec"))),
-        ("ceil", F::custom(|input| resolve_ceil(input, "ceil"))),
-        ("ceiling", F::custom(|input| resolve_ceil(input, "ceiling"))),
-        ("floor", F::custom(|input| resolve_ceil(input, "floor"))),
-        ("bin", F::custom(resolve_bin)),
-        ("pmod", F::custom(resolve_pmod)),
-        ("pow", F::custom(resolve_pow)),
-        ("power", F::custom(resolve_pow)),
-        ("hypot", F::custom(resolve_hypot)),
-        ("rint", F::custom(resolve_rint)),
-        ("round", F::custom(resolve_round)),
-        ("e", F::custom(resolve_e)),
+        ("sign", F::udf(SparkSignum::new())),
+        ("signum", F::udf(SparkSignum::new())),
+        ("sin", F::custom(|input| resolve_acos(input, "sin"))),
+        ("sinh", F::custom(|input| resolve_acos(input, "sinh"))),
+        ("sqrt", F::custom(|input| resolve_acos(input, "sqrt"))),
+        ("tan", F::custom(|input| resolve_acos(input, "tan"))),
+        ("tanh", F::custom(|input| resolve_acos(input, "tanh"))),
+        ("try_add", F::udf(SparkTryAdd::new())),
+        ("try_divide", F::udf(SparkTryDiv::new())),
+        ("try_multiply", F::udf(SparkTryMult::new())),
+        ("try_mod", F::udf(SparkTryMod::new())),
+        ("try_subtract", F::udf(SparkTrySubtract::new())),
+        ("unhex", F::udf(SparkUnHex::new())),
+        ("uniform", F::udf(SparkUniform::new())),
+        (
+            "width_bucket",
+            F::scalar_udf(datafusion_spark::function::math::width_bucket),
+        ),
     ]
 }
