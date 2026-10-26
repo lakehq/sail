@@ -9,7 +9,7 @@ use crate::analyzer::model::*;
 use crate::analyzer::scope::ResolutionScope;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 fn compatible(from: &DataType, to: &DataType) -> bool {
     from == to
@@ -123,7 +123,7 @@ impl PlanResolver<'_> {
                     )?;
                 }
             }
-            expressions.push(NamedExpression {
+            expressions.push(NamedExpr {
                 name: attribute.name.clone(),
                 expression,
             });
@@ -262,7 +262,7 @@ impl PlanResolver<'_> {
                     )?;
                 }
             }
-            expressions.push(NamedExpression {
+            expressions.push(NamedExpr {
                 name: attribute.name.clone(),
                 expression,
             });

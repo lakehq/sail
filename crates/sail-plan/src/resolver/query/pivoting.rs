@@ -14,7 +14,7 @@ use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     fn pivot_tuple(&mut self, mut values: Vec<Expr>) -> PlanResult<Expr> {
@@ -114,7 +114,7 @@ impl PlanResolver<'_> {
             None => {
                 for attribute in &schema.attributes {
                     if !excluded.contains(&attribute.id) {
-                        grouping.push(NamedExpression {
+                        grouping.push(NamedExpr {
                             name: attribute.name.clone(),
                             expression: self.reference(attribute)?,
                         });
@@ -128,7 +128,7 @@ impl PlanResolver<'_> {
             let reference = self.reference(&column)?;
             let distinct = self.project(
                 input.clone(),
-                vec![NamedExpression {
+                vec![NamedExpr {
                     name: "pivot".into(),
                     expression: reference,
                 }],
@@ -187,7 +187,7 @@ impl PlanResolver<'_> {
         }
         let mut output = grouping
             .iter()
-            .map(|e| NamedExpression {
+            .map(|e| NamedExpr {
                 name: e.name.clone(),
                 expression: e.expression.clone(),
             })
@@ -266,7 +266,7 @@ impl PlanResolver<'_> {
                         &mut self.context.ids,
                     )?;
                 }
-                output.push(NamedExpression {
+                output.push(NamedExpr {
                     name: if single {
                         value_name.clone()
                     } else {
@@ -324,7 +324,7 @@ impl PlanResolver<'_> {
                 if !id_attributes.contains(&attribute.id) {
                     values.push((
                         attribute.name.clone(),
-                        vec![NamedExpression {
+                        vec![NamedExpr {
                             name: attribute.name.clone(),
                             expression: self.reference(attribute)?,
                         }],
@@ -350,7 +350,7 @@ impl PlanResolver<'_> {
             }
             for attribute in &schema.attributes {
                 if !value_attributes.contains(&attribute.id) {
-                    ids.push(NamedExpression {
+                    ids.push(NamedExpr {
                         name: attribute.name.clone(),
                         expression: self.reference(attribute)?,
                     });
@@ -440,7 +440,7 @@ impl PlanResolver<'_> {
                 .context
                 .function_context()
                 .scalar_udf(core::get_field(), vec![reference, selector])?;
-            ids.push(NamedExpression { name, expression });
+            ids.push(NamedExpr { name, expression });
         }
         let input = self.project(input, ids)?;
         Ok(Query {

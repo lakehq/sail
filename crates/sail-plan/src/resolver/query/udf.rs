@@ -14,7 +14,7 @@ use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGr
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 struct GroupInput {
     plan: Query,
@@ -123,7 +123,7 @@ impl PlanResolver<'_> {
                 .context
                 .function_context()
                 .scalar_udf(core::get_field(), vec![element, name])?;
-            output.push(NamedExpression {
+            output.push(NamedExpr {
                 name: field.name().clone(),
                 expression,
             });
@@ -237,7 +237,7 @@ impl PlanResolver<'_> {
             .keys
             .iter()
             .map(|a| {
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: a.name.clone(),
                     expression: self.reference(a)?,
                 })
@@ -246,7 +246,7 @@ impl PlanResolver<'_> {
         let plan = self.aggregate(
             input.plan,
             grouping,
-            vec![NamedExpression {
+            vec![NamedExpr {
                 name: "group_map".into(),
                 expression,
             }],
@@ -513,7 +513,7 @@ impl PlanResolver<'_> {
         };
         let plan = self.project(
             plan,
-            vec![NamedExpression {
+            vec![NamedExpr {
                 name: "co_group_map".into(),
                 expression,
             }],

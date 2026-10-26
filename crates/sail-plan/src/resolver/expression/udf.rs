@@ -22,7 +22,7 @@ use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::data_type::DataTypeResolver;
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 pub(in crate::resolver) struct PythonFunction {
     pub python_version: String,
@@ -88,7 +88,7 @@ impl PlanResolver<'_> {
         id: ExprId,
         request: spec::CommonInlineUserDefinedFunction,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let spec::CommonInlineUserDefinedFunction {
             function_name,
             deterministic,
@@ -123,7 +123,7 @@ impl PlanResolver<'_> {
         requests: Vec<spec::Expr>,
         schema: &QuerySchema,
         mode: PySparkAggregateMode,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let mut names = vec![];
         let mut values = vec![];
         let mut keywords = vec![];
@@ -171,7 +171,7 @@ impl PlanResolver<'_> {
             &keywords,
             mode,
         )?;
-        Ok(NamedExpression {
+        Ok(NamedExpr {
             name: display_name,
             expression,
         })

@@ -14,7 +14,7 @@ use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::data_type::DataTypeResolver;
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 pub(in crate::resolver) struct PythonTableFunction {
     pub python_version: String,
@@ -183,7 +183,7 @@ impl PlanResolver<'_> {
                 };
                 is_tables.push(true);
                 literals.push(None);
-                NamedExpression {
+                NamedExpr {
                     name: "table".into(),
                     expression,
                 }
@@ -222,7 +222,7 @@ impl PlanResolver<'_> {
         let mut projections = passthrough
             .iter()
             .map(|a| {
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: a.name.clone(),
                     expression: self.reference(a)?,
                 })

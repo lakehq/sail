@@ -7,7 +7,7 @@ use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     #[async_recursion::async_recursion]
@@ -236,7 +236,7 @@ impl PlanResolver<'_> {
             }
             let expression = self.reference(source)?;
             let mut projection = self.projection(
-                NamedExpression {
+                NamedExpr {
                     name: source.name.clone(),
                     expression,
                 },
@@ -253,7 +253,7 @@ impl PlanResolver<'_> {
             }
             let expression = self.reference(source)?;
             let mut projection = self.projection(
-                NamedExpression {
+                NamedExpr {
                     name: source.name.clone(),
                     expression,
                 },

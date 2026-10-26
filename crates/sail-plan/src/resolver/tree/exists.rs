@@ -10,7 +10,7 @@ use sail_common_plan::rewrite::{QueryRewriter, walk_expression, walk_query};
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) fn projected_exists(
@@ -149,7 +149,7 @@ impl PlanResolver<'_> {
         let query = self.aggregate(
             query,
             vec![],
-            vec![NamedExpression {
+            vec![NamedExpr {
                 name: "exists".into(),
                 expression,
             }],

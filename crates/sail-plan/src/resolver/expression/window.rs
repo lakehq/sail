@@ -7,7 +7,7 @@ use sail_common::spec;
 use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     #[async_recursion::async_recursion]
@@ -17,7 +17,7 @@ impl PlanResolver<'_> {
         expression: spec::Expr,
         window: spec::Window,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let (call, inline) = match expression {
             spec::Expr::UnresolvedFunction(call) => (call, None),
             spec::Expr::CommonInlineUserDefinedFunction(function) => {
@@ -245,7 +245,7 @@ impl PlanResolver<'_> {
                 options,
             )?,
         };
-        Ok(NamedExpression {
+        Ok(NamedExpr {
             name: display_name,
             expression,
         })

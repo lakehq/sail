@@ -10,16 +10,16 @@ use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 enum Slot {
-    Value(NamedExpression),
+    Value(NamedExpr),
     Lambda {
         request: spec::Expr,
-        captured: Option<Box<NamedExpression>>,
+        captured: Option<Box<NamedExpr>>,
         names: Vec<String>,
         parameters: Option<QuerySchema>,
-        body: Option<Box<NamedExpression>>,
+        body: Option<Box<NamedExpr>>,
     },
 }
 
@@ -52,7 +52,7 @@ impl PlanResolver<'_> {
         &mut self,
         id: ExprId,
         name: &[String],
-    ) -> PlanResult<Option<NamedExpression>> {
+    ) -> PlanResult<Option<NamedExpr>> {
         let Some((first, fields)) = name.split_first() else {
             return Ok(None);
         };
@@ -66,7 +66,7 @@ impl PlanResolver<'_> {
         else {
             return Ok(None);
         };
-        let mut value = NamedExpression {
+        let mut value = NamedExpr {
             name: attribute.name.clone(),
             expression: Expr {
                 id: if fields.is_empty() {
@@ -84,7 +84,7 @@ impl PlanResolver<'_> {
             } else {
                 self.context.ids.expression()
             };
-            let extraction = NamedExpression {
+            let extraction = NamedExpr {
                 name: field.clone(),
                 expression: Expr::literal(
                     self.context.ids.expression(),
@@ -104,7 +104,7 @@ impl PlanResolver<'_> {
         mut function: Arc<HigherOrderUDF>,
         arguments: Vec<spec::Expr>,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let mut slots = vec![];
         let mut implicit_map_lambda = false;
         for (index, argument) in arguments.into_iter().enumerate() {
@@ -280,7 +280,7 @@ impl PlanResolver<'_> {
                     self.context
                         .function_context()
                         .copy_expression(&captured.expression)
-                        .map(|expression| NamedExpression {
+                        .map(|expression| NamedExpr {
                             name: captured.name.clone(),
                             expression,
                         })
@@ -437,7 +437,7 @@ impl PlanResolver<'_> {
                 }
             }
             let display_name = format!("{name}({})", names.join(", "));
-            return Ok(NamedExpression {
+            return Ok(NamedExpr {
                 name: display_name,
                 expression: Expr {
                     id,

@@ -513,7 +513,7 @@ impl PlanResolver<'_> {
                 let name = attribute.name.clone();
                 **query = self.project(
                     *query.clone(),
-                    vec![crate::resolver::NamedExpression {
+                    vec![crate::resolver::NamedExpr {
                         name,
                         expression: right,
                     }],

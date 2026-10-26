@@ -8,7 +8,7 @@ use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     #[async_recursion::async_recursion]
@@ -154,11 +154,11 @@ impl PlanResolver<'_> {
                 output.origin = source.origin;
             }
             outputs.push(output);
-            left_values.push(NamedExpression {
+            left_values.push(NamedExpr {
                 name: name.clone(),
                 expression: left_value,
             });
-            right_values.push(NamedExpression {
+            right_values.push(NamedExpr {
                 name,
                 expression: right_value,
             });
@@ -237,7 +237,7 @@ impl PlanResolver<'_> {
             .iter()
             .take(width)
             .map(|a| {
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: a.name.clone(),
                     expression: self.reference(a)?,
                 })

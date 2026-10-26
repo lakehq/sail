@@ -11,7 +11,7 @@ use crate::analyzer::model::*;
 use crate::analyzer::scope::ResolutionScope;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) fn validate_source_binding(
@@ -43,7 +43,7 @@ impl PlanResolver<'_> {
         parts: &[String],
         plan_id: Option<i64>,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         self.validate_source_binding(parts, plan_id)?;
         if let Some(result) = self.recovery_attribute(id, parts, plan_id, schema) {
             return result;
@@ -60,7 +60,7 @@ impl PlanResolver<'_> {
             } else {
                 &self.outer[self.outer.len() - bound.depth]
             };
-            let mut value = NamedExpression {
+            let mut value = NamedExpr {
                 name: source.attribute(bound.id)?.name.clone(),
                 expression: Expr {
                     id: if length == parts.len() {
@@ -80,7 +80,7 @@ impl PlanResolver<'_> {
                 },
             };
             for (i, field) in parts[length..].iter().enumerate() {
-                let extraction = NamedExpression {
+                let extraction = NamedExpr {
                     name: field.clone(),
                     expression: Expr::literal(
                         self.context.ids.expression(),
@@ -117,7 +117,7 @@ impl PlanResolver<'_> {
                     return Err(PlanError::analysis(format!("ambiguous attribute: {name}")));
                 }
                 let expression = value.expression.clone();
-                let mut value = NamedExpression {
+                let mut value = NamedExpr {
                     name: name.clone(),
                     expression: self
                         .context
@@ -125,7 +125,7 @@ impl PlanResolver<'_> {
                         .copy_expression(&expression)?,
                 };
                 for field in fields {
-                    let extraction = NamedExpression {
+                    let extraction = NamedExpr {
                         name: field.clone(),
                         expression: self
                             .context
@@ -149,7 +149,7 @@ impl PlanResolver<'_> {
         id: ExprId,
         parts: &[String],
         plan_id: Option<i64>,
-    ) -> PlanResult<Option<NamedExpression>> {
+    ) -> PlanResult<Option<NamedExpr>> {
         let outer = std::mem::take(&mut self.outer);
         let aliases = std::mem::take(&mut self.expression_aliases);
         let current = self.recovery.take();
@@ -196,9 +196,9 @@ impl PlanResolver<'_> {
     pub(in crate::resolver) fn extract_value(
         &mut self,
         id: ExprId,
-        child: NamedExpression,
-        mut extraction: NamedExpression,
-    ) -> PlanResult<NamedExpression> {
+        child: NamedExpr,
+        mut extraction: NamedExpr,
+    ) -> PlanResult<NamedExpr> {
         let data_type = &child
             .expression
             .result_type
@@ -245,7 +245,7 @@ impl PlanResolver<'_> {
                 )?;
                 let first =
                     Expr::literal(self.context.ids.expression(), ScalarValue::Int64(Some(1)));
-                return Ok(NamedExpression {
+                return Ok(NamedExpr {
                     name,
                     expression: typing::resolve_scalar_call(
                         id,
@@ -401,7 +401,7 @@ impl PlanResolver<'_> {
                 } else {
                     element
                 };
-                return Ok(NamedExpression { name, expression });
+                return Ok(NamedExpr { name, expression });
             }
             _ => {
                 return Err(PlanError::analysis(format!(
@@ -409,7 +409,7 @@ impl PlanResolver<'_> {
                 )));
             }
         };
-        Ok(NamedExpression {
+        Ok(NamedExpr {
             name,
             expression: typing::resolve_scalar_call(
                 id,

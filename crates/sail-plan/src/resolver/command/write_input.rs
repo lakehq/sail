@@ -17,7 +17,7 @@ use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::command::write::{TableInfo, WriteColumnMatch};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) async fn rewrite_write_input(
@@ -79,7 +79,7 @@ impl PlanResolver<'_> {
             };
             let expression = self.align_store_value(value, &column.data_type, false)?;
             slots[index] = Some(intermediate.len());
-            intermediate.push(NamedExpression {
+            intermediate.push(NamedExpr {
                 name: column.name.clone(),
                 expression,
             });
@@ -224,7 +224,7 @@ impl PlanResolver<'_> {
                 kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(value))),
                 result_type: Deferred::Resolved(result_type),
             };
-            final_values.push(NamedExpression {
+            final_values.push(NamedExpr {
                 name: column.name.clone(),
                 expression,
             });

@@ -3,14 +3,14 @@ use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) fn grouping_metadata(
         &mut self,
         input: &mut Query,
-        grouping: &mut [NamedExpression],
-        output: &mut [NamedExpression],
+        grouping: &mut [NamedExpr],
+        output: &mut [NamedExpr],
         having: &mut Option<Expr>,
     ) -> PlanResult<()> {
         let mut materialized: Vec<Projection> = vec![];

@@ -11,7 +11,7 @@ use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::command::write_constraints::strip_delta_check_constraint_prefix;
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 impl PlanResolver<'_> {
     pub(in crate::resolver) async fn resolve_delta_alter_table_or_catalog(
         &mut self,
@@ -218,7 +218,7 @@ impl PlanResolver<'_> {
         let expression = self.write_error(message)?;
         let validation = self.project(
             input,
-            vec![NamedExpression {
+            vec![NamedExpr {
                 name: "constraint_validation".into(),
                 expression,
             }],

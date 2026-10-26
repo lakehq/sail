@@ -98,7 +98,7 @@ impl PlanResolver<'_> {
                     &target.result_type.resolved("UNION target")?.data_type,
                     &mut self.context.ids,
                 )?;
-                expressions.push(crate::resolver::NamedExpression {
+                expressions.push(crate::resolver::NamedExpr {
                     name: source.name.clone(),
                     expression,
                 });

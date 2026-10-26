@@ -13,7 +13,7 @@ use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::data_type::DataTypeResolver;
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) fn types(&self) -> DataTypeResolver<'_> {
@@ -28,7 +28,7 @@ impl PlanResolver<'_> {
         &mut self,
         request: spec::Expr,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         if let Some((_, value)) = self
             .expression_replacements
             .iter()
@@ -36,7 +36,7 @@ impl PlanResolver<'_> {
         {
             let name = value.name.clone();
             let expression = value.expression.clone();
-            return Ok(NamedExpression {
+            return Ok(NamedExpr {
                 name,
                 expression: self
                     .context
@@ -46,7 +46,7 @@ impl PlanResolver<'_> {
         }
         let id = self.context.ids.expression();
         if matches!(request, spec::Expr::DefaultColumnValue) {
-            return Ok(NamedExpression {
+            return Ok(NamedExpr {
                 name: "DEFAULT".into(),
                 expression: Expr {
                     id,
@@ -230,7 +230,7 @@ impl PlanResolver<'_> {
                     }
                     _ => format!("update_fields({}, {operation})", source.name),
                 };
-                return Ok(NamedExpression {
+                return Ok(NamedExpr {
                     name,
                     expression: typing::resolve_scalar_call(
                         id,
@@ -328,15 +328,15 @@ impl PlanResolver<'_> {
                     Operator::LtEq,
                     high.expression,
                 )?;
-                let value = NamedExpression {
+                let value = NamedExpr {
                     name: value_name,
                     expression: value_expression,
                 };
-                let low = NamedExpression {
+                let low = NamedExpr {
                     name: low_name,
                     expression: low_expression,
                 };
-                let high = NamedExpression {
+                let high = NamedExpr {
                     name: high_name,
                     expression: high_expression,
                 };
@@ -390,7 +390,7 @@ impl PlanResolver<'_> {
                 } else {
                     Operator::IsNotDistinctFrom
                 };
-                return Ok(NamedExpression {
+                return Ok(NamedExpr {
                     name: format!("({} {} {})", left.name, operator, right.name),
                     expression: self.context.function_context().binary(
                         left.expression,
@@ -480,7 +480,7 @@ impl PlanResolver<'_> {
                 let right = self.context.function_context().cast(right, common)?;
                 let query = self.project(
                     query,
-                    vec![NamedExpression {
+                    vec![NamedExpr {
                         name: right_name,
                         expression: right,
                     }],
@@ -512,7 +512,7 @@ impl PlanResolver<'_> {
                     names.push(item.name);
                     values.push(item.expression);
                 }
-                return Ok(NamedExpression {
+                return Ok(NamedExpr {
                     name: format!(
                         "({} {}IN ({}))",
                         value.name,
@@ -632,7 +632,7 @@ impl PlanResolver<'_> {
                 )));
             }
         };
-        Ok(NamedExpression {
+        Ok(NamedExpr {
             name,
             expression: Expr {
                 id,

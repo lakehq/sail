@@ -16,7 +16,7 @@ use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::FunctionContextInput;
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 enum TimestampStringInCoercion {
     ToString,
@@ -606,11 +606,11 @@ impl PlanResolver<'_> {
         value: Option<bool>,
         negated: bool,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let inner = self.resolve_named_expression(expression, schema).await?;
         let expression =
             typing::coerce(inner.expression, &DataType::Boolean, &mut self.context.ids)?;
-        Ok(NamedExpression {
+        Ok(NamedExpr {
             name: format!(
                 "({} IS {}{})",
                 inner.name,

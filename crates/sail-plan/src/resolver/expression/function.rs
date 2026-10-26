@@ -6,7 +6,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 enum FunctionResolution {
     Python(super::udf::PythonFunction, bool),
@@ -21,7 +21,7 @@ impl PlanResolver<'_> {
         id: ExprId,
         function: spec::UnresolvedFunction,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let spec::UnresolvedFunction {
             function_name,
             mut arguments,
@@ -250,7 +250,7 @@ impl PlanResolver<'_> {
                         })?
                     }
                 };
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: display_name,
                     expression,
                 })

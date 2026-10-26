@@ -3,7 +3,7 @@ use sail_common::spec;
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     #[async_recursion::async_recursion]
@@ -59,7 +59,7 @@ impl PlanResolver<'_> {
         self.expression_aliases = projections
             .iter()
             .flatten()
-            .map(|value| NamedExpression {
+            .map(|value| NamedExpr {
                 name: value.name.clone(),
                 expression: value.expression.clone(),
             })
@@ -73,7 +73,7 @@ impl PlanResolver<'_> {
                     if projection.expression.equivalent(&key.expression)? {
                         self.expression_replacements.push((
                             request.clone(),
-                            NamedExpression {
+                            NamedExpr {
                                 name: projection.name.clone(),
                                 expression: key.expression.clone(),
                             },
@@ -85,7 +85,7 @@ impl PlanResolver<'_> {
         }
         self.expression_aliases = grouping
             .iter()
-            .map(|value| NamedExpression {
+            .map(|value| NamedExpr {
                 name: value.name.clone(),
                 expression: value.expression.clone(),
             })
@@ -93,7 +93,7 @@ impl PlanResolver<'_> {
         let mut output = vec![];
         if aggregate.with_grouping_expressions {
             for value in &grouping {
-                output.push(NamedExpression {
+                output.push(NamedExpr {
                     name: value.name.clone(),
                     expression: self
                         .context
@@ -106,7 +106,7 @@ impl PlanResolver<'_> {
             output.push(self.resolve_named_expression(request, &schema).await?);
         }
         self.expression_aliases
-            .extend(output.iter().map(|value| NamedExpression {
+            .extend(output.iter().map(|value| NamedExpr {
                 name: value.name.clone(),
                 expression: value.expression.clone(),
             }));
@@ -117,7 +117,7 @@ impl PlanResolver<'_> {
                     plan_id: None,
                     is_metadata_column: false,
                 },
-                NamedExpression {
+                NamedExpr {
                     name: value.name.clone(),
                     expression: value.expression.clone(),
                 },
@@ -135,7 +135,7 @@ impl PlanResolver<'_> {
         self.aggregate_with_sets(input, grouping, output, having, grouping_sets)
     }
 
-    fn validate_aggregate_functions(&self, output: &[NamedExpression]) -> PlanResult<()> {
+    fn validate_aggregate_functions(&self, output: &[NamedExpr]) -> PlanResult<()> {
         let mut python = false;
         let mut native = false;
         for named in output {

@@ -10,7 +10,7 @@ use crate::analyzer::model::*;
 use crate::analyzer::scope::ResolutionScope;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) fn expand_regex(
@@ -18,7 +18,7 @@ impl PlanResolver<'_> {
         pattern: &str,
         plan_id: Option<i64>,
         schema: &QuerySchema,
-    ) -> PlanResult<Vec<NamedExpression>> {
+    ) -> PlanResult<Vec<NamedExpr>> {
         let schema = self.recovery_local_schema(schema).clone();
         let quoted = pattern
             .strip_prefix('`')
@@ -38,7 +38,7 @@ impl PlanResolver<'_> {
                     && plan_id.is_none_or(|id| a.plan_ids.contains(&id))
             })
             .map(|a| {
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: a.name.clone(),
                     expression: self.reference(a)?,
                 })
@@ -56,7 +56,7 @@ impl PlanResolver<'_> {
             .iter()
             .filter(|a| !a.hidden)
             .map(|a| {
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: a.name.clone(),
                     expression: self.reference(a)?,
                 })
@@ -72,7 +72,7 @@ impl PlanResolver<'_> {
         plan_id: Option<i64>,
         options: spec::WildcardOptions,
         schema: &QuerySchema,
-    ) -> PlanResult<Vec<NamedExpression>> {
+    ) -> PlanResult<Vec<NamedExpr>> {
         let local = self.recovery_local_schema(schema).clone();
         let schema = &local;
         let qualifier = target.map(Vec::<String>::from).unwrap_or_default();
@@ -222,7 +222,7 @@ impl PlanResolver<'_> {
                 .get(&key)
                 .map(|name| name.as_ref().to_string())
                 .unwrap_or_else(|| attribute.name.clone());
-            output.push(NamedExpression { name, expression });
+            output.push(NamedExpr { name, expression });
         }
         Ok(output)
     }
@@ -279,7 +279,7 @@ impl PlanResolver<'_> {
                 self.resolve_named_expression(request.clone(), schema)
                     .await?
             } else {
-                NamedExpression {
+                NamedExpr {
                     name: attribute.name.clone(),
                     expression: self.reference(attribute)?,
                 }
@@ -336,7 +336,7 @@ impl PlanResolver<'_> {
         for attribute in &schema.attributes {
             if !excluded.contains(&attribute.id) && !names.contains(&self.name_key(&attribute.name))
             {
-                expressions.push(NamedExpression {
+                expressions.push(NamedExpr {
                     name: attribute.name.clone(),
                     expression: self.reference(attribute)?,
                 });
@@ -348,7 +348,7 @@ impl PlanResolver<'_> {
     fn project_preserving_hidden(
         &mut self,
         input: Query,
-        values: Vec<NamedExpression>,
+        values: Vec<NamedExpr>,
     ) -> PlanResult<Query> {
         let hidden = input
             .schema
@@ -387,7 +387,7 @@ impl PlanResolver<'_> {
                 .with_case_sensitive(self.context.config.case_sensitive)
                 .resolve(std::slice::from_ref(field.name()), None)?;
             let value = self.reference(schema.attribute(bound.id)?)?;
-            expressions.push(NamedExpression {
+            expressions.push(NamedExpr {
                 name: field.name().clone(),
                 expression: typing::coerce(value, field.data_type(), &mut self.context.ids)?,
             });
@@ -448,7 +448,7 @@ impl PlanResolver<'_> {
                     } else {
                         attribute.name.clone()
                     };
-                    values.push(NamedExpression { name, expression });
+                    values.push(NamedExpr { name, expression });
                 }
                 self.project(input, values)?
             }

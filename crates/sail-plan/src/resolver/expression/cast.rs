@@ -24,15 +24,15 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) fn explicit_cast(
         &mut self,
-        inner: NamedExpression,
+        inner: NamedExpr,
         target: spec::DataType,
         is_try: bool,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let source_field = inner
             .expression
             .result_type
@@ -375,7 +375,7 @@ impl PlanResolver<'_> {
                 kind: Deferred::Resolved(ExprKind::WithMetadata(Box::new(expression))),
             };
         }
-        Ok(NamedExpression { name, expression })
+        Ok(NamedExpr { name, expression })
     }
 
     fn cast_mode(&mut self, value: Expr, target: DataType, safe: bool) -> PlanResult<Expr> {

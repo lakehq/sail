@@ -8,7 +8,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{CteDefinition, NamedExpression, PlanResolver};
+use crate::resolver::{CteDefinition, NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     #[async_recursion::async_recursion]
@@ -67,7 +67,7 @@ impl PlanResolver<'_> {
         values: Vec<spec::Expr>,
         negated: bool,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let query = self.relations.get(&plan_id).cloned().ok_or_else(|| {
             PlanError::analysis(format!(
                 "subquery plan_id {plan_id} not found in WithRelations references"
@@ -114,7 +114,7 @@ impl PlanResolver<'_> {
         query: spec::QueryPlan,
         negated: bool,
         schema: &QuerySchema,
-    ) -> PlanResult<NamedExpression> {
+    ) -> PlanResult<NamedExpr> {
         let mut outer = vec![];
         for value in values {
             let value = self
@@ -166,7 +166,7 @@ impl PlanResolver<'_> {
             query,
             condition.ok_or_else(|| PlanError::internal("empty IN comparison"))?,
         )?;
-        Ok(NamedExpression {
+        Ok(NamedExpr {
             name: "in_subquery".into(),
             expression: Expr {
                 id: self.context.ids.expression(),

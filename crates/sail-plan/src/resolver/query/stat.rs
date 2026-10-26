@@ -11,7 +11,7 @@ use crate::analyzer::model::*;
 use crate::analyzer::scope::ResolutionScope;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     #[async_recursion::async_recursion]
@@ -36,7 +36,7 @@ impl PlanResolver<'_> {
         let expression = typing::coerce(reference, &DataType::Utf8, &mut self.context.ids)?;
         let distinct = self.project(
             input.clone(),
-            vec![NamedExpression {
+            vec![NamedExpr {
                 name: right.name.clone(),
                 expression,
             }],
@@ -57,11 +57,11 @@ impl PlanResolver<'_> {
                 }
             }
         }
-        let grouping = NamedExpression {
+        let grouping = NamedExpr {
             name: name.clone(),
             expression: self.reference(&left)?,
         };
-        let mut output = vec![NamedExpression {
+        let mut output = vec![NamedExpr {
             name,
             expression: self.reference(&left)?,
         }];
@@ -90,7 +90,7 @@ impl PlanResolver<'_> {
                 Some(zero),
                 &mut self.context.ids,
             )?;
-            output.push(NamedExpression {
+            output.push(NamedExpr {
                 name: value,
                 expression: self
                     .context
@@ -106,7 +106,7 @@ impl PlanResolver<'_> {
             if index == 0 {
                 expression = typing::coerce(expression, &DataType::Utf8, &mut self.context.ids)?;
             }
-            output.push(NamedExpression {
+            output.push(NamedExpr {
                 name: attribute.name.clone(),
                 expression,
             });
@@ -146,7 +146,7 @@ impl PlanResolver<'_> {
         let count = self.aggregate(
             input.clone(),
             vec![],
-            vec![NamedExpression {
+            vec![NamedExpr {
                 name: "count".into(),
                 expression: count,
             }],
@@ -189,7 +189,7 @@ impl PlanResolver<'_> {
         self.aggregate(
             input,
             vec![],
-            vec![NamedExpression {
+            vec![NamedExpr {
                 name: name.into(),
                 expression,
             }],
@@ -329,7 +329,7 @@ impl PlanResolver<'_> {
                 .context
                 .function_context()
                 .literal(ScalarValue::Utf8(Some(statistic.clone())));
-            let mut output = vec![NamedExpression {
+            let mut output = vec![NamedExpr {
                 name: "summary".into(),
                 expression: label,
             }];
@@ -374,7 +374,7 @@ impl PlanResolver<'_> {
                     value = typing::coerce(value, original, &mut self.context.ids)?;
                 }
                 value = typing::coerce(value, &DataType::Utf8, &mut self.context.ids)?;
-                output.push(NamedExpression {
+                output.push(NamedExpr {
                     name: attribute.name.clone(),
                     expression: value,
                 });

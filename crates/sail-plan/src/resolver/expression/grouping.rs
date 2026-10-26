@@ -5,7 +5,7 @@ use sail_common::spec;
 
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 const MAX_GROUPING_SETS: usize = 65536;
 
@@ -14,9 +14,9 @@ impl PlanResolver<'_> {
     pub(in crate::resolver) async fn grouping_requests(
         &mut self,
         requests: Vec<spec::Expr>,
-        projections: &[Option<NamedExpression>],
+        projections: &[Option<NamedExpr>],
         schema: &QuerySchema,
-    ) -> PlanResult<(Vec<NamedExpression>, Option<Vec<Vec<usize>>>)> {
+    ) -> PlanResult<(Vec<NamedExpr>, Option<Vec<Vec<usize>>>)> {
         let has_sets = requests.iter().any(|r| {
             matches!(
                 r,
@@ -58,9 +58,9 @@ impl PlanResolver<'_> {
     async fn grouping_request(
         &mut self,
         request: spec::Expr,
-        projections: &[Option<NamedExpression>],
+        projections: &[Option<NamedExpr>],
         schema: &QuerySchema,
-        keys: &mut Vec<NamedExpression>,
+        keys: &mut Vec<NamedExpr>,
     ) -> PlanResult<Vec<Vec<usize>>> {
         match request {
             spec::Expr::GroupingSets(sets) => {
@@ -125,9 +125,9 @@ impl PlanResolver<'_> {
     async fn grouping_key(
         &mut self,
         request: spec::Expr,
-        projections: &[Option<NamedExpression>],
+        projections: &[Option<NamedExpr>],
         schema: &QuerySchema,
-        keys: &mut Vec<NamedExpression>,
+        keys: &mut Vec<NamedExpr>,
     ) -> PlanResult<usize> {
         let value =
             if let Some(position) = crate::resolver::query::aggregate_request::ordinal(&request) {
@@ -140,7 +140,7 @@ impl PlanResolver<'_> {
                 let projection = projections[position as usize - 1].as_ref().ok_or_else(|| {
                     PlanError::analysis("grouping position references an unresolved projection")
                 })?;
-                NamedExpression {
+                NamedExpr {
                     name: projection.name.clone(),
                     expression: self
                         .context
@@ -166,7 +166,7 @@ impl PlanResolver<'_> {
                 if crate::resolver::query::aggregate_request::ordinal(&request).is_none() {
                     self.expression_replacements.push((
                         request,
-                        NamedExpression {
+                        NamedExpr {
                             name: key.name.clone(),
                             expression: key.expression.clone(),
                         },
@@ -181,7 +181,7 @@ impl PlanResolver<'_> {
             // including stateful functions that allocate an instance per call.
             self.expression_replacements.push((
                 request,
-                NamedExpression {
+                NamedExpr {
                     name: value.name.clone(),
                     expression: value.expression.clone(),
                 },

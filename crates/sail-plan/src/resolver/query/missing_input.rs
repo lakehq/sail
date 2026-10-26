@@ -3,7 +3,7 @@ use sail_common::spec;
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     /// Resolve against the nearest scope first, then carry missing attributes
@@ -15,7 +15,7 @@ impl PlanResolver<'_> {
         mut input: Query,
         request: spec::Expr,
         sorting: bool,
-    ) -> PlanResult<(Query, NamedExpression)> {
+    ) -> PlanResult<(Query, NamedExpr)> {
         let result = self
             .resolve_named_expression(request.clone(), input.schema.resolved("expression input")?)
             .await;
@@ -350,7 +350,7 @@ impl PlanResolver<'_> {
         parts: &[String],
         plan_id: Option<i64>,
         schema: &QuerySchema,
-    ) -> Option<PlanResult<NamedExpression>> {
+    ) -> Option<PlanResult<NamedExpr>> {
         let scope = self.recovery.as_ref().filter(|r| r.applies(schema))?;
         let schemas = scope.schemas.clone();
         for (index, candidate) in schemas.iter().enumerate() {
@@ -393,7 +393,7 @@ impl PlanResolver<'_> {
         input: Query,
         request: spec::Expr,
         sorting: bool,
-    ) -> PlanResult<(Query, NamedExpression)> {
+    ) -> PlanResult<(Query, NamedExpr)> {
         let mut schemas = vec![input.schema.resolved("recovery input")?.clone()];
         let mut child = &input;
         while let Some(next) = recovery_child(child) {

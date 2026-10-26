@@ -79,10 +79,6 @@ impl JevKind {
     }
 }
 
-pub fn jev_udf(kind: JevKind) -> ScalarUDF {
-    kind.udf()
-}
-
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct Jev {
     // Distinct volatile call sites must not compare equal in the async mapper.

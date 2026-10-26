@@ -26,8 +26,8 @@ impl AnalyzerLayer for PlanResolver<'_> {
 
 pub struct PlanResolver<'a> {
     context: AnalyzerContext<'a>,
-    expression_aliases: Vec<NamedExpression>,
-    expression_replacements: Vec<(spec::Expr, NamedExpression)>,
+    expression_aliases: Vec<NamedExpr>,
+    expression_replacements: Vec<(spec::Expr, NamedExpr)>,
     outer: Vec<QuerySchema>,
     lambdas: Vec<QuerySchema>,
     // Definitions retain semantic origins; references allocate occurrence IDs.
@@ -49,7 +49,7 @@ struct CteDefinition {
 }
 
 #[derive(Debug)]
-struct NamedExpression {
+struct NamedExpr {
     name: String,
     expression: Expr,
 }
@@ -103,11 +103,7 @@ impl PlanResolver<'_> {
         })
     }
 
-    fn projection(
-        &mut self,
-        named: NamedExpression,
-        input: &QuerySchema,
-    ) -> PlanResult<Projection> {
+    fn projection(&mut self, named: NamedExpr, input: &QuerySchema) -> PlanResult<Projection> {
         let result_type = named
             .expression
             .result_type
@@ -130,11 +126,7 @@ impl PlanResolver<'_> {
         })
     }
 
-    fn project(
-        &mut self,
-        mut input: Query,
-        expressions: Vec<NamedExpression>,
-    ) -> PlanResult<Query> {
+    fn project(&mut self, mut input: Query, expressions: Vec<NamedExpr>) -> PlanResult<Query> {
         let mut windows: Vec<Projection> = vec![];
         let expressions = expressions
             .into_iter()
@@ -165,7 +157,7 @@ impl PlanResolver<'_> {
                             Ok(expression)
                         }
                     })?;
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: named.name,
                     expression,
                 })
@@ -173,7 +165,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         let mut window_values = windows
             .iter()
-            .map(|p| NamedExpression {
+            .map(|p| NamedExpr {
                 name: p.attribute.name.clone(),
                 expression: p.expression.clone(),
             })

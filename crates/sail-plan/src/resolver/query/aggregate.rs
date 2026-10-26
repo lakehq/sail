@@ -2,14 +2,14 @@ use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::analyzer::typing;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) fn aggregate(
         &mut self,
         input: Query,
-        grouping: Vec<NamedExpression>,
-        output: Vec<NamedExpression>,
+        grouping: Vec<NamedExpr>,
+        output: Vec<NamedExpr>,
         having: Option<Expr>,
     ) -> PlanResult<Query> {
         self.aggregate_with_sets(input, grouping, output, having, None)
@@ -18,8 +18,8 @@ impl PlanResolver<'_> {
     pub(in crate::resolver) fn aggregate_with_sets(
         &mut self,
         mut input: Query,
-        mut grouping: Vec<NamedExpression>,
-        mut output: Vec<NamedExpression>,
+        mut grouping: Vec<NamedExpr>,
+        mut output: Vec<NamedExpr>,
         mut having: Option<Expr>,
         grouping_sets: Option<Vec<Vec<usize>>>,
     ) -> PlanResult<Query> {
@@ -54,7 +54,7 @@ impl PlanResolver<'_> {
         let output = output
             .into_iter()
             .map(|expression| {
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: expression.name,
                     expression: self.aggregate_expression(
                         expression.expression,

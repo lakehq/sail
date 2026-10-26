@@ -3,7 +3,7 @@ use sail_common::spec;
 use crate::analyzer::deferred::Deferred;
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 impl PlanResolver<'_> {
     pub(in crate::resolver) fn rename(
@@ -22,7 +22,7 @@ impl PlanResolver<'_> {
             .iter()
             .zip(names)
             .map(|(attribute, name)| {
-                Ok(NamedExpression {
+                Ok(NamedExpr {
                     name: name.into(),
                     expression: Expr {
                         id: self.context.ids.expression(),

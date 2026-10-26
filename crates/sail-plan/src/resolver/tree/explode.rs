@@ -5,7 +5,7 @@ use sail_common::spec;
 
 use crate::analyzer::model::*;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::{NamedExpression, PlanResolver};
+use crate::resolver::{NamedExpr, PlanResolver};
 
 pub(in crate::resolver) fn is_generator(expression: &spec::Expr) -> bool {
     match expression {
@@ -23,7 +23,7 @@ impl PlanResolver<'_> {
         &mut self,
         mut input: Query,
         request: spec::Expr,
-    ) -> PlanResult<(Query, Vec<NamedExpression>)> {
+    ) -> PlanResult<(Query, Vec<NamedExpr>)> {
         let (request, aliases) = match request {
             spec::Expr::Alias { expr, name, .. } => (*expr, Some(name)),
             request => (request, None),
@@ -58,7 +58,7 @@ impl PlanResolver<'_> {
                 let generated = input.schema.resolved("UDTF result")?.attributes[width..]
                     .iter()
                     .map(|a| {
-                        Ok(NamedExpression {
+                        Ok(NamedExpr {
                             name: a.name.clone(),
                             expression: self.reference(a)?,
                         })
@@ -221,7 +221,7 @@ impl PlanResolver<'_> {
                             .function_context()
                             .case(vec![(is_null, null)], Some(expression))?;
                     }
-                    expressions.push(NamedExpression { name, expression });
+                    expressions.push(NamedExpr { name, expression });
                 }
                 Ok((input, expressions))
             }
