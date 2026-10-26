@@ -543,7 +543,7 @@ fn catalog_managed_bootstrap_actions(
     )
     .map_err(|e| DataFusionError::External(Box::new(e)))?;
     if let Some(comment) = comment {
-        metadata = metadata.with_description(comment);
+        metadata = metadata.with_description(Some(comment));
     }
     let metadata = metadata_with_catalog_managed(metadata, &table_id);
     let operation = DeltaOperation::Create {

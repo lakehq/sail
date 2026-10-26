@@ -400,7 +400,7 @@ impl LakeSource for DeltaLakeSource {
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if let Some(comment) = comment {
-            metadata = metadata.with_description(comment);
+            metadata = metadata.with_description(Some(comment));
         }
         let mut protocol =
             protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -1038,7 +1038,9 @@ impl DeltaLakeSource {
         // Enforce existence of UNSET keys unless `IF EXISTS` was specified.
         if !if_exists {
             for key in &canonical_unsets {
-                if !existing_config.contains_key(key) {
+                if !existing_config.contains_key(key)
+                    && !(key == "comment" && snapshot.metadata().description().is_some())
+                {
                     return plan_err!(
                         "cannot remove property '{key}' because it is not set on the table"
                     );
@@ -1049,9 +1051,18 @@ impl DeltaLakeSource {
         // Build new metadata by applying changes.
         let mut new_metadata = snapshot.metadata().clone();
         for (key, value) in &validated_sets {
-            new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+            if key == "comment" {
+                new_metadata = new_metadata
+                    .with_description(Some(value.clone()))
+                    .remove_config_key(key);
+            } else {
+                new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+            }
         }
         for key in &canonical_unsets {
+            if key == "comment" {
+                new_metadata = new_metadata.with_description(None);
+            }
             new_metadata = new_metadata.remove_config_key(key);
         }
 
