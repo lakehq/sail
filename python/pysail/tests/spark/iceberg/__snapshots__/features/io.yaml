@@ -13,9 +13,9 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_io/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_io/metadata/v1.metadata.json
+  - metadata-file: file://<tmp>/iceberg_io/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
-  - metadata-file: <tmp>/iceberg_io/metadata/v2.metadata.json
+  - metadata-file: file://<tmp>/iceberg_io/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
   partition-specs:
   - fields: []

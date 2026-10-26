@@ -435,6 +435,9 @@ pub enum CommandNode {
         if_exists: bool,
         purge: bool,
     },
+    TruncateTable {
+        table: ObjectName,
+    },
     CreateView {
         view: ObjectName,
         #[serde(flatten)]
@@ -1384,6 +1387,9 @@ pub enum ExplainMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
+    AlterSnapshotReference {
+        operation: super::SnapshotReferenceOperation,
+    },
     AlterIdentifierFields {
         names: Vec<ObjectName>,
         drop: bool,

@@ -8,13 +8,14 @@ import pytest
 
 from pysail.testing.spark.ddl import exercise_lakehouse_alter
 from pysail.testing.spark.steps.iceberg import _find_latest_metadata
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 @pytest.mark.parametrize("fmt", ["delta", "iceberg"])
 def test_memory_lakehouse_ddl(spark, tmp_path, fmt):
     spark.conf.set("spark.sql.warehouse.dir", str(tmp_path / "warehouse"))
     table = f"default.ddl_{fmt}"
-    location = (tmp_path / fmt).as_uri()
+    location = escape_sql_string_literal(str(tmp_path / fmt))
     properties = "'format-version'='3'" if fmt == "iceberg" else "'delta.enableTypeWidening'='true'"
     try:
         spark.sql(
@@ -40,10 +41,9 @@ def test_memory_lakehouse_ddl(spark, tmp_path, fmt):
 @pytest.mark.parametrize("alteration", ["SET DEFAULT 7", "DROP DEFAULT"])
 def test_delta_nested_default_rejection_preserves_metadata(spark, tmp_path, alteration):
     table = "default.nested_default_rejection"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
-        spark.sql(
-            f"CREATE TABLE {table} (id INT, payload STRUCT<value:INT>) USING delta LOCATION '{tmp_path.as_uri()}'"
-        )
+        spark.sql(f"CREATE TABLE {table} (id INT, payload STRUCT<value:INT>) USING delta LOCATION '{location}'")
         spark.sql(f"INSERT INTO {table} VALUES (1, named_struct('value', 2))")
         delta_log = tmp_path / "_delta_log"
         before = {path.name: path.read_bytes() for path in delta_log.iterdir() if path.is_file()}
@@ -59,9 +59,10 @@ def test_delta_nested_default_rejection_preserves_metadata(spark, tmp_path, alte
 @pytest.mark.parametrize(("alteration", "data_type"), [("TYPE BIGINT", "bigint"), ("SET DEFAULT 7", "int")])
 def test_iceberg_alter_column_after_schema_merge(spark, tmp_path, alteration, data_type):
     table = "default.alter_merged_column"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT NOT NULL COMMENT 'identifier') USING iceberg LOCATION '{tmp_path.as_uri()}' "
+            f"CREATE TABLE {table} (id INT NOT NULL COMMENT 'identifier') USING iceberg LOCATION '{location}' "
             "TBLPROPERTIES ('format-version'='3')"
         )
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN id SET DEFAULT 11")
@@ -111,10 +112,11 @@ def test_iceberg_alter_column_after_schema_merge(spark, tmp_path, alteration, da
 )
 def test_iceberg_decimal_defaults(spark, tmp_path, data_type, expression, expected):
     table = "default.decimal_defaults"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
             f"CREATE TABLE {table} (id INT, value {data_type}) USING iceberg "
-            f"LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('format-version'='3')"
+            f"LOCATION '{location}' TBLPROPERTIES ('format-version'='3')"
         )
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN value SET DEFAULT {expression}")
         metadata = _find_latest_metadata(tmp_path)
@@ -132,10 +134,11 @@ def test_iceberg_decimal_defaults(spark, tmp_path, data_type, expression, expect
 
 def test_iceberg_decimal_default_overflow_preserves_metadata(spark, tmp_path):
     table = "default.decimal_default_overflow"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
             f"CREATE TABLE {table} (id INT, value DECIMAL(5, 2)) USING iceberg "
-            f"LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('format-version'='3')"
+            f"LOCATION '{location}' TBLPROPERTIES ('format-version'='3')"
         )
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN value SET DEFAULT 12.34")
         metadata_dir = tmp_path / "metadata"
@@ -179,10 +182,11 @@ def test_iceberg_decimal_default_overflow_preserves_metadata(spark, tmp_path):
 @pytest.mark.usefixtures("local_timezone")
 def test_iceberg_temporal_defaults(spark, tmp_path, data_type, expression, expected, stored):
     table = "default.temporal_defaults"
+    location = escape_sql_string_literal(str(tmp_path))
     try:
         spark.sql(
             f"CREATE TABLE {table} (id INT, value {data_type}) USING iceberg "
-            f"LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ('format-version'='3')"
+            f"LOCATION '{location}' TBLPROPERTIES ('format-version'='3')"
         )
         spark.sql(f"ALTER TABLE {table} ALTER COLUMN value SET DEFAULT {expression}")
         metadata = _find_latest_metadata(tmp_path)

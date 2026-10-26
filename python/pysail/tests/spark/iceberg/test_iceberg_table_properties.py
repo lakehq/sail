@@ -7,6 +7,7 @@ from pyiceberg.transforms import BucketTransform, IdentityTransform, TruncateTra
 from pyiceberg.types import IntegerType, NestedField, StringType, StructType
 
 from pysail.testing.spark.steps.iceberg import _latest_metadata_path
+from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
 
 
 @pytest.mark.parametrize("entry", ["path", "catalog"])
@@ -104,7 +105,9 @@ def test_column_rename_preserves_disabled_metrics(spark, tmp_path, nested):
         spark.sql(f"INSERT INTO {table} VALUES (1, {values[0]})")
         spark.sql(f"ALTER TABLE {table} RENAME COLUMN {column} TO renamed")
         spark.sql(f"INSERT INTO {table} VALUES (2, {values[1]})")
-        reference = StaticTable.from_metadata(str(_latest_metadata_path(tmp_path)))
+        reference = StaticTable.from_metadata(
+            _latest_metadata_path(tmp_path).as_uri(), properties=pyiceberg_file_io_properties()
+        )
         field_id = reference.schema().find_field(f"renamed{suffix}").field_id
         files = list(reference.scan().plan_files())
         assert len(files) == 2
@@ -114,7 +117,9 @@ def test_column_rename_preserves_disabled_metrics(spark, tmp_path, nested):
         assert reference.properties[f"{property_prefix}renamed{suffix}"] == "none"
         assert f"{property_prefix}{column}{suffix}" not in reference.properties
         spark.sql(f"ALTER TABLE {table} DROP COLUMN renamed")
-        reference = StaticTable.from_metadata(str(_latest_metadata_path(tmp_path)))
+        reference = StaticTable.from_metadata(
+            _latest_metadata_path(tmp_path).as_uri(), properties=pyiceberg_file_io_properties()
+        )
         assert f"{property_prefix}renamed{suffix}" not in reference.properties
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")

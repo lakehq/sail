@@ -132,7 +132,8 @@ pub(crate) fn apply_alter_table_options(
 ) -> CatalogResult<()> {
     match options {
         // Iceberg partition specs live in format metadata; HMS partition keys stay empty.
-        AlterTableOptions::AlterIdentifierFields { .. }
+        AlterTableOptions::AlterSnapshotReference { .. }
+        | AlterTableOptions::AlterIdentifierFields { .. }
         | AlterTableOptions::AlterPartitionSpec { .. }
         | AlterTableOptions::SetPartitioning { .. } => {}
         AlterTableOptions::SetWriteOrder { distribution, .. } => {

@@ -25,8 +25,8 @@ use crate::ast::keywords::{
     Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename,
     Replace, Reset, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted,
     Source, Start, Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp,
-    Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values,
-    Verbose, View, Views, When, With, Zone,
+    Temporary, Terminated, Then, Time, To, Truncate, Type, Uncache, Unset, Update, Use, User,
+    Using, Values, Verbose, View, Views, When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -160,6 +160,11 @@ pub enum Statement {
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
         purge: Option<Purge>,
+    },
+    TruncateTable {
+        truncate: Truncate,
+        table: Table,
+        name: ObjectName,
     },
     ShowTableProperties {
         show: Show,
@@ -832,8 +837,68 @@ pub enum TableWriteOrderList {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum SnapshotReferenceCreateAction {
+    Create(Create, Option<(Or, Replace)>),
+    Replace(Replace),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum SnapshotReferenceKind {
+    Branch(crate::ast::keywords::Branch),
+    Tag(crate::ast::keywords::Tag),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ReferenceTimeUnit {
+    Days(crate::ast::keywords::Days),
+    Hours(crate::ast::keywords::Hours),
+    Minutes(crate::ast::keywords::Minutes),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ReferenceDuration {
+    pub value: IntegerLiteral,
+    pub unit: ReferenceTimeUnit,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ReferenceSnapshotRetention {
+    Count(
+        IntegerLiteral,
+        crate::ast::keywords::Snapshots,
+        Option<ReferenceDuration>,
+    ),
+    Age(ReferenceDuration),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum AlterTableOperation {
+    CreateSnapshotReference {
+        action: SnapshotReferenceCreateAction,
+        kind: SnapshotReferenceKind,
+        if_not_exists: Option<(If, Not, Exists)>,
+        name: Ident,
+        version: Option<(
+            As,
+            crate::ast::keywords::Of,
+            crate::ast::keywords::Version,
+            IntegerLiteral,
+        )>,
+        retain: Option<(crate::ast::keywords::Retain, ReferenceDuration)>,
+        retention: Option<(
+            With,
+            crate::ast::keywords::Snapshot,
+            crate::ast::keywords::Retention,
+            ReferenceSnapshotRetention,
+        )>,
+    },
+    DropSnapshotReference {
+        drop: Drop,
+        kind: SnapshotReferenceKind,
+        if_exists: Option<(If, Exists)>,
+        name: Ident,
+    },
     SetIdentifierFields {
         set: Set,
         identifier: crate::ast::keywords::Identifier,

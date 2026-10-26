@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
 
 @pytest.mark.parametrize("mapped", [False, True])
 @pytest.mark.parametrize("api", ["option", "v2"])
@@ -12,7 +14,7 @@ def test_dynamic_overwrite_replaces_only_written_partitions(spark, tmp_path, map
     try:
         spark.sql(
             f"CREATE TABLE {table} (id INT, part STRING) USING delta PARTITIONED BY (part) "
-            f"LOCATION '{tmp_path.as_uri()}' TBLPROPERTIES ({properties}'delta.enableChangeDataFeed'='true')"
+            f"LOCATION '{escape_sql_string_literal(str(tmp_path))}' TBLPROPERTIES ({properties}'delta.enableChangeDataFeed'='true')"
         )
         spark.sql(f"INSERT INTO {table} VALUES (1, 'a'), (2, 'b'), (3, NULL), (4, 'a')")
         replacement = spark.createDataFrame([(10, "a"), (30, None)], "id INT, part STRING")
@@ -68,7 +70,7 @@ def test_session_dynamic_overwrite_and_explicit_static_override(spark, tmp_path,
     previous = spark.conf.get(key)
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT, part STRING) USING {fmt} PARTITIONED BY (part) LOCATION '{tmp_path.as_uri()}'"
+            f"CREATE TABLE {table} (id INT, part STRING) USING {fmt} PARTITIONED BY (part) LOCATION '{escape_sql_string_literal(str(tmp_path))}'"
         )
         spark.sql(f"INSERT INTO {table} VALUES (1, 'a'), (2, 'b')")
         spark.conf.set(key, "dynamic")

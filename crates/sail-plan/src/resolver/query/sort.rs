@@ -42,22 +42,36 @@ impl PlanResolver<'_> {
             .collect();
         let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
         let output_schema = Arc::clone(input.schema());
-        let plan = if is_global {
+        let (input, sorts) = if is_global {
             // Visible sort orders need no recovery, so leave their rewrite to the builder.
             // Rewriting scans the input projection for each sort order.
-            let (input, sorts) = if Self::missing_sort_columns(&input, &sorts).is_some() {
+            if Self::missing_sort_columns(&input, &sorts).is_some() {
                 // The logical plan builder rewrites the sort orders in the same way.
                 let sorts = rewrite_sort_cols_by_aggs(sorts, &input)?;
                 (Self::add_sort_missing_inputs(input, &sorts, state)?, sorts)
             } else {
                 (input, sorts)
-            };
+            }
+        } else {
+            let input = Self::add_sort_missing_inputs(input, &sorts, state)?;
+            (input, sorts)
+        };
+        let (input, expressions) = self.rewrite_partition_expressions(
+            input,
+            sorts.iter().map(|sort| sort.expr.clone()).collect(),
+            state,
+        )?;
+        let sorts = sorts
+            .into_iter()
+            .zip(expressions)
+            .map(|(sort, expr)| Sort { expr, ..sort })
+            .collect::<Vec<_>>();
+        let plan = if is_global {
             LogicalPlanBuilder::from(input).sort(sorts)?.build()?
         } else {
             // TODO: Use the logical plan builder to include logic such as expression rebase.
             //   We can build a plan with a `Sort` node and then replace it with the
             //   `SortWithinPartitions` node using a tree node rewriter.
-            let input = Self::add_sort_missing_inputs(input, &sorts, state)?;
             LogicalPlan::Extension(Extension {
                 node: Arc::new(SortWithinPartitionsNode::new(Arc::new(input), sorts, None)),
             })
@@ -185,7 +199,11 @@ impl PlanResolver<'_> {
         } = sort;
         let has_grouping_set = Self::has_grouping_set(&aggregate.group_expr);
         let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&aggregate.group_expr);
-        let expr = Self::rewrite_grouping_expr(expr, &grouping_exprs, has_grouping_set)?;
+        let duplicate_sets = has_grouping_set
+            && Self::correlation_keeps_grouping(&aggregate.input, &aggregate.group_expr)?
+            && Self::has_duplicate_grouping_sets(&aggregate.group_expr)?;
+        let expr =
+            Self::rewrite_grouping_expr(expr, &grouping_exprs, has_grouping_set, duplicate_sets)?;
         Ok(Sort {
             expr,
             asc,

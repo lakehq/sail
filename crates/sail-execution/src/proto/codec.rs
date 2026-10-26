@@ -210,7 +210,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::SparkDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -233,6 +233,7 @@ use sail_function::scalar::misc::theta_sketch::{
 };
 use sail_function::scalar::misc::version::SparkVersion;
 use sail_function::scalar::multi_expr::MultiExpr;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
@@ -3611,6 +3612,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
             "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
+            "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
@@ -3678,7 +3680,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "xpath" => Ok(Arc::new(ScalarUDF::from(Xpath::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
-            "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
+            "spark_div" => Ok(Arc::new(ScalarUDF::from(SparkDiv::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
@@ -3810,6 +3812,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<VectorNormalize>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
+            || node_inner.is::<NormalizeFloatKeys>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
@@ -3861,7 +3864,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
             || node_inner.is::<SparkHex>()
-            || node_inner.is::<SparkIntervalDiv>()
+            || node_inner.is::<SparkDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkVariantExplodeUdf>()
@@ -5082,6 +5085,7 @@ impl RemoteExecutionCodec {
             r#gen::IcebergSnapshotUpdateKind::RowLevelRewrite => {
                 Ok(SnapshotUpdateKind::RowLevelRewrite)
             }
+            r#gen::IcebergSnapshotUpdateKind::Truncate => Ok(SnapshotUpdateKind::Truncate),
             r#gen::IcebergSnapshotUpdateKind::Unspecified => {
                 plan_err!("Iceberg snapshot update kind is unspecified")
             }
@@ -5090,6 +5094,7 @@ impl RemoteExecutionCodec {
 
     fn try_encode_iceberg_snapshot_update_kind(kind: SnapshotUpdateKind) -> i32 {
         (match kind {
+            SnapshotUpdateKind::Truncate => r#gen::IcebergSnapshotUpdateKind::Truncate,
             SnapshotUpdateKind::FastAppend => r#gen::IcebergSnapshotUpdateKind::FastAppend,
             SnapshotUpdateKind::FullOverwrite => r#gen::IcebergSnapshotUpdateKind::FullOverwrite,
             SnapshotUpdateKind::RowDelta => r#gen::IcebergSnapshotUpdateKind::RowDelta,
@@ -6604,6 +6609,7 @@ mod tests {
             for (kind, dynamic) in [
                 (SnapshotUpdateKind::CopyOnWrite, true),
                 (SnapshotUpdateKind::RowLevelRewrite, false),
+                (SnapshotUpdateKind::Truncate, false),
                 (SnapshotUpdateKind::RewriteDataFiles, false),
             ] {
                 let input: Arc<dyn ExecutionPlan> =
@@ -7228,6 +7234,14 @@ mod tests {
 
         let coalesce = round_trip_udf(ScalarUDF::from(CoalesceFunc::new()))?;
         downcast_udf::<CoalesceFunc>(&coalesce, "CoalesceFunc")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_normalize_float_keys_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(NormalizeFloatKeys::new()))?;
+        downcast_udf::<NormalizeFloatKeys>(&decoded, "NormalizeFloatKeys")?;
+        assert_eq!(decoded.name(), "normalize_float_keys");
         Ok(())
     }
 
