@@ -7,8 +7,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
-use sail_query::deferred::Deferred;
-use sail_query::model::{Attribute, ExprType, IdGenerator, QueryKind, QueryNode, QuerySchema};
+use sail_common_plan::deferred::Deferred;
+use sail_common_plan::model::{Attribute, ExprType, IdGenerator, Query, QueryKind, QuerySchema};
 use sail_system_store::catalog::{SystemCatalog, SystemDatabase, SystemTable};
 
 use crate::table_source::SystemTableSource;
@@ -57,7 +57,7 @@ impl SystemCatalogProvider {
             database: database.clone().into(),
             name: table.to_string(),
             kind: TableKind::TemporaryView {
-                plan: Arc::new(QueryNode {
+                plan: Arc::new(Query {
                     kind: Deferred::Resolved(QueryKind::Scan {
                         name: format!("{SYSTEM_CATALOG_NAME}.{}.{}", database.head, t.name()),
                         source: Arc::new(SystemTableSource::new(t)),

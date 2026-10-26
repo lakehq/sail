@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{Result, plan_err};
-use sail_query::model::QueryNode;
+use sail_common_plan::model::Query;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
@@ -143,7 +143,7 @@ pub enum TableKind {
         properties: Vec<(String, String)>,
     },
     TemporaryView {
-        plan: Arc<QueryNode>,
+        plan: Arc<Query>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         properties: Vec<(String, String)>,
@@ -151,7 +151,7 @@ pub enum TableKind {
         source: Option<TemporaryViewSource>,
     },
     GlobalTemporaryView {
-        plan: Arc<QueryNode>,
+        plan: Arc<Query>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         properties: Vec<(String, String)>,

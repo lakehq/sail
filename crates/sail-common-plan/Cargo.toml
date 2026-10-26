@@ -1,0 +1,17 @@
+[package]
+name = "sail-common-plan"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+arrow-schema = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+educe = { workspace = true }
+datafusion = { workspace = true }

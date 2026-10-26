@@ -25,7 +25,7 @@ mod tests {
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::datasource::DataSourceRegistry;
     use sail_common_datafusion::session::plan::PlanService;
-    use sail_plan::analysis::QueryAnalyzer;
+    use sail_plan::analyzer::QueryAnalyzer;
     use sail_plan::catalog::SparkCatalogObjectDisplay;
     use sail_plan::config::PlanConfig;
     use sail_plan::formatter::SparkPlanFormatter;
@@ -100,7 +100,7 @@ mod tests {
         }
 
         let session = create_session()?;
-        let resolver = QueryAnalyzer::new(&session, Arc::new(PlanConfig::default()));
+        let mut resolver = QueryAnalyzer::new(&session, Arc::new(PlanConfig::default()));
 
         for (predicate, values) in [
             (

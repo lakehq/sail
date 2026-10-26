@@ -7,7 +7,7 @@ use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
     TemporaryViewSource,
 };
-use sail_query::model::QueryNode;
+use sail_common_plan::model::Query;
 use serde::{Deserialize, Serialize};
 
 /// Options for creating a database in a catalog.
@@ -108,7 +108,7 @@ pub struct CreateViewColumnOptions {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub struct CreateTemporaryViewOptions<I = Arc<QueryNode>> {
+pub struct CreateTemporaryViewOptions<I = Arc<Query>> {
     pub input: I,
     pub columns: Vec<CreateTemporaryViewColumnOptions>,
     pub if_not_exists: bool,

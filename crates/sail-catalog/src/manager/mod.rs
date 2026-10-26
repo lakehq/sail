@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::extension::SessionExtension;
-use sail_query::model::QueryNode;
+use sail_common_plan::model::Query;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogObjectTracker, CatalogQueryId};
@@ -147,11 +147,11 @@ impl CatalogManager {
         self.tracker.get_tracked_function(id)
     }
 
-    pub fn track_query(&self, plan: Arc<QueryNode>) -> CatalogResult<CatalogQueryId> {
+    pub fn track_query(&self, plan: Arc<Query>) -> CatalogResult<CatalogQueryId> {
         self.tracker.track_query(plan)
     }
 
-    pub fn get_tracked_query(&self, id: CatalogQueryId) -> CatalogResult<Arc<QueryNode>> {
+    pub fn get_tracked_query(&self, id: CatalogQueryId) -> CatalogResult<Arc<Query>> {
         self.tracker.get_tracked_query(id)
     }
 }

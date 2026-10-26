@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::ScalarUDF;
-use sail_query::model::QueryNode;
+use sail_common_plan::model::Query;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
@@ -18,7 +18,7 @@ struct CatalogObjectTrackerState {
     next_function_id: u64,
     next_query_id: u64,
     functions: HashMap<u64, ScalarUDF>,
-    queries: HashMap<u64, Arc<QueryNode>>,
+    queries: HashMap<u64, Arc<Query>>,
 }
 
 /// Tracks in-memory objects (UDFs and query trees) that cannot be serialized directly,
@@ -54,7 +54,7 @@ impl CatalogObjectTracker {
             .ok_or_else(|| CatalogError::NotFound(CatalogObject::Function, id.0.to_string()))
     }
 
-    pub fn track_query(&self, plan: Arc<QueryNode>) -> CatalogResult<CatalogQueryId> {
+    pub fn track_query(&self, plan: Arc<Query>) -> CatalogResult<CatalogQueryId> {
         let mut state = self.state()?;
         let id = state.next_query_id;
         state.next_query_id += 1;
@@ -62,7 +62,7 @@ impl CatalogObjectTracker {
         Ok(CatalogQueryId(id))
     }
 
-    pub fn get_tracked_query(&self, id: CatalogQueryId) -> CatalogResult<Arc<QueryNode>> {
+    pub fn get_tracked_query(&self, id: CatalogQueryId) -> CatalogResult<Arc<Query>> {
         let state = self.state()?;
         state
             .queries

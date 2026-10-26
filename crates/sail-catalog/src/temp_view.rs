@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use lazy_static::lazy_static;
 use sail_common_datafusion::catalog::{TableColumnStatus, TemporaryViewSource};
-use sail_query::model::QueryNode;
+use sail_common_plan::model::Query;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::provider::{CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions};
@@ -16,7 +16,7 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub struct TemporaryView {
-    plan: Arc<QueryNode>,
+    plan: Arc<Query>,
     columns: Vec<TableColumnStatus>,
     comment: Option<String>,
     properties: Vec<(String, String)>,
@@ -29,7 +29,7 @@ pub struct TemporaryViewColumn {
 }
 
 impl TemporaryView {
-    pub fn plan(&self) -> &Arc<QueryNode> {
+    pub fn plan(&self) -> &Arc<Query> {
         &self.plan
     }
 

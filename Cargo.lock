@@ -7012,7 +7012,7 @@ dependencies = [
  "regex",
  "sail-common",
  "sail-common-datafusion",
- "sail-query",
+ "sail-common-plan",
  "serde",
  "serde_arrow",
  "serde_json",
@@ -7119,7 +7119,7 @@ dependencies = [
  "parquet-variant-compute",
  "sail-catalog",
  "sail-common-datafusion",
- "sail-query",
+ "sail-common-plan",
  "sail-system-store",
  "serde",
  "tokio",
@@ -7239,7 +7239,7 @@ dependencies = [
  "pin-project-lite",
  "prost",
  "sail-common",
- "sail-query",
+ "sail-common-plan",
  "serde",
  "serde_arrow",
  "serde_json",
@@ -7259,6 +7259,18 @@ dependencies = [
  "sail-thrift",
  "thrift",
  "tokio",
+]
+
+[[package]]
+name = "sail-common-plan"
+version = "0.7.2"
+dependencies = [
+ "arrow-schema",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "educe",
+ "sail-common",
 ]
 
 [[package]]
@@ -7687,12 +7699,12 @@ dependencies = [
  "sail-catalog-memory",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-plan",
  "sail-data-source",
  "sail-function",
  "sail-logical-plan",
  "sail-physical-plan",
  "sail-python-udf",
- "sail-query",
  "sail-sql-analyzer",
  "serde",
  "serde_json",
@@ -7748,18 +7760,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
-]
-
-[[package]]
-name = "sail-query"
-version = "0.7.2"
-dependencies = [
- "arrow-schema",
- "datafusion",
- "datafusion-common",
- "datafusion-expr",
- "educe",
- "sail-common",
 ]
 
 [[package]]
