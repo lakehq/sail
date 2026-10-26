@@ -2,6 +2,7 @@ from collections import Counter
 from itertools import pairwise
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -265,7 +266,7 @@ def test_input_file_name_from_parquet_scan(spark, tmp_path):
     ]
     parsed = urlparse(rows[0].file_name)
     assert parsed.scheme == "file"
-    assert Path(unquote(parsed.path)).resolve() == data_file.resolve()
+    assert Path(url2pathname(parsed.path)).resolve() == data_file.resolve()
     assert spark.read.parquet(str(location)).where(F.input_file_block_length() > 0).count() == len(rows)
     assert not dataframe.schema["file_name"].nullable
     assert not dataframe.schema["block_start"].nullable
@@ -300,7 +301,9 @@ def test_input_file_block_metadata_from_parquet_splits(spark, tmp_path):
 
     assert len(metadata_rows) > 1
     assert sum(row["count"] for row in metadata_rows) == PARQUET_SPLIT_ROW_COUNT
-    assert all(Path(unquote(urlparse(row.file_name).path)).resolve() == data_file.resolve() for row in metadata_rows)
+    assert all(
+        Path(url2pathname(urlparse(row.file_name).path)).resolve() == data_file.resolve() for row in metadata_rows
+    )
 
     ranges = [(row.block_start, row.block_length) for row in metadata_rows]
     assert ranges[0][0] == 0
@@ -343,7 +346,7 @@ def test_input_file_metadata_from_delta_scan(spark, tmp_path, metadata_as_data):
     row_files = {}
     for row in rows:
         parsed = urlparse(row.file_name)
-        data_file = Path(unquote(parsed.path)).resolve()
+        data_file = Path(url2pathname(parsed.path)).resolve()
         assert parsed.scheme == "file"
         assert data_file in data_files
         assert row.block_start == 0
@@ -389,7 +392,7 @@ def test_input_file_metadata_restores_delta_columns(spark, tmp_path, column_mapp
     )
     assert [row.id for row in rows] == [1, 2]
     for row, part in zip(rows, ["east", "west"], strict=True):
-        data_file = Path(unquote(urlparse(row.file_name).path)).resolve()
+        data_file = Path(url2pathname(urlparse(row.file_name).path)).resolve()
         assert data_file in data_files
         assert row.label == f"{part}:{row.file_name}"
         assert row.value == row.id * 10

@@ -64,6 +64,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -146,6 +149,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -442,6 +448,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -524,6 +533,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -835,6 +847,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -919,6 +934,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -1346,6 +1364,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -1500,6 +1521,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2035,6 +2059,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -2128,6 +2155,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2530,6 +2560,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -2614,6 +2647,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:

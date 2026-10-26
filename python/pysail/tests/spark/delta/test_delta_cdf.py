@@ -9,6 +9,8 @@ import pyarrow.parquet as pq
 import pytest
 from pyspark.sql.types import LongType, StringType, TimestampType
 
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
+
 
 def _actions(path, version):
     return [json.loads(line) for line in (path / "_delta_log" / f"{version:020}.json").read_text().splitlines()]
@@ -141,7 +143,7 @@ def test_cdf_noop_rewrite_and_replace_where(spark, tmp_path):
 def test_cdf_enable_disable_and_range_validation(spark, tmp_path):
     path = tmp_path / "cdf_enable"
     spark.range(1).write.format("delta").save(str(path))
-    spark.sql(f"CREATE TABLE cdf_enable USING DELTA LOCATION '{path}'")
+    spark.sql(f"CREATE TABLE cdf_enable USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'")
     spark.sql("ALTER TABLE cdf_enable SET TBLPROPERTIES ('delta.enableChangeDataFeed'='true')")
     spark.range(1, 2).write.format("delta").mode("append").save(str(path))
     spark.sql("ALTER TABLE cdf_enable SET TBLPROPERTIES ('delta.enableChangeDataFeed'='false')")
@@ -441,7 +443,7 @@ def test_cdf_ignores_reorganization_actions(spark, tmp_path):
 def test_cdf_generated_columns(spark, tmp_path):
     path = tmp_path / "cdf_generated"
     spark.sql(f"""CREATE TABLE cdf_generated (id BIGINT, doubled BIGINT GENERATED ALWAYS AS (id * 2))
-        USING DELTA LOCATION '{path}' TBLPROPERTIES ('delta.enableChangeDataFeed'='true')""")
+        USING DELTA LOCATION '{escape_sql_string_literal(str(path))}' TBLPROPERTIES ('delta.enableChangeDataFeed'='true')""")
     try:
         spark.sql("INSERT INTO cdf_generated (id) VALUES (1), (2)")
         spark.sql("UPDATE cdf_generated SET id = 3 WHERE id = 1")
