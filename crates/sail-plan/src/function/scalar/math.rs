@@ -9,6 +9,8 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
@@ -22,7 +24,9 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkDiv;
+use sail_function::scalar::math::spark_div::{
+    DIVIDE_BY_ZERO_MESSAGE, SparkIntegerDiv, SparkIntervalDiv,
+};
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -279,6 +283,120 @@ fn is_zero_literal(expr: &Expr) -> bool {
     }
 }
 
+/// `Decimal128` only: the kernel behind `div` divides at 256-bit from a 128-bit pair, so a
+/// `Decimal256` operand keeps the previous path rather than silently taking a narrower one.
+fn is_spark_decimal(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Decimal128(_, _))
+}
+
+/// The four types `IntegralDivide.inputType` accepts (arithmetic.scala:890), checked on the pair.
+fn accepts_div_input(data_type: &DataType) -> bool {
+    data_type.is_integer()
+        || matches!(
+            data_type,
+            DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+                | DataType::Duration(_)
+                | DataType::Interval(IntervalUnit::YearMonth)
+        )
+}
+
+/// The types Spark's coercion rules LEAVE BEHIND for a rejected `div` pair.
+///
+/// `BinaryOperator.checkInputDataTypes` (Expression.scala:842-856) runs after the coercion batch,
+/// so both the subclass it picks and the names it prints are post-coercion: the types the user
+/// wrote can appear nowhere in the message. Only the names are needed here — an accepted pair is
+/// coerced for real further down — so this rebuilds the three rules that can fire before the
+/// check and returns the resulting pair.
+fn coerced_type_names_for_rejection(
+    left: &DataType,
+    right: &DataType,
+    ansi_mode: bool,
+) -> (DataType, DataType) {
+    let is_string =
+        |t: &DataType| matches!(t, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View);
+    let is_interval = |t: &DataType| matches!(t, DataType::Interval(_) | DataType::Duration(_));
+    let is_float =
+        |t: &DataType| matches!(t, DataType::Float16 | DataType::Float32 | DataType::Float64);
+    // Spark's `FractionalType` covers every DECIMAL width, not just the one the kernel takes.
+    let is_decimal = |t: &DataType| {
+        matches!(
+            t,
+            DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+        )
+    };
+    // Spark's `AtomicType`: everything but the containers, and `NullType` is matched earlier.
+    let is_atomic = |t: &DataType| {
+        !is_interval(t)
+            && !matches!(
+                t,
+                DataType::Null
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::ListView(_)
+                    | DataType::LargeListView(_)
+                    | DataType::FixedSizeList(_, _)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _)
+                    | DataType::Union(_, _)
+                    | DataType::Dictionary(_, _)
+                    | DataType::RunEndEncoded(_, _)
+            )
+    };
+
+    // `IntegralDivisionTypeCoercion.scala:34-37` widens a narrower integral to LONG whatever the
+    // peer is, so an INT is reported as BIGINT even beside a DATE.
+    let widen = |t: &DataType| match t {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 => DataType::Int64,
+        other => other.clone(),
+    };
+    let (mut left, mut right) = (widen(left), widen(right));
+
+    if ansi_mode {
+        // `findWiderTypeForString` (AnsiStringPromotionTypeCoercion.scala:92-109) sends BOTH
+        // sides to one type, or neither moves. The arm order is load-bearing: a DECIMAL is
+        // `FractionalType`, so it goes to DOUBLE rather than staying DECIMAL.
+        let wider = |string: &DataType, peer: &DataType| match peer {
+            _ if peer.is_integer() => Some(DataType::Int64),
+            _ if is_float(peer) || is_decimal(peer) => Some(DataType::Float64),
+            DataType::Null => Some(string.clone()),
+            _ if is_interval(peer) => None,
+            _ if is_string(peer) => Some(string.clone()),
+            _ if is_atomic(peer) => Some(peer.clone()),
+            _ => None,
+        };
+        let promoted = match (is_string(&left), is_string(&right)) {
+            (true, _) => wider(&left, &right),
+            (_, true) => wider(&right, &left),
+            (false, false) => None,
+        };
+        if let Some(promoted) = promoted {
+            (left, right) = (promoted.clone(), promoted);
+        }
+    } else {
+        // `StringPromotionTypeCoercion.scala:48-54` sends a string to DOUBLE on its own, one
+        // side at a time, and skips it only when the peer is an interval.
+        if is_string(&left) && !is_interval(&right) {
+            left = DataType::Float64;
+        }
+        if is_string(&right) && !is_interval(&left) {
+            right = DataType::Float64;
+        }
+    }
+
+    // `DecimalPrecisionTypeCoercion.scala:182-185` sends the DECIMAL to DOUBLE and leaves the
+    // float side alone, so a FLOAT peer is still reported as FLOAT.
+    if is_decimal(&left) && is_float(&right) {
+        left = DataType::Float64;
+    } else if is_float(&left) && is_decimal(&right) {
+        right = DataType::Float64;
+    }
+    (left, right)
+}
+
 /// Returns a guarded divisor expression that handles division by zero at runtime.
 ///
 /// In non-ANSI mode: returns `nullif(divisor, 0)` — evaluates to NULL when divisor is zero.
@@ -398,40 +516,246 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         function_context,
     } = input;
 
-    let (dividend, divisor) = arguments.two()?;
-
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
+    // Spark's `wrongNumArgsError` (QueryCompilationErrors.scala:1009-1016); checked here because
+    // `ItemTaker` would leak a Rust `Debug` rendering of the argument list instead.
+    if arguments.len() != 2 {
+        return Err(PlanError::analysis(format!(
+            "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `div` requires 2 parameters but the actual \
+             number is {}. Please, refer to \
+             'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix. \
+             SQLSTATE: 42605",
+            arguments.len()
+        )));
     }
+    let (dividend, divisor) = arguments.two()?;
 
     let ansi_mode = function_context.plan_config.ansi_mode;
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
-
-    // Apply runtime zero-divisor guard to the divisor before building the division expression.
-    let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
-    let divisor = make_safe_divisor(
-        divisor,
-        &effective_divisor_type,
-        ansi_mode,
-        "Division by zero",
+    // Spark checks the types after ANSI-dependent coercion. Keep this rejection after coercion
+    // too, so an unsupported pair cannot be hidden by a zero-divisor guard.
+    // `BinaryOperator.checkInputDataTypes` (Expression.scala:842-856) tests `!sameType` BEFORE
+    // `!inputType.acceptsType`, so a mismatched pair is DIFF_TYPES even when neither type is
+    // accepted. Spark's parent template is `Cannot resolve <sqlExpr> due to data type mismatch:`
+    // (error-conditions.json), so the clause carries the operand SQL — which the builder DOES
+    // have, as `argument_display_names` (the same source the resolver uses to name the output
+    // column, resolver/expression/function.rs:291).
+    let reject = |left: Option<&DataType>, right: Option<&DataType>| {
+        // Built here rather than above: `function_to_string` checks the arity of the DISPLAY
+        // NAMES, which the arity guard above does not, so computing it eagerly would let a
+        // caller that supplies no names fail a VALID `div` with a leaked `Debug` rendering.
+        let formatter = function_context
+            .session_context
+            .extension::<PlanService>()?;
+        let formatter = formatter.plan_formatter();
+        let sql_expr = formatter.function_to_string(
+            "div",
+            function_context
+                .argument_display_names
+                .iter()
+                .map(String::as_str)
+                .collect(),
+            false,
+        )?;
+        let coerced = match (left, right) {
+            (Some(l), Some(r)) => Some(coerced_type_names_for_rejection(l, r, ansi_mode)),
+            _ => None,
+        };
+        let (left, right) = match coerced.as_ref() {
+            Some((l, r)) => (Some(l), Some(r)),
+            None => (left, right),
+        };
+        let name = |t: Option<&DataType>| {
+            t.and_then(|t| formatter.data_type_to_simple_string(t).ok())
+                .map_or_else(
+                    || "\"UNKNOWN\"".to_string(),
+                    |t| format!("\"{}\"", t.to_uppercase()),
+                )
+        };
+        // `sameType` ignores the storage width of a string, so Spark sees `Utf8` and `Utf8View`
+        // as one STRING type where `==` would not. Defensive: SQL always resolves a string to
+        // `Utf8`, so only a Connect literal can reach the other arms and no test covers them.
+        let same_type = |l: &DataType, r: &DataType| {
+            let normalize = |t: &DataType| match t {
+                DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8,
+                other => other.clone(),
+            };
+            normalize(l) == normalize(r)
+        };
+        let message = match (left, right) {
+            (Some(l), Some(r)) if same_type(l, r) => format!(
+                "[DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE] Cannot resolve \"{sql_expr}\" due to \
+                 data type mismatch: the binary operator requires the input type (\"BIGINT\" or \
+                 \"DECIMAL\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL DAY TO SECOND\"), not \
+                 {}. SQLSTATE: 42K09",
+                name(left)
+            ),
+            _ => format!(
+                "[DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES] Cannot resolve \"{sql_expr}\" due to \
+                 data type mismatch: the left and right operands of the binary operator have \
+                 incompatible types ({} and {}). SQLSTATE: 42K09",
+                name(left),
+                name(right)
+            ),
+        };
+        Err(PlanError::analysis(message))
+    };
+    // Legacy promotion sends a STRING to DOUBLE, which `div` rejects; ANSI promotion widens
+    // it to LONG, but only when the other side is integral (`findWiderTypeForString`).
+    let dividend_is_string = matches!(
+        dividend_type.as_ref().ok(),
+        Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
     );
+    let divisor_is_string = matches!(
+        divisor_type.as_ref().ok(),
+        Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    );
+    let dividend_is_integral = dividend_type.as_ref().is_ok_and(DataType::is_integer);
+    let divisor_is_integral = divisor_type.as_ref().is_ok_and(DataType::is_integer);
+    let (dividend, divisor, dividend_type, divisor_type) =
+        match (dividend_is_string, divisor_is_string) {
+            (false, false) => (dividend, divisor, dividend_type, divisor_type),
+            (true, false) if ansi_mode && divisor_is_integral => (
+                cast(dividend, DataType::Int64),
+                divisor,
+                Ok(DataType::Int64),
+                divisor_type,
+            ),
+            (false, true) if ansi_mode && dividend_is_integral => (
+                dividend,
+                cast(divisor, DataType::Int64),
+                dividend_type,
+                Ok(DataType::Int64),
+            ),
+            // An unresolvable type is tolerated here for the same reason the `accepted` gate
+            // below tolerates it: a failed `get_type` must not turn into a rejected query.
+            _ if dividend_type.is_err() || divisor_type.is_err() => {
+                (dividend, divisor, dividend_type, divisor_type)
+            }
+            _ => return reject(dividend_type.as_ref().ok(), divisor_type.as_ref().ok()),
+        };
 
+    // Spark rewrites an untyped NULL to the expected concrete type rather than tolerating it
+    // (TypeCoercionHelper.scala:570-578); with both sides NULL it falls back to LONG. The
+    // rewrite is conditional: `TypeCoercionHelper.scala:550` only replaces the children when
+    // `inputType` accepts the common type, so beside a REJECTED peer the NULL keeps VOID and
+    // that is the name the rejection carries.
+    let dividend_is_null = matches!(dividend_type.as_ref().ok(), Some(DataType::Null));
+    let divisor_is_null = matches!(divisor_type.as_ref().ok(), Some(DataType::Null));
+    let (mut dividend, mut divisor) = (dividend, divisor);
+    let (mut dividend_type, mut divisor_type) = (dividend_type, divisor_type);
+    let accepted_peer = |t: &datafusion_common::Result<DataType>| {
+        t.as_ref().ok().filter(|t| accepts_div_input(t)).cloned()
+    };
+    let null_target = match (dividend_is_null, divisor_is_null) {
+        (true, true) => Some(DataType::Int64),
+        (true, false) => accepted_peer(&divisor_type),
+        (false, true) => accepted_peer(&dividend_type),
+        (false, false) => None,
+    };
+    if let Some(target) = null_target {
+        if dividend_is_null {
+            dividend = cast(dividend, target.clone());
+            dividend_type = Ok(target.clone());
+        }
+        if divisor_is_null {
+            divisor = cast(divisor, target.clone());
+            divisor_type = Ok(target);
+        }
+    }
+
+    // `IntegralDivide.inputType` (arithmetic.scala:890), checked on the PAIR: per-operand
+    // checks let a mixed pair through and it dies inside DataFusion instead of here.
+    let numeric = |t: &DataType| {
+        t.is_integer() || matches!(t, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
+    };
+    let accepted = match (&dividend_type, &divisor_type) {
+        (Err(_), _) | (_, Err(_)) => true,
+        (Ok(l), Ok(r)) => {
+            (numeric(l) && numeric(r))
+                || matches!((l, r), (DataType::Duration(a), DataType::Duration(b)) if a == b)
+                || matches!(
+                    (l, r),
+                    (
+                        DataType::Interval(IntervalUnit::YearMonth),
+                        DataType::Interval(IntervalUnit::YearMonth)
+                    )
+                )
+        }
+    };
+    if !accepted {
+        return reject(dividend_type.as_ref().ok(), divisor_type.as_ref().ok());
+    }
+
+    // Each kernel owns the zero policy for its own arm, including "a NULL dividend wins over a
+    // zero divisor" (arithmetic.scala:664-684): under ANSI it raises, so the divisor is passed
+    // through untouched; without ANSI it needs the divisor already NULLed.
+    let kernel_guarded_divisor = |divisor: Expr, divisor_type: &DataType| {
+        if ansi_mode {
+            divisor
+        } else {
+            // `make_safe_divisor` reads the message only on the ANSI path.
+            make_safe_divisor(divisor, divisor_type, false, "")
+        }
+    };
     let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
         (Ok(DataType::Duration(_)), Ok(DataType::Duration(_))) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
-            cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
+            // Sail resolves Spark's DAY TO SECOND to Duration, and Spark divides it as LONG
+            // (`PhysicalLongType.integral`, arithmetic.scala:918-919). `checkDivideOverflow`
+            // only fires for a LONG *dividend* (arithmetic.scala:885-888), so an interval
+            // dividend wraps at `LONG_MIN / -1` in BOTH ANSI modes instead of raising — hence
+            // the kernel with the overflow check disabled rather than a checked division.
+            let dividend = cast(dividend, DataType::Int64);
+            let divisor = kernel_guarded_divisor(cast(divisor, DataType::Int64), &DataType::Int64);
+            ScalarUDF::from(SparkIntegerDiv::new(ansi_mode, false)).call(vec![dividend, divisor])
         }
-        // Keep the original operands intact through grouping and aggregate extraction.
-        // SparkDiv's normal argument coercion handles resolved numeric and interval types.
-        _ => ScalarUDF::from(SparkDiv::new()).call(vec![dividend, divisor]),
+        // The UDF owns its zero policy. Each arm hands the UDF the ORIGINAL operands, so
+        // grouping and aggregate extraction still see the expression the user wrote (#2822).
+        (
+            Ok(DataType::Interval(IntervalUnit::YearMonth)),
+            Ok(DataType::Interval(IntervalUnit::YearMonth)),
+        ) => ScalarUDF::from(SparkIntervalDiv::new(ansi_mode)).call(vec![dividend, divisor]),
+        // Integer operands: delegate to SparkIntegerDiv, which raises on a zero divisor
+        // under ANSI and handles the LONG_MIN / -1 overflow edge. Outside ANSI the zero
+        // has to become a NULL before it reaches the kernel.
+        (Ok(d), Ok(s)) if d.is_integer() && s.is_integer() => {
+            let divisor = kernel_guarded_divisor(divisor, s);
+            ScalarUDF::from(SparkIntegerDiv::new(ansi_mode, true)).call(vec![dividend, divisor])
+        }
+        // DECIMAL on either side. Spark promotes an integral peer with `DecimalType.forType`
+        // and then divides on BigDecimal WITHOUT bringing the two decimals to a common type
+        // (the analyzed plan keeps both), so the pair is handed to the kernel as it is. Routing
+        // this through DataFusion's `/` instead is what made a wide scale overflow, or fail to
+        // resolve a result type at all. The kernel owns both zero policies, like the interval
+        // one, so no guard is wrapped around the divisor here.
+        (Ok(d), Ok(s))
+            if (is_spark_decimal(d) && is_spark_decimal(s))
+                || (is_spark_decimal(d) && s.is_integer())
+                || (d.is_integer() && is_spark_decimal(s)) =>
+        {
+            // The operands are passed through UNPROMOTED: `SparkIntegerDiv::coerce_types`
+            // resolves a mixed pair, because promoting here with `DecimalType.forType` (scale 0)
+            // destroys the value whenever the declared type understates it — Sail types
+            // `CASE WHEN false THEN 0 ELSE 1.5 END` as INT, and rounding it to a scale-0 decimal
+            // answers 4 where Spark answers 3 (measured; #2822 pins this shape).
+            // `checkDivideOverflow` is LONG-dividend-only (arithmetic.scala:885-888), so a DECIMAL
+            // dividend is never overflow-checked.
+            ScalarUDF::from(SparkIntegerDiv::new(ansi_mode, false)).call(vec![dividend, divisor])
+        }
+        // TODO: In case getting the type fails, we don't want to fail the query.
+        //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
+        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => {
+            let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
+            let divisor = make_safe_divisor(
+                divisor,
+                &effective_divisor_type,
+                ansi_mode,
+                DIVIDE_BY_ZERO_MESSAGE,
+            );
+            dividend / divisor
+        }
     };
 
     Ok(cast(div_expr, DataType::Int64))

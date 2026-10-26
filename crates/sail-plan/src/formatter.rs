@@ -449,9 +449,16 @@ impl PlanFormatter for SparkPlanFormatter {
                 let (left, right) = arguments.two()?;
                 Ok(format!("({left} = {right})"))
             }
-            "&" | "^" | "|" | "*" | "/" | "%" | "!=" | "<" | "<=" | "<=>" | "=" | ">" | ">=" => {
+            // `div` is a `BinaryOperator` in Spark, not a plain function: `BinaryOperator.sql`
+            // renders `(left sqlOperator right)` with `sqlOperator = "div"`
+            // (Expression.scala:859, arithmetic.scala:908), so an unaliased column is named
+            // `(7 div 2)` whether it was written infix or as `div(7, 2)`.
+            "&" | "^" | "|" | "*" | "/" | "%" | "div" | "!=" | "<" | "<=" | "<=>" | "=" | ">"
+            | ">=" => {
                 let (left, right) = arguments.two()?;
-                Ok(format!("({left} {name} {right})"))
+                // The arm is selected on the lowercased name but `name` keeps the user's casing,
+                // so `DIV(7, 2)` would render `(7 DIV 2)`; Spark's `sqlOperator` is a constant.
+                Ok(format!("({left} {} {right})", name.to_lowercase()))
             }
             "and" | "or" => {
                 let (left, right) = arguments.two()?;
