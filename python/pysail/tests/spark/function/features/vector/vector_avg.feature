@@ -75,12 +75,14 @@ Feature: vector_avg
     Scenario: NaN, infinities and float overflow follow single-precision arithmetic
       When query
         """
-        SELECT vector_avg(col) AS result
-        FROM VALUES
-          (array(CAST('NaN' AS FLOAT), CAST('Infinity' AS FLOAT), 3.0E38F)),
-          (array(1.0F, 1.0F, -3.0E38F))
-        AS tab(col)
-        """
+        SELECT result FROM (
+          SELECT id, vector_avg(col) OVER (ORDER BY id) AS result
+          FROM VALUES
+            (1, array(CAST('NaN' AS FLOAT), CAST('Infinity' AS FLOAT), 3.0E38F)),
+            (2, array(1.0F, 1.0F, -3.0E38F))
+          AS tab(id, col)
+        )
+        WHERE id = 2
       Then query result
         | result                |
         | [NaN, NaN, -Infinity] |
