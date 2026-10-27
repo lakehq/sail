@@ -804,3 +804,103 @@ def test_parquet_int96_timestamp_is_instant(spark, tmp_path, session_timezone):
     assert isinstance(df.schema["ts"].dataType, TimestampType)
     assert df.selectExpr("unix_micros(ts)").collect() == [(1592107200000000,)]
     assert df.filter("ts = TIMESTAMP '2020-06-13 21:00:00'").count() == 1
+
+
+@pytest.mark.parametrize(
+    ("session_timezone", "expected"),
+    [("Asia/Shanghai", "2020-06-14 12:00:00"), ("America/Los_Angeles", "2020-06-13 21:00:00")],
+    indirect=["session_timezone"],
+)
+def test_parquet_timestamp_show_uses_session_timezone(spark, tmp_path, session_timezone, expected):
+    _ = session_timezone
+    path = tmp_path / "instants.parquet"
+    pq.write_table(
+        pa.table({"ts": pa.array([datetime(2020, 6, 14, 4, tzinfo=UTC)], type=pa.timestamp("us", tz="UTC"))}),
+        path,
+        store_schema=False,
+    )
+    shown = spark.read.parquet(str(path))._show_string()  # noqa: SLF001
+    assert expected in shown
+
+
+_INT96_DISPLAY_INSTANTS = [
+    datetime(2020, 6, 14, 6, 59, 59, tzinfo=UTC),
+    datetime(2020, 6, 14, 7, 0, tzinfo=UTC),
+    datetime(2020, 6, 13, 16, 0, tzinfo=UTC),
+    datetime(2020, 3, 8, 10, 0, tzinfo=UTC),
+    datetime(2020, 11, 1, 8, 30, tzinfo=UTC),
+    datetime(2020, 11, 1, 9, 30, tzinfo=UTC),
+    None,
+]
+
+
+@pytest.mark.parametrize(
+    ("session_timezone", "expected"),
+    [
+        (
+            "America/Los_Angeles",
+            [
+                (0, "2020-06-13 23:59:59", "2020-06-13", "2020-06-13"),
+                (1, "2020-06-14 00:00:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-13 09:00:00", "2020-06-13", "2020-06-13"),
+                (3, "2020-03-08 03:00:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 01:30:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 01:30:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+        (
+            "Asia/Shanghai",
+            [
+                (0, "2020-06-14 14:59:59", "2020-06-14", "2020-06-14"),
+                (1, "2020-06-14 15:00:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-14 00:00:00", "2020-06-14", "2020-06-14"),
+                (3, "2020-03-08 18:00:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 16:30:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 17:30:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+        (
+            "+05:30",
+            [
+                (0, "2020-06-14 12:29:59", "2020-06-14", "2020-06-14"),
+                (1, "2020-06-14 12:30:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-13 21:30:00", "2020-06-13", "2020-06-13"),
+                (3, "2020-03-08 15:30:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 14:00:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 15:00:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+    ],
+    indirect=["session_timezone"],
+)
+def test_parquet_int96_timestamp_display_uses_session_timezone(spark, tmp_path, session_timezone, expected):
+    _ = session_timezone
+    path = tmp_path / "int96_display.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": list(range(len(_INT96_DISPLAY_INSTANTS))),
+                "ts": pa.array(_INT96_DISPLAY_INSTANTS, type=pa.timestamp("us", tz="UTC")),
+            }
+        ),
+        path,
+        use_deprecated_int96_timestamps=True,
+        store_schema=False,
+    )
+    df = spark.read.parquet(str(path))
+    actual = (
+        df.selectExpr(
+            "id",
+            "CAST(ts AS STRING)",
+            "CAST(CAST(ts AS DATE) AS STRING)",
+            "CAST(to_date(ts) AS STRING)",
+        )
+        .orderBy("id")
+        .collect()
+    )
+    assert [tuple(r) for r in actual] == expected
+    shown = df.orderBy("id")._show_string(n=100, truncate=False)  # noqa: SLF001
+    assert expected[0][1] in shown

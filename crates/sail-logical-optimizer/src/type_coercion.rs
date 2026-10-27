@@ -27,6 +27,14 @@
 //! or as a deliberate design choice. Each divergence below states which.
 //!
 //! - Explicit casts: `CAST(expr AS type)` supports some casts that Spark rejects.
+//! - `IN` lists of constants that a cast between TIMESTAMP_NTZ and TIMESTAMP is compared with match
+//!   like an `OR` of `=` comparisons, which replaces an inconsistency within Spark. Spark converts
+//!   only one-value lists to `=` and unwraps the cast for them, but compares longer lists with the
+//!   cast value, so the two forms can disagree for wall-clock times in DST gaps and overlaps.
+//! - A TIMESTAMP cast to TIMESTAMP_NTZ and compared with a TIMESTAMP_NTZ constant that is a
+//!   wall-clock time repeated in a DST overlap is compared per row, which fixes a Spark bug.
+//!   Spark's `UnwrapCastInBinaryComparison` compares the TIMESTAMP with the earlier instant only,
+//!   which drops the rows of the later one.
 
 use std::borrow::Cow;
 use std::sync::{Arc, LazyLock};
@@ -65,7 +73,7 @@ use datafusion_expr::{
 use itertools::{Itertools as _, izip};
 
 use crate::binary_type_coercion::BinaryTypeCoercer;
-use crate::session_timestamp::convert_session_timestamp_casts;
+use crate::session_timestamp::{convert_session_timestamp_casts, session_wall_clock};
 
 /// Performs type coercion by determining the schema
 /// and performing the expression rewrites.
@@ -131,8 +139,9 @@ impl AnalyzerRule for TypeCoercion {
 }
 
 /// Coerce each node of `plan` and of its subqueries, from the leaves up.
-fn coerce_plan_and_subqueries(plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
+fn coerce_plan_and_subqueries(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
     static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
+    let session_time_zone = config.execution.time_zone.as_deref();
 
     // TODO: Uncomment after DataFusion 56, and traverse with `transform_down_up_with_subqueries`
     //  so that the body of a materialized CTE is coerced before its continuation.
@@ -163,11 +172,10 @@ fn coerce_plan_and_subqueries(plan: LogicalPlan, _config: &ConfigOptions) -> Res
     //     },
     //     |plan| analyze_internal(&EMPTY_SCHEMA, plan, session_time_zone),
     // )
-    // TODO: Pass `config.execution.time_zone`, which coerces TIMESTAMP_NTZ mixed with TIMESTAMP to
-    //  the session time zone, once those casts handle DST gaps and overlaps. Arrow's cast fails
-    //  for them, and DataFusion 55 casts to the time zone of the TIMESTAMP value instead.
-    plan.transform_up_with_subqueries(|plan| analyze_internal(&EMPTY_SCHEMA, plan, None))
-        .map(|t| t.data)
+    plan.transform_up_with_subqueries(|plan| {
+        analyze_internal(&EMPTY_SCHEMA, plan, session_time_zone)
+    })
+    .map(|t| t.data)
 }
 
 // Give the fields of `body_schema` to each scan of the materialized CTE `id`
@@ -512,16 +520,38 @@ impl<'a> TypeCoercionRewriter<'a> {
         let left_expr = if !left_cast_ok {
             Self::coerce_date_time_math_op(left, &op, &left_data_type, &left_type, &right_type)?
         } else {
-            left.cast_to(&left_type, left_schema)?
+            self.cast_operand(left, &op, &left_data_type, &left_type, left_schema)?
         };
 
         let right_expr = if !right_cast_ok {
             Self::coerce_date_time_math_op(right, &op, &right_data_type, &right_type, &left_type)?
         } else {
-            right.cast_to(&right_type, right_schema)?
+            self.cast_operand(right, &op, &right_data_type, &right_type, right_schema)?
         };
 
         Ok((left_expr, right_expr))
+    }
+
+    /// Casts an operand of `op` to `target_type`. Spark subtracts TIMESTAMP_NTZ mixed with
+    /// TIMESTAMP as wall-clock times, so the TIMESTAMP operand takes its wall-clock time in the
+    /// session time zone.
+    fn cast_operand(
+        &self,
+        expr: Expr,
+        op: &Operator,
+        data_type: &DataType,
+        target_type: &DataType,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        match (op, data_type, target_type, self.session_time_zone) {
+            (
+                Operator::Minus,
+                DataType::Timestamp(_, Some(_)),
+                DataType::Timestamp(_, None),
+                Some(timezone),
+            ) => Ok(session_wall_clock(expr, target_type, timezone)),
+            _ => expr.cast_to(target_type, schema),
+        }
     }
 
     fn coerce_date_time_math_op(
@@ -3623,9 +3653,7 @@ mod test {
         )
     }
 
-    // TODO: Enable once the rule passes the session time zone.
     #[test]
-    #[ignore]
     fn timestamp_subtraction_uses_session_timezone() -> Result<()> {
         let schema = DFSchema::from_unqualified_fields(
             vec![
@@ -3663,7 +3691,7 @@ mod test {
             rule,
             plan,
             @r#"
-        Projection: CAST(tstz AS Timestamp(ns, "+08:00")) - CAST(ts AS Timestamp(ns, "+08:00")), CAST(ts AS Timestamp(ns, "+08:00")) - CAST(tstz AS Timestamp(ns, "+08:00"))
+        Projection: CAST(convert_tz(Utf8("UTC"), Utf8("+08:00"), CAST(tstz AS Timestamp(µs))) AS Timestamp(ns)) - ts AS tstz - ts, ts - CAST(convert_tz(Utf8("UTC"), Utf8("+08:00"), CAST(tstz AS Timestamp(µs))) AS Timestamp(ns)) AS ts - tstz
           EmptyRelation: rows=0
         "#,
         )
@@ -3755,9 +3783,168 @@ mod test {
         )
     }
 
-    // TODO: Enable once the rule passes the session time zone.
     #[test]
-    #[ignore]
+    fn timestamp_subtraction_uses_session_wall_clock() -> Result<()> {
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new(
+                    "tstz",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                    true,
+                ),
+                Field::new("ts", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?;
+        let input = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(schema),
+        }));
+        let subtract = |left, right| {
+            Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(col(left)),
+                Operator::Minus,
+                Box::new(col(right)),
+            ))
+        };
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![subtract("tstz", "ts"), subtract("ts", "tstz")],
+            input,
+        )?);
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("America/Los_Angeles".into());
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Projection: convert_tz(Utf8("UTC"), Utf8("America/Los_Angeles"), CAST(tstz AS Timestamp(µs))) - ts AS tstz - ts, ts - convert_tz(Utf8("UTC"), Utf8("America/Los_Angeles"), CAST(tstz AS Timestamp(µs))) AS ts - tstz
+          EmptyRelation: rows=0
+        "#,
+        )
+    }
+
+    #[test]
+    fn timestamp_comparison_with_constant_uses_wall_clock() -> Result<()> {
+        let input = empty_with_type(DataType::Timestamp(TimeUnit::Microsecond, None));
+        // 2020-06-13 21:00:00 in America/Los_Angeles
+        let constant = lit(ScalarValue::TimestampMicrosecond(
+            Some(1_592_107_200_000_000),
+            Some("America/Los_Angeles".into()),
+        ));
+        let plan = LogicalPlan::Filter(Filter::try_new(col("a").eq(constant), input)?);
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("America/Los_Angeles".into());
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Filter: a = TimestampMicrosecond(1592082000000000, None)
+          EmptyRelation: rows=0
+        "#,
+        )
+    }
+
+    #[test]
+    fn timestamp_comparison_with_constant_out_of_wall_clock_range_keeps_cast() -> Result<()> {
+        let input = empty_with_type(DataType::Timestamp(TimeUnit::Microsecond, None));
+        // The wall-clock time of the constant in the session time zone is out of range.
+        let constant = lit(ScalarValue::TimestampMicrosecond(
+            Some(8_210_266_876_799_999_999),
+            Some("+05:30".into()),
+        ));
+        let plan = LogicalPlan::Filter(Filter::try_new(col("a").lt_eq(constant), input)?);
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("+05:30".into());
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Filter: CAST(a AS Timestamp(µs, "+05:30")) <= TimestampMicrosecond(8210266876799999999, Some("+05:30"))
+          EmptyRelation: rows=0
+        "#,
+        )
+    }
+
+    #[test]
+    fn nested_timestamp_comparison_converts_in_session_time_zone() -> Result<()> {
+        let item = |data_type| Arc::new(Field::new_list_field(data_type, true));
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new(
+                    "ntz",
+                    DataType::List(item(DataType::Timestamp(TimeUnit::Microsecond, None))),
+                    true,
+                ),
+                Field::new(
+                    "ltz",
+                    DataType::List(item(DataType::Timestamp(
+                        TimeUnit::Microsecond,
+                        Some("UTC".into()),
+                    ))),
+                    true,
+                ),
+            ]
+            .into(),
+            std::collections::HashMap::new(),
+        )?;
+        let input = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(schema),
+        }));
+        let plan = LogicalPlan::Filter(Filter::try_new(col("ntz").eq(col("ltz")), input)?);
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("America/Los_Angeles".into());
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Filter: convert_tz(Utf8("America/Los_Angeles"), Utf8("UTC"), CAST(ntz AS List(Timestamp(µs)))) = CAST(ltz AS List(Timestamp(µs, "America/Los_Angeles")))
+          EmptyRelation: rows=0
+        "#,
+        )
+    }
+
+    #[test]
+    fn timestamp_date_comparison_uses_session_day_start() -> Result<()> {
+        let input = empty_with_type(DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some("UTC".into()),
+        ));
+        // 2020-06-14
+        let date = lit(ScalarValue::Date32(Some(18_427)));
+        let plan = LogicalPlan::Filter(Filter::try_new(
+            cast(col("a"), DataType::Date32).eq(date),
+            input,
+        )?);
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("America/Los_Angeles".into());
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Filter: a >= TimestampMicrosecond(1592118000000000, Some("UTC")) AND a < TimestampMicrosecond(1592204400000000, Some("UTC"))
+          EmptyRelation: rows=0
+        "#,
+        )
+    }
+
+    #[test]
     fn timestamp_set_comparison_uses_session_timezone() -> Result<()> {
         let outer = empty_with_type(DataType::Timestamp(
             TimeUnit::Second,

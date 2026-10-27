@@ -39,6 +39,7 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::with_timestamp_ntz_coercion;
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -779,10 +780,16 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::var_arg(expr_fn::greatest)),
+        (
+            "greatest",
+            F::custom(with_timestamp_ntz_coercion(expr_fn::greatest)),
+        ),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::var_arg(expr_fn::least)),
+        (
+            "least",
+            F::custom(with_timestamp_ntz_coercion(expr_fn::least)),
+        ),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),

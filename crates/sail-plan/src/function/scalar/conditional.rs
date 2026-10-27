@@ -12,6 +12,9 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{
+    cast_to_session_timestamp, coerce_timestamp_ntz_values, is_timestamp_ntz_mix,
+};
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -71,6 +74,45 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::coalesce(arguments))
 }
 
+/// Spark defines `nvl2` as `if` on whether the first argument is not null.
+fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (value, then_value, else_value) = arguments.three()?;
+    let schema = function_context.schema;
+    // TODO: Use `if` for all types once it returns the common type of its branches.
+    if !is_timestamp_ntz_mix(&[then_value.get_type(schema)?, else_value.get_type(schema)?]) {
+        return Ok(expr_fn::nvl2(value, then_value, else_value));
+    }
+    if_expr(ScalarFunctionInput {
+        arguments: vec![value.is_not_null(), then_value, else_value],
+        function_context,
+    })
+}
+
+/// Spark's `nullif` returns its first argument's type, comparing the arguments in their common type.
+fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    let schema = function_context.schema;
+    let left_type = left.get_type(schema)?;
+    let right_type = right.get_type(schema)?;
+    // The first argument is evaluated twice, so a volatile one keeps the native function.
+    // TODO: The native function returns the common type rather than the first argument's type.
+    if left.is_volatile() || !is_timestamp_ntz_mix(&[left_type.clone(), right_type.clone()]) {
+        return Ok(expr_fn::nullif(left, right));
+    }
+    let timezone = &function_context.plan_config.session_timezone;
+    let condition = cast_to_session_timestamp(left.clone(), &left_type, timezone)
+        .eq(cast_to_session_timestamp(right, &right_type, timezone));
+    Ok(when(condition, lit(ScalarValue::try_from(&left_type)?)).otherwise(left)?)
+}
+
 /// Spark defines `nvl` (and its alias `ifnull`) as `coalesce` with two arguments.
 fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -120,7 +162,11 @@ fn coerce_string_temporal_values(
             arguments
         }
     } else {
-        arguments
+        coerce_timestamp_ntz_values(
+            arguments,
+            function_context.schema,
+            &function_context.plan_config.session_timezone,
+        )?
     };
     Ok(arguments)
 }
@@ -197,10 +243,10 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("if", F::custom(if_expr)),
         ("ifnull", F::custom(nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
-        ("nullif", F::binary(expr_fn::nullif)),
+        ("nullif", F::custom(nullif)),
         ("nullifzero", F::custom(nullifzero)),
         ("nvl", F::custom(nvl)),
-        ("nvl2", F::ternary(expr_fn::nvl2)),
+        ("nvl2", F::custom(nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),

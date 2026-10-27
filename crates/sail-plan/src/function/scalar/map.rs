@@ -14,6 +14,9 @@ use sail_function::scalar::map::str_to_map::StrToMap;
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{
+    coerce_timestamp_ntz_array_element, coerce_timestamp_ntz_values,
+};
 
 fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use crate::function::common::ScalarFunctionBuilder as F;
@@ -40,6 +43,9 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } else {
         (keys, values)
     };
+    let timezone = &input.function_context.plan_config.session_timezone;
+    let keys = coerce_timestamp_ntz_values(keys, schema, timezone)?;
+    let values = coerce_timestamp_ntz_values(values, schema, timezone)?;
     let value_contains_null = values.iter().try_fold(false, |nullable, value| {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
     })?;
@@ -293,7 +299,7 @@ fn with_nullable(field: &FieldRef, nullable: bool) -> FieldRef {
     Arc::new(field.as_ref().clone().with_nullable(nullable))
 }
 
-fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     use datafusion_expr::Expr;
 
     use crate::function::common::ScalarFunctionBuilder as F;
@@ -303,6 +309,11 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     if input.arguments.is_empty() {
         return Ok(lit(ScalarValue::Null));
     }
+    input.arguments = coerce_timestamp_ntz_values(
+        input.arguments,
+        input.function_context.schema,
+        &input.function_context.plan_config.session_timezone,
+    )?;
 
     // Build the result expression
     let (keys, values) = input
@@ -346,8 +357,15 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 }
 
-fn map_contains_key(map: expr::Expr, key: expr::Expr) -> expr::Expr {
-    expr_fn::array_has(expr_fn::map_keys(map), key)
+fn map_contains_key(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (map, key) = input.arguments.two()?;
+    let (keys, key) = coerce_timestamp_ntz_array_element(
+        expr_fn::map_keys(map),
+        key,
+        input.function_context.schema,
+        &input.function_context.plan_config.session_timezone,
+    )?;
+    Ok(expr_fn::array_has(keys, key))
 }
 
 fn str_to_map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -372,7 +390,7 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
     vec![
         ("map", F::custom(map)),
         ("map_concat", F::custom(map_concat)),
-        ("map_contains_key", F::binary(map_contains_key)),
+        ("map_contains_key", F::custom(map_contains_key)),
         ("map_entries", F::custom(map_entries)),
         ("map_from_arrays", F::custom(map_from_arrays)),
         ("map_from_entries", F::custom(map_from_entries)),

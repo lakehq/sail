@@ -95,7 +95,7 @@ impl<'a> BinaryTypeCoercer<'a> {
     }
 
     /// Sets the session timezone used to coerce mixed timezone-aware and
-    /// timezone-naive timestamps for comparisons and subtraction.
+    /// timezone-naive timestamps for comparisons.
     pub fn with_session_time_zone(mut self, session_time_zone: Option<&'a str>) -> Self {
         self.session_time_zone = session_time_zone;
         self
@@ -303,24 +303,15 @@ impl<'a> BinaryTypeCoercer<'a> {
                 return Ok(Signature { lhs, rhs, ret });
             }
             Plus | Minus | Multiply | Divide | Modulo => {
-                // Interpret the naive operand in the session timezone when set,
-                // or in the aware operand's timezone otherwise. Coerce before the
-                // Arrow probe so equal units follow the same rule as different units.
-                // TODO: Coerce without a session time zone too after DataFusion 56
-                //  Remove `&& self.session_time_zone.is_some()`
-                //  DataFusion 55 subtracts the values of the same unit without coercion.
+                // Spark subtracts the wall-clock times of TIMESTAMP_NTZ mixed with TIMESTAMP,
+                // reading the TIMESTAMP operand in the session time zone. Type coercion casts it
+                // with `session_wall_clock`, since Arrow's cast would read it in UTC. Coerce
+                // before the Arrow probe so equal units follow the same rule as different units.
                 if self.op == &Minus
-                    && self.session_time_zone.is_some()
-                    && matches!(
-                        (lhs, rhs),
-                        (Timestamp(_, Some(_)), Timestamp(_, None))
-                            | (Timestamp(_, None), Timestamp(_, Some(_)))
-                    )
-                    && let Some(coerced) =
-                        timestamp_types_with_session_timezone(lhs, rhs, self.session_time_zone)
-                            .map(|(lhs, _)| lhs)
-                            .or_else(|| temporal_coercion_strict_timezone(lhs, rhs))
+                    && let (Timestamp(lhs_unit, Some(_)), Timestamp(rhs_unit, None))
+                    | (Timestamp(lhs_unit, None), Timestamp(rhs_unit, Some(_))) = (lhs, rhs)
                 {
+                    let coerced = Timestamp(timeunit_coercion(lhs_unit, rhs_unit), None);
                     let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                         plan_datafusion_err!(
                         "Cannot get result type for temporal operation {coerced} {} {coerced}: {e}", self.op
@@ -420,8 +411,8 @@ impl<'a> BinaryTypeCoercer<'a> {
 /// session timezone and widens both operands to the finer of the two units.
 ///
 /// A timezone-naive timestamp does not identify an instant on its own, so
-/// comparing or subtracting it against a timezone-aware one has to read it in
-/// some zone. Postgres and DuckDB read it in the session timezone.
+/// comparing it against a timezone-aware one has to read it in some zone.
+/// Postgres and DuckDB read it in the session timezone.
 fn timestamp_types_with_session_timezone(
     lhs: &DataType,
     rhs: &DataType,

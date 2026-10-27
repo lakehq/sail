@@ -265,6 +265,7 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    SparkToStringUdf spark_to_string = 40;
   }
 }
 
@@ -350,6 +351,10 @@ message SparkUnixTimestampUdf {
 message SparkSequenceUdf {
   string session_timezone = 1;
   bool ansi_mode = 2;
+}
+
+message SparkToStringUdf {
+  optional string timezone = 1;
 }
 
 message SparkDateFormatUdf {
@@ -471,9 +476,17 @@ message SparkMakeTimestampNtzUdf {
   bool is_try = 1;
 }
 
+enum ConvertTzMode {
+  CONVERT_TZ_MODE_FUNCTION = 0;
+  CONVERT_TZ_MODE_CAST = 1;
+  CONVERT_TZ_MODE_TRY_CAST = 2;
+}
+
 message ConvertTzUdf {
   bool classic = 1;
   bool null_short_circuit = 2;
+  ConvertTzMode mode = 3;
+  optional string output_timezone = 4;
 }
 
 message StandardUdaf {}
@@ -658,6 +671,7 @@ message ShowStringExecNode {
   ShowStringStyle style = 4;
   uint64 truncate = 5;
   bytes schema = 6;
+  optional string timezone = 7;
 }
 
 enum ShowStringStyle {
