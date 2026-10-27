@@ -20,8 +20,11 @@ use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
+use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
 
+use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
@@ -30,6 +33,18 @@ static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
 
 static SPARK_MAP_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new())));
+
+static SPARK_TRANSFORM_VALUES_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new())));
+
+/// Only used to type lambda parameters, which do not depend on the duplicate-key
+/// policy. The instance that evaluates the function carries the policy resolved
+/// from the session config, so it is built per call in [`transform_keys`].
+static SPARK_TRANSFORM_KEYS_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
+    Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
+        false,
+    )))
+});
 
 static SPARK_ARRAY_AGGREGATE_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new())));
@@ -75,6 +90,8 @@ fn higher_order_udf(name: &str) -> Option<&'static LazyLock<Arc<HigherOrderUDF>>
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
         "filter" => &SPARK_ARRAY_FILTER_UDF,
         "map_filter" => &SPARK_MAP_FILTER_UDF,
+        "transform_keys" => &SPARK_TRANSFORM_KEYS_UDF,
+        "transform_values" => &SPARK_TRANSFORM_VALUES_UDF,
         "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
         "forall" => &SPARK_ARRAY_FORALL_UDF,
@@ -106,10 +123,14 @@ pub(crate) fn lambda_slot_positions(function_name: &str, arity: usize) -> Vec<us
 
 /// The lambda positions the resolver wraps when they hold a plain expression.
 ///
-/// `map_filter` is excluded: its builder wraps a bare predicate itself, after coercing a
-/// NULL-typed map, which the resolver-level wrapping would reject before that point.
+/// `map_filter`, `transform_keys` and `transform_values` are excluded: their builders wrap a
+/// bare function themselves, after coercing a NULL-typed map, which the resolver-level wrapping
+/// would reject before that point.
 pub(crate) fn lambda_argument_positions(function_name: &str, arity: usize) -> Vec<usize> {
-    if function_name.trim().eq_ignore_ascii_case("map_filter") {
+    if matches!(
+        function_name.trim().to_lowercase().as_str(),
+        "map_filter" | "transform_keys" | "transform_values"
+    ) {
         return vec![];
     }
     lambda_slot_positions(function_name, arity)
@@ -339,6 +360,74 @@ fn erase_null_typed_body(
         *lambda.body = lit(ScalarValue::try_new_null(expected)?);
     }
     Ok(())
+}
+
+/// Binds the arguments of a map higher-order function that takes one lambda
+/// over each `(key, value)` entry, such as `transform_keys` and `transform_values`.
+fn bind_map_entry_function(
+    name: &str,
+    mut map: expr::Expr,
+    function: expr::Expr,
+    schema: &DFSchema,
+) -> PlanResult<(expr::Expr, expr::Expr)> {
+    // Spark binds an ordinary expression as a hidden lambda whose parameters
+    // are unused. Avoid capturing variables from any enclosing lambda.
+    let function = if matches!(function, expr::Expr::Lambda(_)) {
+        function
+    } else {
+        // Spark coerces a null map only when the function is already resolved.
+        // An explicit lambda remains unresolved and must still reject this input.
+        if map.get_type(schema)? == DataType::Null {
+            validate_map_filter_null_expr(&map, schema)?;
+            map = lit(ScalarValue::try_new_null(&map_type_from_key_value_types(
+                &DataType::Null,
+                &DataType::Null,
+            ))?);
+        }
+        let mut params = Vec::with_capacity(2);
+        for base in ["__map_key", "__map_value"] {
+            let mut name = base.to_string();
+            while lambda_body_uses_param(&function, &name)? {
+                name.push('_');
+            }
+            params.push(name);
+        }
+        expr::Expr::Lambda(Lambda::new(params, function))
+    };
+    expect_lambda_arity(name, &function, 2)?;
+    Ok((map, function))
+}
+
+fn transform_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (map, function) = input.arguments.two()?;
+    let (map, function) = bind_map_entry_function(
+        "transform_values",
+        map,
+        function,
+        input.function_context.schema,
+    )?;
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_TRANSFORM_VALUES_UDF),
+        vec![map, function],
+    )))
+}
+
+fn transform_keys(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let last_value_wins =
+        input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
+    let (map, function) = input.arguments.two()?;
+    let (map, function) = bind_map_entry_function(
+        "transform_keys",
+        map,
+        function,
+        input.function_context.schema,
+    )?;
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
+            last_value_wins,
+        ))),
+        vec![map, function],
+    )))
 }
 
 fn validate_map_filter_null_expr(expression: &expr::Expr, schema: &DFSchema) -> PlanResult<()> {
@@ -594,8 +683,8 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("map_zip_with", F::unknown("map_zip_with")),
         ("reduce", F::custom(aggregate)),
         ("transform", F::custom(transform)),
-        ("transform_keys", F::unknown("transform_keys")),
-        ("transform_values", F::unknown("transform_values")),
+        ("transform_keys", F::custom(transform_keys)),
+        ("transform_values", F::custom(transform_values)),
         ("zip_with", F::unknown("zip_with")),
     ]
 }

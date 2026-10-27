@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use arrow::datatypes::{DataType, Field};
 use chrono::Utc;
-use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::hive_format::{HiveDetectedFormat, HiveStorageFormat};
 use sail_catalog::provider::{
@@ -91,7 +90,12 @@ pub(crate) fn table_to_status(
         .as_ref()
         .map(|keys| field_names(keys))
         .unwrap_or_default();
-    let columns = match columns_from_spark_properties(table.parameters.as_ref())? {
+    let spark_columns = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        None
+    } else {
+        columns_from_spark_properties(table.parameters.as_ref())?
+    };
+    let columns = match spark_columns {
         Some(spark_columns) => reorder_spark_columns(spark_columns, &partition_columns)?,
         None => columns_from_hms(storage, table.partition_keys.as_ref())?,
     };
@@ -176,9 +180,9 @@ pub(crate) fn build_database(
     let parameters = vec_to_map(properties);
 
     Ok(Database {
-        name: Some(validate_namespace(namespace)?.into()),
-        description: comment.map(Into::into),
-        location_uri: location.map(Into::into),
+        name: Some(validate_namespace(namespace)?),
+        description: comment,
+        location_uri: location,
         parameters,
         owner_name: Some(DEFAULT_OWNER.into()),
         owner_type: Some(PrincipalType::USER),
@@ -200,33 +204,24 @@ pub(crate) fn build_generic_table(
     let (regular_columns, partition_keys) = build_columns(columns, &partition_columns)?;
     let mut parameters = vec_to_map(properties);
     insert_comment(&mut parameters, comment);
-    let table_parameters = parameters.get_or_insert_with(AHashMap::new);
+    let table_parameters = parameters.get_or_insert_with(HashMap::new);
     if let Some(provider) = spark_datasource_provider(format.logical_format) {
-        table_parameters.insert(
-            FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-            FastStr::from_string(provider),
-        );
+        table_parameters.insert(String::from(SPARK_DATASOURCE_PROVIDER_KEY), provider);
     } else if format
         .logical_format
         .eq_ignore_ascii_case(ICEBERG_TABLE_TYPE_VALUE)
     {
         table_parameters.insert(
-            FastStr::from_static_str(ICEBERG_TABLE_TYPE_KEY),
-            FastStr::from_static_str(ICEBERG_TABLE_TYPE_VALUE),
+            String::from(ICEBERG_TABLE_TYPE_KEY),
+            String::from(ICEBERG_TABLE_TYPE_VALUE),
         );
     }
 
-    table_parameters.insert(
-        FastStr::from_static_str(EXTERNAL_KEY),
-        FastStr::from_static_str(EXTERNAL_TRUE),
-    );
+    table_parameters.insert(String::from(EXTERNAL_KEY), String::from(EXTERNAL_TRUE));
     let serde_parameters = if is_spark_datasource_format(format.logical_format) {
         location.as_ref().map(|location| {
-            let mut parameters = AHashMap::new();
-            parameters.insert(
-                FastStr::from_static_str(SPARK_DATASOURCE_PATH_KEY),
-                FastStr::from_string(location.clone()),
-            );
+            let mut parameters = HashMap::new();
+            parameters.insert(String::from(SPARK_DATASOURCE_PATH_KEY), location.clone());
             parameters
         })
     } else {
@@ -234,15 +229,15 @@ pub(crate) fn build_generic_table(
     };
 
     Ok(Table {
-        db_name: Some(database_name.to_string().into()),
-        table_name: Some(table_name.to_string().into()),
+        db_name: Some(database_name.to_string()),
+        table_name: Some(table_name.to_string()),
         owner: Some(DEFAULT_OWNER.into()),
         create_time: Some(current_time_secs()?),
         last_access_time: Some(current_time_secs()?),
         table_type: Some(EXTERNAL_TABLE_TYPE.into()),
         sd: Some(StorageDescriptor {
             cols: Some(regular_columns),
-            location: location.map(Into::into),
+            location,
             input_format: Some(format.storage.input_format.into()),
             output_format: Some(format.storage.output_format.into()),
             serde_info: Some(SerDeInfo {
@@ -271,7 +266,7 @@ pub(crate) fn inject_spark_metadata(
     partition_columns: &[String],
     format: &str,
 ) -> CatalogResult<()> {
-    let parameters = table.parameters.get_or_insert_with(AHashMap::new);
+    let parameters = table.parameters.get_or_insert_with(HashMap::new);
 
     let fields: Vec<_> = columns
         .iter()
@@ -305,27 +300,21 @@ pub(crate) fn inject_spark_metadata(
 
     if !partition_columns.is_empty() {
         parameters.insert(
-            FastStr::from_static_str("spark.sql.sources.schema.numPartCols"),
-            FastStr::from_string(partition_columns.len().to_string()),
+            String::from("spark.sql.sources.schema.numPartCols"),
+            partition_columns.len().to_string(),
         );
         for (i, col) in partition_columns.iter().enumerate() {
-            parameters.insert(
-                FastStr::from_string(format!("spark.sql.sources.schema.partCol.{i}")),
-                FastStr::from_string(col.clone()),
-            );
+            parameters.insert(format!("spark.sql.sources.schema.partCol.{i}"), col.clone());
         }
     }
 
     if let Some(provider) = spark_datasource_provider(format) {
-        parameters.insert(
-            FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-            FastStr::from_string(provider),
-        );
+        parameters.insert(String::from(SPARK_DATASOURCE_PROVIDER_KEY), provider);
     }
 
     parameters.insert(
-        FastStr::from_static_str("spark.sql.create.version"),
-        FastStr::from_string(format!("sail-{}", env!("CARGO_PKG_VERSION"))),
+        String::from("spark.sql.create.version"),
+        format!("sail-{}", env!("CARGO_PKG_VERSION")),
     );
 
     Ok(())
@@ -336,9 +325,51 @@ pub(crate) fn alter_spark_column_default(
     column_path: &[String],
     default: Option<String>,
 ) -> CatalogResult<()> {
+    alter_spark_schema_field(table, column_path, |field| {
+        let metadata = field
+            .as_object_mut()
+            .ok_or_else(|| {
+                CatalogError::External("Spark schema field must be an object".to_string())
+            })?
+            .entry("metadata")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| {
+                CatalogError::External("Spark schema field metadata must be an object".to_string())
+            })?;
+        let key = ColumnFeatureKey::CurrentDefault.as_str();
+        match default {
+            Some(default) => {
+                metadata.insert(key.to_string(), serde_json::Value::String(default));
+            }
+            None => {
+                metadata.remove(key);
+            }
+        }
+        Ok(())
+    })
+}
+
+pub(crate) fn alter_spark_column_type(
+    table: &mut Table,
+    column_path: &[String],
+    data_type: &DataType,
+) -> CatalogResult<()> {
+    let schema = spark_struct_json_from_fields(&[Field::new("column", data_type.clone(), true)])?;
+    alter_spark_schema_field(table, column_path, |field| {
+        field["type"] = schema["fields"][0]["type"].clone();
+        Ok(())
+    })
+}
+
+fn alter_spark_schema_field(
+    table: &mut Table,
+    column_path: &[String],
+    update: impl FnOnce(&mut serde_json::Value) -> CatalogResult<()>,
+) -> CatalogResult<()> {
     let [column_name] = column_path else {
         return Err(CatalogError::NotSupported(
-            "Hive Metastore catalog does not support altering nested column defaults".to_string(),
+            "Hive Metastore catalog does not support altering nested columns".to_string(),
         ));
     };
     let Some(schema) = read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)? else {
@@ -359,32 +390,19 @@ pub(crate) fn alter_spark_column_default(
             .and_then(serde_json::Value::as_str)
             .is_some_and(|name| name.eq_ignore_ascii_case(column_name))
     }) else {
+        // Delta may omit its schema from HMS; its transaction log owns these columns.
+        if table_provider_format(table.parameters.as_ref()).as_deref() == Some("delta") {
+            return Ok(());
+        }
         return Err(CatalogError::InvalidArgument(format!(
             "Column '{column_name}' does not exist"
         )));
     };
-    let metadata = field
-        .as_object_mut()
-        .ok_or_else(|| CatalogError::External("Spark schema field must be an object".to_string()))?
-        .entry("metadata")
-        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| {
-            CatalogError::External("Spark schema field metadata must be an object".to_string())
-        })?;
-    let key = ColumnFeatureKey::CurrentDefault.as_str();
-    match default {
-        Some(default) => {
-            metadata.insert(key.to_string(), serde_json::Value::String(default));
-        }
-        None => {
-            metadata.remove(key);
-        }
-    }
+    update(field)?;
     let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
         CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
     })?;
-    let parameters = table.parameters.get_or_insert_with(AHashMap::new);
+    let parameters = table.parameters.get_or_insert_with(HashMap::new);
     write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &schema_json);
     Ok(())
 }
@@ -393,7 +411,7 @@ pub(crate) fn alter_spark_column_default(
 /// or chunked values for the key. Removing stale keys matters for
 /// correctness since `read_large_table_prop` prefers the plain key, which
 /// would otherwise shadow rewritten chunks.
-fn write_large_table_prop(parameters: &mut AHashMap<FastStr, FastStr>, key: &str, value: &str) {
+fn write_large_table_prop(parameters: &mut HashMap<String, String>, key: &str, value: &str) {
     let num_parts_prefix = format!("{key}.numParts");
     let part_prefix = format!("{key}.part.");
     parameters.retain(|k, _| {
@@ -401,7 +419,7 @@ fn write_large_table_prop(parameters: &mut AHashMap<FastStr, FastStr>, key: &str
         k != key && !k.starts_with(&num_parts_prefix) && !k.starts_with(&part_prefix)
     });
     for (k, v) in split_large_table_prop(key, value, 4000) {
-        parameters.insert(FastStr::from_string(k), FastStr::from_string(v));
+        parameters.insert(k, v);
     }
 }
 
@@ -423,14 +441,14 @@ pub(crate) fn build_view(
     insert_comment(&mut parameters, comment);
 
     Ok(Table {
-        db_name: Some(database_name.to_string().into()),
-        table_name: Some(view_name.to_string().into()),
+        db_name: Some(database_name.to_string()),
+        table_name: Some(view_name.to_string()),
         owner: Some(DEFAULT_OWNER.into()),
         create_time: Some(current_time_secs()?),
         last_access_time: Some(current_time_secs()?),
         table_type: Some(VIRTUAL_VIEW_TYPE.into()),
-        view_original_text: Some(definition.clone().into()),
-        view_expanded_text: Some(definition.into()),
+        view_original_text: Some(definition.clone()),
+        view_expanded_text: Some(definition),
         sd: Some(StorageDescriptor {
             cols: Some(
                 columns
@@ -443,7 +461,7 @@ pub(crate) fn build_view(
                 "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat".into(),
             ),
             serde_info: Some(SerDeInfo {
-                name: Some(format!("{database_name}.{view_name}").into()),
+                name: Some(format!("{database_name}.{view_name}")),
                 serialization_lib: Some(
                     "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe".into(),
                 ),
@@ -461,7 +479,7 @@ pub(crate) fn is_view_table(table: &Table) -> bool {
 }
 
 pub(crate) fn extract_property(
-    parameters: Option<&AHashMap<FastStr, FastStr>>,
+    parameters: Option<&HashMap<String, String>>,
     key: &str,
 ) -> Option<String> {
     parameters.and_then(|props| props.get(key).map(ToString::to_string))
@@ -496,7 +514,7 @@ pub(crate) fn table_location(table: &Table) -> Option<String> {
     storage.location.as_ref().map(ToString::to_string)
 }
 
-fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Option<String> {
+fn table_provider_format(parameters: Option<&HashMap<String, String>>) -> Option<String> {
     let provider = extract_property(parameters, SPARK_DATASOURCE_PROVIDER_KEY)?;
     let provider = provider.trim().to_ascii_lowercase();
     match provider.as_str() {
@@ -506,7 +524,7 @@ fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Opt
 }
 
 fn get_case_insensitive<'a>(
-    parameters: Option<&'a AHashMap<FastStr, FastStr>>,
+    parameters: Option<&'a HashMap<String, String>>,
     key: &str,
 ) -> Option<&'a str> {
     parameters?
@@ -515,7 +533,7 @@ fn get_case_insensitive<'a>(
         .map(|(_, value)| value.as_str())
 }
 
-fn is_iceberg_table_parameters(parameters: Option<&AHashMap<FastStr, FastStr>>) -> bool {
+fn is_iceberg_table_parameters(parameters: Option<&HashMap<String, String>>) -> bool {
     parameters.is_some_and(|properties| {
         properties
             .iter()
@@ -596,7 +614,7 @@ fn split_large_table_prop(key: &str, value: &str, threshold: usize) -> Vec<(Stri
 }
 
 fn read_large_table_prop(
-    parameters: Option<&AHashMap<FastStr, FastStr>>,
+    parameters: Option<&HashMap<String, String>>,
     key: &str,
 ) -> CatalogResult<Option<String>> {
     let Some(parameters) = parameters else {
@@ -636,7 +654,7 @@ fn read_large_table_prop(
 }
 
 fn columns_from_spark_properties(
-    parameters: Option<&AHashMap<FastStr, FastStr>>,
+    parameters: Option<&HashMap<String, String>>,
 ) -> CatalogResult<Option<Vec<TableColumnStatus>>> {
     let Some(schema) = read_large_table_prop(parameters, SPARK_SCHEMA_KEY)? else {
         return Ok(None);
@@ -709,7 +727,7 @@ fn reorder_spark_columns(
 ///    SerDe/InputFormat/OutputFormat metadata.
 /// 3. If neither is present or detectable, the format is `unknown`.
 fn resolve_data_source_format(
-    parameters: Option<&AHashMap<FastStr, FastStr>>,
+    parameters: Option<&HashMap<String, String>>,
     storage: Option<&StorageDescriptor>,
 ) -> String {
     if let Some(format) = table_provider_format(parameters) {
@@ -728,12 +746,11 @@ fn resolve_data_source_format(
     "unknown".to_string()
 }
 
-fn insert_comment(parameters: &mut Option<AHashMap<FastStr, FastStr>>, comment: Option<String>) {
+fn insert_comment(parameters: &mut Option<HashMap<String, String>>, comment: Option<String>) {
     if let Some(comment) = comment {
-        parameters.get_or_insert_with(AHashMap::new).insert(
-            FastStr::from_static_str(COMMENT_KEY),
-            FastStr::from_string(comment),
-        );
+        parameters
+            .get_or_insert_with(HashMap::new)
+            .insert(String::from(COMMENT_KEY), comment);
     }
 }
 
@@ -756,20 +773,15 @@ fn check_unmatched_partitions(
     Err(make_error(missing.join(", ")))
 }
 
-pub(crate) fn vec_to_map(values: Vec<(String, String)>) -> Option<AHashMap<FastStr, FastStr>> {
+pub(crate) fn vec_to_map(values: Vec<(String, String)>) -> Option<HashMap<String, String>> {
     if values.is_empty() {
         None
     } else {
-        Some(
-            values
-                .into_iter()
-                .map(|(key, value)| (FastStr::from_string(key), FastStr::from_string(value)))
-                .collect(),
-        )
+        Some(values.into_iter().collect())
     }
 }
 
-pub(crate) fn map_to_vec(values: Option<&AHashMap<FastStr, FastStr>>) -> Vec<(String, String)> {
+pub(crate) fn map_to_vec(values: Option<&HashMap<String, String>>) -> Vec<(String, String)> {
     let mut values: Vec<_> = values
         .into_iter()
         .flat_map(|map| {
@@ -854,9 +866,9 @@ fn create_field_schema(
     comment: Option<String>,
 ) -> CatalogResult<FieldSchema> {
     Ok(FieldSchema {
-        name: Some(name.into()),
-        r#type: Some(arrow_to_hive_type(data_type)?.into()),
-        comment: comment.map(Into::into),
+        name: Some(name),
+        r#type: Some(arrow_to_hive_type(data_type)?),
+        comment,
     })
 }
 
@@ -875,12 +887,122 @@ fn current_time_secs() -> CatalogResult<i32> {
     })
 }
 
+pub(crate) fn alter_columns(
+    table: &mut Table,
+    changes: &[sail_catalog::provider::ColumnChange<DataType>],
+    case_sensitive: bool,
+) -> CatalogResult<()> {
+    let partition_names = table
+        .partition_keys
+        .as_deref()
+        .map(field_names)
+        .unwrap_or_default();
+    let spark_schema = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        None
+    } else {
+        read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)?
+    };
+    let fields = if let Some(schema) = spark_schema {
+        spark_struct_json_to_fields(&schema)?
+    } else {
+        columns_from_hms(table.sd.as_ref(), table.partition_keys.as_ref())?
+            .iter()
+            .map(TableColumnStatus::field)
+            .collect()
+    };
+    let schema = arrow::datatypes::Schema::new(fields);
+    let updated =
+        sail_common_datafusion::column_change::alter_schema(&schema, changes, case_sensitive)
+            .map_err(|e| CatalogError::InvalidArgument(e.to_string()))?;
+    let mut partition_names = partition_names;
+    for change in changes {
+        if let sail_catalog::provider::ColumnChange::Rename { path, name } = change
+            && let [old] = path.as_slice()
+        {
+            for partition in &mut partition_names {
+                if partition.eq_ignore_ascii_case(old) {
+                    *partition = name.clone();
+                }
+            }
+        }
+    }
+    replace_columns_with_partitions(table, &updated, partition_names)
+}
+
+pub(crate) fn replace_columns(
+    table: &mut Table,
+    schema: &arrow::datatypes::Schema,
+) -> CatalogResult<()> {
+    let partition_names = table
+        .partition_keys
+        .iter()
+        .flatten()
+        .map(|c| c.name.as_ref().map(ToString::to_string).unwrap_or_default())
+        .collect();
+    replace_columns_with_partitions(table, schema, partition_names)
+}
+
+fn replace_columns_with_partitions(
+    table: &mut Table,
+    updated: &arrow::datatypes::Schema,
+    partition_names: Vec<String>,
+) -> CatalogResult<()> {
+    let mut columns = Vec::new();
+    let mut partitions = Vec::new();
+    for field in updated.fields() {
+        let column = create_field_schema(
+            field.name().clone(),
+            field.data_type(),
+            field.metadata().get("comment").cloned(),
+        )?;
+        if partition_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(field.name()))
+        {
+            partitions.push(column);
+        } else {
+            columns.push(column);
+        }
+    }
+    let storage = table
+        .sd
+        .as_mut()
+        .ok_or_else(|| CatalogError::InvalidArgument("Missing HMS storage descriptor".into()))?;
+    storage.cols = Some(columns);
+    table.partition_keys = Some(partitions);
+    if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        // Native Iceberg clients maintain sd.cols, not Spark's datasource schema cache.
+        if let Some(parameters) = table.parameters.as_mut() {
+            let prefix = format!("{SPARK_SCHEMA_KEY}.");
+            parameters.retain(|key, _| key != SPARK_SCHEMA_KEY && !key.starts_with(&prefix));
+        }
+        return Ok(());
+    }
+    let fields = updated
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect::<Vec<_>>();
+    let value = spark_struct_json_from_fields(&fields)?;
+    let json = serde_json::to_string(&value).map_err(|e| CatalogError::External(e.to_string()))?;
+    let parameters = table.parameters.get_or_insert_with(HashMap::new);
+    write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &json);
+    for (i, partition) in partition_names.iter().enumerate() {
+        parameters.insert(
+            format!("spark.sql.sources.schema.partCol.{i}"),
+            partition.clone(),
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    use std::collections::HashMap;
+
     use arrow::datatypes::{DataType, Field, Fields};
-    use pilota::{AHashMap, FastStr};
     use sail_catalog::hive_format::HiveStorageFormat;
     use sail_catalog::provider::{
         CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions,
@@ -1434,12 +1556,10 @@ mod tests {
             r#"{"name":"b","type":"string","nullable":true,"#,
             r#""metadata":{"CURRENT_DEFAULT":"\"hello\""}}]}"#,
         );
-        let parameters: AHashMap<FastStr, FastStr> = [(
-            FastStr::from_static_str(SPARK_SCHEMA_KEY),
-            FastStr::from_string(schema_json.to_string()),
-        )]
-        .into_iter()
-        .collect();
+        let parameters: HashMap<String, String> =
+            [(String::from(SPARK_SCHEMA_KEY), schema_json.to_string())]
+                .into_iter()
+                .collect();
 
         let columns = columns_from_spark_properties(Some(&parameters))
             .unwrap()
@@ -1519,12 +1639,9 @@ mod tests {
         );
         let mut table = Table {
             parameters: Some(
-                [(
-                    FastStr::from_static_str(SPARK_SCHEMA_KEY),
-                    FastStr::from_string(schema_json.to_string()),
-                )]
-                .into_iter()
-                .collect(),
+                [(String::from(SPARK_SCHEMA_KEY), schema_json.to_string())]
+                    .into_iter()
+                    .collect(),
             ),
             ..Default::default()
         };
@@ -1663,39 +1780,36 @@ mod tests {
         )
         .unwrap();
         let split_at = schema.len() / 2;
-        let mut parameters = AHashMap::new();
+        let mut parameters = HashMap::new();
         parameters.insert(
-            FastStr::from_static_str("spark.sql.sources.schema.numParts"),
-            FastStr::from_static_str("2"),
+            String::from("spark.sql.sources.schema.numParts"),
+            String::from("2"),
         );
         parameters.insert(
-            FastStr::from_static_str("spark.sql.sources.schema.part.0"),
-            FastStr::from_string(schema[..split_at].to_string()),
+            String::from("spark.sql.sources.schema.part.0"),
+            schema[..split_at].to_string(),
         );
         parameters.insert(
-            FastStr::from_static_str("spark.sql.sources.schema.part.1"),
-            FastStr::from_string(schema[split_at..].to_string()),
+            String::from("spark.sql.sources.schema.part.1"),
+            schema[split_at..].to_string(),
         );
         parameters.insert(
-            FastStr::from_static_str("spark.sql.sources.provider"),
-            FastStr::from_static_str("delta"),
+            String::from("spark.sql.sources.provider"),
+            String::from("delta"),
         );
         parameters.insert(
-            FastStr::from_static_str("spark.sql.sources.schema.numPartCols"),
-            FastStr::from_static_str("1"),
+            String::from("spark.sql.sources.schema.numPartCols"),
+            String::from("1"),
         );
         parameters.insert(
-            FastStr::from_static_str("spark.sql.sources.schema.partCol.0"),
-            FastStr::from_static_str("day"),
+            String::from("spark.sql.sources.schema.partCol.0"),
+            String::from("day"),
         );
         parameters.insert(
-            FastStr::from_static_str(super::EXTERNAL_KEY),
-            FastStr::from_static_str(super::EXTERNAL_TRUE),
+            String::from(super::EXTERNAL_KEY),
+            String::from(super::EXTERNAL_TRUE),
         );
-        parameters.insert(
-            FastStr::from_static_str("owner"),
-            FastStr::from_static_str("alice"),
-        );
+        parameters.insert(String::from("owner"), String::from("alice"));
         let table = Table {
             table_name: Some("items".into()),
             table_type: Some(super::EXTERNAL_TABLE_TYPE.into()),
@@ -1768,9 +1882,9 @@ mod tests {
                 r#type: Some("string".into()),
                 ..Default::default()
             }]),
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str(SPARK_SCHEMA_KEY),
-                FastStr::from_string(schema),
+            parameters: Some(HashMap::from_iter([(
+                String::from(SPARK_SCHEMA_KEY),
+                schema,
             )])),
             ..Default::default()
         };
@@ -1805,22 +1919,19 @@ mod tests {
                 r#type: Some("string".into()),
                 ..Default::default()
             }]),
-            parameters: Some(AHashMap::from_iter([
+            parameters: Some(HashMap::from_iter([
+                (String::from(SPARK_SCHEMA_KEY), schema),
                 (
-                    FastStr::from_static_str(SPARK_SCHEMA_KEY),
-                    FastStr::from_string(schema),
+                    String::from("spark.sql.sources.provider"),
+                    String::from("parquet"),
                 ),
                 (
-                    FastStr::from_static_str("spark.sql.sources.provider"),
-                    FastStr::from_static_str("parquet"),
+                    String::from("spark.sql.sources.schema.numPartCols"),
+                    String::from("1"),
                 ),
                 (
-                    FastStr::from_static_str("spark.sql.sources.schema.numPartCols"),
-                    FastStr::from_static_str("1"),
-                ),
-                (
-                    FastStr::from_static_str("spark.sql.sources.schema.partCol.0"),
-                    FastStr::from_static_str("region"),
+                    String::from("spark.sql.sources.schema.partCol.0"),
+                    String::from("region"),
                 ),
             ])),
             ..Default::default()
@@ -1861,9 +1972,9 @@ mod tests {
         let table = Table {
             table_name: Some("items".into()),
             sd: Some(StorageDescriptor::default()),
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str("spark.sql.sources.schema.numParts"),
-                FastStr::from_static_str("2"),
+            parameters: Some(HashMap::from_iter([(
+                String::from("spark.sql.sources.schema.numParts"),
+                String::from("2"),
             )])),
             ..Default::default()
         };
@@ -1927,9 +2038,9 @@ mod tests {
                     comment: Some("partition date".into()),
                 },
             ]),
-            parameters: Some(AHashMap::from_iter([(
-                FastStr::from_static_str("owner"),
-                FastStr::from_static_str("alice"),
+            parameters: Some(HashMap::from_iter([(
+                String::from("owner"),
+                String::from("alice"),
             )])),
             ..Default::default()
         };
@@ -1972,11 +2083,7 @@ mod tests {
         let split = super::split_large_table_prop(SPARK_SCHEMA_KEY, &original, 13);
         assert!(split.len() > 2);
 
-        let parameters = AHashMap::from_iter(
-            split
-                .into_iter()
-                .map(|(k, v)| (FastStr::from_string(k), FastStr::from_string(v))),
-        );
+        let parameters = HashMap::from_iter(split);
 
         let decoded = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY)
             .unwrap()
@@ -1989,11 +2096,7 @@ mod tests {
         let split = super::split_large_table_prop(SPARK_SCHEMA_KEY, "", 13);
         assert_eq!(split, vec![(SPARK_SCHEMA_KEY.to_string(), String::new())]);
 
-        let parameters = AHashMap::from_iter(
-            split
-                .into_iter()
-                .map(|(k, v)| (FastStr::from_string(k), FastStr::from_string(v))),
-        );
+        let parameters = HashMap::from_iter(split);
 
         let decoded = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY)
             .unwrap()
@@ -2003,9 +2106,9 @@ mod tests {
 
     #[test]
     fn test_read_large_table_prop_rejects_zero_num_parts() {
-        let parameters = AHashMap::from_iter([(
-            FastStr::from_static_str("spark.sql.sources.schema.numParts"),
-            FastStr::from_static_str("0"),
+        let parameters = HashMap::from_iter([(
+            String::from("spark.sql.sources.schema.numParts"),
+            String::from("0"),
         )]);
         let result = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY);
         assert!(result.is_err());
@@ -2026,18 +2129,18 @@ mod tests {
 
     #[test]
     fn test_read_large_table_prop_rejects_missing_mid_sequence_part() {
-        let parameters = AHashMap::from_iter([
+        let parameters = HashMap::from_iter([
             (
-                FastStr::from_static_str("spark.sql.sources.schema.numParts"),
-                FastStr::from_static_str("3"),
+                String::from("spark.sql.sources.schema.numParts"),
+                String::from("3"),
             ),
             (
-                FastStr::from_static_str("spark.sql.sources.schema.part.0"),
-                FastStr::from_static_str("present"),
+                String::from("spark.sql.sources.schema.part.0"),
+                String::from("present"),
             ),
             (
-                FastStr::from_static_str("spark.sql.sources.schema.part.2"),
-                FastStr::from_static_str("present"),
+                String::from("spark.sql.sources.schema.part.2"),
+                String::from("present"),
             ),
         ]);
         let result = super::read_large_table_prop(Some(&parameters), SPARK_SCHEMA_KEY);
@@ -2050,10 +2153,8 @@ mod tests {
 
     #[test]
     fn test_columns_from_spark_properties_rejects_malformed_json() {
-        let parameters = AHashMap::from_iter([(
-            FastStr::from_string(SPARK_SCHEMA_KEY.to_string()),
-            FastStr::from_string("{invalid json}".to_string()),
-        )]);
+        let parameters =
+            HashMap::from_iter([(SPARK_SCHEMA_KEY.to_string(), "{invalid json}".to_string())]);
         let result = columns_from_spark_properties(Some(&parameters));
         let err = result.unwrap_err().to_string();
         assert!(
@@ -2064,9 +2165,9 @@ mod tests {
 
     #[test]
     fn test_columns_from_spark_properties_rejects_non_struct_json() {
-        let parameters = AHashMap::from_iter([(
-            FastStr::from_string(SPARK_SCHEMA_KEY.to_string()),
-            FastStr::from_string(r#""just a string""#.to_string()),
+        let parameters = HashMap::from_iter([(
+            SPARK_SCHEMA_KEY.to_string(),
+            r#""just a string""#.to_string(),
         )]);
         let result = columns_from_spark_properties(Some(&parameters));
         assert!(result.is_err());
@@ -2343,21 +2444,18 @@ mod tests {
         serde_path_key: Option<&str>,
         serde_path: Option<&str>,
     ) -> Table {
-        let mut table_parameters = AHashMap::new();
+        let mut table_parameters = HashMap::new();
         if let Some(provider) = provider {
             table_parameters.insert(
-                FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
-                FastStr::from_string(provider.to_string()),
+                String::from(SPARK_DATASOURCE_PROVIDER_KEY),
+                provider.to_string(),
             );
         }
 
         let serde_parameters = serde_path_key.map(|key| {
-            [(
-                FastStr::from_string(key.to_string()),
-                FastStr::from_string(serde_path.unwrap_or_default().to_string()),
-            )]
-            .into_iter()
-            .collect()
+            [(key.to_string(), serde_path.unwrap_or_default().to_string())]
+                .into_iter()
+                .collect()
         });
 
         Table {
@@ -2374,7 +2472,7 @@ mod tests {
                     r#type: Some("bigint".into()),
                     ..Default::default()
                 }]),
-                location: sd_location.map(|location| location.to_string().into()),
+                location: sd_location.map(|location| location.to_string()),
                 input_format: Some(HiveStorageFormat::parquet().input_format.into()),
                 output_format: Some(HiveStorageFormat::parquet().output_format.into()),
                 serde_info: Some(SerDeInfo {
@@ -2492,9 +2590,9 @@ mod tests {
     #[test]
     fn test_table_to_status_metadata_location_without_marker_is_not_iceberg() {
         let mut table = hms_table_with_locations(None, Some("s3://warehouse/items"), None, None);
-        table.parameters = Some(AHashMap::from_iter([(
-            FastStr::from_static_str("metadata_location"),
-            FastStr::from_static_str("s3://warehouse/items/metadata/00001.json"),
+        table.parameters = Some(HashMap::from_iter([(
+            String::from("metadata_location"),
+            String::from("s3://warehouse/items/metadata/00001.json"),
         )]));
 
         assert_eq!(

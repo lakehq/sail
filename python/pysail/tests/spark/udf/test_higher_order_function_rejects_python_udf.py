@@ -35,6 +35,10 @@ def _register_udfs(spark):
         ("SELECT forall(array(1, 2), is_even(2)) AS r", "is_even"),
         ("SELECT aggregate(array(1, 2), 0, plus_one(3)) AS r", "plus_one"),
         ("SELECT map_filter(map(1, 2), is_even(2)) AS r", "is_even"),
+        ("SELECT transform_keys(map(1, 2), (k, v) -> is_even(k)) AS r", "is_even"),
+        ("SELECT transform_values(map(1, 2), (k, v) -> plus_one(v)) AS r", "plus_one"),
+        ("SELECT transform_keys(map(1, 2), plus_one(1)) AS r", "plus_one"),
+        ("SELECT transform_values(map(1, 2), plus_one(1)) AS r", "plus_one"),
     ],
 )
 @pytest.mark.skipif(pyspark_version() < (4,), reason="Python UDF rejection in higher-order functions needs Spark 4+")

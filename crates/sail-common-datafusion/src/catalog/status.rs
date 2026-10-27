@@ -501,3 +501,45 @@ pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionFiel
         })
         .collect()
 }
+
+pub fn alter_columns(
+    columns: &mut Vec<TableColumnStatus>,
+    changes: &[sail_common::spec::ColumnChange<DataType>],
+    case_sensitive: bool,
+) -> Result<()> {
+    let schema = datafusion::arrow::datatypes::Schema::new(
+        columns
+            .iter()
+            .map(TableColumnStatus::field)
+            .collect::<Vec<_>>(),
+    );
+    let schema = crate::column_change::alter_schema(&schema, changes, case_sensitive)?;
+    replace_columns(columns, &schema);
+    Ok(())
+}
+
+pub fn replace_columns(
+    columns: &mut Vec<TableColumnStatus>,
+    schema: &datafusion::arrow::datatypes::Schema,
+) {
+    *columns = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let features = crate::column_features::ColumnFeatures::from_field(field);
+            let previous = columns.iter().find(|column| column.name == *field.name());
+            TableColumnStatus {
+                name: field.name().clone(),
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+                comment: field.metadata().get("comment").cloned(),
+                default: features.current_default(),
+                generated_always_as: features.generation_expression(),
+                identity: features.identity(),
+                is_partition: previous.is_some_and(|column| column.is_partition),
+                is_bucket: previous.is_some_and(|column| column.is_bucket),
+                is_cluster: previous.is_some_and(|column| column.is_cluster),
+            }
+        })
+        .collect();
+}

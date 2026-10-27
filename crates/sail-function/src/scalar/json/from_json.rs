@@ -238,16 +238,15 @@ fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef
         }
     }
 
-    parse_rows(rows, &schema_data_type, &options, session_timezone)
+    parse_rows(rows, &schema_data_type, &options)
 }
 
 fn parse_rows(
     rows: &StringArray,
     schema: &DataType,
     options: &SparkFromJsonOptions,
-    session_timezone: &str,
 ) -> Result<ArrayRef> {
-    let mut builder = create_builder(schema, rows.len(), session_timezone)?;
+    let mut builder = create_builder(schema, rows.len())?;
     for i in 0..rows.len() {
         if rows.is_null(i) {
             append_to_builder(&mut builder, &Value::Null, options)?;
@@ -358,11 +357,7 @@ enum FieldBuilder {
     },
 }
 
-fn create_builder(
-    data_type: &DataType,
-    capacity: usize,
-    session_timezone: &str,
-) -> Result<FieldBuilder> {
+fn create_builder(data_type: &DataType, capacity: usize) -> Result<FieldBuilder> {
     match data_type {
         DataType::Boolean => Ok(FieldBuilder::Boolean(BooleanBuilder::with_capacity(
             capacity,
@@ -388,7 +383,7 @@ fn create_builder(
         DataType::Int32 => Ok(FieldBuilder::Int32(Int32Builder::with_capacity(capacity))),
         DataType::Int64 => Ok(FieldBuilder::Int64(Int64Builder::with_capacity(capacity))),
         DataType::List(field) => {
-            let values = create_builder(field.data_type(), capacity, session_timezone)?;
+            let values = create_builder(field.data_type(), capacity)?;
             let mut offsets = Vec::with_capacity(capacity + 1);
             offsets.push(0);
             Ok(FieldBuilder::List {
@@ -410,9 +405,8 @@ fn create_builder(
                     other
                 ),
             }?;
-            let keys_builder = create_builder(keys_field.data_type(), capacity, session_timezone)?;
-            let values_builder =
-                create_builder(values_field.data_type(), capacity, session_timezone)?;
+            let keys_builder = create_builder(keys_field.data_type(), capacity)?;
+            let values_builder = create_builder(values_field.data_type(), capacity)?;
             let mut offsets = Vec::with_capacity(capacity + 1);
             offsets.push(0);
             Ok(FieldBuilder::Map {
@@ -427,7 +421,7 @@ fn create_builder(
         DataType::Struct(fields) => {
             let nested_builders = fields
                 .iter()
-                .map(|f| create_builder(f.data_type(), capacity, session_timezone))
+                .map(|f| create_builder(f.data_type(), capacity))
                 .collect::<Result<Vec<_>>>()?;
             Ok(FieldBuilder::Struct {
                 fields: fields.clone(),
@@ -439,7 +433,8 @@ fn create_builder(
             capacity, 0,
         ))),
         DataType::Timestamp(time_unit, tz) => {
-            let resolved_tz = tz.clone().unwrap_or(Arc::from(session_timezone));
+            // NTZ fields store wall-clock microseconds and never use the session zone.
+            let resolved_tz = tz.clone().unwrap_or_else(|| Arc::from("UTC"));
             match time_unit {
                 TimeUnit::Microsecond => Ok(FieldBuilder::TimestampMicrosecond {
                     builder: TimestampMicrosecondBuilder::with_capacity(capacity)
@@ -1130,10 +1125,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
         "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         "interval" => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
         other => {
-            if let Some(args) = other
-                .strip_prefix("decimal(")
-                .and_then(|x| x.strip_suffix(')'))
-            {
+            if let Some(args) = other.strip_circumfix("decimal(", ')') {
                 let mut parts = args.split(',').map(str::trim);
                 if let (Some(precision), Some(scale), None) =
                     (parts.next(), parts.next(), parts.next())
@@ -1151,10 +1143,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
                     return Ok(DataType::Decimal128(precision, scale));
                 }
             }
-            if let Some(args) = other
-                .strip_prefix("geometry(")
-                .and_then(|x| x.strip_suffix(')'))
-            {
+            if let Some(args) = other.strip_circumfix("geometry(", ')') {
                 let srid = args.trim();
                 if srid == "ANY" || srid.parse::<i32>().is_ok() {
                     return Ok(DataType::Binary);
@@ -1163,10 +1152,7 @@ fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Resul
                     "Unsupported JSON schema type: '{other}'"
                 )));
             }
-            if let Some(args) = other
-                .strip_prefix("geography(")
-                .and_then(|x| x.strip_suffix(')'))
-            {
+            if let Some(args) = other.strip_circumfix("geography(", ')') {
                 let mut parts = args.split(',').map(str::trim);
                 if let (Some(srid), algorithm, None) = (parts.next(), parts.next(), parts.next()) {
                     let valid_srid = srid == "ANY" || srid.parse::<i32>().is_ok();

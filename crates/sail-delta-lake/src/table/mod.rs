@@ -352,6 +352,39 @@ pub async fn infer_delta_logical_metadata(
     Ok((schema, properties))
 }
 
+pub(crate) async fn delta_table_properties(
+    ctx: &dyn Session,
+    table_url: Url,
+    options: DeltaReadOptions,
+    lakehouse_table: Option<LakehouseExecutionContext>,
+) -> Result<Vec<(String, String)>> {
+    let (snapshot, _, _) =
+        load_delta_read_state(ctx, table_url, None, options, true, lakehouse_table).await?;
+    let mut properties = snapshot.metadata().configuration().clone();
+    properties.remove("path");
+    let protocol = snapshot.protocol();
+    properties.insert(
+        "delta.minReaderVersion".to_string(),
+        protocol.min_reader_version().to_string(),
+    );
+    properties.insert(
+        "delta.minWriterVersion".to_string(),
+        protocol.min_writer_version().to_string(),
+    );
+    for feature in protocol
+        .reader_features()
+        .unwrap_or_default()
+        .iter()
+        .chain(protocol.writer_features().unwrap_or_default())
+    {
+        properties.insert(
+            format!("delta.feature.{}", feature.as_str()),
+            "supported".to_string(),
+        );
+    }
+    Ok(properties.into_iter().collect())
+}
+
 fn delta_read_snapshot_config(
     metadata_only: bool,
     options: &DeltaReadOptions,
@@ -510,7 +543,7 @@ fn catalog_managed_bootstrap_actions(
     )
     .map_err(|e| DataFusionError::External(Box::new(e)))?;
     if let Some(comment) = comment {
-        metadata = metadata.with_description(comment);
+        metadata = metadata.with_description(Some(comment));
     }
     let metadata = metadata_with_catalog_managed(metadata, &table_id);
     let operation = DeltaOperation::Create {
@@ -906,7 +939,8 @@ fn refresh_catalog_delta_field(catalog_field: &Field, snapshot_field: &Field) ->
                 *sorted,
             )
         }
-        _ => catalog_field.data_type().clone(),
+        (DataType::Timestamp(..), DataType::Timestamp(..)) => catalog_field.data_type().clone(),
+        _ => snapshot_field.data_type().clone(),
     };
     catalog_field
         .clone()

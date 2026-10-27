@@ -78,6 +78,63 @@ fn request(transport: &FlightTransport, path: &str) -> Result<Request<Body>, Tra
 }
 
 #[tokio::test]
+async fn unary_tickets_use_final_data_frames() -> Result<(), TransportError> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let ticket = bytes::Bytes::from_static(b"small unary ticket");
+        let expected = ticket.clone();
+        let server = AbortOnDropHandle::new(tokio::spawn(async move {
+            let (socket, _) = listener.accept().await?;
+            // Reject even one non-final small DATA frame. A final frame is exempt,
+            // so this checks the framing without depending on timing or concurrency.
+            let mut connection = h2::server::Builder::new()
+                .data_frame_budget(0)
+                .handshake::<_, bytes::Bytes>(socket)
+                .await?;
+            let (request, mut respond) = connection.accept().await.ok_or("missing request")??;
+            let received = tokio::spawn(async move {
+                let mut body = request.into_body();
+                let data = body.data().await.ok_or("missing ticket")??;
+                assert_eq!(data, expected);
+                body.flow_control().release_capacity(data.len())?;
+                assert!(body.data().await.is_none());
+                respond.send_response(Response::new(()), true)?;
+                Ok::<_, TransportError>(())
+            });
+            while let Some(request) = connection.accept().await {
+                request?;
+            }
+            received.await??;
+            Ok::<_, TransportError>(())
+        }));
+        let options = ClientOptions {
+            enable_tls: false,
+            host: address.ip().to_string(),
+            port: address.port(),
+            flight_connection_count: NonZeroUsize::MIN,
+            flight_initial_stream_window_size: None,
+            flight_initial_connection_window_size: None,
+        };
+        let transport = FlightTransport::connect(&options).await?;
+        // Like Tonic's unary encoder, StreamBody cannot signal EOS with its data.
+        let body = http_body_util::StreamBody::new(futures::stream::once(async move {
+            Ok::<_, std::convert::Infallible>(hyper::body::Frame::data(ticket))
+        }));
+        let request = Request::builder()
+            .uri(transport.inner.origin.clone())
+            .body(Body::new(body))?;
+        let response = transport.clone().oneshot(request).await?;
+        assert_eq!(response.status(), 200);
+        drop(response);
+        drop(transport);
+        server.await??;
+        Ok::<_, TransportError>(())
+    })
+    .await?
+}
+
+#[tokio::test]
 async fn internal_resets_do_not_close_shared_connection() -> Result<(), TransportError> {
     tokio::time::timeout(Duration::from_secs(15), async {
         let (options, connections, _server) = server().await?;

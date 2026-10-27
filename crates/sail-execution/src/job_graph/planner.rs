@@ -15,18 +15,21 @@ use datafusion::physical_plan::joins::{
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, replace_children_if_necessary,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common_datafusion::lakeprocedure::LakeProcedureRootPlacement;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
-use sail_iceberg::physical_plan::IcebergCommitExec;
+use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergProcedureExec};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
@@ -47,6 +50,7 @@ impl JobGraph {
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
         let plan = materialize_shared_file_scan_builds(plan)?;
+        let plan = ensure_worker_input_for_iceberg_procedure(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -64,6 +68,38 @@ impl JobGraph {
         });
         Ok(graph)
     }
+}
+
+fn ensure_worker_input_for_iceberg_procedure(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    fn has_exchange(plan: &Arc<dyn ExecutionPlan>) -> bool {
+        if let Some(cooperative) = plan.downcast_ref::<CooperativeExec>() {
+            return has_exchange(cooperative.input());
+        }
+        plan.is::<CoalescePartitionsExec>() || plan.is::<SortPreservingMergeExec>()
+    }
+
+    Ok(plan
+        .transform_up(|plan| {
+            let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() else {
+                return Ok(Transformed::no(plan));
+            };
+            let Some(input) = procedure.input() else {
+                return Ok(Transformed::no(plan));
+            };
+            if has_exchange(input) {
+                return Ok(Transformed::no(plan));
+            }
+            // A single writer partition still belongs on a worker. Insert the exchange after
+            // physical optimization so redundant-coalesce removal cannot erase this boundary.
+            let input = Arc::new(CoalescePartitionsExec::new(Arc::clone(input)));
+            Ok(Transformed::yes(replace_children_if_necessary(
+                plan,
+                vec![input],
+            )?))
+        })?
+        .data)
 }
 
 /// A single-partition build no longer needs a physical coalesce, but should
@@ -179,7 +215,9 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // We have to remove unnecessary repartitioning explicitly here
         // since no physical optimizer will run afterward.
-        let plan = if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
+        let plan = if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>()
+            && coalesce.fetch().is_none()
+        {
             Arc::clone(coalesce.input())
         } else if let Some(repartition) = plan.downcast_ref::<RepartitionExec>() {
             Arc::clone(repartition.input())
@@ -199,6 +237,26 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
 
         if join.mode != PartitionMode::CollectLeft {
             return Ok(Transformed::no(plan));
+        }
+
+        if join.null_aware {
+            // NULL and empty-input decisions require the entire probe side, and workers
+            // cannot share DataFusion's probe flags or build-side match bitmap.
+            let children = join
+                .children()
+                .into_iter()
+                .map(|input| {
+                    if input.output_partitioning().partition_count() > 1 {
+                        Arc::new(CoalescePartitionsExec::new(Arc::clone(input)))
+                            as Arc<dyn ExecutionPlan>
+                    } else {
+                        Arc::clone(input)
+                    }
+                })
+                .collect();
+            return Ok(Transformed::yes(replace_children_if_necessary(
+                plan, children,
+            )?));
         }
 
         if !matches!(
@@ -461,15 +519,24 @@ fn plan_job_graph_stages(
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
     let plan = if let Some(repartition) = subtree.plan.downcast_ref::<RepartitionExec>() {
-        if repartition.preserve_order() {
-            // We haven't found a case when order-preserving repartition can be constructed,
-            // so it's fine to return an error for now.
-            // TODO: support order-preserving repartition
+        let ordering = repartition
+            .preserve_order()
+            .then(|| repartition.properties().output_ordering().cloned())
+            .flatten();
+        if ordering.is_some() && repartition.properties().boundedness.is_unbounded() {
             return Err(ExecutionError::InternalError(
-                "repartition is order-preserving and would result in incorrect results in distributed execution".to_string()
+                "order-preserving repartition of unbounded input is not supported in distributed execution".to_string()
             ));
         }
-        let properties = repartition.properties().clone();
+        // Shuffle readers interleave producer streams. Restore the promised ordering
+        // in each receiving partition before downstream operators consume the rows.
+        let mut properties = repartition.properties().as_ref().clone();
+        if ordering.is_some() {
+            let mut equivalence = properties.eq_properties.clone();
+            equivalence.clear_orderings();
+            properties.set_eq_properties(equivalence);
+        }
+        let properties = Arc::new(properties);
         let child = subtree.only_child()?;
         let plan = match &properties.partitioning {
             Partitioning::UnknownPartitioning(n) => {
@@ -488,7 +555,15 @@ fn plan_job_graph_stages(
                 create_shuffle(child, graph, properties, consumption, scalar_context)?
             }
         };
-        PlannedSubtree::without_pending_scalar_subquery_expr(plan)
+        let plan = match ordering {
+            Some(ordering) => {
+                Arc::new(SortExec::new(ordering, plan).with_preserve_partitioning(true))
+                    as Arc<dyn ExecutionPlan>
+            }
+            None => plan,
+        };
+        let has_pending_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan)?;
+        PlannedSubtree::new(plan, has_pending_scalar_subquery_expr)
     } else if let Some(repartition) = subtree.plan.downcast_ref::<ExplicitRepartitionExec>() {
         let properties = repartition.properties().clone();
         let child = subtree.only_child()?;
@@ -537,6 +612,7 @@ fn plan_job_graph_stages(
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
+        || is_coordinator_lake_procedure(&subtree.plan)
         || subtree.plan.is::<FileDeleteExec>()
         || subtree.plan.is::<DeltaCommitExec>()
         || subtree.plan.is::<IcebergCommitExec>()
@@ -688,10 +764,21 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
 
     plan.is::<SystemTableExec>()
         || plan.is::<CatalogCommandExec>()
+        || is_coordinator_lake_procedure(plan)
         || plan.is::<FileDeleteExec>()
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
         || plan.is::<RemoteCheckpointCommitExec>()
+}
+
+fn is_coordinator_lake_procedure(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.downcast_ref::<LakeProcedureExec>()
+        .is_some_and(|procedure| {
+            matches!(
+                procedure.root_placement(),
+                LakeProcedureRootPlacement::Coordinator
+            )
+        })
 }
 
 fn wrap_pending_scalar_subqueries(
@@ -979,7 +1066,7 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-    use datafusion::common::ScalarValue;
+    use datafusion::common::{JoinType, NullEquality, ScalarValue};
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::functions_aggregate::sum::sum_udaf;
     use datafusion::logical_expr::Operator;
@@ -990,14 +1077,18 @@ mod tests {
     use datafusion::physical_expr::expressions::{binary, col};
     use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use datafusion::physical_expr::{
-        Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
+        LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
+    use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+    use datafusion::physical_plan::limit::GlobalLimitExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+    use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
@@ -1052,6 +1143,158 @@ mod tests {
                 partition_split_threshold: 1_i64 << 30,
                 partition_split_mode: PartitionSplitMode::Soft,
             },
+        }
+    }
+
+    #[test]
+    fn lake_procedure_root_placement_is_preserved() {
+        use datafusion::common::tree_node::TreeNode;
+        use sail_common_datafusion::lakeprocedure::{
+            LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
+            LakeProcedureInvocationId, LakeProcedureRootPlacement, LakeProcedureTarget,
+        };
+        use sail_physical_plan::lake_procedure::LakeProcedureExec;
+
+        for (placement, expected) in [
+            (
+                LakeProcedureRootPlacement::Coordinator,
+                TaskPlacement::Driver,
+            ),
+            (
+                LakeProcedureRootPlacement::Distributed,
+                TaskPlacement::Worker,
+            ),
+        ] {
+            let procedure = LakeProcedure {
+                name: "test".to_string(),
+                parameters: vec![],
+                output: vec![],
+                access: LakeProcedureAccess::MetadataCommit,
+                target: LakeProcedureTarget::Catalog,
+            };
+            let implementation = Arc::new(EmptyExec::new(procedure.schema()));
+            let call = LakeProcedureCall {
+                invocation_id: LakeProcedureInvocationId("test".to_string()),
+                catalog: "test".to_string(),
+                namespace: vec!["system".to_string()],
+                lake_source: "iceberg".to_string(),
+                target: None,
+                invocation: LakeProcedureInvocation {
+                    procedure,
+                    arguments: vec![],
+                },
+            };
+            let plan =
+                Arc::new(LakeProcedureExec::try_new(call, implementation, placement).unwrap());
+            let graph = JobGraph::try_new(plan, flight_shuffle_options()).unwrap();
+            let stages = graph
+                .stages
+                .iter()
+                .filter(|stage| {
+                    stage
+                        .plan
+                        .exists(|plan| Ok(plan.is::<LakeProcedureExec>()))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(stages.len(), 1);
+            assert_eq!(stages[0].placement, expected);
+        }
+    }
+
+    #[test]
+    fn hash_join_repartition_preserves_input_fetch() {
+        for join_type in [
+            JoinType::Left,
+            JoinType::LeftAnti,
+            JoinType::LeftSemi,
+            JoinType::LeftMark,
+            JoinType::Full,
+        ] {
+            for limited_side in [0, 1] {
+                for fetch in [0, 3] {
+                    let inputs = [0, 1].map(|side| {
+                        let input = UnionExec::try_new(vec![empty_plan(); 4]).unwrap();
+                        if side == limited_side {
+                            Arc::new(CoalescePartitionsExec::new(input).with_fetch(Some(fetch)))
+                                as Arc<dyn ExecutionPlan>
+                        } else {
+                            input
+                        }
+                    });
+                    let key = col("id", &schema()).unwrap();
+                    let join = HashJoinExec::try_new(
+                        Arc::clone(&inputs[0]),
+                        Arc::clone(&inputs[1]),
+                        vec![(Arc::clone(&key), key)],
+                        None,
+                        &join_type,
+                        None,
+                        PartitionMode::CollectLeft,
+                        NullEquality::NullEqualsNothing,
+                        false,
+                    )
+                    .unwrap();
+                    let graph =
+                        JobGraph::try_new(Arc::new(join), flight_shuffle_options()).unwrap();
+                    let stage = graph.stages.last().unwrap();
+                    let join = stage.plan.downcast_ref::<HashJoinExec>().unwrap();
+                    assert_eq!(*join.partition_mode(), PartitionMode::Partitioned);
+                    let input = join.children()[limited_side]
+                        .downcast_ref::<StageInputExec<usize>>()
+                        .unwrap();
+                    let producer = &graph.stages[stage.inputs[*input.input()].stage];
+                    let limit = producer.plan.downcast_ref::<GlobalLimitExec>().unwrap();
+                    assert_eq!(limit.skip(), 0);
+                    assert_eq!(limit.fetch(), Some(fetch));
+                    assert_eq!(limit.input().output_partitioning().partition_count(), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn null_aware_hash_join_consumes_both_inputs_in_one_task() {
+        for options in [flight_shuffle_options(), blocking_shuffle_options()] {
+            for (left_partitions, right_partitions) in [(1, 1), (1, 4), (4, 1), (4, 4)] {
+                for null_aware in [false, true] {
+                    let key = col("id", &schema()).unwrap();
+                    let join = HashJoinExec::try_new(
+                        UnionExec::try_new(vec![empty_plan(); left_partitions]).unwrap(),
+                        UnionExec::try_new(vec![empty_plan(); right_partitions]).unwrap(),
+                        vec![(Arc::clone(&key), key)],
+                        None,
+                        &JoinType::LeftAnti,
+                        Some(vec![0]),
+                        PartitionMode::CollectLeft,
+                        NullEquality::NullEqualsNothing,
+                        null_aware,
+                    )
+                    .unwrap();
+                    let expected_schema = join.schema();
+                    let graph = JobGraph::try_new(Arc::new(join), options.clone()).unwrap();
+                    let stage = graph.stages.last().unwrap();
+                    let join = stage.plan.downcast_ref::<HashJoinExec>().unwrap();
+                    assert_eq!(join.null_aware, null_aware);
+                    assert_eq!(join.schema(), expected_schema);
+                    assert_eq!(
+                        *join.partition_mode(),
+                        if null_aware {
+                            PartitionMode::CollectLeft
+                        } else {
+                            PartitionMode::Partitioned
+                        }
+                    );
+                    let partitions = if null_aware { 1 } else { right_partitions };
+                    assert_eq!(
+                        stage.plan.output_partitioning().partition_count(),
+                        partitions
+                    );
+                    for input in join.children() {
+                        assert_eq!(input.output_partitioning().partition_count(), partitions);
+                    }
+                }
+            }
         }
     }
 
@@ -1173,6 +1416,42 @@ mod tests {
     }
 
     #[test]
+    fn test_order_preserving_shuffle_sorts_after_receiving_rows() {
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(col("id", &schema()).unwrap())].into();
+        for options in [flight_shuffle_options(), blocking_shuffle_options()] {
+            for partitioning in [
+                Partitioning::RoundRobinBatch(4),
+                Partitioning::Hash(vec![col("id", &schema()).unwrap()], 4),
+            ] {
+                let source = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+                let source = Arc::new(
+                    SortExec::new(ordering.clone(), source).with_preserve_partitioning(true),
+                );
+                let repartition = RepartitionExec::try_new(source, partitioning.clone())
+                    .unwrap()
+                    .with_preserve_order();
+                let graph = JobGraph::try_new(Arc::new(repartition), options.clone()).unwrap();
+                let output = graph
+                    .stages()
+                    .last()
+                    .unwrap()
+                    .plan
+                    .downcast_ref::<SortExec>()
+                    .unwrap();
+                assert!(output.preserve_partitioning());
+                assert_eq!(output.expr(), &ordering);
+                assert_eq!(output.properties().output_partitioning(), &partitioning);
+                let input = output
+                    .input()
+                    .downcast_ref::<StageInputExec<usize>>()
+                    .unwrap();
+                assert!(input.properties().output_ordering().is_none());
+            }
+        }
+    }
+
+    #[test]
     fn test_storage_shuffle_inserts_a_blocking_merge_stage() {
         let graph = JobGraph::try_new(
             Arc::new(
@@ -1287,6 +1566,108 @@ mod tests {
                 mode: InputMode::Rescale { partitions: 2 },
             }]
         ));
+    }
+
+    #[test]
+    fn iceberg_rewrite_concurrency_bounds_the_reader_writer_stage() {
+        use datafusion::common::tree_node::TreeNode;
+        use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+        use sail_common_datafusion::datasource::PhysicalSinkMode;
+        use sail_iceberg::SnapshotUpdateKind;
+        use sail_iceberg::physical_plan::{
+            IcebergCommitExec, IcebergFileTasksExec, IcebergRewriteExec,
+            IcebergScanByDataFilesExec, IcebergWriterExec, IcebergWriterExecOptions,
+            prepare_iceberg_write_context,
+        };
+        use url::Url;
+
+        let table_url = Url::parse("memory://bucket/rewrite").unwrap();
+        let tasks = Arc::new(IcebergFileTasksExec::try_new(vec![vec![]; 6]).unwrap());
+        let scan = Arc::new(
+            IcebergScanByDataFilesExec::new(
+                tasks,
+                table_url.to_string(),
+                schema(),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+            .preserve_file_groups(),
+        );
+        let options = IcebergWriterExecOptions::default();
+        let context = prepare_iceberg_write_context(
+            &table_url,
+            None,
+            &options,
+            &[],
+            &PhysicalSinkMode::Append,
+            &schema(),
+        )
+        .unwrap();
+        let writer = Arc::new(
+            IcebergWriterExec::new(
+                scan,
+                table_url.clone(),
+                vec![],
+                PhysicalSinkMode::Append,
+                false,
+                options,
+                context,
+            )
+            .unwrap(),
+        );
+        let runner = Arc::new(
+            IcebergRewriteExec::try_new(writer, vec![vec![0, 2, 4], vec![1, 3, 5]]).unwrap(),
+        );
+        let commit = Arc::new(IcebergCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(runner)),
+            table_url,
+            None,
+            SnapshotUpdateKind::RewriteDataFiles,
+        ));
+        let graph = JobGraph::try_new(commit, flight_shuffle_options()).unwrap();
+        let stages = graph
+            .stages()
+            .iter()
+            .filter(|stage| {
+                stage
+                    .plan
+                    .exists(|plan| Ok(plan.is::<IcebergRewriteExec>()))
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stages.len(), 1);
+        let stage = stages[0];
+        assert_eq!(stage.placement, TaskPlacement::Worker);
+        assert_eq!(stage.plan.output_partitioning().partition_count(), 2);
+        assert!(stage.inputs.is_empty());
+        assert!(
+            stage
+                .plan
+                .exists(|plan| Ok(plan.is::<IcebergWriterExec>()))
+                .unwrap()
+        );
+        assert!(
+            stage
+                .plan
+                .exists(|plan| Ok(plan.is::<IcebergScanByDataFilesExec>()))
+                .unwrap()
+        );
+        assert!(
+            stage
+                .plan
+                .exists(|plan| Ok(plan.is::<IcebergFileTasksExec>()
+                    && plan.output_partitioning().partition_count() == 6))
+                .unwrap()
+        );
+        let commits = graph
+            .stages()
+            .iter()
+            .filter(|stage| stage.plan.is::<IcebergCommitExec>())
+            .collect::<Vec<_>>();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].placement, TaskPlacement::Driver);
     }
 
     #[test]

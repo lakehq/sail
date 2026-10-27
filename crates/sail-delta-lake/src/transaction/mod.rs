@@ -344,6 +344,10 @@ impl OperationMetrics {
         use crate::spec::DeltaOperation;
 
         match operation {
+            DeltaOperation::Truncate {} => {
+                self.num_deleted_rows = self.num_touched_rows.take();
+                self.scan_time_ms = None;
+            }
             DeltaOperation::Delete { .. } => {
                 if self.num_copied_rows.is_none() {
                     self.num_copied_rows = self.num_output_rows;
@@ -447,10 +451,16 @@ impl OperationMetrics {
             // counts from the snapshot diff it produces.
             DeltaOperation::Restore { .. }
             | DeltaOperation::Write { .. }
+            | DeltaOperation::DynamicPartitionOverwrite { .. }
             | DeltaOperation::Create { .. }
             | DeltaOperation::SetTableProperties { .. }
             | DeltaOperation::AddConstraint { .. }
+            | DeltaOperation::DropConstraint { .. }
             | DeltaOperation::UnsetTableProperties { .. }
+            | DeltaOperation::AddColumns { .. }
+            | DeltaOperation::DropColumns { .. }
+            | DeltaOperation::RenameColumn { .. }
+            | DeltaOperation::ReplaceColumns { .. }
             | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
                                                        //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
                                                        //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles

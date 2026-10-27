@@ -32,9 +32,9 @@ pub async fn create_row_level_write_physical_plan(
     let target = node.target().clone();
 
     match node.command() {
-        RowLevelCommand::Delete => {
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => {
             let info = RowLevelWriteInfo {
-                command: RowLevelCommand::Delete,
+                command: node.command(),
                 target,
                 condition: node.condition().cloned(),
                 expanded_input: None,
@@ -146,7 +146,7 @@ async fn create_delta_row_level_writer(
         DeltaLakeSource::parse_table_url(ctx, vec![info.target.location.clone()]).await?;
     let delta_options = DeltaWriteOptions::resolve(ctx, target_options)?;
     let partition_columns = match info.command {
-        RowLevelCommand::Delete => Vec::new(),
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => Vec::new(),
         RowLevelCommand::Merge | RowLevelCommand::Update => info.target.partition_by.clone(),
     };
     let config = DeltaPlannerConfig::new(
@@ -162,6 +162,9 @@ async fn create_delta_row_level_writer(
     let planner_ctx = PlannerContext::new(ctx, config);
 
     match (mode, info.command) {
+        (_, RowLevelCommand::Truncate) => {
+            super::op_truncate::build_truncate_plan(&planner_ctx).await
+        }
         (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
             plan_delete_mor(&planner_ctx, delete_condition(&info)).await
         }

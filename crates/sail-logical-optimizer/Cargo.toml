@@ -2,11 +2,13 @@
 name = "sail-logical-optimizer"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
+sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 

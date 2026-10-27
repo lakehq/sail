@@ -184,6 +184,16 @@ mod memory_pool {
 pub struct TemporaryFilesConfig {
     pub paths: Vec<String>,
     pub max_size: usize,
+    pub compression: TemporaryFileCompression,
+}
+
+/// Compression for temporary Arrow IPC spill files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemporaryFileCompression {
+    Uncompressed,
+    Lz4Frame,
+    Zstd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,8 +393,7 @@ impl FromStr for CelebornCompressionCodec {
             "none" => Ok(Self::None),
             "lz4" => Ok(Self::Lz4),
             value => value
-                .strip_prefix("zstd(")
-                .and_then(|value| value.strip_suffix(')'))
+                .strip_circumfix("zstd(", ')')
                 .ok_or_else(|| format!("invalid Celeborn compression codec: {value}"))?
                 .parse::<i8>()
                 .map_err(|_| format!("invalid Celeborn zstd compression level: {value}"))
