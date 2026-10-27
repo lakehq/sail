@@ -39,6 +39,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::struct_function::StructFunction;
 
@@ -1060,7 +1061,10 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("var_pop", F::default(variance::var_pop_udaf)),
         ("var_samp", F::default(variance::var_samp_udaf)),
         ("variance", F::default(variance::var_samp_udaf)),
-        ("vector_avg", F::unknown("vector_avg")),
+        (
+            "vector_avg",
+            F::default(|| Arc::new(AggregateUDF::from(VectorAvg::new()))),
+        ),
         (
             "vector_sum",
             F::default(|| Arc::new(AggregateUDF::from(VectorSum::new()))),

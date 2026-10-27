@@ -155,6 +155,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::vector::avg::VectorAvg;
 use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
@@ -4220,8 +4221,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 }
                 "theta_union_agg" => Ok(Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
-                "vector_sum" => Ok(Arc::new(AggregateUDF::from(VectorSum::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
+                "vector_avg" => Ok(Arc::new(AggregateUDF::from(VectorAvg::new()))),
+                "vector_sum" => Ok(Arc::new(AggregateUDF::from(VectorSum::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
             Some(UdafKind::PySparkGroupAgg(r#gen::PySparkGroupAggUdaf {
@@ -4344,8 +4346,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<ThetaSketchAggFunction>()
             || node.inner().is::<ThetaUnionAggFunction>()
             || node.inner().is::<TryAvgFunction>()
-            || node.inner().is::<VectorSum>()
             || node.inner().is::<SparkTrySum>()
+            || node.inner().is::<VectorAvg>()
+            || node.inner().is::<VectorSum>()
         {
             UdafKind::Standard(r#gen::StandardUdaf {})
         } else if let Some(func) = node.inner().downcast_ref::<PySparkGroupAggregateUDF>() {
@@ -6009,14 +6012,31 @@ mod tests {
         codec.try_decode_udf(&name, &buf)
     }
 
-    #[test]
-    fn test_round_trip_vector_sum_udaf() -> Result<()> {
+    fn round_trip_udaf(udaf: AggregateUDF) -> Result<Arc<AggregateUDF>> {
         let codec = RemoteExecutionCodec;
-        let udaf = AggregateUDF::from(VectorSum::new());
+        let name = udaf.name().to_string();
         let mut buf = vec![];
         codec.try_encode_udaf(&udaf, &mut buf)?;
-        let decoded = codec.try_decode_udaf(udaf.name(), &buf)?;
+        codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_vector_avg_udaf() -> Result<()> {
+        let decoded = round_trip_udaf(AggregateUDF::from(VectorAvg::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorAvg>().is_some());
+        assert_eq!(decoded.name(), "vector_avg");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_sum_udaf() -> Result<()> {
+        let decoded = round_trip_udaf(AggregateUDF::from(VectorSum::new()))?;
+
         assert!(decoded.inner().downcast_ref::<VectorSum>().is_some());
+        assert_eq!(decoded.name(), "vector_sum");
+
         Ok(())
     }
 

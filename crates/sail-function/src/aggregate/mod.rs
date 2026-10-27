@@ -93,4 +93,5 @@ pub mod skewness;
 pub mod theta_sketch;
 pub mod try_avg;
 pub mod utils;
+pub mod vector;
 pub mod vector_sum;
