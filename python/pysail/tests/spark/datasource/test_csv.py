@@ -341,16 +341,62 @@ def test_csv_read_truncated_rows_disallowed(spark, tmp_path, infer_schema):
         df.collect()
 
 
-# TODO: Skip lines that are empty after trimming when `multiLine` is false,
-#   in both the projected CSV decoder and the arrow decoder input.
-@pytest.mark.xfail(not is_jvm_spark(), reason="Sail reads a whitespace-only line as a row", strict=True)
-@pytest.mark.parametrize("blank", ["   ", "\t"])
-def test_csv_read_skips_whitespace_only_lines(spark, tmp_path, blank):
-    # Spark drops lines that are empty after `trim` before parsing (`CSVExprUtils.filterCommentAndEmpty`),
-    # so a whitespace-only line is not read as a short row.
-    (tmp_path / "data.csv").write_text(f"a,b,c\nx,1,2\n{blank}\ny,3\n")
-    df = spark.read.option("header", "true").csv(str(tmp_path)).orderBy("a")
-    assert df.collect() == [Row(a="x", b="1", c="2"), Row(a="y", b="3", c=None)]
+@pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "a,b,c\nx,1,2\n   \ny,3\n",
+        "a,b,c\nx,1,2\n\t\ny,3\n",
+        "a,b,c\nx,1,2\ny,3\n   ",
+        "a,b,c\nx,1,2\ny,3\n\t",
+        # Spark trims only spaces when it looks for the header (`CSVUtils.filterCommentAndEmpty`
+        # on a `Dataset`), so a tab-only line before the header is not covered here.
+        "   \na,b,c\nx,1,2\ny,3\n",
+    ],
+    ids=["spaces between rows", "tab between rows", "spaces at end", "tab at end", "spaces before header"],
+)
+def test_csv_read_skips_whitespace_only_lines(spark, tmp_path, infer_schema, content):
+    # Spark drops the lines that are empty after `String.trim` before it parses rows
+    # (`CSVExprUtils.filterCommentAndEmpty`), so a whitespace-only line is not read as a short row.
+    (tmp_path / "data.csv").write_text(content)
+    df = spark.read.option("header", "true").option("inferSchema", infer_schema).csv(str(tmp_path)).orderBy("a")
+    if infer_schema:
+        assert df.collect() == [Row(a="x", b=1, c=2), Row(a="y", b=3, c=None)]
+    else:
+        assert df.collect() == [Row(a="x", b="1", c="2"), Row(a="y", b="3", c=None)]
+
+
+def test_csv_infer_schema_skips_whitespace_only_lines(spark, tmp_path):
+    # The tab-only line would make the first column a string if it reached type inference.
+    (tmp_path / "data.csv").write_text("a,b\n1,2\n\t\n3,4\n")
+    df = spark.read.option("header", "true").option("inferSchema", "true").csv(str(tmp_path)).orderBy("a")
+    assert [tuple(r) for r in df.collect()] == [(1, 2), (3, 4)]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark splits quoted values at line breaks without `multiLine`")
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("p\n\nq", "p\n\nq"), ("p\n   \nq", "p\nq")],
+    ids=["empty line", "whitespace-only line"],
+)
+def test_csv_read_quoted_value_with_line_breaks(spark, tmp_path, value, expected):
+    # Without `multiLine`, Spark reads such a value as broken rows. Sail parses the quotes across
+    # lines, but drops whitespace-only lines before parsing, inside quotes as well.
+    (tmp_path / "data.csv").write_text(f'a,b\n"{value}",1\n')
+    df = spark.read.option("header", "true").csv(str(tmp_path))
+    assert df.collect() == [Row(a=expected, b="1")]
+
+
+def test_csv_read_multiline_keeps_whitespace_only_lines(spark, tmp_path):
+    # With `multiLine`, Spark parses the file as one stream instead of line by line,
+    # so a whitespace-only line is a record with one field.
+    (tmp_path / "data.csv").write_text("a,b,c\nx,1,2\n   \ny,3\n")
+    df = spark.read.option("header", "true").option("multiLine", "true").csv(str(tmp_path)).orderBy("a")
+    assert df.collect() == [
+        Row(a="   ", b=None, c=None),
+        Row(a="x", b="1", c="2"),
+        Row(a="y", b="3", c=None),
+    ]
 
 
 @pytest.mark.parametrize(
