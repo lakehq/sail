@@ -154,21 +154,28 @@ impl PlanResolver<'_> {
                 let named = named.one()?;
                 // Only the lateral scope exposes this alias by name. The typing schema
                 // also retains the original attributes, which take precedence over aliases.
-                let field = state.register_field_name(String::new());
+                let (qualifier, field) = if let Expr::Column(column) = &named.expr {
+                    (
+                        column.relation.clone(),
+                        state.register_identity_field(String::new(), column.name())?,
+                    )
+                } else {
+                    (None, state.register_field_name(String::new()))
+                };
                 let mut exprs = input
                     .schema()
                     .columns()
                     .into_iter()
                     .map(Expr::Column)
                     .collect::<Vec<_>>();
-                exprs.push(named.expr.alias(&field));
+                exprs.push(named.expr.alias_qualified(qualifier.clone(), &field));
                 input = LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(input))?);
                 let mut fields = typing_schema
                     .iter()
                     .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
                     .collect::<Vec<_>>();
                 fields.push((
-                    None,
+                    qualifier.clone(),
                     Arc::clone(
                         input
                             .schema()
@@ -182,7 +189,7 @@ impl PlanResolver<'_> {
                     schema.metadata().clone(),
                 )?);
                 resolved.push(NamedExpr {
-                    expr: Expr::Column(Column::new_unqualified(field)),
+                    expr: Expr::Column(Column::new(qualifier, field)),
                     ..named
                 });
             }

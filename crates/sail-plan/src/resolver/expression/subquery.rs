@@ -116,11 +116,8 @@ impl PlanResolver<'_> {
                 "Correlated scalar subquery has duplicate grouping sets and can return more than one row",
             ));
         }
-        let subquery = self.protect_scalar_cardinality(subquery, state)?;
-        Ok(NamedExpr::new(
-            vec!["subquery".to_string()],
-            expr_fn::scalar_subquery(Arc::new(subquery)),
-        ))
+        let expr = self.protect_scalar_cardinality(subquery, state)?;
+        Ok(NamedExpr::new(vec!["subquery".to_string()], expr))
     }
 
     /// Aggregate non-aggregate correlated scalar queries with a runtime cardinality
@@ -129,17 +126,18 @@ impl PlanResolver<'_> {
         &self,
         mut query: LogicalPlan,
         state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
+    ) -> PlanResult<Expr> {
         use datafusion::functions_aggregate::expr_fn::{count, first_value};
         use datafusion_common::Column;
-        use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, lit, when};
+        use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, lit};
         use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
-        use sail_function::scalar::misc::raise_error::RaiseError;
+        use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
+        use sail_function::scalar::struct_function::StructFunction;
         if query.all_out_ref_exprs().is_empty() || query.schema().fields().len() != 1 {
-            return Ok(query);
+            return Ok(expr_fn::scalar_subquery(Arc::new(query)));
         }
         if query.exists(|plan| Ok(matches!(plan, LogicalPlan::Aggregate(_))))? {
-            return Ok(query);
+            return Ok(expr_fn::scalar_subquery(Arc::new(query)));
         }
         let mut limited = false;
         if let LogicalPlan::Limit(limit) = &query {
@@ -164,16 +162,18 @@ impl PlanResolver<'_> {
                 })
                 .transpose()?;
             if skip == 0 && fetch == Some(0) {
-                return Ok(LogicalPlan::EmptyRelation(datafusion_expr::EmptyRelation {
-                    produce_one_row: false,
-                    schema: Arc::clone(query.schema()),
-                }));
+                return Ok(expr_fn::scalar_subquery(Arc::new(
+                    LogicalPlan::EmptyRelation(datafusion_expr::EmptyRelation {
+                        produce_one_row: false,
+                        schema: Arc::clone(query.schema()),
+                    }),
+                )));
             }
             if skip == 0 && fetch == Some(1) {
                 limited = true;
                 query = Arc::unwrap_or_clone(limit.input.clone());
             } else {
-                return Ok(query);
+                return Ok(expr_fn::scalar_subquery(Arc::new(query)));
             }
         }
         let output = Column::from(query.schema().qualified_field(0));
@@ -265,17 +265,22 @@ impl PlanResolver<'_> {
         let value = if limited {
             value
         } else {
-            when(
-                Expr::Column(Column::new_unqualified(count_name)).gt(lit(1_i64)),
-                ScalarUDF::from(RaiseError::new()).call(vec![lit(
-                    "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row",
-                )]),
-            )
-            .otherwise(value)?
+            // Carry both results through decorrelation without asserting here:
+            // an inner group may have no matching outer row at all.
+            ScalarUDF::from(StructFunction::new(vec!["value".into(), "count".into()])).call(vec![
+                value,
+                Expr::Column(Column::new_unqualified(count_name)),
+            ])
         };
-        Ok(LogicalPlanBuilder::from(aggregate)
+        let query = LogicalPlanBuilder::from(aggregate)
             .project(vec![value.alias_qualified(output.relation, output.name)])?
-            .build()?)
+            .build()?;
+        let value = expr_fn::scalar_subquery(Arc::new(query));
+        Ok(if limited {
+            value
+        } else {
+            ScalarUDF::from(ScalarSubqueryResult::new()).call(vec![value])
+        })
     }
 
     pub(super) async fn resolve_expression_exists(

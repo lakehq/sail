@@ -20,6 +20,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
@@ -54,6 +55,9 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
         if let Expr::ScalarFunction(f) = e
             && f.func.signature().volatility == Volatility::Volatile
             && f.func.as_async().is_none()
+            // This internal assertion is evaluation-sensitive, but does not
+            // make the scalar subquery's value non-deterministic.
+            && !f.func.inner().is::<ScalarSubqueryResult>()
         {
             found_name = Some(f.func.name().to_string());
             return Ok(TreeNodeRecursion::Stop);

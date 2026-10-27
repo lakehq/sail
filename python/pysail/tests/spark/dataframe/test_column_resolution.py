@@ -626,6 +626,25 @@ def test_lateral_alias_evaluates_random_once(spark):
     assert all(row.x == row.y for row in rows)
 
 
+@pytest.mark.parametrize("projection", ["id", "*"])
+def test_lateral_alias_preserves_bound_input_column(spark, projection):
+    source = spark.range(3).alias("t")
+    projected = source.selectExpr(projection, "id + 1 AS x", "x + 1 AS y")
+
+    assert projected.select(source.id).orderBy("id").collect() == [(0,), (1,), (2,)]
+    assert projected.select("t.id").orderBy("id").collect() == [(0,), (1,), (2,)]
+
+
+@pytest.mark.parametrize("rows", [0, 3])
+@pytest.mark.parametrize("operation", ["distinct", "dropDuplicates"])
+def test_deduplicate_zero_column_dataframe(spark, rows, operation):
+    result = getattr(spark.range(rows).select(), operation)()
+
+    assert result.columns == []
+    assert result.count() == min(rows, 1)
+    assert [tuple(row) for row in result.collect()] == ([()] if rows else [])
+
+
 def test_lateral_alias_does_not_capture_unrelated_dataframe_column(spark):
     left = spark.range(1)
     right = spark.range(1).withColumn("x", f.lit(9))

@@ -41,7 +41,7 @@ impl PlanResolver<'_> {
                 Arc::new(input),
             )?)))
         } else if column_names.is_empty() && all_columns_as_keys {
-            if dataframe {
+            if dataframe && !schema.fields().is_empty() {
                 let columns = schema
                     .columns()
                     .into_iter()
