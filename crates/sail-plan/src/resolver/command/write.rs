@@ -915,8 +915,8 @@ impl PlanResolver<'_> {
                             .iter()
                             .filter(|f| f.name().eq_ignore_ascii_case(name))
                             .map(|f| {
-                                let expr =
-                                    col(f.name()).cast_to(field.data_type(), input.schema())?;
+                                let expr = col(Column::from_name(f.name()))
+                                    .cast_to(field.data_type(), input.schema())?;
                                 Self::make_nullable_if_needed(expr, field, input.schema())
                             })
                             .collect::<PlanResult<Vec<_>>>()?;
