@@ -4,6 +4,7 @@ use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod correlated_limit;
+mod deduplicate;
 mod lateral_join;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
@@ -46,6 +47,10 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
     for rule in rules {
+        if rule.name() == deduplicate::SimplifyDeduplicate::default().name() {
+            custom.push(Arc::new(deduplicate::SimplifyDeduplicate::default()));
+            continue;
+        }
         if rule.name() == ScalarSubqueryToJoin::new().name() {
             // SimplifyExpressions must first fold LIMIT/OFFSET casts into
             // literals. Decorrelate before limit pushdown can turn the sort

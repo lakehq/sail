@@ -758,3 +758,30 @@ Feature: Correlated query results
       | k | selected |
       | 1 | 20       |
       | 2 | NULL     |
+
+  Scenario Outline: Lateral limits retain hidden ordering through projections
+    When query
+      """
+      SELECT o.k, q.v FROM VALUES (1), (2), (3) o(k),
+      LATERAL (
+        SELECT v FROM (
+          SELECT <projection>
+          FROM VALUES (1, 10, 3), (1, 20, 1), (1, 30, 2), (2, 40, 2), (2, 50, 1) u(k, v, s)
+          WHERE u.k = o.k
+        ) r ORDER BY <ordering> LIMIT 2 OFFSET 1
+      ) q
+      """
+    Then query result collected
+      | k | v  |
+      | 1 | 30 |
+      | 1 | 10 |
+      | 2 | 40 |
+    Then query column types
+      | column | type |
+      | k      | int  |
+      | v      | int  |
+
+    Examples:
+      | projection       | ordering |
+      | v, s, k          | r.s      |
+      | v, s AS rank_key | rank_key |

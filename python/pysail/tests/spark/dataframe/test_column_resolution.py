@@ -466,7 +466,7 @@ def test_exists_subquery_supports_bound_outer_column(source, other):
     assert result.dtypes == [("id", "bigint")]
 
 
-@SUBQUERY_API
+@pytest.mark.skipif(pyspark_version() < (4, 1), reason="Column.isin with a DataFrame requires PySpark 4.1+")
 def test_isin_accepts_dataframe_subquery(source, other):
     result = source.select("id", source.id.isin(other.select("id")).alias("b"))
     expected = [

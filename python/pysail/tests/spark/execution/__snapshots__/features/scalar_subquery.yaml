@@ -528,7 +528,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC]
         ProjectionExec: expr=[#2@0 as #9, #3@1 as #10]
@@ -1081,7 +1081,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc), (#10@1, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC, #10@1 ASC]
         ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11]
@@ -1647,7 +1647,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC]
         ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11]
@@ -2460,7 +2460,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc)], dist_by=SinglePartition
         SortPreservingMergeExec: [#12@0 ASC]
@@ -3142,7 +3142,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc), (#13@1, asc)], dist_by=SinglePartition
         SortPreservingMergeExec: [#12@0 ASC, #13@1 ASC]
@@ -3691,7 +3691,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
     physical_plan after OptimizeScanPartitions:
@@ -4152,7 +4152,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#5@0, asc)], dist_by=SinglePartition
         SortExec: expr=[#5@0 ASC], preserve_partitioning=[false]
@@ -4667,7 +4667,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
     physical_plan after OptimizeScanPartitions:
@@ -5211,7 +5211,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
     physical_plan after OptimizeScanPartitions:
@@ -5720,7 +5720,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
     physical_plan after OptimizeScanPartitions:
@@ -6183,7 +6183,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#2@0 as #7, count(Int64(1)) FILTER (WHERE t.#3 > (<subquery>))@1 as #8]
@@ -6716,7 +6716,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
@@ -7231,7 +7231,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#2@0 as #7, sum(t.#3)@1 as #8]
@@ -7738,7 +7738,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[g@0 as #5, count(Int64(1))@1 as #6]
@@ -8226,7 +8226,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#2@0 as #7, sum(t.#3 + #6)@1 as #8]
@@ -8736,7 +8736,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#2@0 as #7, sum(t.#3)@1 as #8]
@@ -9297,7 +9297,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc)], dist_by=SinglePartition
         ProjectionExec: expr=[#1@0 as #7, #3@1 as #8]
@@ -9848,7 +9848,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc), (#8@1, asc)], dist_by=SinglePartition
         ProjectionExec: expr=[#1@0 as #7, #3@1 as #8]
@@ -10351,7 +10351,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[#7@0 as #9, sum(p.#8)@1 as #10]
@@ -10861,7 +10861,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
     physical_plan after OptimizeScanPartitions:
@@ -11324,7 +11324,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
     physical_plan after OptimizeScanPartitions:
@@ -11785,7 +11785,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
         ProjectionExec: expr=[#1@0 as #6, sum(t.#1 + #4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
@@ -12276,7 +12276,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@1, asc)], dist_by=SinglePartition
         ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
@@ -12780,7 +12780,7 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
-    physical_plan after ensure_requirements:
+    physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
         ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]

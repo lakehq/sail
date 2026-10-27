@@ -6,11 +6,12 @@ use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, Result};
-use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
+use datafusion_expr::expr::{Sort, WindowFunction, WindowFunctionParams};
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, Operator, WindowFrame, WindowFunctionDefinition, lit,
+    Expr, LogicalPlan, LogicalPlanBuilder, Operator, Projection, WindowFrame,
+    WindowFunctionDefinition, lit,
 };
 use sail_logical_plan::sort::RequiredSortNode;
 
@@ -92,33 +93,8 @@ impl OptimizerRule for DecorrelateLimit {
             return Ok(Transformed::no(plan));
         }
         let output = plan.schema().columns();
-        let mut order = None;
-        let input = Arc::unwrap_or_clone(Arc::clone(&limit.input))
-            .transform_down(|node| {
-                if let LogicalPlan::Sort(sort) = node {
-                    if order.is_none() {
-                        order = Some(sort.expr);
-                    }
-                    Ok(Transformed::yes(Arc::unwrap_or_clone(sort.input)))
-                } else if let LogicalPlan::Extension(extension) = &node
-                    && let Some(sort) = extension.node.as_any().downcast_ref::<RequiredSortNode>()
-                    && sort.fetch().is_none_or(|top| {
-                        fetch.is_some_and(|fetch| top >= skip.saturating_add(fetch))
-                    })
-                    && !sort.preserve_partitioning()
-                {
-                    // Order-sensitive aggregates protect their input sort with
-                    // an extension node before optimization. The per-key rank
-                    // carries that ordering when decorrelating a nested limit.
-                    if order.is_none() {
-                        order = Some(sort.sort_expr().to_vec());
-                    }
-                    Ok(Transformed::yes(extension.node.inputs()[0].clone()))
-                } else {
-                    Ok(Transformed::no(node))
-                }
-            })?
-            .data;
+        let (input, order) =
+            extract_ordering(Arc::unwrap_or_clone(Arc::clone(&limit.input)), skip, fetch)?;
         let mut pull_up = PullUpCorrelatedExpr::new();
         let input = input.rewrite(&mut pull_up)?.data;
         if !pull_up.can_pull_up {
@@ -160,5 +136,113 @@ impl OptimizerRule for DecorrelateLimit {
             .project(output.into_iter().map(Expr::Column))?
             .build()?;
         Ok(Transformed::yes(result))
+    }
+}
+
+/// Carry ordering expressions through projections before ranking. The outer
+/// projection restores the LIMIT's original output after the extra keys are used.
+fn extract_ordering(
+    plan: LogicalPlan,
+    skip: usize,
+    fetch: Option<usize>,
+) -> Result<(LogicalPlan, Option<Vec<Sort>>)> {
+    match plan {
+        LogicalPlan::Sort(sort)
+            if sort
+                .fetch
+                .is_none_or(|top| fetch.is_some_and(|fetch| top >= skip.saturating_add(fetch))) =>
+        {
+            Ok((Arc::unwrap_or_clone(sort.input), Some(sort.expr)))
+        }
+        LogicalPlan::Extension(ref extension)
+            if let Some(sort) = extension.node.as_any().downcast_ref::<RequiredSortNode>()
+                && sort.fetch().is_none_or(|top| {
+                    fetch.is_some_and(|fetch| top >= skip.saturating_add(fetch))
+                })
+                && !sort.preserve_partitioning() =>
+        {
+            Ok((
+                extension.node.inputs()[0].clone(),
+                Some(sort.sort_expr().to_vec()),
+            ))
+        }
+        LogicalPlan::Projection(projection) => {
+            let (input, ordering) =
+                extract_ordering(Arc::unwrap_or_clone(projection.input), skip, fetch)?;
+            let Some(ordering) = ordering else {
+                return Ok((
+                    LogicalPlan::Projection(Projection::try_new(projection.expr, Arc::new(input))?),
+                    None,
+                ));
+            };
+            let outputs = projection.schema.columns();
+            let mut expressions = projection.expr.clone();
+            let ordering = ordering
+                .into_iter()
+                .map(|sort| {
+                    let expr = sort
+                        .expr
+                        .transform_down(|expr| {
+                            if let Some(index) = projection
+                                .expr
+                                .iter()
+                                .position(|projected| projected.clone().unalias() == expr)
+                            {
+                                return Ok(Transformed::new(
+                                    Expr::Column(outputs[index].clone()),
+                                    true,
+                                    TreeNodeRecursion::Jump,
+                                ));
+                            }
+                            if let Expr::Column(column) = &expr
+                                && !outputs.contains(column)
+                                && !expressions.contains(&expr)
+                            {
+                                expressions.push(expr.clone());
+                            }
+                            Ok(Transformed::no(expr))
+                        })?
+                        .data;
+                    Ok(Sort { expr, ..sort })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((
+                LogicalPlan::Projection(Projection::try_new(expressions, Arc::new(input))?),
+                Some(ordering),
+            ))
+        }
+        LogicalPlan::Filter(_) | LogicalPlan::SubqueryAlias(_) => {
+            let (input, ordering) = extract_ordering(plan.inputs()[0].clone(), skip, fetch)?;
+            let ordering = if let LogicalPlan::SubqueryAlias(alias) = &plan {
+                ordering
+                    .map(|ordering| {
+                        ordering
+                            .into_iter()
+                            .map(|sort| {
+                                let expr = sort
+                                    .expr
+                                    .transform_up(|expr| {
+                                        if let Expr::Column(mut column) = expr {
+                                            column.relation = Some(alias.alias.clone());
+                                            Ok(Transformed::yes(Expr::Column(column)))
+                                        } else {
+                                            Ok(Transformed::no(expr))
+                                        }
+                                    })?
+                                    .data;
+                                Ok(Sort { expr, ..sort })
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .transpose()?
+            } else {
+                ordering
+            };
+            Ok((
+                plan.with_new_exprs(plan.expressions(), vec![input])?,
+                ordering,
+            ))
+        }
+        plan => Ok((plan, None)),
     }
 }

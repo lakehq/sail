@@ -310,3 +310,46 @@ Feature: Grouping and sort resolution
       | grouping |
       | ALL      |
       | 1        |
+
+  Scenario: GROUP BY ALL respects a case-sensitive input column
+    Given config spark.sql.caseSensitive = true
+    When query
+      """
+      SELECT count(*) AS n FROM VALUES (1), (2) t(ALL) GROUP BY ALL
+      """
+    Then query result collected
+      | n |
+      | 1 |
+      | 1 |
+
+  Scenario: ORDER BY ALL respects a case-sensitive input column
+    Given config spark.sql.caseSensitive = true
+    When query
+      """
+      SELECT * FROM VALUES (1, 2), (2, 1) t(x, ALL) ORDER BY ALL
+      """
+    Then query result collected ordered
+      | x | ALL |
+      | 2 | 1   |
+      | 1 | 2   |
+
+  Scenario: GROUP BY ALL keeps inferred integer literals as expressions
+    When query
+      """
+      SELECT 42, count(*) AS n FROM VALUES (1), (2) t(v) GROUP BY ALL
+      """
+    Then query result collected
+      | 42 | n |
+      | 42 | 2 |
+
+  Scenario: ORDER BY ALL excludes hidden USING keys
+    When query
+      """
+      SELECT * FROM VALUES (1, CAST(NULL AS INT), CAST(NULL AS STRING)) l(k1, k2, a)
+      FULL JOIN VALUES (1, CAST(NULL AS INT), 'a') r(k1, k2, b) USING (k1, k2)
+      ORDER BY ALL
+      """
+    Then query result collected ordered
+      | k1 | k2   | a    | b    |
+      | 1  | NULL | NULL | NULL |
+      | 1  | NULL | NULL | a    |

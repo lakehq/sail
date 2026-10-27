@@ -237,3 +237,50 @@ Feature: Projection and alias resolution
       | 0  | false | false |
       | 1  | true  | true  |
       | 2  | true  | true  |
+
+  Scenario: Lateral aliases provide types for casts and functions
+    When query
+      """
+      SELECT 1 AS a, CAST(a AS STRING) AS b, concat(b, 'x') AS c
+      """
+    Then query result collected
+      | a | b | c  |
+      | 1 | 1 | 1x |
+    Then query column types
+      | column | type   |
+      | a      | int    |
+      | b      | string |
+      | c      | string |
+
+  Scenario Outline: Wildcards expand only the original input with lateral aliases
+    When query
+      """
+      SELECT <projection> FROM VALUES (1) t(v)
+      """
+    Then query result collected
+      | v | x | y |
+      | 1 | 2 | 3 |
+    Then query column types
+      | column | type |
+      | v      | int  |
+      | x      | int  |
+      | y      | int  |
+
+    Examples:
+      | projection                  |
+      | *, v + 1 AS x, x + 1 AS y   |
+      | t.*, v + 1 AS x, x + 1 AS y |
+
+  Scenario: A wildcard after a lateral alias excludes staged columns
+    When query
+      """
+      SELECT v + 1 AS x, *, x + 1 AS y FROM VALUES (1) t(v)
+      """
+    Then query result collected
+      | x | v | y |
+      | 2 | 1 | 3 |
+    Then query column types
+      | column | type |
+      | x      | int  |
+      | v      | int  |
+      | y      | int  |

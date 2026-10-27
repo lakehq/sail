@@ -88,10 +88,10 @@ impl PlanResolver<'_> {
             .resolve_projections_deferring(&projections, schema, state)
             .await?;
 
-        let grouping = if matches!(grouping.as_slice(), [spec::Expr::UnresolvedAttribute { name, .. }]
+        let infer_grouping = matches!(grouping.as_slice(), [spec::Expr::UnresolvedAttribute { name, .. }]
             if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("all")
-            && self.resolve_column_candidates(schema, "all", None, state).is_empty())
-        {
+            && self.resolve_column_candidates(schema, name.parts()[0].as_ref(), None, state).is_empty());
+        let grouping = if infer_grouping {
             let (_, expanded) = self.rewrite_wildcard(
                 input.clone(),
                 resolved_projections.iter().flatten().cloned().collect(),
@@ -129,6 +129,11 @@ impl PlanResolver<'_> {
             .await?;
 
         let (input, projections) = self.rewrite_wildcard(input, projections, state)?;
+        let grouping = if infer_grouping {
+            grouping
+        } else {
+            self.resolve_grouping_positions(grouping, &projections)?
+        };
         let (input, projections, grouping) =
             self.prepare_aggregate_input(input, projections, grouping, state)?;
         let schema = input.schema();
@@ -234,6 +239,7 @@ impl PlanResolver<'_> {
         with_grouping_expressions: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let grouping = self.resolve_grouping_positions(grouping, &projections)?;
         let (input, projections, grouping) =
             self.prepare_aggregate_input(input, projections, grouping, state)?;
         self.rewrite_prepared_aggregate(
@@ -253,7 +259,6 @@ impl PlanResolver<'_> {
         grouping: Vec<NamedExpr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, Vec<NamedExpr>)> {
-        let grouping = self.resolve_grouping_positions(grouping, &projections)?;
         // Spark materializes non-deterministic grouping keys before CheckAnalysis,
         // and reuses those values wherever the grouping expressions occur.
         let mut partition_expressions = vec![];

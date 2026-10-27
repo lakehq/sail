@@ -49,7 +49,7 @@ impl PhysicalOptimizerRule for OffsetSafeRequirements {
     }
 
     fn name(&self) -> &str {
-        "ensure_requirements"
+        "EnsureRequirements"
     }
     fn schema_check(&self) -> bool {
         true

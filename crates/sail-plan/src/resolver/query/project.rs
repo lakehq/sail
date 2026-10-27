@@ -90,6 +90,7 @@ impl PlanResolver<'_> {
         // Compute aggregates first, then materialize the SELECT aliases above
         // them. Inlining the entire SELECT list would evaluate a volatile alias
         // again at every reference (e.g. COUNT(*), RAND() AS x, x AS y).
+        let original_input = input.clone();
         let aggregate_columns = if aggregates.is_empty() {
             vec![]
         } else {
@@ -106,6 +107,7 @@ impl PlanResolver<'_> {
             )?;
             input.schema().columns()
         };
+        let mut typing_schema = Arc::clone(&schema);
         let mut resolved = vec![];
         for expression in expressions {
             let mut named = {
@@ -113,7 +115,7 @@ impl PlanResolver<'_> {
                     state.enter_aggregate_scope(crate::resolver::state::AggregateState::Lateral {
                         projections: resolved.clone(),
                     });
-                self.resolve_named_expression(expression, &schema, scope.state())
+                self.resolve_named_expression(expression, &typing_schema, scope.state())
                     .await?
             };
             named.expr = named
@@ -129,36 +131,67 @@ impl PlanResolver<'_> {
                     )
                 })?
                 .data;
-            // Wildcards/generators are expanded by the regular projection rewrite.
-            if named.name.len() != 1 || matches!(named.expr, Expr::Wildcard { .. }) {
-                return Err(PlanError::analysis(
-                    "unsupported lateral alias with wildcard or generator",
+            // Expand against the original output so staged aliases never leak into `*`.
+            let expanded = if matches!(named.expr, Expr::Wildcard { .. }) {
+                self.rewrite_wildcard(original_input.clone(), vec![named], state)?
+                    .1
+            } else {
+                vec![named]
+            };
+            for named in expanded {
+                if named.name.len() != 1 {
+                    return Err(PlanError::analysis(
+                        "unsupported lateral alias with generator",
+                    ));
+                }
+                // These expressions must be lowered before they are hidden behind
+                // the materialized alias's column reference.
+                let (next, named) =
+                    self.rewrite_projection::<MonotonicIdRewriter>(input, vec![named], state)?;
+                let (next, named) =
+                    self.rewrite_projection::<SparkPartitionIdRewriter>(next, named, state)?;
+                let (next, named) =
+                    self.rewrite_projection::<ExplodeRewriter>(next, named, state)?;
+                let (next, named) =
+                    self.rewrite_projection::<WindowRewriter>(next, named, state)?;
+                let (next, named) =
+                    self.rewrite_projection::<ExistsRewriter>(next, named, state)?;
+                input = next;
+                let named = named.one()?;
+                // Only the lateral scope exposes this alias by name. The typing schema
+                // also retains the original attributes, which take precedence over aliases.
+                let field = state.register_field_name(String::new());
+                let mut exprs = input
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect::<Vec<_>>();
+                exprs.push(named.expr.alias(&field));
+                input = LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(input))?);
+                let mut fields = typing_schema
+                    .iter()
+                    .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+                    .collect::<Vec<_>>();
+                fields.push((
+                    None,
+                    Arc::clone(
+                        input
+                            .schema()
+                            .fields()
+                            .last()
+                            .ok_or_else(|| PlanError::internal("missing lateral alias field"))?,
+                    ),
                 ));
+                typing_schema = Arc::new(DFSchema::new_with_metadata(
+                    fields,
+                    schema.metadata().clone(),
+                )?);
+                resolved.push(NamedExpr {
+                    expr: Expr::Column(Column::new_unqualified(field)),
+                    ..named
+                });
             }
-            // These expressions must be lowered before they are hidden behind
-            // the materialized alias's column reference.
-            let (next, named) =
-                self.rewrite_projection::<MonotonicIdRewriter>(input, vec![named], state)?;
-            let (next, named) =
-                self.rewrite_projection::<SparkPartitionIdRewriter>(next, named, state)?;
-            let (next, named) = self.rewrite_projection::<ExplodeRewriter>(next, named, state)?;
-            let (next, named) = self.rewrite_projection::<WindowRewriter>(next, named, state)?;
-            let (next, named) = self.rewrite_projection::<ExistsRewriter>(next, named, state)?;
-            input = next;
-            let named = named.one()?;
-            let field = state.register_field_name(named.name[0].clone());
-            let mut exprs = input
-                .schema()
-                .columns()
-                .into_iter()
-                .map(Expr::Column)
-                .collect::<Vec<_>>();
-            exprs.push(named.expr.alias(&field));
-            input = LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(input))?);
-            resolved.push(NamedExpr {
-                expr: Expr::Column(Column::new_unqualified(field)),
-                ..named
-            });
         }
         Ok((input, resolved))
     }

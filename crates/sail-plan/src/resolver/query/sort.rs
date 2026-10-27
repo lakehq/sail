@@ -32,12 +32,17 @@ impl PlanResolver<'_> {
             && matches!(order.as_slice(), [sort]
             if matches!(sort.child.as_ref(), spec::Expr::UnresolvedAttribute { name, .. }
                 if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("all")
-                && self.resolve_column_candidates(input.schema(), "all", None, state).is_empty()))
+                && self.resolve_column_candidates(input.schema(), name.parts()[0].as_ref(), None, state).is_empty()))
         {
             input
                 .schema()
                 .columns()
                 .into_iter()
+                .filter(|column| {
+                    state
+                        .get_field_info(column.name())
+                        .is_ok_and(|info| !info.is_hidden())
+                })
                 .map(|column| {
                     Self::sort_with_options(
                         Expr::Column(column),
