@@ -11,23 +11,30 @@ mod scalar_iterator_udf;
 mod scalar_subquery_keys;
 mod type_coercion;
 
-use crate::type_coercion::TypeCoercion;
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
 use scalar_subquery_keys::NormalizeScalarSubqueryKeys;
 
+use crate::type_coercion::TypeCoercion;
+
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
-    // FIXME: Create analyzer rule for TypeCoercion in Sail
-    //  so we don't have to depend on DataFusion's implementation which is incorrect for Spark.
+    // Sail's `TypeCoercion` replaces DataFusion's, whose implementation is incorrect for Spark.
     let Analyzer {
         function_rewrites: _,
         rules: built_in_rules,
     } = Analyzer::default();
     let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
         vec![Arc::new(ResolveLambdaVariables)];
-    rules.extend(built_in_rules);
+    rules.extend(built_in_rules.into_iter().map(|rule| {
+        if rule.name() == datafusion::optimizer::analyzer::type_coercion::TypeCoercion::new().name()
+        {
+            Arc::new(TypeCoercion::new())
+        } else {
+            rule
+        }
+    }));
     // Iterator UDFs need partition streams and must be extracted before scalar folding.
     rules.push(Arc::new(ExtractScalarIteratorUDF));
     rules

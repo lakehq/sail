@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+use std::sync::{Arc, LazyLock};
+
 /// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/analyzer/type_coercion.rs
 ///
 /// Spark-compatible type coercion for Sail's logical analyzer.
@@ -19,16 +22,11 @@
 /// already more permissive than Spark. Sail-specific changes should only add cases Spark accepts
 /// but DataFusion rejects, or resolve conflicts in favor of Spark semantics.
 use arrow::compute::can_cast_types;
-use itertools::{Itertools as _, izip};
-use std::borrow::Cow;
-use std::sync::{Arc, LazyLock};
-
-use crate::binary_type_coercion::BinaryTypeCoercer;
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion::optimizer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, Spans, TableReference,
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
@@ -47,11 +45,16 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
+// DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
+#[expect(clippy::disallowed_types)]
 use datafusion_expr::{
-    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, MergeIntoOp, Operator,
-    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp,
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
+    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection, Union,
+    ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false,
+    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
+use itertools::{Itertools as _, izip};
+
+use crate::binary_type_coercion::BinaryTypeCoercer;
 
 /// Performs type coercion by determining the schema
 /// and performing the expression rewrites.
@@ -116,44 +119,43 @@ impl AnalyzerRule for TypeCoercion {
 }
 
 /// Coerce each node of `plan` and of its subqueries, from the leaves up.
-fn coerce_plan_and_subqueries(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
+fn coerce_plan_and_subqueries(plan: LogicalPlan, _config: &ConfigOptions) -> Result<LogicalPlan> {
     static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
 
-    // TODO: Uncomment after DataFusion 56
-    plan.transform_down_up_with_subqueries(
-        |plan| match plan {
-            // Coercion can change the types of the body, for example the type
-            // of a `NULL` column of a `UNION`. Coerce the body first, and give
-            // its new schema to the scans before the continuation is coerced.
-            // LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-            //     let body = coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
-            //     let continuation = with_materialized_cte_scan_schema(
-            //         Arc::unwrap_or_clone(cte.continuation),
-            //         cte.id,
-            //         body.schema(),
-            //     )?;
-            //     let continuation = coerce_plan_and_subqueries(continuation, config)?;
-            //     Ok(Transformed::new(
-            //         LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
-            //             cte: Arc::new(body),
-            //             continuation: Arc::new(continuation),
-            //             ..cte
-            //         })),
-            //         true,
-            //         TreeNodeRecursion::Jump,
-            //     ))
-            // }
-            _ => Ok(Transformed::no(plan)),
-        },
-        |plan| {
-            analyze_internal(
-                &EMPTY_SCHEMA,
-                plan,
-                config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
-            )
-        },
-    )
-    .map(|t| t.data)
+    // TODO: Uncomment after DataFusion 56, and traverse with `transform_down_up_with_subqueries`
+    //  so that the body of a materialized CTE is coerced before its continuation.
+    // plan.transform_down_up_with_subqueries(
+    //     |plan| match plan {
+    //         Coercion can change the types of the body, for example the type
+    //         of a `NULL` column of a `UNION`. Coerce the body first, and give
+    //         its new schema to the scans before the continuation is coerced.
+    //         LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+    //             let body = coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
+    //             let continuation = with_materialized_cte_scan_schema(
+    //                 Arc::unwrap_or_clone(cte.continuation),
+    //                 cte.id,
+    //                 body.schema(),
+    //             )?;
+    //             let continuation = coerce_plan_and_subqueries(continuation, config)?;
+    //             Ok(Transformed::new(
+    //                 LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+    //                     cte: Arc::new(body),
+    //                     continuation: Arc::new(continuation),
+    //                     ..cte
+    //                 })),
+    //                 true,
+    //                 TreeNodeRecursion::Jump,
+    //             ))
+    //         }
+    //         _ => Ok(Transformed::no(plan)),
+    //     },
+    //     |plan| analyze_internal(&EMPTY_SCHEMA, plan, session_time_zone),
+    // )
+    // TODO: Pass `config.execution.time_zone`, which coerces TIMESTAMP_NTZ mixed with TIMESTAMP to
+    //  the session time zone, once those casts handle DST gaps and overlaps. Arrow's cast fails
+    //  for them, and DataFusion 55 casts to the time zone of the TIMESTAMP value instead.
+    plan.transform_up_with_subqueries(|plan| analyze_internal(&EMPTY_SCHEMA, plan, None))
+        .map(|t| t.data)
 }
 
 // Give the fields of `body_schema` to each scan of the materialized CTE `id`
@@ -305,6 +307,7 @@ impl<'a> TypeCoercionRewriter<'a> {
         }
     }
 
+    #[expect(clippy::disallowed_types)]
     fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
         let WriteOp::MergeInto(merge_op) = &dml.op else {
             return Ok(LogicalPlan::Dml(dml));
@@ -380,7 +383,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     // TODO: Uncomment after DataFusion 56
-    /// Coerce ASOF equality and ordered match expressions across input schemas.
+    // Coerce ASOF equality and ordered match expressions across input schemas.
     // pub fn coerce_asof_join(&mut self, mut join: AsOfJoin) -> Result<LogicalPlan> {
     //     join.on = join
     //         .on
@@ -1284,14 +1287,19 @@ fn coerce_window_frame(
                 .transpose()?;
             if let Some(col_type) = current_types {
                 let target_type = match extract_window_frame_target_type(&col_type) {
-                    Some(target_type) => {
-                        if window_frame_is_ree_range(&window_frame) {
-                            // The first key established the target type above, but
-                            // every later key also participates in peer comparison.
-                            check_free_range_order_by_types(&expressions[1..], schema)?;
-                        }
-                        target_type
-                    }
+                    // TODO: Check the later keys of a range frame after DataFusion 56.
+                    //  Sail's window functions default to a range frame, which DataFusion 55
+                    //  supports for any later key.
+                    // Some(target_type) => {
+                    //     if window_frame_is_ree_range(&window_frame) {
+                    //         // The first key established the target type above, but
+                    //         // every later key also participates in peer comparison.
+                    //         check_free_range_order_by_types(&expressions[1..], schema)?;
+                    //     }
+                    //     target_type
+                    // }
+                    // TODO: Remove after DataFusion 56
+                    Some(target_type) => target_type,
                     // A free range frame has no offsets to coerce. Check whether
                     // its ORDER BY types are supported by the free-range fallback.
                     None if window_frame_is_ree_range(&window_frame) => {
@@ -1599,6 +1607,7 @@ fn coerce_case_expression(
 /// - **Datatypes**: Determined by `type_union_coercion()` rules, not input order
 /// - **Nullability**: Later inputs can add nullability but cannot remove it (logical OR)
 /// - **Metadata**: Later inputs take precedence for same keys (HashMap::extend semantics)
+#[expect(dead_code, reason = "DataFusion's logical plan builder uses it")]
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
     coerce_union_schema_with_schema(&inputs[1..], inputs[0].schema())
 }
@@ -1753,25 +1762,14 @@ fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
 // [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L213-L221
 // TODO: Remove after DataFusion 56
 /// Build the target-plus-source schema used by MERGE expressions.
+#[expect(clippy::disallowed_types)]
 pub fn merge_dml_schema(dml: &DmlStatement) -> Result<DFSchema> {
-    let WriteOp::MergeInto(merge_op) = &dml.op else {
+    let WriteOp::MergeInto(_) = &dml.op else {
         return internal_err!("DmlStatement::merge_schema requires a MERGE operation");
     };
-    expression_merge_op_schema(&merge_op, &dml.target.schema(), dml.input.schema())
-}
-
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L349-L359
-// TODO: Remove after DataFusion 56
-/// Build the schema used to resolve expressions owned by this operation.
-///
-/// Target fields precede source fields. The visible target qualifier must
-/// not also identify a source relation in the outer MERGE scope.
-pub fn expression_merge_op_schema(
-    merge_into: &MergeIntoOp,
-    target_schema: &Schema,
-    source_schema: &DFSchema,
-) -> Result<DFSchema> {
-    expression_merge_op_schema_for(&merge_into.target_qualifier, target_schema, source_schema)
+    // TODO: Use the operation's target qualifier after DataFusion 56.
+    //  DataFusion 55 qualifies the MERGE target with the table name.
+    expression_merge_op_schema_for(&dml.table_name, &dml.target.schema(), dml.input.schema())
 }
 
 // [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr/src/logical_plan/dml.rs#L361-L378
@@ -1925,6 +1923,12 @@ pub fn comparison_coercion_with_session_timezone(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::disallowed_types
+)]
 mod test {
 
     use std::sync::Arc;
@@ -1933,9 +1937,6 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
     use datafusion::functions_aggregate::average::AvgAccumulator;
     use datafusion::optimizer::{Analyzer, AnalyzerRule};
-    use insta::assert_snapshot;
-
-    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter, coerce_case_expression};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference};
@@ -1950,7 +1951,9 @@ mod test {
         ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast, col,
         create_udaf, grouping_set, is_true, lit, placeholder,
     };
-    use datafusion_functions_aggregate::average::AvgAccumulator;
+    use insta::assert_snapshot;
+
+    use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter, coerce_case_expression};
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -2045,7 +2048,9 @@ mod test {
         Ok(())
     }
 
+    // TODO: Enable after DataFusion 56, which infers the type of a LIMIT parameter.
     #[test]
+    #[ignore]
     fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
         let plan = LogicalPlan::Limit(Limit {
             input: empty(),
@@ -2155,10 +2160,10 @@ mod test {
         // target schema to be visible to the analyzer, which only sees
         // `plan.inputs()` (the source plan) by default.
         let on = col("target.id").eq(col("source.id"));
-        let merge_op = MergeIntoOp::new(
-            "target",
+        // TODO: Use `MergeIntoOp::new` after DataFusion 56.
+        let merge_op = MergeIntoOp {
             on,
-            vec![
+            clauses: vec![
                 MergeIntoClause {
                     kind: MergeIntoClauseKind::Matched,
                     predicate: None,
@@ -2173,7 +2178,7 @@ mod test {
                     },
                 },
             ],
-        );
+        };
         let plan = LogicalPlan::Dml(DmlStatement::new(
             target_table_name,
             target_source,
@@ -3606,7 +3611,9 @@ mod test {
         )
     }
 
+    // TODO: Enable once the rule passes the session time zone.
     #[test]
+    #[ignore]
     fn timestamp_subtraction_uses_session_timezone() -> Result<()> {
         let schema = DFSchema::from_unqualified_fields(
             vec![
@@ -3637,7 +3644,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".parse()?);
+        options.execution.time_zone = Some("+08:00".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3736,7 +3743,9 @@ mod test {
         )
     }
 
+    // TODO: Enable once the rule passes the session time zone.
     #[test]
+    #[ignore]
     fn timestamp_set_comparison_uses_session_timezone() -> Result<()> {
         let outer = empty_with_type(DataType::Timestamp(
             TimeUnit::Second,
@@ -3756,7 +3765,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(set_comparison, outer)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".parse()?);
+        options.execution.time_zone = Some("+08:00".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,

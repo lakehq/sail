@@ -1,10 +1,11 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr-common/src/type_coercion/binary.rs
-// TODO: Remove after DataFusion 56
 
 //! Coercion rules for matching argument types for binary operators
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+// The file is copied as a whole, including the functions that Sail does not use.
+#![expect(dead_code)]
+
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::array::{Array, new_empty_array};
@@ -297,7 +298,11 @@ impl<'a> BinaryTypeCoercer<'a> {
                 // Interpret the naive operand in the session timezone when set,
                 // or in the aware operand's timezone otherwise. Coerce before the
                 // Arrow probe so equal units follow the same rule as different units.
+                // TODO: Coerce without a session time zone too after DataFusion 56
+                //  Remove `&& self.session_time_zone.is_some()`
+                //  DataFusion 55 subtracts the values of the same unit without coercion.
                 if self.op == &Minus
+                    && self.session_time_zone.is_some()
                     && matches!(
                         (lhs, rhs),
                         (Timestamp(_, Some(_)), Timestamp(_, None))
@@ -1433,6 +1438,7 @@ fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
 
 /// Coerce two structs by matching fields by name using `coerce_fn`.
 /// Assumes the name-sets match.
+#[expect(clippy::unwrap_used)]
 fn coerce_struct_by_name<F>(
     lhs_fields: &Fields,
     rhs_fields: &Fields,
