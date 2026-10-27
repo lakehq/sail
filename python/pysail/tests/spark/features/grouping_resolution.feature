@@ -342,6 +342,42 @@ Feature: Grouping and sort resolution
       | 42 | n |
       | 42 | 2 |
 
+  Scenario Outline: A matching select alias takes precedence over GROUP BY ALL inference
+    Given config spark.sql.caseSensitive = <sensitive>
+    When query
+      """
+      SELECT k AS <alias>, v, count(*) AS n
+      FROM VALUES (1, 10), (1, 20) t(k, v)
+      GROUP BY ALL
+      """
+    Then query error (?i)(non-aggregate|not.*group by|missing_aggregation|no field named)
+
+    Examples:
+      | sensitive | alias |
+      | false     | ALL   |
+      | false     | all   |
+      | true      | ALL   |
+
+  Scenario Outline: GROUP BY ALL infers keys when select alias resolution is inapplicable
+    Given config spark.sql.caseSensitive = <sensitive>
+    Given config spark.sql.groupByAliases = <aliases>
+    When query
+      """
+      SELECT k AS <alias>, v, count(*) AS n
+      FROM VALUES (1, 10), (1, 20) t(k, v)
+      GROUP BY ALL
+      """
+    Then query result collected
+      | <alias> | v  | n |
+      | 1       | 10 | 1 |
+      | 1       | 20 | 1 |
+
+    Examples:
+      | sensitive | aliases | alias |
+      | false     | false   | ALL   |
+      | true      | false   | ALL   |
+      | true      | true    | all   |
+
   Scenario: ORDER BY ALL excludes hidden USING keys
     When query
       """

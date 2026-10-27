@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
@@ -147,6 +147,8 @@ impl PlanResolver<'_> {
         let mut aliases = vec![];
         let mut resolved = vec![];
         let mut columns = vec![];
+        let mut lateral_columns = HashSet::new();
+        let input_columns = input.schema().columns().into_iter().collect::<HashSet<_>>();
         let mut deferred = vec![];
         let mut has_dependencies = false;
         let mut has_multi_alias = false;
@@ -164,7 +166,9 @@ impl PlanResolver<'_> {
                 Err(_) if defer_unresolved => {
                     deferred.push((resolved.len(), expression));
                     resolved.push(None);
-                    columns.push(Column::new_unqualified(state.register_lateral_field(None)?));
+                    let column = Column::new_unqualified(state.register_lateral_field(None)?);
+                    lateral_columns.insert(column.clone());
+                    columns.push(column);
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -176,7 +180,11 @@ impl PlanResolver<'_> {
             };
             let expanded = self.rewrite_multi_expr(expanded)?;
             for named in expanded {
-                has_dependencies |= named.expr.column_refs().iter().any(|c| columns.contains(c));
+                has_dependencies |= named
+                    .expr
+                    .column_refs()
+                    .iter()
+                    .any(|c| lateral_columns.contains(*c));
                 has_multi_alias |= named.name.len() != 1;
                 for aggregate in
                     datafusion_expr::utils::find_aggregate_exprs(std::slice::from_ref(&named.expr))
@@ -184,7 +192,7 @@ impl PlanResolver<'_> {
                     if aggregate
                         .column_refs()
                         .iter()
-                        .any(|column| columns.contains(*column))
+                        .any(|column| lateral_columns.contains(*column))
                     {
                         return Err(PlanError::analysis(
                             "lateral column alias in aggregate function is not supported",
@@ -200,7 +208,21 @@ impl PlanResolver<'_> {
                     (None, state.register_lateral_field(None)?)
                 };
                 let column = Column::new(qualifier.clone(), &name);
+                lateral_columns.insert(column.clone());
                 columns.push(column.clone());
+                // An unchanged visible input name already has precedence over
+                // lateral aliases. In particular, a wide wildcard needs no copy
+                // of the growing schema for each of its expanded columns.
+                if let Expr::Column(source) = &named.expr
+                    && input_columns.contains(source)
+                    && let [name] = named.name.as_slice()
+                    && let info = state.get_field_info(source.name())?
+                    && !info.is_hidden()
+                    && self.merge_name_key(name) == self.merge_name_key(info.name())
+                {
+                    resolved.push(Some(named));
+                    continue;
+                }
                 // Generators and expressions awaiting type analysis need no staged
                 // field unless a later expression actually references their alias.
                 let field = match named.expr.to_field(&schema) {

@@ -107,9 +107,24 @@ impl PlanResolver<'_> {
             .resolve_projections_deferring(&projections, &input, state)
             .await?;
 
-        let infer_grouping = matches!(grouping.as_slice(), [spec::Expr::UnresolvedAttribute { name, .. }]
-            if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("all")
-            && self.resolve_column_candidates(schema, name.parts()[0].as_ref(), None, state).is_empty());
+        let infer_grouping = match grouping.as_slice() {
+            [spec::Expr::UnresolvedAttribute { name, .. }]
+                if name.parts().len() == 1
+                    && name.parts()[0].as_ref().eq_ignore_ascii_case("all") =>
+            {
+                let name = name.parts()[0].as_ref();
+                let has_alias = self.config.group_by_aliases
+                    && resolved_projections.iter().flatten().any(|projection| {
+                        matches!(projection.name.as_slice(), [alias]
+                            if self.merge_name_key(alias) == self.merge_name_key(name))
+                    });
+                !has_alias
+                    && self
+                        .resolve_column_candidates(schema, name, None, state)
+                        .is_empty()
+            }
+            _ => false,
+        };
         let grouping = if infer_grouping {
             let expanded = resolved_projections.iter().flatten().cloned().collect();
             let expanded = if lateral_columns.is_empty() {
