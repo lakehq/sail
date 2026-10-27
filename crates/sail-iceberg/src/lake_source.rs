@@ -283,6 +283,7 @@ impl LakeSource for IcebergLakeSource {
         Ok(LakeSourceMetadata {
             schema: self.infer_schema(ctx, info).await?,
             properties: vec![],
+            partition_by: None,
         })
     }
 
