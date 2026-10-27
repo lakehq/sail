@@ -3869,7 +3869,7 @@ mod test {
             rule,
             plan,
             @r#"
-        Filter: CAST(a AS Timestamp(µs, "+05:30")) <= TimestampMicrosecond(8210266876799999999, Some("+05:30"))
+        Filter: convert_tz(Utf8("+05:30"), Utf8("UTC"), CAST(a AS Timestamp(µs))) <= TimestampMicrosecond(8210266876799999999, Some("+05:30"))
           EmptyRelation: rows=0
         "#,
         )
@@ -3973,7 +3973,7 @@ mod test {
             @r#"
         Filter: CAST(a AS Timestamp(ns, "+08:00")) = ANY (<subquery>)
           Subquery:
-            Projection: CAST(a AS Timestamp(ns, "+08:00"))
+            Projection: CAST(convert_tz(Utf8("+08:00"), Utf8("UTC"), CAST(a AS Timestamp(µs))) AS Timestamp(ns, "+08:00")) AS a
               EmptyRelation: rows=0
           EmptyRelation: rows=0
         "#,

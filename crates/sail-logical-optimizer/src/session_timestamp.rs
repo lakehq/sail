@@ -29,7 +29,8 @@ use sail_function::scalar::datetime::convert_tz::{ConvertTz, has_timestamp_ntz};
 /// Other casts to the session time zone convert like Spark, which moves a wall-clock time in a DST
 /// gap forward and resolves one in an overlap to the earlier offset. Arrow's cast fails for them,
 /// and the optimizer would unwrap it by reading the constant's UTC epoch as a wall-clock time,
-/// whereas the optimizer unwraps the conversion like Spark when a comparison forms later.
+/// whereas the optimizer unwraps the conversion like Spark when a comparison forms later. A fixed
+/// offset converts too, since Arrow's cast panics near the ends of Chrono's range.
 pub(crate) fn convert_session_timestamp_casts(
     plan: LogicalPlan,
     config: &ConfigOptions,
@@ -39,7 +40,7 @@ pub(crate) fn convert_session_timestamp_casts(
     };
     let rewriter = Rewriter {
         timezone,
-        converts: !is_fixed_zero_offset_timezone(timezone) && !timezone.starts_with(['+', '-']),
+        converts: !is_fixed_zero_offset_timezone(timezone),
         config,
         simplifier: OnceCell::new(),
     };
