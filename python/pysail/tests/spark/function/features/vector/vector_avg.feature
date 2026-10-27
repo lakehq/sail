@@ -60,6 +60,71 @@ Feature: vector_avg
         | result |
         | []     |
 
+    Scenario: the output column is named after the call
+      When query
+        """
+        SELECT vector_avg(col) FROM VALUES (array(1.0F, 2.0F)) AS tab(col)
+        """
+      Then query schema
+        """
+        root
+         |-- vector_avg(col): array (nullable = true)
+         |    |-- element: float (containsNull = false)
+        """
+
+    Scenario: NaN, infinities and float overflow follow single-precision arithmetic
+      When query
+        """
+        SELECT vector_avg(col) AS result
+        FROM VALUES
+          (array(CAST('NaN' AS FLOAT), CAST('Infinity' AS FLOAT), 3.0E38F)),
+          (array(1.0F, 1.0F, -3.0E38F))
+        AS tab(col)
+        """
+      Then query result
+        | result                |
+        | [NaN, NaN, -Infinity] |
+
+    Scenario: DISTINCT averages each distinct vector once
+      When query
+        """
+        SELECT vector_avg(DISTINCT col) AS result
+        FROM VALUES (array(1.0F, 2.0F)), (array(1.0F, 2.0F)), (array(4.0F, 8.0F)) AS tab(col)
+        """
+      Then query result
+        | result     |
+        | [2.5, 5.0] |
+
+    Scenario: DISTINCT next to another aggregate averages each distinct vector once
+      When query
+        """
+        SELECT vector_avg(DISTINCT v) AS result, count(*) AS n
+        FROM VALUES (1, array(1.0F, 2.0F)), (2, array(1.0F, 2.0F)), (3, array(4.0F, 8.0F)) AS t(k, v)
+        """
+      Then query result
+        | result     | n |
+        | [2.5, 5.0] | 3 |
+
+    Scenario: DISTINCT with FILTER averages each distinct vector once
+      When query
+        """
+        SELECT vector_avg(DISTINCT v) FILTER (WHERE k > 0) AS result
+        FROM VALUES (1, array(1.0F, 2.0F)), (2, array(1.0F, 2.0F)), (3, array(4.0F, 8.0F)) AS t(k, v)
+        """
+      Then query result
+        | result     |
+        | [2.5, 5.0] |
+
+    Scenario: FILTER limits the vectors averaged
+      When query
+        """
+        SELECT vector_avg(v) FILTER (WHERE k > 1) AS result
+        FROM VALUES (1, array(100.0F)), (2, array(2.0F)), (3, array(4.0F)) AS t(k, v)
+        """
+      Then query result
+        | result |
+        | [3.0]  |
+
   Rule: Precision
 
     Scenario: a long ordered sequence follows Spark's single-precision running mean
@@ -136,6 +201,19 @@ Feature: vector_avg
       Then query result
         | result |
         | NULL   |
+
+    Scenario: a group of only null vectors returns NULL next to other groups
+      When query
+        """
+        SELECT k, vector_avg(v) AS result
+        FROM VALUES ('a', array(1.0F)), ('b', CAST(NULL AS ARRAY<FLOAT>)) AS t(k, v)
+        GROUP BY k
+        ORDER BY k
+        """
+      Then query result
+        | k | result |
+        | a | [1.0]  |
+        | b | NULL   |
 
   Rule: Window usage
 
@@ -265,3 +343,18 @@ Feature: vector_avg
         FROM VALUES (1.0F) AS tab(col)
         """
       Then query error (?i)(DATATYPE_MISMATCH|UNEXPECTED_INPUT_TYPE|ARRAY|FLOAT|vector_avg)
+
+    Scenario: an empty vector followed by a non-empty one is rejected
+      When query
+        """
+        SELECT vector_avg(col) AS result
+        FROM VALUES (CAST(array() AS ARRAY<FLOAT>)), (array(1.0F)) AS tab(col)
+        """
+      Then query error (?i)(VECTOR_DIMENSION_MISMATCH|matching dimensions)
+
+    Scenario: untyped NULL input is rejected
+      When query
+        """
+        SELECT vector_avg(NULL) AS result
+        """
+      Then query error (?i)(DATATYPE_MISMATCH|UNEXPECTED_INPUT_TYPE|ARRAY<FLOAT>)

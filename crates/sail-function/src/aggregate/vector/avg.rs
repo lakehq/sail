@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -9,7 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{
     as_float32_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, not_impl_err, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{AggregateUDFImpl, Signature, Volatility};
@@ -162,6 +162,103 @@ impl Accumulator for VectorAvgAccumulator {
     }
 }
 
+fn float_vectors_field() -> FieldRef {
+    Arc::new(Field::new_list_field(float_vector_type(), false))
+}
+
+/// Spark normalizes NaN and -0.0 in grouping keys before it removes duplicates
+/// (`NormalizeFloatingNumbers`), so `DISTINCT` treats them as one value.
+fn normalize(value: f32) -> f32 {
+    if value.is_nan() {
+        f32::NAN
+    } else if value == 0.0 {
+        0.0
+    } else {
+        value
+    }
+}
+
+/// Accumulator for `vector_avg(DISTINCT ...)`.
+///
+/// Each distinct vector enters the running mean once, when it is first seen.
+/// The state is the list of distinct vectors, as the bits of their elements.
+#[derive(Debug, Default)]
+struct VectorAvgDistinctAccumulator {
+    seen: HashSet<Vec<u32>>,
+    avg: VectorAvgAccumulator,
+}
+
+impl VectorAvgDistinctAccumulator {
+    fn insert(&mut self, vector: &[f32]) -> Result<()> {
+        let vector = vector.iter().copied().map(normalize).collect::<Vec<_>>();
+        if self
+            .seen
+            .insert(vector.iter().map(|x| x.to_bits()).collect())
+        {
+            self.avg.update_vector(&vector)?;
+        }
+        Ok(())
+    }
+}
+
+impl Accumulator for VectorAvgDistinctAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        for_each_valid_vector(values, |vector| self.insert(vector))
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.avg.evaluate()
+    }
+
+    fn size(&self) -> usize {
+        let elements = self.seen.iter().map(Vec::capacity).sum::<usize>();
+        std::mem::size_of::<HashSet<Vec<u32>>>()
+            + self.seen.capacity() * std::mem::size_of::<Vec<u32>>()
+            + elements * std::mem::size_of::<u32>()
+            + self.avg.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        // Sorted, so that the running mean of the merged states does not
+        // depend on the hash order of the set.
+        let mut vectors = self.seen.iter().collect::<Vec<_>>();
+        vectors.sort_unstable();
+        let elements = Float32Array::from_iter_values(
+            vectors
+                .iter()
+                .flat_map(|vector| vector.iter().copied().map(f32::from_bits)),
+        );
+        let vectors = ListArray::try_new(
+            float_vector_field(),
+            OffsetBuffer::from_lengths(vectors.iter().map(|vector| vector.len())),
+            Arc::new(elements),
+            None,
+        )?;
+        let state = ListArray::try_new(
+            float_vectors_field(),
+            OffsetBuffer::from_lengths([vectors.len()]),
+            Arc::new(vectors),
+            None,
+        )?;
+        Ok(vec![ScalarValue::List(Arc::new(state))])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let [states] = states else {
+            return exec_err!(
+                "vector_avg expects one distinct state column, got {}",
+                states.len()
+            );
+        };
+        for vectors in as_list_array(states)?.iter().flatten() {
+            for vector in as_list_array(&vectors)?.iter().flatten() {
+                self.insert(as_float32_array(&vector)?.values())?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Accumulator for `vector_avg` over window frames whose start moves.
 ///
 /// Spark evaluates such frames by aggregating every row in the frame again,
@@ -263,15 +360,32 @@ impl AggregateUDFImpl for VectorAvg {
         }
     }
 
-    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VectorAvgAccumulator::default()))
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if acc_args.is_distinct {
+            Ok(Box::new(VectorAvgDistinctAccumulator::default()))
+        } else {
+            Ok(Box::new(VectorAvgAccumulator::default()))
+        }
     }
 
-    fn create_sliding_accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if args.is_distinct {
+            return not_impl_err!("vector_avg(DISTINCT ...) over a sliding window frame");
+        }
         Ok(Box::new(VectorAvgSlidingAccumulator::default()))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        if args.is_distinct {
+            return Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "distinct"),
+                    DataType::List(float_vectors_field()),
+                    true,
+                )
+                .into(),
+            ]);
+        }
         Ok(vec![
             Field::new(
                 format_state_name(args.name, "avg"),
@@ -428,6 +542,29 @@ mod tests {
             result,
             Err(error) if error.to_string().contains("matching dimensions, got 2 and 1")
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_merges_partial_states_without_duplicates() -> Result<()> {
+        let mut left = VectorAvgDistinctAccumulator::default();
+        left.update_batch(&[vectors(vec![
+            Some(vec![Some(1.0), Some(-0.0)]),
+            Some(vec![Some(1.0), Some(0.0)]),
+        ])])?;
+        let mut right = VectorAvgDistinctAccumulator::default();
+        right.update_batch(&[vectors(vec![
+            Some(vec![Some(1.0), Some(0.0)]),
+            Some(vec![Some(4.0), Some(8.0)]),
+        ])])?;
+        let mut empty = VectorAvgDistinctAccumulator::default();
+
+        let states = [left.state()?, right.state()?, empty.state()?];
+        let column = ScalarValue::iter_to_array(states.iter().map(|state| state[0].clone()))?;
+
+        let mut merged = VectorAvgDistinctAccumulator::default();
+        merged.merge_batch(&[column])?;
+        assert_eq!(result_vector(&merged.evaluate()?)?, Some(vec![2.5, 4.0]));
         Ok(())
     }
 
