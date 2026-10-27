@@ -25,7 +25,8 @@ use crate::resolver::tree::window::WindowRewriter;
 
 /// Resolved expressions and the stable fields used by later aliases in the list.
 pub(super) struct LateralExpressions {
-    pub expressions: Vec<NamedExpr>,
+    pub expressions: Vec<Option<NamedExpr>>,
+    pub deferred: Vec<(usize, spec::Expr)>,
     pub columns: Vec<Column>,
     pub schema: DFSchemaRef,
 }
@@ -77,20 +78,20 @@ impl PlanResolver<'_> {
         expressions: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
-        let schema = Arc::clone(input.schema());
-        if let Ok(exprs) = self
-            .resolve_named_expressions(expressions.clone(), &schema, state)
-            .await
-        {
-            return Ok((input, exprs));
-        }
         let LateralExpressions {
-            mut expressions,
+            expressions,
             columns,
-            schema: _,
+            ..
         } = self
-            .resolve_lateral_expressions(expressions, &input, state)
+            .resolve_lateral_expressions(expressions, &input, false, state)
             .await?;
+        let mut expressions = expressions
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| PlanError::internal("unexpected deferred projection"))?;
+        if columns.is_empty() {
+            return Ok((input, expressions));
+        }
         let aggregates = datafusion_expr::utils::find_aggregate_exprs(
             &expressions
                 .iter()
@@ -139,32 +140,44 @@ impl PlanResolver<'_> {
         &self,
         expressions: Vec<spec::Expr>,
         input: &LogicalPlan,
+        defer_unresolved: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LateralExpressions> {
         let mut schema = Arc::clone(input.schema());
         let mut aliases = vec![];
         let mut resolved = vec![];
         let mut columns = vec![];
+        let mut deferred = vec![];
+        let mut has_dependencies = false;
+        let mut has_multi_alias = false;
         for expression in expressions {
             let named = {
                 let mut scope =
                     state.enter_aggregate_scope(crate::resolver::state::AggregateState::Lateral {
                         projections: aliases.clone(),
                     });
-                self.resolve_named_expression(expression, &schema, scope.state())
-                    .await?
+                self.resolve_named_expression(expression.clone(), &schema, scope.state())
+                    .await
+            };
+            let named = match named {
+                Ok(named) => named,
+                Err(_) if defer_unresolved => {
+                    deferred.push((resolved.len(), expression));
+                    resolved.push(None);
+                    columns.push(Column::new_unqualified(state.register_lateral_field(None)?));
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             let expanded = if matches!(named.expr, Expr::Wildcard { .. }) {
                 self.rewrite_wildcard(input.clone(), vec![named], state)?.1
             } else {
                 vec![named]
             };
+            let expanded = self.rewrite_multi_expr(expanded)?;
             for named in expanded {
-                if named.name.len() != 1 {
-                    return Err(PlanError::analysis(
-                        "unsupported lateral alias with generator",
-                    ));
-                }
+                has_dependencies |= named.expr.column_refs().iter().any(|c| columns.contains(c));
+                has_multi_alias |= named.name.len() != 1;
                 for aggregate in
                     datafusion_expr::utils::find_aggregate_exprs(std::slice::from_ref(&named.expr))
                 {
@@ -181,12 +194,22 @@ impl PlanResolver<'_> {
                 let (qualifier, name) = if let Expr::Column(column) = &named.expr {
                     (
                         column.relation.clone(),
-                        state.register_identity_field(String::new(), column.name())?,
+                        state.register_lateral_field(Some(column.name()))?,
                     )
                 } else {
-                    (None, state.register_field_name(""))
+                    (None, state.register_lateral_field(None)?)
                 };
-                let (_, field) = named.expr.to_field(&schema)?;
+                let column = Column::new(qualifier.clone(), &name);
+                columns.push(column.clone());
+                // Generators and expressions awaiting type analysis need no staged
+                // field unless a later expression actually references their alias.
+                let field = match named.expr.to_field(&schema) {
+                    Ok((_, field)) if named.name.len() == 1 => field,
+                    _ => {
+                        resolved.push(Some(named));
+                        continue;
+                    }
+                };
                 let mut fields = schema
                     .iter()
                     .map(|(q, f)| (q.cloned(), Arc::clone(f)))
@@ -199,17 +222,25 @@ impl PlanResolver<'_> {
                     fields,
                     schema.metadata().clone(),
                 )?);
-                let column = Column::new(qualifier, name);
                 aliases.push(NamedExpr {
                     expr: Expr::Column(column.clone()),
                     ..named.clone()
                 });
-                columns.push(column);
-                resolved.push(named);
+                resolved.push(Some(named));
             }
+        }
+        if has_dependencies && has_multi_alias {
+            return Err(PlanError::analysis(
+                "unsupported lateral alias with generator",
+            ));
+        }
+        if !has_dependencies {
+            columns.clear();
+            schema = Arc::clone(input.schema());
         }
         Ok(LateralExpressions {
             expressions: resolved,
+            deferred,
             columns,
             schema,
         })

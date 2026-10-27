@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
-use datafusion_expr::{ScalarUDF, col, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
@@ -100,10 +100,21 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if plan_id.is_none()
-            && let Some((name, expr)) =
-                self.resolve_aggregate_field(&name, state.get_lateral_projections())?
+            && matches!(local, FieldResolution::Missing)
+            && let [root, inner @ ..] = name.parts()
+            && let Some((_, expr)) = self.resolve_aggregate_field(
+                &spec::ObjectName::from(vec![root.clone()]),
+                state.get_lateral_projections(),
+            )?
         {
-            return Ok(NamedExpr::new(vec![name], expr));
+            let data_type = expr.get_type(schema)?;
+            let expr = self
+                .resolve_potentially_nested_field(expr, &data_type, inner)?
+                .ok_or_else(|| {
+                    PlanError::analysis(format!("cannot resolve lateral alias: {name:?}"))
+                })?;
+            let display = inner.last().unwrap_or(root).as_ref().to_string();
+            return Ok(NamedExpr::new(vec![display], expr));
         }
         if self.config.group_by_aliases
             && let Some((name, expr)) =

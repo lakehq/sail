@@ -363,21 +363,21 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_GROUP_BY_ALIASES)
-            .map(|x| x.trim().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.group_by_aliases = value;
         }
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_GROUP_BY_ORDINAL)
-            .map(|x| x.trim().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.group_by_ordinal = value;
         }
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_ORDER_BY_ORDINAL)
-            .map(|x| x.trim().parse::<bool>())
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?
         {
             output.order_by_ordinal = value;

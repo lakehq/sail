@@ -436,3 +436,22 @@ Feature: Grouping and sort resolution
       | g | s |
       | 5 | 5 |
       | 2 | 4 |
+
+  Scenario Outline: Grouping and ordering options accept mixed case booleans
+    Given config spark.sql.groupByAliases = <value>
+    Given config spark.sql.groupByOrdinal = <value>
+    Given config spark.sql.orderByOrdinal = <value>
+    When query
+      """
+      SELECT 1 AS x GROUP BY 1 ORDER BY 1
+      """
+    Then query result collected
+      | x |
+      | 1 |
+
+    Examples:
+      | value |
+      | FALSE |
+      | FaLsE |
+      | TRUE  |
+      | TrUe  |

@@ -42,7 +42,7 @@ use crate::resolver::tree::window::WindowRewriter;
 /// A `None` marks a projection deferred until grouping is materialized.
 struct ResolvedProjections {
     expressions: Vec<Option<NamedExpr>>,
-    deferred: Vec<usize>,
+    deferred: Vec<(usize, spec::Expr)>,
     lateral_columns: Vec<Column>,
     schema: DFSchemaRef,
 }
@@ -159,7 +159,6 @@ impl PlanResolver<'_> {
             .finish_projections(
                 resolved_projections,
                 deferred_projections,
-                &projections,
                 &generator_replacements,
                 schema,
                 state,
@@ -984,57 +983,22 @@ impl PlanResolver<'_> {
             .collect()
     }
 
-    /// Resolves the projections against the input. If that fails, resolves each one
-    /// individually and defers (by index) those that cannot resolve yet because they
-    /// reference a grouping output not in scope until the grouping is materialized.
+    /// Resolve each projection once, deferring only expressions that need the
+    /// grouping output to be materialized before their names can resolve.
     async fn resolve_projections_deferring(
         &self,
         projections: &[spec::Expr],
         input: &LogicalPlan,
         state: &mut PlanResolverState,
     ) -> PlanResult<ResolvedProjections> {
-        let schema = input.schema();
-        if let Ok(resolved) = self
-            .resolve_named_expressions(projections.to_vec(), schema, state)
-            .await
-        {
-            return Ok(ResolvedProjections {
-                expressions: resolved.into_iter().map(Some).collect(),
-                deferred: vec![],
-                lateral_columns: vec![],
-                schema: Arc::clone(schema),
-            });
-        }
-        if let Ok(resolved) = self
-            .resolve_lateral_expressions(projections.to_vec(), input, state)
-            .await
-        {
-            return Ok(ResolvedProjections {
-                expressions: resolved.expressions.into_iter().map(Some).collect(),
-                deferred: vec![],
-                lateral_columns: resolved.columns,
-                schema: resolved.schema,
-            });
-        }
-        let mut resolved = Vec::with_capacity(projections.len());
-        let mut deferred = vec![];
-        for (index, projection) in projections.iter().enumerate() {
-            match self
-                .resolve_named_expression(projection.clone(), schema, state)
-                .await
-            {
-                Ok(named) => resolved.push(Some(named)),
-                Err(_) => {
-                    resolved.push(None);
-                    deferred.push(index);
-                }
-            }
-        }
+        let resolved = self
+            .resolve_lateral_expressions(projections.to_vec(), input, true, state)
+            .await?;
         Ok(ResolvedProjections {
-            expressions: resolved,
-            deferred,
-            lateral_columns: vec![],
-            schema: Arc::clone(schema),
+            expressions: resolved.expressions,
+            deferred: resolved.deferred,
+            lateral_columns: resolved.columns,
+            schema: resolved.schema,
         })
     }
 
@@ -1043,15 +1007,14 @@ impl PlanResolver<'_> {
     async fn finish_projections(
         &self,
         mut resolved: Vec<Option<NamedExpr>>,
-        deferred: Vec<usize>,
-        projections: &[spec::Expr],
+        deferred: Vec<(usize, spec::Expr)>,
         generator_replacements: &[(Expr, Expr)],
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Vec<NamedExpr>> {
-        for index in deferred {
+        for (index, projection) in deferred {
             resolved[index] = Some(
-                self.resolve_named_expression(projections[index].clone(), schema, state)
+                self.resolve_named_expression(projection, schema, state)
                     .await?,
             );
         }

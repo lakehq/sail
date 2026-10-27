@@ -349,3 +349,65 @@ Feature: Projection and alias resolution
     Then query result collected
       | x | y | z |
       | 3 | 4 | 5 |
+
+  Scenario Outline: Lateral aliases expose nested struct fields
+    Given config spark.sql.caseSensitive = <case_sensitive>
+    When query
+      """
+      SELECT named_struct('nested', named_struct('v', 1)) AS s,
+             s.<field>.v + 1 AS n,
+             array(s) AS items,
+             items.<field>.v AS values
+      """
+    Then query result collected
+      | s                   | n | items                 | values |
+      | Row(nested=Row(v=1)) | 2 | [Row(nested=Row(v=1))] | [1]    |
+
+    Examples:
+      | case_sensitive | field  |
+      | false          | NESTED |
+      | true           | nested |
+
+  Scenario: Input struct fields take precedence over a lateral alias
+    When query
+      """
+      SELECT named_struct('v', 1) AS s, s.v AS n
+      FROM VALUES (named_struct('v', 10)) t(s)
+      """
+    Then query result collected
+      | s        | n  |
+      | Row(v=1) | 10 |
+
+  Scenario: An invalid local struct field does not resolve through a lateral alias
+    When query
+      """
+      SELECT named_struct('v', 1) AS s, s.v AS n
+      FROM VALUES (named_struct('other', 10)) t(s)
+      """
+    Then query error (?i)(cannot resolve|unresolved|not found|no such struct field)
+
+  Scenario Outline: Lateral aliases take precedence over outer references
+    When query
+      """
+      SELECT q.x
+      FROM VALUES (10) t(a),
+        LATERAL (SELECT 1 AS a, a + 1 AS x <grouping>) q
+      """
+    Then query result collected
+      | x |
+      | 2 |
+
+    Examples:
+      | grouping   |
+      |            |
+      | GROUP BY 1 |
+
+  Scenario: Select aliases do not shadow outer input columns inside a subquery
+    When query
+      """
+      SELECT 1 AS a, (SELECT 2 WHERE a = 10) AS b
+      FROM VALUES (10) t(a)
+      """
+    Then query result collected
+      | a | b |
+      | 1 | 2 |

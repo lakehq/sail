@@ -662,9 +662,27 @@ def test_lateral_alias_chain_uses_materialized_values(spark, aggregate):
     assert result[0].a30 == 2**30
 
 
-def test_alias_over_using_join_keeps_hidden_key_provenance(spark):
-    left = spark.sql("SELECT 1 AS id, 'left' AS a").alias("l")
-    right = spark.sql("SELECT 1 AS id, 'right' AS b").alias("r")
-    joined = left.join(right, "id").alias("q")
+@pytest.mark.parametrize(
+    ("how", "expected"),
+    [
+        ("inner", [(1, 1, 1)]),
+        ("left", [(1, 1, 1), (2, 2, None)]),
+        ("right", [(1, 1, 1), (3, None, 3)]),
+        ("full", [(1, 1, 1), (2, 2, None), (3, None, 3)]),
+    ],
+)
+def test_alias_over_using_join_keeps_hidden_key_provenance(spark, how, expected):
+    left = spark.sql("SELECT * FROM VALUES (1, 'left'), (2, 'left') t(id, a)").alias("l")
+    right = spark.sql("SELECT * FROM VALUES (1, 'right'), (3, 'right') t(id, b)").alias("r")
+    joined = left.join(right, "id", how).alias("q")
     assert joined.select("q.*").columns == ["id", "a", "b"]
-    assert [tuple(row) for row in joined.select("q.id", "l.id", "r.id").collect()] == [(1, 1, 1)]
+    assert Counter(joined.select("q.id", "l.id", "r.id").collect()) == Counter(expected)
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("grouping", ["", " GROUP BY 1"])
+def test_nested_scalar_lateral_alias_schema(spark, grouping):
+    query = "SELECT 1"
+    for _ in range(16):
+        query = f"SELECT b FROM (SELECT ({query}) AS a, a AS b{grouping}) q"  # noqa: S608
+    assert spark.sql(query).dtypes == [("b", "int")]
