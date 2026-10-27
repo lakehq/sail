@@ -969,6 +969,31 @@ def test_external_parquet_timestamp_instant_roundtrip(spark, tmp_path):
 
 
 @pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("adjusted_to_utc", [False, True])
+@pytest.mark.parametrize(
+    ("lower", "upper"), [("2020-06-14", "2020-06-15"), ("2020-06-14 00:00:00", "2020-06-15 00:00:00")]
+)
+def test_external_parquet_timestamp_string_window(spark, tmp_path, adjusted_to_utc, lower, upper):
+    # String bounds cast to the column type, so the window is the day in the session time zone.
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    values = [datetime(2020, 6, 14, 12) + timedelta(minutes=30 * i) for i in range(24)]  # noqa: DTZ001
+    if adjusted_to_utc:
+        values = [value.replace(tzinfo=ZoneInfo(session_timezone)) for value in values]
+    data_type = pa.timestamp("us", tz=session_timezone if adjusted_to_utc else None)
+    path = tmp_path / "external.parquet"
+    pq.write_table(pa.table({"ts": pa.array(values, type=data_type)}), path, store_schema=False)
+
+    row = (
+        spark.read.parquet(str(path))
+        .filter(f"ts >= '{lower}' AND ts < '{upper}'")
+        .selectExpr("count(*) AS n", "CAST(min(ts) AS STRING) AS lo", "CAST(max(ts) AS STRING) AS hi")
+        .collect()[0]
+    )
+    assert (row.n, row.lo, row.hi) == (24, "2020-06-14 12:00:00", "2020-06-14 23:30:00")
+
+
+@pytest.mark.usefixtures("session_timezone")
 @pytest.mark.parametrize("unit", ["ms", "us"])
 @pytest.mark.parametrize("producer_timezone", [None, "UTC", "America/New_York"])
 @pytest.mark.parametrize(
