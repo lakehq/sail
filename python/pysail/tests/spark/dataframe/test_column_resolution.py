@@ -76,6 +76,36 @@ def test_full_using_join_preserves_bound_input_keys(source, other):
     assert result.dtypes == [("l", "bigint"), ("r", "bigint"), ("id", "bigint")]
 
 
+@pytest.mark.parametrize(
+    ("how", "expected"),
+    [
+        ("left", [(1, "a", 1, "x"), (2, "b", None, None)]),
+        ("inner", [(1, "a", 1, "x")]),
+        ("full", [(1, "a", 1, "x"), (2, "b", None, None), (None, None, 3, "y")]),
+        ("left_anti", [(2, "b", None, None)]),
+    ],
+)
+def test_using_join_preserves_qualified_stars_and_keys(spark, how, expected):
+    left = spark.createDataFrame([(1, "a"), (2, "b")], "id int, l string").alias("t")
+    right = spark.createDataFrame([(1, "x"), (3, "y")], "id int, r string").alias("s")
+    joined = left.join(right, on="id", how=how)
+
+    result = joined.select("t.*")
+    assert result.columns == ["id", "l"]
+    assert Counter(result.collect()) == Counter((row[0], row[1]) for row in expected)
+    assert Counter(joined.select("t.id").collect()) == Counter((row[0],) for row in expected)
+
+    if how != "left_anti":
+        result = joined.select("t.*", "s.r")
+        assert result.columns == ["id", "l", "r"]
+        assert Counter(result.collect()) == Counter((row[0], row[1], row[3]) for row in expected)
+        assert Counter(joined.select("s.id").collect()) == Counter((row[2],) for row in expected)
+
+    assert Counter(joined.select("id").collect()) == Counter(
+        (row[0] if row[0] is not None else row[2],) for row in expected
+    )
+
+
 def test_distinct_filter_recovers_hidden_column(source):
     result = source.select("id", "g").distinct().filter(f.col("v") > 15)
     expected = [

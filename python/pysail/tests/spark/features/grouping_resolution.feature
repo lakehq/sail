@@ -290,3 +290,23 @@ Feature: Grouping and sort resolution
       | v | n |
       | 1 | 2 |
       | 2 | 1 |
+
+  Scenario Outline: GROUP BY ALL matches explicit ordinal grouping
+    When query
+      """
+      SELECT k, count(*) AS n FROM VALUES (1), (1), (2) AS t(k)
+      GROUP BY <grouping> ORDER BY k
+      """
+    Then query result ordered
+      | k | n |
+      | 1 | 2 |
+      | 2 | 1 |
+    Then query column types
+      | column | type   |
+      | k      | int    |
+      | n      | bigint |
+
+    Examples:
+      | grouping |
+      | ALL      |
+      | 1        |

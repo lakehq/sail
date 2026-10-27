@@ -152,3 +152,31 @@ Feature: Projection and alias resolution
       | expression | value |
       | v          | 10    |
       | v + 100    | 110   |
+
+  Scenario: A qualified star includes the USING key in a SQL join
+    When query
+      """
+      SELECT t.*
+      FROM VALUES (1, 'a'), (2, 'b') AS t(id, l)
+      JOIN VALUES (1, 'x') AS s(id, r) USING (id)
+      """
+    Then query result collected
+      | id | l |
+      | 1  | a |
+    Then query column types
+      | column | type   |
+      | id     | int    |
+      | l      | string |
+
+  Scenario: A later projection references an alias without a FROM clause
+    When query
+      """
+      SELECT 1 AS a, a + 1 AS b
+      """
+    Then query result collected
+      | a | b |
+      | 1 | 2 |
+    Then query column types
+      | column | type |
+      | a      | int  |
+      | b      | int  |
