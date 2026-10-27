@@ -69,6 +69,68 @@ Feature: vector_sum
         | 2 | 1 | [5.0, 6.0] |
         | 2 | 2 | [5.0, 6.0] |
 
+    Scenario: bounded window removes departing vectors
+      When query
+        """
+        SELECT n,
+          vector_sum(v) OVER (
+            ORDER BY n ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+          ) AS total
+        FROM VALUES
+          (1, array(1.0F)),
+          (2, array(2.0F)),
+          (3, array(3.0F))
+        AS t(n, v)
+        ORDER BY n
+        """
+      Then query result ordered
+        | n | total |
+        | 1 | [1.0] |
+        | 2 | [3.0] |
+        | 3 | [5.0] |
+
+    Scenario: bounded window returns NULL when only null vectors or no rows remain
+      When query
+        """
+        SELECT n,
+          vector_sum(v) OVER (
+            ORDER BY n ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING
+          ) AS total
+        FROM VALUES
+          (1, array(1.0F)),
+          (2, CAST(NULL AS ARRAY<FLOAT>)),
+          (3, array(3.0F)),
+          (4, CAST(NULL AS ARRAY<FLOAT>))
+        AS t(n, v)
+        ORDER BY n
+        """
+      Then query result ordered
+        | n | total |
+        | 1 | [3.0] |
+        | 2 | [3.0] |
+        | 3 | NULL  |
+        | 4 | NULL  |
+
+    Scenario: bounded window validates dimensions only within the current frame
+      When query
+        """
+        SELECT n,
+          vector_sum(v) OVER (
+            ORDER BY n ROWS BETWEEN CURRENT ROW AND CURRENT ROW
+          ) AS total
+        FROM VALUES
+          (1, array(1.0F)),
+          (2, array(2.0F, 3.0F)),
+          (3, CAST(array() AS ARRAY<FLOAT>))
+        AS t(n, v)
+        ORDER BY n
+        """
+      Then query result ordered
+        | n | total      |
+        | 1 | [1.0]      |
+        | 2 | [2.0, 3.0] |
+        | 3 | []         |
+
   Rule: Null handling
 
     Scenario: null vectors and vectors containing null elements are skipped
@@ -142,6 +204,29 @@ Feature: vector_sum
         """
 
   Rule: Error cases
+
+    Scenario: DISTINCT window aggregates are not supported
+      When query
+        """
+        SELECT vector_sum(DISTINCT v) OVER (
+          ORDER BY n ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS total
+        FROM VALUES (1, array(1.0F)), (2, array(1.0F)) AS t(n, v)
+        """
+      Then query error (?i)(DISTINCT_WINDOW_FUNCTION_UNSUPPORTED|DISTINCT window functions are not supported)
+
+    Scenario: a bounded window rejects mismatched dimensions within a frame
+      When query
+        """
+        SELECT vector_sum(v) OVER (
+          ORDER BY n ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
+        ) AS total
+        FROM VALUES
+          (1, array(1.0F)),
+          (2, array(2.0F, 3.0F))
+        AS t(n, v)
+        """
+      Then query error (?i)(VECTOR_DIMENSION_MISMATCH|matching dimensions|dimension)
 
     Scenario: different dimensions produce an error
       When query

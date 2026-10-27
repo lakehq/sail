@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -73,6 +73,16 @@ impl AggregateUDFImpl for VectorSum {
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(VectorSumAccumulator::new(args.is_distinct)))
     }
+
+    fn create_sliding_accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        if args.is_distinct {
+            return plan_err!("DISTINCT window functions are not supported: vector_sum");
+        }
+        Ok(Box::new(VectorSumAccumulator {
+            window_vectors: Some(VecDeque::new()),
+            ..Default::default()
+        }))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -80,6 +90,7 @@ struct VectorSumAccumulator {
     sum: Option<Vec<f32>>,
     seen: Option<HashSet<Vec<OrderedFloat<f32>>>>,
     vectors: Vec<Vec<f32>>,
+    window_vectors: Option<VecDeque<Vec<f32>>>,
 }
 
 impl VectorSumAccumulator {
@@ -125,8 +136,50 @@ impl VectorSumAccumulator {
             let vector = vectors.value(row);
             let vector = vector.as_primitive::<Float32Type>();
             if vector.null_count() == 0 {
-                self.add(vector.values())?;
+                if let Some(window_vectors) = &mut self.window_vectors {
+                    window_vectors.push_back(vector.values().to_vec());
+                } else {
+                    self.add(vector.values())?;
+                }
             }
+        }
+        Ok(())
+    }
+
+    fn retract<O: OffsetSizeTrait>(&mut self, vectors: &GenericListArray<O>) -> Result<()> {
+        let Some(window_vectors) = &mut self.window_vectors else {
+            return exec_err!("vector_sum cannot retract from a non-sliding accumulator");
+        };
+        for row in 0..vectors.len() {
+            if vectors.is_null(row) {
+                continue;
+            }
+            let vector = vectors.value(row);
+            let vector = vector.as_primitive::<Float32Type>();
+            if vector.null_count() > 0 {
+                continue;
+            }
+            let Some(departing) = window_vectors.pop_front() else {
+                return exec_err!("vector_sum cannot retract a vector from an empty window");
+            };
+            if !departing
+                .iter()
+                .map(|value| value.to_bits())
+                .eq(vector.values().iter().map(|value| value.to_bits()))
+            {
+                return exec_err!("vector_sum retracted vector does not match the window input");
+            }
+        }
+        Ok(())
+    }
+
+    fn recompute_window_sum(&mut self) -> Result<()> {
+        if let Some(window_vectors) = &self.window_vectors {
+            let mut accumulator = Self::default();
+            for vector in window_vectors {
+                accumulator.add(vector)?;
+            }
+            self.sum = accumulator.sum;
         }
         Ok(())
     }
@@ -209,10 +262,12 @@ impl Accumulator for VectorSumAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.recompute_window_sum()?;
         self.result()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.recompute_window_sum()?;
         Ok(vec![if self.seen.is_some() {
             self.distinct_state()?
         } else {
@@ -260,6 +315,28 @@ impl Accumulator for VectorSumAccumulator {
                         .map(|v| v.capacity() * size_of::<OrderedFloat<f32>>())
                         .sum::<usize>()
             })
+            + self.window_vectors.as_ref().map_or(0, |vectors| {
+                vectors.capacity() * size_of::<Vec<f32>>()
+                    + vectors
+                        .iter()
+                        .map(|v| v.capacity() * size_of::<f32>())
+                        .sum::<usize>()
+            })
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        match values {
+            [array] => match array.data_type() {
+                DataType::List(_) => self.retract(as_list_array(array)),
+                DataType::LargeList(_) => self.retract(as_large_list_array(array)),
+                other => exec_err!("vector_sum expects an ARRAY<FLOAT>, got {other:?}"),
+            },
+            _ => exec_err!("vector_sum needs exactly one argument"),
+        }
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        self.window_vectors.is_some()
     }
 }
 
@@ -362,6 +439,48 @@ mod tests {
         empty_group.merge_batch(&[empty.state()?[0].to_array()?])?;
         assert!(!empty_group.evaluate()?.is_null());
         assert_eq!(empty_group.sum, Some(vec![]));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_window_retracts_valid_vectors_and_preserves_empty_frames() -> Result<()> {
+        let mut acc = VectorSumAccumulator {
+            window_vectors: Some(VecDeque::new()),
+            ..Default::default()
+        };
+        let first = Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            None,
+            Some(vec![Some(9.0), None]),
+            Some(vec![Some(1.0)]),
+        ])) as ArrayRef;
+        acc.update_batch(std::slice::from_ref(&first))?;
+        assert_eq!(acc.sum, None);
+        assert_eq!(
+            acc.evaluate()?.to_array()?.as_list::<i32>().value(0).len(),
+            1
+        );
+        let next = Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            Some(vec![Some(2.0), Some(3.0)]),
+        ])) as ArrayRef;
+        acc.update_batch(&[next])?;
+        acc.retract_batch(&[first])?;
+        assert_eq!(
+            acc.evaluate()?.to_array()?.as_list::<i32>().value(0).len(),
+            2
+        );
+        let last = Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            Some(vec![Some(2.0), Some(3.0)]),
+        ])) as ArrayRef;
+        acc.retract_batch(&[last])?;
+        assert!(acc.evaluate()?.is_null());
+
+        let empty = Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            Some(vec![]),
+        ])) as ArrayRef;
+        acc.update_batch(std::slice::from_ref(&empty))?;
+        assert!(!acc.evaluate()?.is_null());
+        acc.retract_batch(&[empty])?;
+        assert!(acc.evaluate()?.is_null());
         Ok(())
     }
 }

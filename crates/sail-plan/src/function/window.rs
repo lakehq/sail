@@ -156,6 +156,23 @@ fn spark_sum(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     })))
 }
 
+fn vector_sum(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    if input.distinct {
+        return Err(PlanError::unsupported(
+            "DISTINCT window functions are not supported: vector_sum",
+        ));
+    }
+    Ok(aggregate_udf_window_expr(
+        Arc::new(AggregateUDF::from(VectorSum::new())),
+        input.arguments,
+        input.partition_by,
+        input.order_by,
+        input.window_frame,
+        input.ignore_nulls,
+        false,
+    ))
+}
+
 fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let WinFunctionInput {
         arguments,
@@ -845,10 +862,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("var_pop", F::aggregate(variance::var_pop_udaf)),
         ("var_samp", F::aggregate(variance::var_samp_udaf)),
         ("variance", F::aggregate(variance::var_samp_udaf)),
-        (
-            "vector_sum",
-            F::aggregate(|| Arc::new(AggregateUDF::from(VectorSum::new()))),
-        ),
+        ("vector_sum", F::custom(vector_sum)),
     ]
 }
 
