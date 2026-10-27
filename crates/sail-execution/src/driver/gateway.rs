@@ -3,21 +3,24 @@ use std::sync::Arc;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use prost::Message;
 use sail_common::config::{AppConfig, GRPC_MAX_MESSAGE_LENGTH_DEFAULT};
-use sail_server::ServerBuilder;
+use sail_common::server::ServerBuilder;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tonic::codec::CompressionEncoding;
 use tonic::{Status, async_trait};
 
+use crate::driver::celeborn::service::CelebornLifecycleManagerServer;
+use crate::driver::r#gen::celeborn_lifecycle_manager_service_server::CelebornLifecycleManagerServiceServer;
 use crate::driver::r#gen::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
-use crate::driver::{DriverEvent, DriverRegistryAccessor};
+use crate::driver::{DriverMessage, DriverRegistryAccessor};
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{DriverId, TaskStreamKey};
+use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
 use crate::stream::r#gen::{DriverTaskStreamTicket, TaskStreamTicket};
 use crate::stream::reader::TaskStreamSource;
-use crate::stream_service::{TaskStreamFetcher, TaskStreamFlightServer, TaskStreamKeyDecoder};
+use crate::stream::service::{TaskStreamFetcher, TaskStreamFlightServer, TaskStreamKeyDecoder};
 
 enum DriverGatewayState {
     Pending {
@@ -34,6 +37,7 @@ enum DriverGatewayState {
 pub struct DriverGatewayOptions {
     pub listen_host: String,
     pub listen_port: u16,
+    pub flight_compression: ShuffleCompression,
 }
 
 impl DriverGatewayOptions {
@@ -41,6 +45,8 @@ impl DriverGatewayOptions {
         Self {
             listen_host: config.cluster.driver_listen_host.clone(),
             listen_port: config.cluster.driver_listen_port,
+            flight_compression: ShuffleBackendKind::from(&config.cluster.shuffle_backend)
+                .flight_compression(),
         }
     }
 }
@@ -78,7 +84,7 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
         self.registry
             .get(key.driver_id)
             .await?
-            .send(DriverEvent::FetchDriverStream {
+            .send(DriverMessage::FetchDriverStream {
                 key: key.stream,
                 result: sender,
             })
@@ -89,6 +95,7 @@ impl TaskStreamFetcher<DriverTaskStreamKey> for DriverTaskStreamFetcher {
 
 pub struct DriverGateway {
     port: u16,
+    flight_compression: ShuffleCompression,
     state: DriverGatewayState,
 }
 
@@ -98,6 +105,7 @@ impl DriverGateway {
         let port = listener.local_addr()?.port();
         Ok(Self {
             port,
+            flight_compression: options.flight_compression,
             state: DriverGatewayState::Pending { listener },
         })
     }
@@ -116,9 +124,18 @@ impl DriverGateway {
             .accept_compressed(CompressionEncoding::Zstd)
             .send_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Zstd);
+        let celeborn_service = CelebornLifecycleManagerServiceServer::new(
+            CelebornLifecycleManagerServer::new(registry.clone()),
+        )
+        .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
+        .accept_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Zstd)
+        .send_compressed(CompressionEncoding::Gzip)
+        .send_compressed(CompressionEncoding::Zstd);
         let flight_service =
             FlightServiceServer::new(TaskStreamFlightServer::<DriverTaskStreamKey>::new(
                 Box::new(DriverTaskStreamFetcher { registry }),
+                self.flight_compression,
             ))
             .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT)
             .accept_compressed(CompressionEncoding::Gzip)
@@ -129,6 +146,8 @@ impl DriverGateway {
         let handle = tokio::spawn(async move {
             ServerBuilder::new("sail_driver", Default::default())
                 .add_service(service, Some(crate::driver::r#gen::FILE_DESCRIPTOR_SET))
+                .await
+                .add_service(celeborn_service, None)
                 .await
                 .add_service(flight_service, None)
                 .await

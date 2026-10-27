@@ -7,12 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::Span;
 use fastrace::future::FutureExt;
-use futures::Stream;
-use futures::stream::{StreamExt, TryStreamExt};
+use futures::stream::StreamExt;
+use futures::{Stream, stream};
+use sail_common_datafusion::schema::{normalize_record_batch, record_batch_has_views};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -28,6 +30,7 @@ use crate::spark::connect::{
 
 #[derive(Clone, Debug)]
 pub enum ExecutorBatch {
+    Heartbeat,
     ArrowBatch(ArrowBatch),
     SqlCommandResult(Box<SqlCommandResult>),
     WriteStreamOperationStartResult(Box<WriteStreamOperationStartResult>),
@@ -57,23 +60,30 @@ impl ExecutorOutput {
     }
 }
 
-pub type ExecutorOutputStream = Pin<Box<dyn Stream<Item = ExecutorOutput> + Send>>;
+pub type ExecutorOutputStream = Pin<Box<dyn Stream<Item = SparkResult<ExecutorOutput>> + Send>>;
 
 struct ExecutorBuffer {
+    capacity: usize,
     inner: VecDeque<ExecutorOutput>,
 }
 
+// TODO: use "spark.connect.execute.reattachable.observerRetryBufferSize"
+// TODO: limit the size based on serialized message size instead of element count
+const EXECUTOR_BUFFER_CAPACITY: usize = 128;
+
 impl ExecutorBuffer {
-    fn new() -> Self {
-        // TODO: use "spark.connect.execute.reattachable.observerRetryBufferSize"
-        // TODO: limit the size based on serialized message size instead of element count
+    fn new(capacity: usize) -> Self {
         Self {
-            inner: VecDeque::with_capacity(128),
+            capacity,
+            inner: VecDeque::with_capacity(capacity),
         }
     }
 
     fn add(&mut self, output: ExecutorOutput) {
-        if self.inner.len() >= self.inner.capacity() {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.inner.len() >= self.capacity {
             self.inner.pop_front();
         }
         self.inner.push_back(output);
@@ -112,6 +122,9 @@ enum ExecutorState {
         task: ExecutorTask,
         span: Span,
     },
+    Completed {
+        buffer: Arc<Mutex<ExecutorBuffer>>,
+    },
     Pausing,
     Failed(SparkError),
 }
@@ -125,37 +138,76 @@ struct ExecutorTask {
 struct ExecutorTaskContext {
     stream: SendableRecordBatchStream,
     heartbeat_interval: Duration,
+    state: ExecutorTaskState,
     buffer: Arc<Mutex<ExecutorBuffer>>,
 }
 
-impl ExecutorTaskContext {
-    fn new(stream: SendableRecordBatchStream, heartbeat_interval: Duration) -> Self {
-        Self {
-            stream,
-            heartbeat_interval,
-            buffer: Arc::new(Mutex::new(ExecutorBuffer::new())),
-        }
+pub(crate) enum ExecutorMode {
+    Query,
+    Command {
+        completion: CommandCompletionHandler,
+    },
+}
+
+impl ExecutorMode {
+    pub(crate) fn command() -> Self {
+        Self::command_with_completion(|_, _| Ok(None))
     }
 
-    async fn next(&mut self) -> SparkResult<Option<RecordBatch>> {
+    pub(crate) fn command_with_completion(
+        completion: impl FnOnce(SchemaRef, Vec<RecordBatch>) -> SparkResult<Option<ExecutorOutput>>
+        + Send
+        + 'static,
+    ) -> Self {
+        Self::Command {
+            completion: Box::new(completion),
+        }
+    }
+}
+
+pub(crate) enum ExecutorTaskState {
+    Query,
+    Command {
+        batches: Vec<RecordBatch>,
+        completion: Option<CommandCompletionHandler>,
+    },
+    Completed,
+}
+
+enum ExecutorTaskItem {
+    Batch(Option<RecordBatch>),
+    Heartbeat,
+}
+
+pub(crate) type CommandCompletionHandler =
+    Box<dyn FnOnce(SchemaRef, Vec<RecordBatch>) -> SparkResult<Option<ExecutorOutput>> + Send>;
+
+impl ExecutorTaskContext {
+    async fn next(
+        stream: &mut SendableRecordBatchStream,
+        heartbeat_interval: Duration,
+    ) -> SparkResult<ExecutorTaskItem> {
         let span = Span::enter_with_local_parent("ExecutorTaskContext::next");
         tokio::select! {
-            batch = self.stream.next().in_span(span) => Ok(batch.transpose()?),
-            _ = tokio::time::sleep(self.heartbeat_interval) => {
-                Ok(Some(RecordBatch::new_empty(self.stream.schema())))
+            batch = stream.next().in_span(span) => Ok(ExecutorTaskItem::Batch(batch.transpose()?)),
+            _ = tokio::time::sleep(heartbeat_interval) => {
+                // FIXME: non-reattachable clients cannot refresh session activity by releasing heartbeat responses
+                Ok(ExecutorTaskItem::Heartbeat)
             }
         }
     }
 
-    fn save_output(&self, output: &ExecutorOutput) -> SparkResult<()> {
-        let mut buffer = self.buffer.lock()?;
-        buffer.add(output.clone());
+    async fn send_output(
+        buffer: &Arc<Mutex<ExecutorBuffer>>,
+        tx: &mpsc::Sender<SparkResult<ExecutorOutput>>,
+        output: ExecutorOutput,
+    ) -> SparkResult<()> {
+        {
+            let mut buffer = buffer.lock()?;
+            buffer.add(output.clone());
+        }
+        tx.send(Ok(output)).await?;
         Ok(())
-    }
-
-    fn replay_outputs(&self) -> SparkResult<Vec<ExecutorOutput>> {
-        let buffer = self.buffer.lock()?;
-        Ok(buffer.iter().cloned().collect())
     }
 }
 
@@ -170,70 +222,181 @@ impl Executor {
         metadata: ExecutorMetadata,
         stream: SendableRecordBatchStream,
         heartbeat_interval: Duration,
+        mode: ExecutorMode,
     ) -> Self {
+        let state = match mode {
+            ExecutorMode::Query => ExecutorTaskState::Query,
+            ExecutorMode::Command { completion } => ExecutorTaskState::Command {
+                batches: vec![],
+                completion: Some(completion),
+            },
+        };
+        let buffer = if metadata.reattachable {
+            ExecutorBuffer::new(EXECUTOR_BUFFER_CAPACITY)
+        } else {
+            ExecutorBuffer::new(0)
+        };
         Self {
             metadata,
             state: Mutex::new(ExecutorState::Pending {
-                context: ExecutorTaskContext::new(stream, heartbeat_interval),
+                context: ExecutorTaskContext {
+                    stream,
+                    heartbeat_interval,
+                    state,
+                    buffer: Arc::new(Mutex::new(buffer)),
+                },
                 span: Span::enter_with_local_parent("Executor::new"),
+            }),
+        }
+    }
+
+    pub(crate) fn completed(metadata: ExecutorMetadata, outputs: Vec<ExecutorOutput>) -> Self {
+        let mut buffer = ExecutorBuffer::new(outputs.len());
+        for output in outputs {
+            buffer.add(output);
+        }
+        Self {
+            metadata,
+            state: Mutex::new(ExecutorState::Completed {
+                buffer: Arc::new(Mutex::new(buffer)),
             }),
         }
     }
 
     async fn run_internal(
         context: &mut ExecutorTaskContext,
-        tx: mpsc::Sender<ExecutorOutput>,
+        tx: &mpsc::Sender<SparkResult<ExecutorOutput>>,
+        reattachable: bool,
     ) -> SparkResult<()> {
-        for out in context.replay_outputs()? {
-            tx.send(out).await?;
+        let outputs = {
+            let buffer = context.buffer.lock()?;
+            buffer.iter().cloned().collect::<Vec<_>>()
+        };
+        for output in outputs {
+            tx.send(Ok(output)).await?;
         }
-        let schema = to_spark_schema(context.stream.schema())?;
-        let out = ExecutorOutput::new(ExecutorBatch::Schema(Box::new(schema)));
-        context.save_output(&out)?;
-        tx.send(out).await?;
+        match &mut context.state {
+            ExecutorTaskState::Query => {
+                let schema = to_spark_schema(context.stream.schema())?;
+                ExecutorTaskContext::send_output(
+                    &context.buffer,
+                    tx,
+                    ExecutorOutput::new(ExecutorBatch::Schema(Box::new(schema))),
+                )
+                .await?;
 
-        let mut empty = true;
-        while let Some(batch) = context.next().await? {
-            let batch = to_arrow_batch(&batch)?;
-            let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
-            context.save_output(&out)?;
-            tx.send(out).await?;
-            empty = false;
+                let mut empty = true;
+                loop {
+                    match ExecutorTaskContext::next(&mut context.stream, context.heartbeat_interval)
+                        .await?
+                    {
+                        ExecutorTaskItem::Batch(Some(batch)) => {
+                            let batch = to_arrow_batch(&batch)?;
+                            ExecutorTaskContext::send_output(
+                                &context.buffer,
+                                tx,
+                                ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch)),
+                            )
+                            .await?;
+                            empty = false;
+                        }
+                        ExecutorTaskItem::Batch(None) => break,
+                        ExecutorTaskItem::Heartbeat => {
+                            ExecutorTaskContext::send_output(
+                                &context.buffer,
+                                tx,
+                                ExecutorOutput::new(ExecutorBatch::Heartbeat),
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                if empty {
+                    let batch = RecordBatch::new_empty(context.stream.schema());
+                    let batch = to_arrow_batch(&batch)?;
+                    ExecutorTaskContext::send_output(
+                        &context.buffer,
+                        tx,
+                        ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch)),
+                    )
+                    .await?;
+                }
+            }
+            ExecutorTaskState::Command {
+                batches,
+                completion,
+            } => {
+                loop {
+                    match ExecutorTaskContext::next(&mut context.stream, context.heartbeat_interval)
+                        .await?
+                    {
+                        ExecutorTaskItem::Batch(Some(batch)) => {
+                            batches.push(batch);
+                        }
+                        ExecutorTaskItem::Batch(None) => break,
+                        ExecutorTaskItem::Heartbeat => {
+                            ExecutorTaskContext::send_output(
+                                &context.buffer,
+                                tx,
+                                ExecutorOutput::new(ExecutorBatch::Heartbeat),
+                            )
+                            .await?;
+                        }
+                    }
+                }
+                let schema = context.stream.schema();
+                let output = completion
+                    .take()
+                    .map(|completion| completion(schema, mem::take(batches)))
+                    .transpose()?
+                    .flatten();
+                if let Some(output) = output {
+                    ExecutorTaskContext::send_output(&context.buffer, tx, output).await?;
+                }
+            }
+            ExecutorTaskState::Completed => return Ok(()),
         }
-        if empty {
-            let batch = RecordBatch::new_empty(context.stream.schema());
-            let batch = to_arrow_batch(&batch)?;
-            let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
-            context.save_output(&out)?;
-            tx.send(out).await?;
+        // A disconnect while sending completion must only replay the buffered response.
+        context.state = ExecutorTaskState::Completed;
+        if reattachable {
+            ExecutorTaskContext::send_output(&context.buffer, tx, ExecutorOutput::complete())
+                .await?;
         }
-
-        let out = ExecutorOutput::new(ExecutorBatch::Complete);
-        context.save_output(&out)?;
-        tx.send(out).await?;
         Ok(())
     }
 
     async fn run(
         mut context: ExecutorTaskContext,
         listener: oneshot::Receiver<()>,
-        tx: mpsc::Sender<ExecutorOutput>,
+        tx: mpsc::Sender<SparkResult<ExecutorOutput>>,
+        reattachable: bool,
     ) -> ExecutorTaskResult {
         let out = tokio::select! {
-            x = Executor::run_internal(&mut context, tx) => x,
+            x = Executor::run_internal(&mut context, &tx, reattachable) => x,
             _ = listener => return ExecutorTaskResult::Paused(context),
         };
         match out {
             Ok(()) => ExecutorTaskResult::Completed,
             Err(SparkError::SendError(_)) => ExecutorTaskResult::Paused(context),
-            Err(e) => ExecutorTaskResult::Failed(e),
+            Err(e) => {
+                let _ = tx.send(Err(e)).await;
+                // TODO: track the original error in the task result
+                ExecutorTaskResult::Failed(SparkError::internal(
+                    "task failed while executing the plan",
+                ))
+            }
         }
     }
 
-    pub(crate) fn start(&self) -> SparkResult<ReceiverStream<ExecutorOutput>> {
+    pub(crate) fn start(&self) -> SparkResult<ExecutorOutputStream> {
         let mut state = self.state.lock()?;
         let (context, span) = match mem::replace(state.deref_mut(), ExecutorState::Idle) {
             ExecutorState::Pending { context, span } => (context, span),
+            ExecutorState::Completed { buffer } => {
+                let outputs = buffer.lock()?.iter().cloned().collect::<Vec<_>>();
+                *state = ExecutorState::Completed { buffer };
+                return Ok(Box::pin(stream::iter(outputs.into_iter().map(Ok))));
+            }
             ExecutorState::Failed(e) => {
                 *state = ExecutorState::Failed(SparkError::internal(
                     "task failed due to a previous error",
@@ -256,9 +419,14 @@ impl Executor {
         let (tx, rx) = mpsc::channel(1);
         let (notifier, listener) = oneshot::channel();
         let buffer = Arc::clone(&context.buffer);
+        let reattachable = self.metadata.reattachable;
         let handle = {
             let span = { Span::enter_with_parent("Executor::run", &span) };
-            tokio::spawn(async move { Executor::run(context, listener, tx).in_span(span).await })
+            tokio::spawn(async move {
+                Executor::run(context, listener, tx, reattachable)
+                    .in_span(span)
+                    .await
+            })
         };
         *state = ExecutorState::Running {
             task: ExecutorTask {
@@ -268,7 +436,7 @@ impl Executor {
             },
             span,
         };
-        Ok(ReceiverStream::new(rx))
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
     pub(crate) async fn pause_if_running(&self) -> SparkResult<()> {
@@ -288,38 +456,41 @@ impl Executor {
         let _ = task.notifier.send(());
         let state = match task.handle.await? {
             ExecutorTaskResult::Paused(context) => ExecutorState::Pending { context, span },
-            ExecutorTaskResult::Completed => ExecutorState::Idle,
+            ExecutorTaskResult::Completed => ExecutorState::Completed {
+                buffer: task.buffer,
+            },
             ExecutorTaskResult::Failed(e) => ExecutorState::Failed(e),
         };
         *(self.state.lock()?) = state;
         Ok(())
     }
 
-    pub(crate) fn release(&self, response_id: Option<String>) -> SparkResult<()> {
+    pub(crate) fn release(&self, response_id: String) -> SparkResult<()> {
         let state = self.state.lock()?;
         let buffer = match state.deref() {
             ExecutorState::Running { task, span: _ } => &task.buffer,
             ExecutorState::Pending { context, span: _ } => &context.buffer,
+            ExecutorState::Completed { buffer } => buffer,
             ExecutorState::Idle | ExecutorState::Failed(_) | ExecutorState::Pausing => {
                 return Ok(());
             }
         };
-        if let Some(response_id) = response_id {
-            buffer.lock()?.remove_until(&response_id);
-        }
+        buffer.lock()?.remove_until(&response_id);
         Ok(())
     }
-}
-
-pub(crate) async fn read_stream(
-    stream: SendableRecordBatchStream,
-) -> SparkResult<Vec<RecordBatch>> {
-    stream.err_into().try_collect::<Vec<_>>().await
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
     let mut output = ArrowBatch::default();
     {
+        // Fallback incase view types weren't handled in planning/execution.
+        let batch = if record_batch_has_views(batch) {
+            // TODO: Look into passing the session's `spark.sql.execution.arrow.useLargeVarTypes` value.
+            // TODO: Look into making `large_to_utf8_and_binary` configurable for Spark Connect clients that may not support `LargeUtf8` or `LargeBinary`.
+            &normalize_record_batch(batch, false, false)?
+        } else {
+            batch
+        };
         let cursor = Cursor::new(&mut output.data);
         let mut writer = StreamWriter::try_new(cursor, batch.schema().as_ref())?;
         writer.write(batch)?;

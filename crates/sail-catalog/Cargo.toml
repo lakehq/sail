@@ -2,6 +2,7 @@
 name = "sail-catalog"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -19,7 +20,11 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 moka = { workspace = true }
+url = { workspace = true }
 log = { workspace = true }
 
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-common = { path = "../sail-common" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

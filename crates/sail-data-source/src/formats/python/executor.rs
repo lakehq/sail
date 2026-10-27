@@ -10,6 +10,7 @@ use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use futures::stream::BoxStream;
+use pyo3::exceptions::PyAttributeError;
 use pyo3::prelude::*;
 use pyo3::types::PyAnyMethods;
 
@@ -292,33 +293,63 @@ impl PythonExecutor for InProcessExecutor {
                     .call_method1("reader", (schema_obj,))
                     .map_err(|e| ctx.wrap_py_error(e))?;
 
-                // Push filters to reader if any were provided
+                // Push filters to reader if any were provided.
+                //
+                // `DataSourceReader.pushFilters` was added in PySpark 4.1; on 4.0
+                // the base class has no such method. Calling it unconditionally
+                // would fail every filtered scan against every Python data source
+                // on 4.0, so skip the push when the reader does not implement it
+                // and let the filters be applied above the scan instead. This is
+                // exactly what happens on 4.1 when a reader declines to push
+                // anything, so no rows are lost either way.
                 if !filters.is_empty() {
                     let filter_ctx = PythonDataSourceContext::new(&ds_name, "pushFilters");
 
-                    // Convert Rust filters to Python filter objects
-                    let py_filters = filters_to_python(py, &filters).map_err(|e| {
-                        filter_ctx.wrap_error(format!("Failed to convert filters: {}", e))
-                    })?;
+                    // A missing attribute is the PySpark 4.0 case, and a present
+                    // but non-callable one is a duck-typed reader that would fail
+                    // at the call site — both mean "cannot push", not an error.
+                    // Anything else is a genuine failure in the reader's
+                    // attribute lookup, reported against `pushFilters` so it is
+                    // not mis-attributed to `partitions`.
+                    let push_filters = match reader.getattr("pushFilters") {
+                        Ok(attr) => Ok(attr.is_callable().then_some(attr)),
+                        Err(e) if e.is_instance_of::<PyAttributeError>(py) => Ok(None),
+                        Err(e) => Err(filter_ctx.wrap_py_error(e)),
+                    }?;
 
-                    // Call pushFilters on the reader
-                    let rejected = reader
-                        .call_method1("pushFilters", (py_filters,))
-                        .map_err(|e| filter_ctx.wrap_py_error(e))?;
+                    if let Some(push_filters) = push_filters {
+                        // Convert Rust filters to Python filter objects
+                        let py_filters = filters_to_python(py, &filters).map_err(|e| {
+                            filter_ctx.wrap_error(format!("Failed to convert filters: {}", e))
+                        })?;
 
-                    // Count rejected filters for logging
-                    use pyo3::types::PyIterator;
-                    let rejected_list = PyIterator::from_object(&rejected).map_err(|e| {
-                        filter_ctx.wrap_error(format!("pushFilters must return an iterator: {}", e))
-                    })?;
-                    let rejected_count = rejected_list.count();
+                        // Call pushFilters on the reader
+                        let rejected = push_filters
+                            .call1((py_filters,))
+                            .map_err(|e| filter_ctx.wrap_py_error(e))?;
 
-                    log::debug!(
-                        "[{}::pushFilters] Pushed {} filters, {} rejected",
-                        ds_name,
-                        filters.len(),
-                        rejected_count
-                    );
+                        // Count rejected filters for logging
+                        use pyo3::types::PyIterator;
+                        let rejected_list = PyIterator::from_object(&rejected).map_err(|e| {
+                            filter_ctx
+                                .wrap_error(format!("pushFilters must return an iterator: {}", e))
+                        })?;
+                        let rejected_count = rejected_list.count();
+
+                        log::debug!(
+                            "[{}::pushFilters] Pushed {} filters, {} rejected",
+                            ds_name,
+                            filters.len(),
+                            rejected_count
+                        );
+                    } else {
+                        log::debug!(
+                            "[{}] Reader does not provide a callable pushFilters \
+                             (requires PySpark 4.1+); applying {} filter(s) above the scan",
+                            ds_name,
+                            filters.len()
+                        );
+                    }
                 }
 
                 // Now call partitions() on the same reader that has the filters

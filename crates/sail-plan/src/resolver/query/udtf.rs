@@ -171,6 +171,7 @@ impl PlanResolver<'_> {
                     &arg_literals,
                     kwargs,
                     &argument_is_tables,
+                    self.config.pyspark_udf_config.arrow_use_large_var_types,
                 )?
             }
         };
@@ -181,6 +182,7 @@ impl PlanResolver<'_> {
             function.eval_type,
             arguments_len,
             &input_types,
+            passthrough_columns,
             kwargs,
             &return_type,
             &self.config.pyspark_udf_config,

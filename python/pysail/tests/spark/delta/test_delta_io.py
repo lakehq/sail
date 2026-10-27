@@ -4,9 +4,11 @@ from datetime import UTC, date, datetime
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.errors import AnalysisException
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import Row
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.files import assert_file_lifecycle, get_data_files
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
@@ -436,6 +438,42 @@ def test_delta_io_overwrite_partitions_with_replace_where(spark, tmp_path):
     assert {row.value for row in result if row.category == "B"} == {20, 40}
 
 
+@pytest.mark.xfail(
+    not is_jvm_spark(), reason="Sail accepts non-deterministic conditional overwrite predicates", strict=True
+)
+@pytest.mark.parametrize("api", ["replace_where", "v2"])
+@pytest.mark.parametrize("predicate", ["rand(0) > p", "p + rand(0) < 1.0 AND v >= 0"])
+def test_delta_io_conditional_overwrite_rejects_nondeterministic_predicates(spark, tmp_path, api, predicate):
+    delta_path = tmp_path / "nondeterministic_overwrite"
+    table_name = "delta_nondeterministic_overwrite"
+    data = [Row(p=0.5, v=value) for value in range(4)]
+    frame = spark.createDataFrame(data)
+    frame.coalesce(1).write.format("delta").partitionBy("p").save(str(delta_path))
+    replacement = spark.createDataFrame([], frame.schema)
+    try:
+        if api == "v2":
+            spark.sql(f"CREATE TABLE {table_name} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'")
+        files_before = {
+            file.relative_to(delta_path): file.read_bytes() for file in delta_path.rglob("*") if file.is_file()
+        }
+        error_message = "Non-deterministic expressions are not allowed in OVERWRITE conditions"
+        if api == "replace_where":
+            with pytest.raises(AnalysisException, match=error_message):
+                replacement.write.format("delta").mode("overwrite").option("replaceWhere", predicate).save(
+                    str(delta_path)
+                )
+        else:
+            with pytest.raises(AnalysisException, match=error_message):
+                replacement.writeTo(table_name).overwrite(F.expr(predicate))
+        assert spark.read.format("delta").load(str(delta_path)).select("p", "v").orderBy("v").collect() == data
+        assert {
+            file.relative_to(delta_path): file.read_bytes() for file in delta_path.rglob("*") if file.is_file()
+        } == files_before
+    finally:
+        if api == "v2":
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 def test_delta_io_overwrite_partitions_with_v2_api(spark, tmp_path):
     """Test Delta Lake overwrite with a condition using the V2 API."""
     delta_path = tmp_path / "delta_condition_v2"
@@ -574,6 +612,7 @@ def test_delta_io_ignore_mode(spark, delta_test_data, tmp_path):
     initial_result = spark.read.format("delta").load(delta_table_path).sort("id")
     initial_data = initial_result.collect()
     assert len(initial_data) == 3  # noqa: PLR2004
+    commit_files_before = sorted((delta_path / "_delta_log").glob("*.json"))
 
     # Try to write new data with ignore mode - should be ignored since table exists
     new_data = [
@@ -581,13 +620,15 @@ def test_delta_io_ignore_mode(spark, delta_test_data, tmp_path):
         Row(id=21, event="Y", score=0.88),
     ]
     df2 = spark.createDataFrame(new_data)
-    df2.write.format("delta").mode("ignore").save(str(delta_path))
+    df2.write.format("delta").mode("ignore").partitionBy("missing").save(str(delta_path))
 
     # Read data again - should be unchanged
     result_df = spark.read.format("delta").load(delta_table_path).sort("id")
     result_data = result_df.collect()
+    commit_files_after = sorted((delta_path / "_delta_log").glob("*.json"))
 
     # Data should remain the same as initial data
+    assert commit_files_after == commit_files_before
     assert len(result_data) == 3  # noqa: PLR2004
     assert result_data[0].id == 10  # noqa: PLR2004
     assert result_data[1].id == 11  # noqa: PLR2004

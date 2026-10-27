@@ -150,6 +150,8 @@
            {"a":1}
           > SELECT to_json(array(map('a', 1)));
            [{"a":1}]
+          > SELECT to_json(named_struct('b', 1, 'a', 2), map('sortKeys', 'true'));
+           {"a":2,"b":1}
       
   since: "2.2.0"
 

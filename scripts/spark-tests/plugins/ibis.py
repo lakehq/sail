@@ -66,7 +66,7 @@ def data_dir() -> Path:
     return _resolve_data_dir()
 
 
-def pytest_configure(config):
+def pytest_configure(config: pytest.Config) -> None:
     resolved = _resolve_data_dir()
     data_volume = str(resolved / "parquet")
     mod = importlib.import_module("ibis.backends.pyspark.tests.conftest")
@@ -152,6 +152,6 @@ def _manage_ansi_mode(request):
     session.conf.set("spark.sql.ansi.enabled", original)
 
 
-def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:  # noqa: ARG001
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     if _is_ibis_testing():
         add_ibis_test_markers(items)

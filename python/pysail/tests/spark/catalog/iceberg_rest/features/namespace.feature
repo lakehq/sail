@@ -370,3 +370,45 @@ Feature: Iceberg REST catalog namespace (database) operations
       """
     Then query result
       | name | catalog | description | locationUri |
+
+  Scenario: Drop a namespace with CASCADE removes its tables and views
+    Given statement
+      """
+      CREATE DATABASE cascade_drop_ns
+      """
+    Given final statement
+      """
+      DROP DATABASE IF EXISTS cascade_drop_ns CASCADE
+      """
+    Given statement
+      """
+      CREATE TABLE cascade_drop_ns.table_to_drop (id INT) USING iceberg
+      """
+    Given statement
+      """
+      CREATE VIEW cascade_drop_ns.view_to_drop AS SELECT 1 AS id
+      """
+    Given statement
+      """
+      DROP DATABASE cascade_drop_ns CASCADE
+      """
+    When query
+      """
+      SHOW DATABASES LIKE 'cascade_drop_ns'
+      """
+    Then query result
+      | name | catalog | description | locationUri |
+    Given statement
+      """
+      CREATE DATABASE cascade_drop_ns
+      """
+    When query
+      """
+      DESCRIBE TABLE cascade_drop_ns.table_to_drop
+      """
+    Then query error .*
+    When query
+      """
+      DESCRIBE TABLE cascade_drop_ns.view_to_drop
+      """
+    Then query error .*

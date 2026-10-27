@@ -109,14 +109,23 @@ def test_udtf_kwargs_reversed_order(udtf_concat):
 
 
 def test_udtf_row_output_invalid_scalar_raises_pickle_exception():
-    from pyspark.errors.exceptions.connect import PickleException
+    if pyspark_version() >= (4, 2):
+        from pyspark.errors.exceptions.connect import PythonException
+
+        exception = PythonException
+        match = "UDTF_ARROW_DATA_CONVERSION_ERROR"
+    else:
+        from pyspark.errors.exceptions.connect import PickleException
+
+        exception = PickleException
+        match = "PickleException"
 
     @udtf(returnType="x: boolean")
     class RowOutputUDTF:
         def eval(self):
             yield (Row(a=0, b=1.1, c=2),)
 
-    with pytest.raises(PickleException, match="PickleException"):
+    with pytest.raises(exception, match=match):
         RowOutputUDTF().collect()
 
 
@@ -132,8 +141,28 @@ def test_arrow_udtf_type_conversion_error_class_is_preserved():
         def eval(self):
             yield (1,)
 
-    with pytest.raises(PythonException, match="UDTF_ARROW_TYPE_CONVERSION_ERROR"):
+    with pytest.raises(PythonException, match=r"UDTF_ARROW_(TYPE|DATA)_CONVERSION_ERROR"):
         ArrowOutputUDTF().collect()
+
+
+@pytest.mark.parametrize("use_arrow", [False, True])
+def test_arrow_udtf_lateral_view_uses_argument_schema(spark, use_arrow):
+    """Passthrough columns must not shift Arrow UDTF argument conversions."""
+
+    @udtf(returnType="output: string", useArrow=use_arrow)
+    class EchoUDTF:
+        def eval(self, value):
+            yield (value,)
+
+    function_name = f"echo_udtf_{'' if use_arrow else 'not_'}use_arrow"
+    spark.udtf.register(function_name, EchoUDTF)
+
+    df = spark.sql(
+        f"""SELECT passthrough, value, output
+        FROM VALUES (X'706173737468726f756768', 'value') AS input(passthrough, value)
+        LATERAL VIEW {function_name}(value) AS output"""  # noqa: S608
+    )
+    assert df.collect() == [Row(passthrough=b"passthrough", value="value", output="value")]
 
 
 @pytest.mark.skipif(

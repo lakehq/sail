@@ -2,13 +2,16 @@
 name = "sail-physical-optimizer"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
 sail-physical-plan = { path = "../sail-physical-plan" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 datafusion = { workspace = true }
+datafusion-datasource = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 log = { workspace = true }

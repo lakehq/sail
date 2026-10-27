@@ -106,6 +106,9 @@ pub enum TransactionError {
     #[error("Unsupported table features required: {0:?}")]
     UnsupportedTableFeatures(Vec<TableFeature>),
 
+    #[error("Invalid Delta protocol: {0}")]
+    InvalidProtocol(String),
+
     #[error("Table features must be specified, please specify: {0:?}")]
     TableFeaturesRequired(TableFeature),
 

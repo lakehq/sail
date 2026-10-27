@@ -8,6 +8,7 @@ use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
@@ -88,6 +89,21 @@ fn current_user(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .plan_config
         .session_user_id
         .clone()))
+}
+
+fn input_file_name() -> expr::Expr {
+    // COALESCE gives the expression Spark's non-nullable string schema; it does not catch errors.
+    // RewriteInputFileMetadataFallback replaces the UDF with an empty string outside file scans
+    // before execution, since DataFusion's UDF cannot be evaluated directly.
+    expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")])
+}
+
+fn input_file_block_start() -> expr::Expr {
+    ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![])
+}
+
+fn input_file_block_length() -> expr::Expr {
+    ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![])
 }
 
 fn type_of(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -186,6 +202,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("bitmap_count", F::unary(bitmap_fn::bitmap_count)),
         ("current_catalog", F::custom(current_catalog)),
         ("current_database", F::custom(current_database)),
+        ("current_path", F::unknown("current_path")),
         ("current_schema", F::custom(current_database)),
         ("current_user", F::custom(current_user)),
         ("from_avro", F::unknown("from_avro")),
@@ -207,14 +224,77 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ),
         ("theta_union", F::custom(theta_union)),
         (
-            "input_file_block_length",
-            F::unknown("input_file_block_length"),
+            "tuple_difference_double",
+            F::unknown("tuple_difference_double"),
         ),
         (
-            "input_file_block_start",
-            F::unknown("input_file_block_start"),
+            "tuple_difference_integer",
+            F::unknown("tuple_difference_integer"),
         ),
-        ("input_file_name", F::unknown("input_file_name")),
+        (
+            "tuple_difference_theta_double",
+            F::unknown("tuple_difference_theta_double"),
+        ),
+        (
+            "tuple_difference_theta_integer",
+            F::unknown("tuple_difference_theta_integer"),
+        ),
+        (
+            "tuple_intersection_double",
+            F::unknown("tuple_intersection_double"),
+        ),
+        (
+            "tuple_intersection_integer",
+            F::unknown("tuple_intersection_integer"),
+        ),
+        (
+            "tuple_intersection_theta_double",
+            F::unknown("tuple_intersection_theta_double"),
+        ),
+        (
+            "tuple_intersection_theta_integer",
+            F::unknown("tuple_intersection_theta_integer"),
+        ),
+        (
+            "tuple_sketch_estimate_double",
+            F::unknown("tuple_sketch_estimate_double"),
+        ),
+        (
+            "tuple_sketch_estimate_integer",
+            F::unknown("tuple_sketch_estimate_integer"),
+        ),
+        (
+            "tuple_sketch_summary_double",
+            F::unknown("tuple_sketch_summary_double"),
+        ),
+        (
+            "tuple_sketch_summary_integer",
+            F::unknown("tuple_sketch_summary_integer"),
+        ),
+        (
+            "tuple_sketch_theta_double",
+            F::unknown("tuple_sketch_theta_double"),
+        ),
+        (
+            "tuple_sketch_theta_integer",
+            F::unknown("tuple_sketch_theta_integer"),
+        ),
+        ("tuple_union_double", F::unknown("tuple_union_double")),
+        ("tuple_union_integer", F::unknown("tuple_union_integer")),
+        (
+            "tuple_union_theta_double",
+            F::unknown("tuple_union_theta_double"),
+        ),
+        (
+            "tuple_union_theta_integer",
+            F::unknown("tuple_union_theta_integer"),
+        ),
+        (
+            "input_file_block_length",
+            F::nullary(input_file_block_length),
+        ),
+        ("input_file_block_start", F::nullary(input_file_block_start)),
+        ("input_file_name", F::nullary(input_file_name)),
         ("java_method", F::unknown("java_method")),
         (
             "monotonically_increasing_id",

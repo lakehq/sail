@@ -1,0 +1,64 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT from_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1));",
+        "result": [
+          "[false]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: from_avro"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT schema_of_avro('{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{\"name\": \"u\", \"type\": [\"int\", \"string\"]}]}', map());",
+        "result": [
+          "STRUCT<u: STRUCT<member0: INT, member1: STRING> NOT NULL>"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: schema_of_avro"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s);",
+        "result": [
+          "[true]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_avro"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_avro(s, '{\"type\": \"record\", \"name\": \"struct\", \"fields\": [{ \"name\": \"u\", \"type\": [\"int\",\"string\"] }]}') IS NULL FROM (SELECT NULL AS s);",
+        "result": [
+          "[true]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": []
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: to_avro"
+      }
+    }
+  ]
+}

@@ -43,12 +43,7 @@ impl ReadFormat for BinaryReadFormat {
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
-        let options = self.options.clone().into_table_options();
-
-        let file_source = Arc::new(BinarySource::new(
-            input.schema,
-            options.path_glob_filter.clone(),
-        ));
+        let file_source = Arc::new(BinarySource::new(input.schema));
 
         let config = FileScanConfigBuilder::new(input.object_store_url, file_source)
             .with_file_groups(input.file_groups)
@@ -58,13 +53,13 @@ impl ReadFormat for BinaryReadFormat {
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
             .with_preserve_order(input.preserve_order)
-            .with_partitioned_by_file_group(input.partitioned_by_file_group)
+            .with_output_partitioning(input.output_partitioning)
             .build();
 
         Ok(config)
     }
 
-    fn input_file_name_glob(&self) -> Option<&str> {
+    fn path_glob_filter(&self) -> Option<&str> {
         self.options.path_glob_filter.as_deref()
     }
 }

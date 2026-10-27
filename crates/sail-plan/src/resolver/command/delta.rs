@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion_common::{Column, DFSchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion_common::{Column, DFSchema, DFSchemaRef};
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{
-    Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, col, lit,
+    EmptyRelation, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, col,
+    lit,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -14,9 +15,10 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SourceInfo, TableFormatRegistry, find_path_in_options,
+    DataSourceRegistry, OptionLayer, SinkInfo, SourceInfo, find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::rename::schema::rename_schema;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::check_constraints::{
@@ -41,6 +43,78 @@ struct DeltaCheckConstraint {
 }
 
 impl PlanResolver<'_> {
+    pub(super) async fn validate_delta_replacement_generated_columns(
+        &self,
+        table: &spec::ObjectName,
+        requested: &Schema,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<()> {
+        if !self.alter_table_target_is_delta(table, false).await? {
+            return Ok(());
+        }
+        let Some(info) = self.resolve_table_info(table).await? else {
+            return Ok(());
+        };
+        let generated = requested
+            .fields()
+            .iter()
+            .filter_map(|field| {
+                info.columns
+                    .iter()
+                    .find(|column| column.name.eq_ignore_ascii_case(field.name()))
+                    .and_then(|column| column.generated_always_as.as_deref())
+                    .map(|expression| (field, expression))
+            })
+            .collect::<Vec<_>>();
+        if generated.is_empty() {
+            return Ok(());
+        }
+        let input = Schema::new(
+            requested
+                .fields()
+                .iter()
+                .filter(|field| {
+                    !generated
+                        .iter()
+                        .any(|(generated, _)| generated.name() == field.name())
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        let names = state.register_fields(input.fields());
+        let input = Arc::new(DFSchema::try_from(rename_schema(&input, &names)?)?);
+        let mut expressions = Vec::with_capacity(generated.len());
+        for (field, expression) in &generated {
+            let expression = self
+                .resolve_expression(parse_delta_generation_expr(expression)?, &input, state)
+                .await?;
+            expressions.push(expression.alias(field.name()));
+        }
+        let projection = LogicalPlanBuilder::from(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: input,
+        }))
+        .project(expressions)?
+        .build()?;
+        let session = self.ctx.state();
+        let analyzed = session.analyzer().execute_and_check(
+            projection,
+            session.config_options().as_ref(),
+            |_, _| {},
+        )?;
+        for ((field, _), actual) in generated.iter().zip(analyzed.schema().fields()) {
+            if !same_generated_column_type(field.data_type(), actual.data_type()) {
+                return Err(PlanError::invalid(format!(
+                    "[DELTA_GENERATED_COLUMNS_EXPR_TYPE_MISMATCH] Generated column '{}' has type {}, but its expression has type {}",
+                    field.name(),
+                    field.data_type(),
+                    actual.data_type(),
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) async fn resolve_delta_alter_table_or_catalog(
         &self,
         table: spec::ObjectName,
@@ -108,14 +182,14 @@ impl PlanResolver<'_> {
             return Ok(input);
         };
 
-        let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+        let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
             PlanError::invalid(format!(
-                "failed to access table format registry for Delta path `{path}`: {e}",
+                "failed to access lake source registry for Delta path `{path}`: {e}",
             ))
         })?;
-        let table_format = registry.get(format).map_err(|e| {
+        let lake_source = registry.get_lake_source(format).map_err(|e| {
             PlanError::invalid(format!(
-                "failed to resolve table format `{}` for Delta path `{path}`: {e}",
+                "failed to resolve lake source `{}` for Delta path `{path}`: {e}",
                 format
             ))
         })?;
@@ -130,7 +204,7 @@ impl PlanResolver<'_> {
             options: vec![],
             read_case_sensitive: self.config.case_sensitive,
         };
-        let metadata = match table_format
+        let metadata = match lake_source
             .infer_metadata(&self.ctx.state(), source_info)
             .await
         {
@@ -180,6 +254,7 @@ impl PlanResolver<'_> {
         }
 
         let info = TableInfo {
+            default_values: Default::default(),
             lakehouse_table: info.lakehouse_table.clone(),
             columns,
             location: Some(path),
@@ -246,7 +321,7 @@ impl PlanResolver<'_> {
         })?;
         if delta_check_constraints_from_properties(&properties)
             .iter()
-            .any(|constraint| constraint.name.eq_ignore_ascii_case(&name))
+            .any(|constraint| delta_constraint_names_equal(&constraint.name, &name))
         {
             return Err(PlanError::invalid(format!(
                 "Delta constraint `{name}` already exists"
@@ -348,7 +423,7 @@ impl PlanResolver<'_> {
             .await
     }
 
-    pub(super) async fn resolve_delta_merge_check_constraints(
+    pub(super) async fn resolve_delta_row_level_check_constraints(
         &self,
         format: &str,
         options: &[OptionLayer],
@@ -366,12 +441,47 @@ impl PlanResolver<'_> {
                 properties.extend(items.clone());
             }
         }
-        let constraints = delta_constraints_from_schema_and_properties(
-            target_schema.fields().iter().map(|field| field.as_ref()),
-            &properties,
-        );
+
+        // MERGE target schemas use opaque field IDs internally. Constraint source text and
+        // diagnostics must use the corresponding user-facing names; resolving that source text
+        // against `target_schema` maps it back to the opaque field safely.
+        let target_field_names = Self::get_field_names(target_schema, state)?;
+        let target_fields = target_schema
+            .fields()
+            .iter()
+            .zip(target_field_names)
+            .map(|(field, name)| field.as_ref().clone().with_name(name))
+            .collect::<Vec<_>>();
+        let constraints =
+            delta_constraints_from_schema_and_properties(target_fields.iter(), &properties);
         self.resolve_delta_check_constraints(constraints, target_schema, state)
             .await
+    }
+
+    pub(super) async fn resolve_delta_update_generated_column_exprs(
+        &self,
+        target_schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<(String, Expr)>> {
+        let mut expressions = Vec::new();
+        for field in target_schema.fields() {
+            let Some(expression) = ColumnFeatures::from_field(field).generation_expression() else {
+                continue;
+            };
+            let name = state
+                .get_field_info(field.name())
+                .map(|info| info.name().to_string())
+                .unwrap_or_else(|_| field.name().clone());
+            let expression = self
+                .resolve_expression(
+                    parse_delta_generation_expr(&expression)?,
+                    target_schema,
+                    state,
+                )
+                .await?;
+            expressions.push((name, expression));
+        }
+        Ok(expressions)
     }
 
     pub(super) async fn resolve_delta_merge_generated_column_exprs(
@@ -396,6 +506,7 @@ impl PlanResolver<'_> {
                 state,
                 target_schema,
                 source_schema,
+                self.config.case_sensitive,
             );
             let resolved = self
                 .resolve_expression(disambiguated, merge_schema, state)
@@ -507,18 +618,18 @@ impl PlanResolver<'_> {
     async fn infer_existing_delta_metadata(
         &self,
         info: &TableInfo,
-    ) -> PlanResult<Option<sail_common_datafusion::datasource::TableFormatMetadata>> {
+    ) -> PlanResult<Option<sail_common_datafusion::lakesource::LakeSourceMetadata>> {
         let Some(location) = info.location.as_ref() else {
             return Ok(None);
         };
-        let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+        let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
             PlanError::invalid(format!(
-                "failed to access table format registry for Delta table `{location}`: {e}"
+                "failed to access lake source registry for Delta table `{location}`: {e}"
             ))
         })?;
-        let table_format = registry.get(&info.format).map_err(|e| {
+        let lake_source = registry.get_lake_source(&info.format).map_err(|e| {
             PlanError::invalid(format!(
-                "failed to resolve table format `{}` for Delta table `{location}`: {e}",
+                "failed to resolve lake source `{}` for Delta table `{location}`: {e}",
                 info.format
             ))
         })?;
@@ -535,7 +646,7 @@ impl PlanResolver<'_> {
             }],
             read_case_sensitive: self.config.case_sensitive,
         };
-        match table_format.infer_metadata(&self.ctx.state(), source).await {
+        match lake_source.infer_metadata(&self.ctx.state(), source).await {
             Ok(metadata) => Ok(Some(metadata)),
             Err(e) => {
                 log::debug!(
@@ -544,6 +655,34 @@ impl PlanResolver<'_> {
                 Ok(None)
             }
         }
+    }
+}
+
+fn same_generated_column_type(expected: &DataType, actual: &DataType) -> bool {
+    match (expected, actual) {
+        (DataType::Struct(left), DataType::Struct(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right)| {
+                    left.name() == right.name()
+                        && same_generated_column_type(left.data_type(), right.data_type())
+                })
+        }
+        (
+            DataType::List(left) | DataType::LargeList(left),
+            DataType::List(right) | DataType::LargeList(right),
+        )
+        | (DataType::Map(left, _), DataType::Map(right, _)) => {
+            same_generated_column_type(left.data_type(), right.data_type())
+        }
+        (
+            DataType::Timestamp(left_unit, left_zone),
+            DataType::Timestamp(right_unit, right_zone),
+        ) => left_unit == right_unit && left_zone.is_some() == right_zone.is_some(),
+        (
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+        ) => true,
+        _ => expected == actual,
     }
 }
 
@@ -612,7 +751,7 @@ fn upsert_delta_check_constraints(
         };
         if let Some(existing) = constraints
             .iter_mut()
-            .find(|c| c.name.eq_ignore_ascii_case(name))
+            .find(|constraint| delta_constraint_names_equal(&constraint.name, name))
         {
             existing.name = name.to_string();
             existing.expression = value.clone();
@@ -625,6 +764,10 @@ fn upsert_delta_check_constraints(
             });
         }
     }
+}
+
+fn delta_constraint_names_equal(left: &str, right: &str) -> bool {
+    left.to_lowercase() == right.to_lowercase()
 }
 
 fn strip_delta_check_constraint_prefix(key: &str) -> Option<&str> {

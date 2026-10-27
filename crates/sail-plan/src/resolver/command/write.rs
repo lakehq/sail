@@ -28,8 +28,7 @@ use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormatRegistry,
-    find_path_in_options,
+    BucketBy, DataSourceRegistry, OptionLayer, SinkInfo, SinkMode, SourceInfo, find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -232,6 +231,12 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
         let input_schema = input.schema().inner().clone();
+        let use_session_overwrite_mode = self.config.dynamic_partition_overwrite
+            && (matches!(mode, WriteMode::Truncate)
+                || matches!(
+                    (&target, &mode),
+                    (WriteTarget::DataSource, WriteMode::Replace { .. })
+                ));
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
@@ -305,8 +310,14 @@ impl PlanResolver<'_> {
                         | WriteMode::TruncatePartitions
                 );
                 if requires_existing && info.is_none() {
-                    return Err(PlanError::invalid(format!(
-                        "table does not exist: {table:?}"
+                    return Err(PlanError::analysis(format!(
+                        "[TABLE_OR_VIEW_NOT_FOUND] The table or view {} cannot be found",
+                        table
+                            .parts()
+                            .iter()
+                            .map(|part| format!("`{}`", part.as_ref().replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join(".")
                     )));
                 }
 
@@ -333,13 +344,13 @@ impl PlanResolver<'_> {
                         ));
                     }
                     info.validate_write_info(&write_format, &sink_info)?;
-                    let table_format_merge_schema = (info.format.eq_ignore_ascii_case("delta")
+                    let lake_source_merge_schema = (info.format.eq_ignore_ascii_case("delta")
                         || info.format.eq_ignore_ascii_case("iceberg"))
                         && Self::has_truthy_option(
                             &sink_info.options,
                             &["mergeSchema", "merge_schema"],
                         );
-                    if !table_format_merge_schema {
+                    if !lake_source_merge_schema {
                         input = self
                             .rewrite_write_input(input, column_match, info, state)
                             .await?;
@@ -524,10 +535,27 @@ impl PlanResolver<'_> {
         input = self
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
+        if use_session_overwrite_mode && matches!(sink_info.mode, SinkMode::Overwrite) {
+            let option = if write_format.eq_ignore_ascii_case("delta") {
+                Some("partitionOverwriteMode")
+            } else if write_format.eq_ignore_ascii_case("iceberg") {
+                Some("overwrite-mode")
+            } else {
+                None
+            };
+            if let Some(option) = option {
+                sink_info.options.insert(
+                    0,
+                    OptionLayer::OptionList {
+                        items: vec![(option.into(), "dynamic".into())],
+                    },
+                );
+            }
+        }
         sink_info.input = input;
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let plan = registry
-            .get(&write_format)?
+            .get_data_source(&write_format)?
             .create_writer(&self.ctx.state(), sink_info)
             .await?;
         Ok(LogicalPlan::Extension(Extension {
@@ -586,7 +614,10 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn resolve_table_info(&self, table: &spec::ObjectName) -> PlanResult<Option<TableInfo>> {
+    pub(super) async fn resolve_table_info(
+        &self,
+        table: &spec::ObjectName,
+    ) -> PlanResult<Option<TableInfo>> {
         let status = match self
             .ctx
             .extension::<CatalogManager>()?
@@ -625,19 +656,20 @@ impl PlanResolver<'_> {
                     .await?;
                 let write_precondition_lakehouse_table =
                     Some(lakehouse_table.for_operation(LakehouseOperation::WritePrecondition));
+                let mut default_values = HashMap::new();
                 // When a table is created without column definitions
                 // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
-                // Discover the schema from the table format so that write operations
+                // Discover the schema from the data source so that write operations
                 // (INSERT INTO) can validate the input schema correctly.
-                if columns.is_empty() {
-                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                if columns.is_empty() || format.eq_ignore_ascii_case("iceberg") {
+                    let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
                         PlanError::invalid(format!(
-                            "failed to access table format registry for table `{table:?}`: {e}",
+                            "failed to access source registry for table `{table:?}`: {e}",
                         ))
                     })?;
-                    let table_format = registry.get(&format).map_err(|e| {
+                    let data_source = registry.get_data_source(&format).map_err(|e| {
                         PlanError::invalid(format!(
-                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
+                            "failed to resolve data source `{format}` for table `{table:?}`: {e}",
                         ))
                     })?;
                     let info = SourceInfo {
@@ -653,29 +685,59 @@ impl PlanResolver<'_> {
                         }],
                         read_case_sensitive: self.config.case_sensitive,
                     };
-                    let metadata = table_format
-                        .infer_metadata(&self.ctx.state(), info)
-                        .await
-                        .map_err(|e| {
-                            PlanError::invalid(format!(
-                                "failed to infer metadata for table `{table:?}` from format `{format}`: {e}",
-                            ))
-                        })?;
-                    columns = Self::table_columns_from_format_schema(metadata.schema.as_ref());
-                    if !metadata.properties.is_empty() {
-                        let mut merged_properties = metadata.properties;
-                        merged_properties.extend(properties);
-                        properties = merged_properties;
+                    if let Some(lake_source) = registry
+                        .get_lake_source_if_supported(&format)
+                        .map_err(PlanError::from)?
+                    {
+                        let metadata = lake_source
+                            .infer_metadata(&self.ctx.state(), info)
+                            .await
+                            .map_err(|e| {
+                                PlanError::invalid(format!(
+                                    "failed to infer metadata for table `{table:?}` from format `{format}`: {e}",
+                                ))
+                            })?;
+                        if columns.is_empty() {
+                            columns =
+                                Self::table_columns_from_format_schema(metadata.schema.as_ref());
+                        } else {
+                            columns.retain(|column| {
+                                metadata.schema.field_with_name(&column.name).is_ok()
+                            });
+                            Self::merge_format_columns(&mut columns, metadata.schema.as_ref());
+                        }
+                        for field in metadata.schema.fields() {
+                            if let Some(value) =
+                                ColumnFeatures::from_field(field).current_default_value()?
+                            {
+                                default_values.insert(field.name().clone(), value);
+                            }
+                        }
+                        if !metadata.properties.is_empty() {
+                            let mut merged_properties = metadata.properties;
+                            merged_properties.extend(properties);
+                            properties = merged_properties;
+                        }
+                    } else {
+                        let schema = data_source
+                            .infer_schema(&self.ctx.state(), info)
+                            .await
+                            .map_err(|e| {
+                                PlanError::invalid(format!(
+                                    "failed to infer schema for table `{table:?}` from data source `{format}`: {e}",
+                                ))
+                            })?;
+                        columns = Self::table_columns_from_format_schema(schema.as_ref());
                     }
                 } else if format.eq_ignore_ascii_case("delta") && location.is_some() {
-                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                    let registry = self.ctx.extension::<DataSourceRegistry>().map_err(|e| {
                         PlanError::invalid(format!(
-                            "failed to access table format registry for table `{table:?}`: {e}",
+                            "failed to access lake source registry for table `{table:?}`: {e}",
                         ))
                     })?;
-                    let table_format = registry.get(&format).map_err(|e| {
+                    let lake_source = registry.get_lake_source(&format).map_err(|e| {
                         PlanError::invalid(format!(
-                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
+                            "failed to resolve lake source `{format}` for table `{table:?}`: {e}",
                         ))
                     })?;
                     let info = SourceInfo {
@@ -691,7 +753,7 @@ impl PlanResolver<'_> {
                         }],
                         read_case_sensitive: self.config.case_sensitive,
                     };
-                    match table_format.infer_metadata(&self.ctx.state(), info).await {
+                    match lake_source.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {
                             Self::merge_format_columns(&mut columns, metadata.schema.as_ref());
                             if !metadata.properties.is_empty() {
@@ -710,6 +772,7 @@ impl PlanResolver<'_> {
                 Ok(Some(TableInfo {
                     lakehouse_table: Some(lakehouse_table),
                     columns,
+                    default_values,
                     location,
                     format,
                     partition_by,
@@ -789,12 +852,20 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let has_column_expressions = info.columns.iter().any(|c| {
-            c.generated_always_as.is_some() || c.default.is_some() || c.identity.is_some()
+            c.generated_always_as.is_some() || info.has_column_default(c) || c.identity.is_some()
         });
         let has_default_values = Self::plan_has_default_column_value(&input)?;
         let requires_delta_not_null_metadata =
             info.format.eq_ignore_ascii_case("delta") && info.columns.iter().any(|c| !c.nullable);
-        if has_column_expressions || has_default_values || requires_delta_not_null_metadata {
+        let missing_lakehouse_columns = (info.format.eq_ignore_ascii_case("iceberg")
+            || info.format.eq_ignore_ascii_case("delta"))
+            && matches!(&column_match, WriteColumnMatch::ByColumns { .. })
+            && input.schema().fields().len() < info.columns.len();
+        if has_column_expressions
+            || has_default_values
+            || requires_delta_not_null_metadata
+            || missing_lakehouse_columns
+        {
             self.rewrite_write_input_with_column_expressions(input, column_match, info, state)
                 .await
         } else {
@@ -916,7 +987,7 @@ impl PlanResolver<'_> {
         let optional_count = info
             .columns
             .iter()
-            .filter(|c| Self::table_column_is_omittable(c))
+            .filter(|c| info.column_is_omittable(c, &column_match))
             .count();
         let identity_count = info.columns.iter().filter(|c| c.identity.is_some()).count();
         let required_count = table_field_count - optional_count;
@@ -990,7 +1061,7 @@ impl PlanResolver<'_> {
             }
             let input_expr = if let Some(input_expr) = provided {
                 input_expr.clone()
-            } else if col.default.is_some() {
+            } else if info.column_is_omittable(col, &column_match) {
                 default_input_exprs[idx].clone()
             } else {
                 return Err(PlanError::invalid(format!(
@@ -1178,7 +1249,7 @@ impl PlanResolver<'_> {
                 } else if input_field_count == required_count {
                     let mut required_idx = 0usize;
                     for (i, table_col) in info.columns.iter().enumerate() {
-                        if Self::table_column_is_omittable(table_col) {
+                        if info.column_is_omittable(table_col, column_match) {
                             continue;
                         }
                         out[i] = Some(col(input_cols[required_idx].clone()));
@@ -1217,7 +1288,7 @@ impl PlanResolver<'_> {
                                 table_col.name
                             )));
                         }
-                    } else if !Self::table_column_is_omittable(table_col) {
+                    } else if !info.column_is_omittable(table_col, column_match) {
                         return Err(PlanError::invalid(format!(
                             "column not found for INSERT by name: {}",
                             table_col.name
@@ -1265,7 +1336,7 @@ impl PlanResolver<'_> {
                     out[pos] = Some(col(input_col.clone()));
                 }
                 for table_col in &info.columns {
-                    if !Self::table_column_is_omittable(table_col)
+                    if !info.column_is_omittable(table_col, column_match)
                         && !columns
                             .iter()
                             .any(|name| name.as_ref().eq_ignore_ascii_case(&table_col.name))
@@ -1289,32 +1360,10 @@ impl PlanResolver<'_> {
         let empty_schema = Arc::new(DFSchema::empty());
         let mut out = Vec::with_capacity(info.columns.len());
         for column in &info.columns {
-            let expr = if let Some(default) = column.default.as_deref() {
-                let ast_expr =
-                    sail_sql_analyzer::parser::parse_expression(default).map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to parse default expression `{default}`: {e}"
-                        ))
-                    })?;
-                let spec_expr = sail_sql_analyzer::expression::from_ast_expression(ast_expr)
-                    .map_err(|e| {
-                        PlanError::invalid(format!(
-                            "failed to analyze default expression `{default}`: {e}"
-                        ))
-                    })?;
-                // A column reference can never be a valid default value. Such text
-                // comes from metadata that stored a raw string value (e.g. the
-                // JSON-encoded string `"hello"` for an Iceberg column default)
-                // rather than SQL expression text, so it is interpreted as a
-                // string literal.
-                let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
-                    spec::Expr::Literal(spec::Literal::Utf8 {
-                        value: Some(default.to_string()),
-                    })
-                } else {
-                    spec_expr
-                };
-                self.resolve_expression(spec_expr, &empty_schema, state)
+            let expr = if let Some(value) = info.default_values.get(&column.name) {
+                lit(value.clone())
+            } else if let Some(default) = column.default.as_deref() {
+                self.resolve_column_default_expression(default, &empty_schema, state)
                     .await?
             } else {
                 lit(ScalarValue::try_from(column.field().data_type())?)
@@ -1322,6 +1371,36 @@ impl PlanResolver<'_> {
             out.push(expr);
         }
         Ok(out)
+    }
+
+    pub(super) async fn resolve_column_default_expression(
+        &self,
+        default: &str,
+        empty_schema: &datafusion_common::DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Expr> {
+        let ast_expr = sail_sql_analyzer::parser::parse_expression(default).map_err(|error| {
+            PlanError::invalid(format!(
+                "failed to parse default expression `{default}`: {error}"
+            ))
+        })?;
+        let spec_expr =
+            sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|error| {
+                PlanError::invalid(format!(
+                    "failed to analyze default expression `{default}`: {error}"
+                ))
+            })?;
+        // A column reference cannot be a default value. Raw string defaults in
+        // format metadata parse as unresolved attributes, so treat them as literals.
+        let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
+            spec::Expr::Literal(spec::Literal::Utf8 {
+                value: Some(default.to_string()),
+            })
+        } else {
+            spec_expr
+        };
+        self.resolve_expression(spec_expr, empty_schema, state)
+            .await
     }
 
     fn rewrite_default_column_values_in_input(
@@ -1467,7 +1546,9 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn expr_contains_default_column_value(expr: &Expr) -> datafusion_common::Result<bool> {
+    pub(super) fn expr_contains_default_column_value(
+        expr: &Expr,
+    ) -> datafusion_common::Result<bool> {
         let mut found = false;
         expr.apply(|expr| {
             if Self::is_default_column_value_expr(expr) {
@@ -1480,7 +1561,7 @@ impl PlanResolver<'_> {
         Ok(found)
     }
 
-    fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
+    pub(super) fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
         if Self::is_default_column_value_expr(expr) {
             return true;
         }
@@ -1491,18 +1572,12 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn is_default_column_value_expr(expr: &Expr) -> bool {
+    pub(super) fn is_default_column_value_expr(expr: &Expr) -> bool {
         matches!(
             expr,
             Expr::Placeholder(placeholder)
                 if placeholder.id == DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID
         )
-    }
-
-    fn table_column_is_omittable(column: &TableColumnStatus) -> bool {
-        column.generated_always_as.is_some()
-            || column.default.is_some()
-            || column.identity.is_some()
     }
 
     fn make_column_field_metadata(
@@ -1573,7 +1648,7 @@ impl PlanResolver<'_> {
             } => {
                 let name: Vec<String> = name.into();
                 Ok(CatalogPartitionField {
-                    column: name.one()?,
+                    column: name.join("."),
                     transform: None,
                 })
             }
@@ -1698,7 +1773,7 @@ fn extract_partition_column_from_args(args: &[spec::Expr], index: usize) -> Plan
             is_metadata_column: false,
         } => {
             let name: Vec<String> = name.clone().into();
-            Ok(name.one()?)
+            Ok(name.join("."))
         }
         _ => Err(PlanError::invalid(
             "partition transform function argument must be a column reference",
@@ -1749,6 +1824,7 @@ fn extract_partition_int_arg(
 pub(super) struct TableInfo {
     pub(super) lakehouse_table: Option<LakehouseExecutionContext>,
     pub(super) columns: Vec<TableColumnStatus>,
+    pub(super) default_values: HashMap<String, ScalarValue>,
     pub(super) location: Option<String>,
     pub(super) format: String,
     pub(super) partition_by: Vec<CatalogPartitionField>,
@@ -1758,6 +1834,24 @@ pub(super) struct TableInfo {
 }
 
 impl TableInfo {
+    fn has_column_default(&self, column: &TableColumnStatus) -> bool {
+        column.default.is_some() || self.default_values.contains_key(&column.name)
+    }
+
+    fn column_is_omittable(
+        &self,
+        column: &TableColumnStatus,
+        column_match: &WriteColumnMatch,
+    ) -> bool {
+        column.generated_always_as.is_some()
+            || self.has_column_default(column)
+            || column.identity.is_some()
+            || ((self.format.eq_ignore_ascii_case("iceberg")
+                || self.format.eq_ignore_ascii_case("delta"))
+                && column.nullable
+                && !matches!(column_match, WriteColumnMatch::ByPosition))
+    }
+
     fn schema(&self) -> Schema {
         let fields = self
             .columns
@@ -1782,7 +1876,7 @@ impl TableInfo {
         }
         if !format.is_empty() && !format.eq_ignore_ascii_case(&self.format) {
             return Err(PlanError::invalid(format!(
-                "the format '{}' does not match the table format '{}'",
+                "the format '{}' does not match the table data source format '{}'",
                 format, self.format
             )));
         }

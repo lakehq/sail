@@ -2,19 +2,25 @@ mod kubernetes;
 mod local;
 mod options;
 
+use futures::future::BoxFuture;
 pub(crate) use options::WorkerLaunchOptions;
+use sail_common::actor::ActorSystem;
 
 use crate::error::ExecutionResult;
 use crate::id::WorkerId;
 
 #[tonic::async_trait]
 pub trait WorkerManager: Send + Sync + 'static {
-    /// Launch a worker.
-    async fn launch_worker(
+    /// Start launching a worker.
+    ///
+    /// Local workers are spawned into `system` immediately. The returned task launches an
+    /// external worker when necessary.
+    fn launch_worker(
         &self,
+        system: &mut ActorSystem,
         id: WorkerId,
         options: WorkerLaunchOptions,
-    ) -> ExecutionResult<()>;
+    ) -> BoxFuture<'static, ExecutionResult<()>>;
 
     /// Stop all workers on a best-effort basis.
     /// The driver have attempted to sent shutdown events to all workers

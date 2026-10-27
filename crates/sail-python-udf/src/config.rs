@@ -14,11 +14,15 @@ pub struct PySparkUdfConfig {
     #[pyo3(get)]
     pub arrow_max_records_per_batch: usize,
     #[pyo3(get)]
+    pub arrow_use_large_var_types: bool,
+    #[pyo3(get)]
     pub python_udf_pandas_conversion_enabled: bool,
     #[pyo3(get)]
     pub python_udtf_pandas_conversion_enabled: bool,
     #[pyo3(get)]
     pub python_udf_pandas_int_to_decimal_coercion_enabled: bool,
+    #[pyo3(get)]
+    pub python_udf_pandas_prefer_int_extension_dtype: bool,
     #[pyo3(get)]
     pub binary_as_bytes: bool,
 }
@@ -31,9 +35,11 @@ impl Default for PySparkUdfConfig {
             pandas_grouped_map_assign_columns_by_name: true,
             pandas_convert_to_arrow_array_safely: false,
             arrow_max_records_per_batch: 10000,
+            arrow_use_large_var_types: false,
             python_udf_pandas_conversion_enabled: false,
             python_udtf_pandas_conversion_enabled: false,
             python_udf_pandas_int_to_decimal_coercion_enabled: false,
+            python_udf_pandas_prefer_int_extension_dtype: false,
             binary_as_bytes: true,
         }
     }
@@ -70,6 +76,10 @@ impl PySparkUdfConfig {
             self.arrow_max_records_per_batch.to_string(),
         ));
         out.push((
+            "spark.sql.execution.arrow.useLargeVarTypes".to_string(),
+            self.arrow_use_large_var_types.to_string(),
+        ));
+        out.push((
             "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled".to_string(),
             self.python_udf_pandas_conversion_enabled.to_string(),
         ));
@@ -80,6 +90,11 @@ impl PySparkUdfConfig {
         out.push((
             "spark.sql.execution.pythonUDF.pandas.intToDecimalCoercionEnabled".to_string(),
             self.python_udf_pandas_int_to_decimal_coercion_enabled
+                .to_string(),
+        ));
+        out.push((
+            "spark.sql.execution.pythonUDF.pandas.preferIntExtensionDtype".to_string(),
+            self.python_udf_pandas_prefer_int_extension_dtype
                 .to_string(),
         ));
         out.push((

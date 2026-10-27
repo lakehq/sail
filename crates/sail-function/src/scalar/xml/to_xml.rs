@@ -5,12 +5,17 @@ use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+};
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common_datafusion::display::{
+    spark_f32_to_string as format_single, spark_f64_to_string as format_double,
+};
 
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::DateTimeFormat;
 
 /// Spark-compatible `to_xml` UDF. Serializes a StructArray into XML strings.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -27,9 +32,9 @@ struct SparkToXmlOptions {
     value_tag: String,
     /// If Some(s), nulls are emitted as <field>s</field>. If None, they are omitted.
     null_value: Option<String>,
-    timestamp_ltz_format: Option<String>,
-    timestamp_ntz_format: String,
-    date_format: String,
+    timestamp_ltz_format: Option<DateTimeFormat>,
+    timestamp_ntz_format: DateTimeFormat,
+    date_format: DateTimeFormat,
     session_timezone: String,
 }
 
@@ -47,10 +52,10 @@ impl SparkToXmlOptions {
     pub const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
 
-    // Standard Spark strftime defaults
-    pub const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f%:z";
-    pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f";
-    pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
+    // Standard Spark Java DateTimeFormatter defaults
+    pub const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
+    pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
+    pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray, session_timezone: &str) -> Result<Self> {
         let row_tag = find_key_value(map, Self::ROW_TAG_OPTION)
@@ -81,20 +86,28 @@ impl SparkToXmlOptions {
 
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?;
 
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_NTZ_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_formatting(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
+                    .expect("default timestamp NTZ format should be valid")
+            });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::for_formatting)
             .transpose()?
-            .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
+                DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
+                    .expect("default date format should be valid")
+            });
 
         Ok(Self {
             row_tag,
@@ -123,6 +136,7 @@ impl SparkToXmlOptions {
 }
 
 impl Default for SparkToXmlOptions {
+    #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
             row_tag: Self::ROW_TAG_DEFAULT.to_string(),
@@ -131,8 +145,12 @@ impl Default for SparkToXmlOptions {
             value_tag: Self::VALUE_TAG_DEFAULT.to_string(),
             null_value: None,
             timestamp_ltz_format: None,
-            timestamp_ntz_format: Self::TIMESTAMP_NTZ_FORMAT_DEFAULT.to_string(),
-            date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
+            timestamp_ntz_format: DateTimeFormat::for_formatting(
+                Self::TIMESTAMP_NTZ_FORMAT_DEFAULT,
+            )
+            .expect("default timestamp NTZ format should be valid"),
+            date_format: DateTimeFormat::for_formatting(Self::DATE_FORMAT_DEFAULT)
+                .expect("default date format should be valid"),
             session_timezone: "UTC".to_string(),
         }
     }
@@ -176,7 +194,15 @@ impl ScalarUDFImpl for SparkToXml {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// Spark: `StructsToXml.nullable = true`, unconditional.
+    /// <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/xmlExpressions.scala#L236>
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, true)))
     }
 
     fn schema_name(&self, args: &[datafusion_expr::Expr]) -> Result<String> {
@@ -698,7 +724,7 @@ fn format_field_to_xml(
                 chrono::NaiveDate::from_num_days_from_ce_opt(days + 719_163).ok_or_else(|| {
                     DataFusionError::Execution(format!("Date32 value out of range: {days}"))
                 })?;
-            Ok(naive.format(&options.date_format).to_string())
+            format_date_xml(naive, &options.date_format)
         }
         DataType::Date64 => {
             let millis = array.as_primitive::<Date64Type>().value(row_idx);
@@ -707,7 +733,7 @@ fn format_field_to_xml(
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!("Date64 value out of range: {millis}"))
                 })?;
-            Ok(naive.format(&options.date_format).to_string())
+            format_date_xml(naive, &options.date_format)
         }
         DataType::Decimal128(_, scale) => {
             let raw = array.as_primitive::<Decimal128Type>().value(row_idx);
@@ -718,6 +744,26 @@ fn format_field_to_xml(
             scalar_to_display_string(&scalar)
         }
     }
+}
+
+fn format_date_xml(date: chrono::NaiveDate, format: &DateTimeFormat) -> Result<String> {
+    use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+
+    let datetime = date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+        DataFusionError::Execution("Failed to create datetime from date".to_string())
+    })?;
+
+    let input = DateTimeFormatInput {
+        datetime,
+        timezone: None,
+        zone_id: None,
+        timestamp_kind: TimestampKind::Normal,
+        precision: TimePrecision::Second,
+    };
+
+    format
+        .format(input)
+        .map_err(|e| DataFusionError::Execution(format!("Failed to format date: {e}")))
 }
 
 fn format_decimal128(raw: i128, scale: u32) -> String {
@@ -734,76 +780,6 @@ fn format_decimal128(raw: i128, scale: u32) -> String {
         "{sign}{integer_part}.{fractional_part:0>width$}",
         width = scale as usize
     )
-}
-
-/// Formats a `f64` the way Java's `Double.toString` (and therefore Spark) does:
-/// plain decimal for `1e-3 <= |x| < 1e7`, scientific `d.dddEexp` otherwise,
-/// always with at least one fractional digit.
-fn format_double(v: f64) -> String {
-    if v.is_nan() {
-        return "NaN".to_string();
-    }
-    if v.is_infinite() {
-        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    if v == 0.0 {
-        return "0.0".to_string();
-    }
-    // Rust's `{:e}` yields the shortest round-tripping mantissa in normalized
-    // form `d[.ddd]e<exp>`, which carries exactly the significant digits and the
-    // base-10 exponent Java needs.
-    java_float_repr(v < 0.0, &format!("{:e}", v.abs()))
-}
-
-/// Same as [`format_double`] but for `f32` (Spark `FLOAT`). Formatting the `f32`
-/// directly (not via `f64`) keeps the shortest `f32` round-tripping digits.
-fn format_single(v: f32) -> String {
-    if v.is_nan() {
-        return "NaN".to_string();
-    }
-    if v.is_infinite() {
-        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    if v == 0.0 {
-        return "0.0".to_string();
-    }
-    java_float_repr(v < 0.0, &format!("{:e}", v.abs()))
-}
-
-/// Reformats Rust's normalized `{:e}` output (e.g. `"1.2345678e7"`) into Java
-/// `Double.toString` style. `neg` carries the sign separately.
-fn java_float_repr(neg: bool, rust_sci: &str) -> String {
-    let Some((mantissa, exp_str)) = rust_sci.split_once('e') else {
-        return rust_sci.to_string();
-    };
-    let Ok(sci_exp) = exp_str.parse::<i32>() else {
-        return rust_sci.to_string();
-    };
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let sign = if neg { "-" } else { "" };
-
-    if (-3..7).contains(&sci_exp) {
-        // Plain decimal notation.
-        let body = if sci_exp >= 0 {
-            let int_len = sci_exp as usize + 1;
-            if int_len >= digits.len() {
-                format!("{}{}.0", digits, "0".repeat(int_len - digits.len()))
-            } else {
-                format!("{}.{}", &digits[..int_len], &digits[int_len..])
-            }
-        } else {
-            format!("0.{}{}", "0".repeat((-sci_exp - 1) as usize), digits)
-        };
-        format!("{sign}{body}")
-    } else {
-        // Scientific notation: one digit before the point, at least one after.
-        let mantissa = if digits.len() == 1 {
-            format!("{}.0", digits)
-        } else {
-            format!("{}.{}", &digits[..1], &digits[1..])
-        };
-        format!("{sign}{mantissa}E{sci_exp}")
-    }
 }
 
 fn scalar_to_display_string(scalar: &ScalarValue) -> Result<String> {
@@ -874,7 +850,7 @@ fn format_timestamp_field(
 
     let secs = micros.div_euclid(1_000_000);
     let nanos = (micros.rem_euclid(1_000_000) * 1_000) as u32;
-    let is_default_format = options.timestamp_ltz_format.is_none();
+    let _is_default_format = options.timestamp_ltz_format.is_none();
 
     if tz_opt.is_some() {
         let tz: Tz = options.session_timezone.parse().map_err(|e| {
@@ -887,20 +863,38 @@ fn format_timestamp_field(
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;
         let local_dt = utc_dt.with_timezone(&tz);
-        if is_default_format {
-            // Default Spark: ISO 8601 with Z suffix for UTC
-            Ok(local_dt
-                .format(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                .to_string()
-                .replace("+00:00", "Z"))
-        } else {
-            let fmt = options.timestamp_ltz_format.as_deref().ok_or_else(|| {
-                DataFusionError::Internal(
-                    "timestamp_ltz_format missing despite non-default path".to_string(),
-                )
-            })?;
 
-            Ok(local_dt.format(fmt).to_string())
+        use chrono::Offset;
+
+        use crate::scalar::datetime::format::{
+            DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
+        };
+
+        let offset = local_dt.offset().fix();
+        let input = DateTimeFormatInput {
+            datetime: local_dt.naive_local(),
+            timezone: Some(TimeZoneDisplay {
+                offset,
+                name: Some(&options.session_timezone),
+            }),
+            zone_id: Some(&options.session_timezone),
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        };
+
+        if let Some(ref fmt) = options.timestamp_ltz_format {
+            Ok(fmt.format(input).map_err(|e| {
+                DataFusionError::Execution(format!("Failed to format timestamp: {e}"))
+            })?)
+        } else {
+            // Use default format
+            #[expect(clippy::expect_used)]
+            let default_fmt =
+                DateTimeFormat::for_formatting(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
+                    .expect("default timestamp LTZ format should be valid");
+            Ok(default_fmt.format(input).map_err(|e| {
+                DataFusionError::Execution(format!("Failed to format timestamp: {e}"))
+            })?)
         }
     } else {
         let naive = DateTime::from_timestamp(secs, nanos)
@@ -908,7 +902,21 @@ fn format_timestamp_field(
             .ok_or_else(|| {
                 DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
             })?;
-        Ok(naive.format(&options.timestamp_ntz_format).to_string())
+
+        use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+
+        let input = DateTimeFormatInput {
+            datetime: naive,
+            timezone: None,
+            zone_id: None,
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        };
+
+        Ok(options
+            .timestamp_ntz_format
+            .format(input)
+            .map_err(|e| DataFusionError::Execution(format!("Failed to format timestamp: {e}")))?)
     }
 }
 
@@ -1051,7 +1059,7 @@ mod tests {
         assert_eq!(format_double(f64::INFINITY), "Infinity");
         assert_eq!(format_double(f64::NEG_INFINITY), "-Infinity");
         assert_eq!(format_double(0.0), "0.0");
-        assert_eq!(format_double(-0.0), "0.0");
+        assert_eq!(format_double(-0.0), "-0.0");
         assert_eq!(format_double(1.0), "1.0");
         assert_eq!(format_double(100.0), "100.0");
         assert_eq!(format_double(2.71), "2.71");

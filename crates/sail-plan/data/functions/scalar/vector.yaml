@@ -1,0 +1,109 @@
+- name: "vector_cosine_similarity"
+  scope: "sql_builtin"
+  group: "vector_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.VectorCosineSimilarity"
+  signatures:
+    - "vector_cosine_similarity(array1, array2)"
+  usage: |2-
+    
+        vector_cosine_similarity(array1, array2) - Returns the cosine similarity between two float vectors.
+        The vectors must have the same dimension.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));
+           0.9746319
+      
+  since: "4.2.0"
+
+- name: "vector_inner_product"
+  scope: "sql_builtin"
+  group: "vector_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.VectorInnerProduct"
+  signatures:
+    - "vector_inner_product(array1, array2)"
+  usage: |2-
+    
+        vector_inner_product(array1, array2) - Returns the inner product (dot product) between two float vectors.
+        The vectors must have the same dimension.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT vector_inner_product(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));
+           32.0
+      
+  since: "4.2.0"
+
+- name: "vector_l2_distance"
+  scope: "sql_builtin"
+  group: "vector_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.VectorL2Distance"
+  signatures:
+    - "vector_l2_distance(array1, array2)"
+  usage: |2-
+    
+        vector_l2_distance(array1, array2) - Returns the Euclidean (L2) distance between two float vectors.
+        The vectors must have the same dimension.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT vector_l2_distance(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));
+           5.196152
+      
+  since: "4.2.0"
+
+- name: "vector_norm"
+  scope: "sql_builtin"
+  group: "vector_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.VectorNorm"
+  signatures:
+    - "vector_norm(vector, degree)"
+  usage: |2-
+    
+        vector_norm(vector, degree) - Returns the Lp norm of a float vector using the specified degree.
+        Degree defaults to 2.0 (Euclidean norm) if unspecified. Supported values: 1.0 (L1 norm),
+        2.0 (L2 norm), float('inf') (infinity norm).
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT vector_norm(array(3.0F, 4.0F), 2.0F);
+           5.0
+          > SELECT vector_norm(array(3.0F, 4.0F), 1.0F);
+           7.0
+          > SELECT vector_norm(array(3.0F, 4.0F), float('inf'));
+           4.0
+      
+  since: "4.2.0"
+
+- name: "vector_normalize"
+  scope: "sql_builtin"
+  group: "vector_funcs"
+  source: "built-in"
+  class_name: "org.apache.spark.sql.catalyst.expressions.VectorNormalize"
+  signatures:
+    - "vector_normalize(vector, degree)"
+  usage: |2-
+    
+        vector_normalize(vector, degree) - Normalizes a float vector to unit length using the specified norm degree.
+        Degree defaults to 2.0 (Euclidean norm) if unspecified. Supported values: 1.0 (L1 norm),
+        2.0 (L2 norm), float('inf') (infinity norm).
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT vector_normalize(array(3.0F, 4.0F), 2.0F);
+           [0.6,0.8]
+          > SELECT vector_normalize(array(3.0F, 4.0F), 1.0F);
+           [0.42857143,0.5714286]
+          > SELECT vector_normalize(array(3.0F, 4.0F), float('inf'));
+           [0.75,1.0]
+      
+  since: "4.2.0"

@@ -14,6 +14,7 @@
 name = "sail-catalog-iceberg"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -38,9 +39,8 @@ tokio = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
 wiremock = { workspace = true }
-testcontainers = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }

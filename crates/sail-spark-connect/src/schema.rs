@@ -2,7 +2,7 @@ use std::fmt;
 use std::fmt::Display;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
-use sail_common::string::escape_meta_characters;
+use sail_common::utils::string::escape_meta_characters;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::connect as sc;
@@ -42,7 +42,7 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
         _ => return write!(f, "?"),
     };
     match kind {
-        Kind::Null(_) => write!(f, "null"),
+        Kind::Null(_) => write!(f, "void"),
         Kind::Binary(_) => write!(f, "binary"),
         Kind::Boolean(_) => write!(f, "boolean"),
         Kind::Byte(_) => write!(f, "byte"),

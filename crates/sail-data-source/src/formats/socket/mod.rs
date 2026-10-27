@@ -10,7 +10,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion_common::{Result, not_impl_err, plan_err};
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::datasource::{DataSource, SinkInfo, SourceInfo};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
 pub use crate::formats::socket::reader::SocketSourceExec;
@@ -21,10 +21,10 @@ pub use crate::options::r#gen::SocketReadOptions;
 /// Read test data from a TCP socket for testing purposes.
 /// The record batches contain a single string column corresponding to lines read from the socket.
 #[derive(Debug)]
-pub struct SocketTableFormat;
+pub struct SocketDataSource;
 
 #[async_trait]
-impl TableFormat for SocketTableFormat {
+impl DataSource for SocketDataSource {
     fn name(&self) -> &str {
         "socket"
     }
@@ -46,13 +46,13 @@ impl TableFormat for SocketTableFormat {
             read_case_sensitive: _,
         } = info;
         if !constraints.deref().is_empty() {
-            return plan_err!("the socket table format does not support constraints");
+            return plan_err!("the socket data source does not support constraints");
         }
         if !partition_by.is_empty() {
-            return plan_err!("the socket table format does not support partitioning");
+            return plan_err!("the socket data source does not support partitioning");
         }
         if bucket_by.is_some() || !sort_order.is_empty() {
-            return plan_err!("the socket table format does not support bucketing");
+            return plan_err!("the socket data source does not support bucketing");
         }
         let schema = match schema {
             Some(schema) if !schema.fields.is_empty() => schema,
@@ -66,6 +66,6 @@ impl TableFormat for SocketTableFormat {
     }
 
     async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
-        not_impl_err!("socket table format writer")
+        not_impl_err!("socket data source writer")
     }
 }

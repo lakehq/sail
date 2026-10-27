@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::prelude::SessionContext;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
@@ -10,6 +11,7 @@ use datafusion_expr::{
     WindowFunctionDefinition, WindowUDF, cast, expr, lit,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::config::PlanConfig;
@@ -204,6 +206,7 @@ pub struct AggFunctionInput<'a> {
     pub ignore_nulls: Option<bool>,
     pub filter: Option<Box<expr::Expr>>,
     pub order_by: Vec<expr::Sort>,
+    pub preserve_count_argument_columns: bool,
     pub function_context: FunctionContextInput<'a>,
 }
 
@@ -236,6 +239,7 @@ impl AggFunctionBuilder {
                 ignore_nulls,
                 filter,
                 order_by,
+                preserve_count_argument_columns: _,
                 function_context: _function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
@@ -262,14 +266,9 @@ impl AggFunctionBuilder {
         Arc::new(f)
     }
 
-    #[expect(dead_code)]
     pub fn unknown(name: &str) -> AggFunction {
         let name = name.to_string();
-        Arc::new(move |_| {
-            Err(PlanError::todo(format!(
-                "unknown aggregate function: {name}"
-            )))
-        })
+        Arc::new(move |_| Err(PlanError::todo(format!("function: {name}"))))
     }
 }
 
@@ -480,4 +479,16 @@ pub(crate) fn theta_args_with_default_lg(
             "{function_name} requires 1 or 2 arguments, got {count}"
         ))),
     }
+}
+
+// TODO: Match Catalyst constant folding and NullPropagation before extracting opaque
+//  Python or Variant scalar calls, so a foldable NULL can eliminate them.
+pub fn expr_contains_spark_cast_to_variant(body: &expr::Expr) -> PlanResult<bool> {
+    Ok(body.exists(|expression| {
+        Ok(matches!(
+            expression,
+            expr::Expr::ScalarFunction(function)
+                if function.func.inner().is::<SparkCastToVariant>()
+        ))
+    })?)
 }

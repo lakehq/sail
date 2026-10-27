@@ -1,17 +1,36 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::execution::SessionState;
+use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion::catalog::Session;
+use datafusion::common::config::TableParquetOptions;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::execution::context::QueryPlanner;
-use datafusion::physical_expr::{LexOrdering, OrderingRequirements};
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
+use datafusion::physical_expr::{
+    LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
+};
 use datafusion::physical_optimizer::output_requirements::OutputRequirementExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{DFSchema, internal_err};
+use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{DFSchema, Statistics, internal_datafusion_err, internal_err};
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::source::{DataSource, DataSourceExec};
+use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
-use datafusion_physical_expr::{Partitioning, create_physical_sort_exprs};
+use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
+use datafusion_physical_expr::{Partitioning, RangePartitioning, create_physical_sort_exprs};
+use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use sail_common_datafusion::streaming::event::schema::{
@@ -21,12 +40,16 @@ use sail_data_source::formats::console::ConsolePhysicalPlanner;
 use sail_data_source::formats::noop::NoopPhysicalPlanner;
 use sail_data_source::formats::python::PythonPhysicalPlanner;
 use sail_data_source::listing::planner::ListingPhysicalPlanner;
+use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
+use sail_logical_plan::remote_checkpoint::{
+    RemoteCheckpointCommandNode, RemoteCheckpointRelationNode,
+};
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
 use sail_logical_plan::show_string::ShowStringNode;
@@ -39,9 +62,14 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::remote_checkpoint::{
+    CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
+    checkpoint_storage_schema,
+};
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -51,6 +79,7 @@ use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
+use sail_plan::procedure::LakeProcedureNode;
 
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
@@ -60,15 +89,18 @@ impl QueryPlanner for ExtensionQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        // TODO: show rewriters and the final logical plan in `EXPLAIN`
-        // Note: the rewriter list is currently empty but may be useful for future logical rewrites.
-        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![];
+        // TODO: show rewriters and the final logical plan in `EXPLAIN`.
+        let rewriters: Vec<Box<dyn LogicalRewriter>> = vec![
+            Box::new(DeltaMetadataAggregateRewriter),
+            Box::new(sail_iceberg::logical::IcebergMetadataAggregateRewriter),
+        ];
         let mut logical_plan = logical_plan.clone();
         for rewriter in rewriters {
-            logical_plan = rewriter.rewrite(logical_plan)?.data
+            logical_plan = rewriter.rewrite(logical_plan, session).await?.data;
         }
+        logical_plan = sail_plan::function::prepare_async_functions(logical_plan)?;
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),
@@ -80,10 +112,58 @@ impl QueryPlanner for ExtensionQueryPlanner {
             Arc::new(ExtensionPhysicalPlanner),
         ];
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
-        planner
-            .create_physical_plan(&logical_plan, session_state)
-            .await
+        let plan = planner.create_physical_plan(&logical_plan, session).await?;
+        ensure_scalar_subquery_nullability(plan)
     }
+}
+
+#[expect(deprecated)]
+fn ensure_scalar_subquery_nullability(
+    plan: Arc<dyn ExecutionPlan>,
+) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|plan| {
+        let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
+            return Ok(Transformed::no(plan));
+        };
+
+        let mut changed = false;
+        let expressions = projection
+            .expr()
+            .iter()
+            .map(|projection_expr| {
+                let transformed = Arc::clone(&projection_expr.expr).transform_up(|expression| {
+                    let Some(scalar) = expression.downcast_ref::<ScalarSubqueryExpr>() else {
+                        return Ok(Transformed::no(expression));
+                    };
+                    if scalar.nullable() {
+                        return Ok(Transformed::no(expression));
+                    }
+                    Ok(Transformed::yes(Arc::new(ScalarSubqueryExpr::new(
+                        scalar.data_type().clone(),
+                        true,
+                        scalar.index(),
+                        scalar.results().clone(),
+                    ))
+                        as Arc<dyn PhysicalExpr>))
+                })?;
+                changed |= transformed.transformed;
+                Ok(ProjectionExpr::new(
+                    transformed.data,
+                    projection_expr.alias.clone(),
+                ))
+            })
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+
+        if changed {
+            Ok(Transformed::yes(Arc::new(ProjectionExec::try_new(
+                expressions,
+                Arc::clone(projection.input()),
+            )?) as Arc<dyn ExecutionPlan>))
+        } else {
+            Ok(Transformed::no(plan))
+        }
+    })
+    .data()
 }
 
 pub struct ExtensionPhysicalPlanner;
@@ -96,11 +176,195 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<RangeNode>()
+            node.as_any().downcast_ref::<RemoteCheckpointCommandNode>()
         {
+            let [_logical_input] = logical_inputs else {
+                return internal_err!("RemoteCheckpointCommand requires exactly one logical input");
+            };
+            let [input] = physical_inputs else {
+                return internal_err!(
+                    "RemoteCheckpointCommand requires exactly one physical input"
+                );
+            };
+            let registry = session.extension::<RemoteCheckpointRegistry>()?;
+            let (object_store_url, prefix) =
+                registry.resolve_relation(session.runtime_env().as_ref(), node.relation_id())?;
+            let storage_schema = checkpoint_storage_schema(node.logical_schema());
+            let output_partitioning =
+                checkpoint_schema_partitioning(input.output_partitioning(), &storage_schema)?;
+            let output_ordering = input
+                .output_ordering()
+                .map(|ordering| checkpoint_schema_ordering(ordering, &storage_schema))
+                .transpose()?;
+            let writer: Arc<dyn ExecutionPlan> = Arc::new(RemoteCheckpointWriteExec::try_new(
+                Arc::clone(input),
+                object_store_url.clone(),
+                prefix.clone(),
+                Arc::clone(&storage_schema),
+                input.output_ordering().cloned(),
+            )?);
+            Arc::new(RemoteCheckpointCommitExec::new(
+                writer,
+                node.relation_id().to_string(),
+                object_store_url,
+                prefix,
+                Arc::clone(node.logical_schema()),
+                storage_schema,
+                output_partitioning,
+                output_ordering,
+            ))
+        } else if let Some(node) = node.as_any().downcast_ref::<RemoteCheckpointRelationNode>() {
+            let registry = session.extension::<RemoteCheckpointRegistry>()?;
+            let descriptor = registry.get(node.relation_id())?.ok_or_else(|| {
+                datafusion_common::DataFusionError::Plan(format!(
+                    "checkpoint relation is not available: {}",
+                    node.relation_id()
+                ))
+            })?;
+            let logical_schema = UserDefinedLogicalNode::schema(node).inner().clone();
+            let schema_matches = descriptor.storage_schema.fields().len()
+                == logical_schema.fields().len()
+                && descriptor
+                    .storage_schema
+                    .fields()
+                    .iter()
+                    .zip(logical_schema.fields())
+                    .all(|(storage, logical)| storage.data_type() == logical.data_type());
+            if !schema_matches {
+                return internal_err!(
+                    "checkpoint storage schema does not match the relation schema by position"
+                );
+            }
+            let output_partitioning = checkpoint_schema_partitioning(
+                &descriptor.output_partitioning,
+                logical_schema.as_ref(),
+            )?;
+            let storage_output_ordering = descriptor
+                .output_ordering
+                .as_ref()
+                .map(|ordering| {
+                    checkpoint_schema_ordering(ordering, descriptor.storage_schema.as_ref())
+                })
+                .transpose()?;
+            let scan: Arc<dyn ExecutionPlan> = if descriptor.storage_schema.fields().is_empty() {
+                let partitions = descriptor
+                    .partitions
+                    .iter()
+                    .map(|partition| {
+                        let row_count = usize::try_from(partition.row_count).map_err(|_| {
+                            datafusion_common::DataFusionError::Plan(
+                                "checkpoint row count is too large".to_string(),
+                            )
+                        })?;
+                        let batch = RecordBatch::try_new_with_options(
+                            Arc::clone(&descriptor.storage_schema),
+                            vec![],
+                            &RecordBatchOptions::new().with_row_count(Some(row_count)),
+                        )?;
+                        Ok(vec![batch])
+                    })
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
+                let source = MemorySourceConfig::try_new(
+                    &partitions,
+                    Arc::clone(&descriptor.storage_schema),
+                    None,
+                )?
+                .try_with_sort_information(storage_output_ordering.clone().into_iter().collect())?;
+                Arc::new(DataSourceExec::new(Arc::new(CheckpointDataSource::new(
+                    Arc::new(source),
+                    output_partitioning,
+                ))))
+            } else {
+                let parquet_options = TableParquetOptions {
+                    global: session.config().options().execution.parquet.clone(),
+                    ..Default::default()
+                };
+                let source =
+                    ParquetSource::new(TableSchema::from(Arc::clone(&descriptor.storage_schema)))
+                        .with_table_parquet_options(parquet_options);
+                let file_groups = descriptor
+                    .partitions
+                    .iter()
+                    .map(|partition| {
+                        let files = partition
+                            .file
+                            .as_ref()
+                            .map(|file| {
+                                let mut statistics =
+                                    Statistics::new_unknown(descriptor.storage_schema.as_ref());
+                                statistics.num_rows = Precision::Exact(
+                                    usize::try_from(partition.row_count).map_err(|_| {
+                                        datafusion_common::DataFusionError::Plan(
+                                            "checkpoint row count is too large".to_string(),
+                                        )
+                                    })?,
+                                );
+                                Ok(PartitionedFile::new(file.location.to_string(), file.size)
+                                    .with_statistics(Arc::new(statistics)))
+                            })
+                            .into_iter()
+                            .collect::<datafusion_common::Result<Vec<_>>>()?;
+                        Ok(FileGroup::new(files))
+                    })
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
+                let total_rows =
+                    descriptor
+                        .partitions
+                        .iter()
+                        .try_fold(0_u64, |total, partition| {
+                            total.checked_add(partition.row_count).ok_or_else(|| {
+                                datafusion_common::DataFusionError::Plan(
+                                    "checkpoint row count overflow".to_string(),
+                                )
+                            })
+                        })?;
+                let mut statistics = Statistics::new_unknown(descriptor.storage_schema.as_ref());
+                statistics.num_rows =
+                    Precision::Exact(usize::try_from(total_rows).map_err(|_| {
+                        datafusion_common::DataFusionError::Plan(
+                            "checkpoint row count is too large".to_string(),
+                        )
+                    })?);
+                let scan = FileScanConfigBuilder::new(
+                    descriptor.object_store_url.clone(),
+                    Arc::new(source),
+                )
+                .with_file_groups(file_groups)
+                .with_statistics(statistics)
+                .with_output_ordering(storage_output_ordering.into_iter().collect())
+                .with_preserve_order(true)
+                .build();
+                let projection = descriptor
+                    .storage_schema
+                    .fields()
+                    .iter()
+                    .zip(logical_schema.fields())
+                    .enumerate()
+                    .map(|(index, (storage, logical))| {
+                        ProjectionExpr::new(
+                            Arc::new(Column::new(storage.name(), index)) as Arc<dyn PhysicalExpr>,
+                            logical.name(),
+                        )
+                    })
+                    .collect::<ProjectionExprs>();
+                let source = scan
+                    .try_swapping_with_projection(&projection)?
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "checkpoint Parquet source rejected its column projection"
+                        )
+                    })?;
+                Arc::new(DataSourceExec::new(Arc::new(CheckpointDataSource::new(
+                    source,
+                    output_partitioning,
+                ))))
+            };
+            scan
+        } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();
             let projection = (0..schema.fields().len()).collect();
             Arc::new(RangeExec::try_new(
@@ -154,7 +418,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             let expr = create_physical_sort_exprs(
                 node.sort_expr(),
                 UserDefinedLogicalNode::schema(node),
-                session_state.execution_props(),
+                session.execution_props(),
+                planning_ctx,
             )?;
             let Some(ordering) = LexOrdering::new(expr) else {
                 return internal_err!("SortExec requires at least one sort expression");
@@ -170,7 +435,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             let expr = create_physical_sort_exprs(
                 node.sort_expr(),
                 UserDefinedLogicalNode::schema(node),
-                session_state.execution_props(),
+                session.execution_props(),
+                planning_ctx,
             )?;
             let Some(ordering) = LexOrdering::new(expr) else {
                 return internal_err!("RequiredSort requires at least one sort expression");
@@ -179,7 +445,10 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 .with_fetch(node.fetch())
                 .with_preserve_partitioning(node.preserve_partitioning());
             let requirements = OrderingRequirements::from(sort.expr().clone());
-            let distribution = sort.required_input_distribution().swap_remove(0);
+            let distribution = sort
+                .input_distribution_requirements()
+                .into_per_child()
+                .swap_remove(0);
             Arc::new(OutputRequirementExec::new(
                 Arc::new(sort),
                 Some(requirements),
@@ -208,7 +477,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.num_partitions(),
                 node.kind(),
                 node.partitioning_expressions(),
-                session_state,
+                session,
+                planning_ctx,
             )?;
             Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
         } else if node.as_any().is::<StreamSourceAdapterNode>() {
@@ -219,12 +489,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         } else if let Some(node) = node.as_any().downcast_ref::<StreamSourceWrapperNode>() {
             let plan = node
                 .source()
-                .scan(
-                    session_state,
-                    node.projection(),
-                    node.filters(),
-                    node.fetch(),
-                )
+                .scan(session, node.projection(), node.filters(), node.fetch())
                 .await?;
             match node.names() {
                 Some(names) => {
@@ -253,7 +518,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             let predicate = planner.create_physical_expr(
                 node.predicate(),
                 logical_input.schema(),
-                session_state,
+                session,
+                planning_ctx,
             )?;
             Arc::new(StreamFilterExec::try_new(input.clone(), predicate)?)
         } else if node.as_any().is::<StreamCollectorNode>() {
@@ -264,6 +530,20 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         } else if let Some(node) = node.as_any().downcast_ref::<CatalogCommandNode>() {
             let schema = node.schema().inner().clone();
             Arc::new(CatalogCommandExec::new(node.command().clone(), schema))
+        } else if let Some(node) = node.as_any().downcast_ref::<LakeProcedureNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("LakeProcedure requires exactly one physical input");
+            };
+            sail_iceberg::physical_plan::validate_iceberg_procedure_call_identity(
+                input,
+                node.call(),
+            )?;
+            let procedure = LakeProcedureExec::try_new(
+                node.call().clone(),
+                input.clone(),
+                node.root_placement(),
+            )?;
+            Arc::new(procedure)
         } else if let Some(_node) = node.as_any().downcast_ref::<BarrierNode>() {
             let (plan, preconditions) = physical_inputs.split_last().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(format!(
@@ -283,6 +563,70 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
     }
 }
 
+// Column ordinals survive logical/storage renames; names may be duplicated or synthetic.
+fn checkpoint_schema_partitioning(
+    partitioning: &Partitioning,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<Partitioning> {
+    match partitioning {
+        Partitioning::RoundRobinBatch(partitions) => Ok(Partitioning::RoundRobinBatch(*partitions)),
+        Partitioning::Hash(expressions, partitions) => Ok(Partitioning::Hash(
+            expressions
+                .iter()
+                .map(|expression| checkpoint_schema_expression(Arc::clone(expression), schema))
+                .collect::<datafusion_common::Result<Vec<_>>>()?,
+            *partitions,
+        )),
+        Partitioning::Range(range) => Ok(Partitioning::Range(RangePartitioning::try_new(
+            checkpoint_schema_ordering(range.ordering(), schema)?,
+            range.split_points().to_vec(),
+        )?)),
+        Partitioning::UnknownPartitioning(partitions) => {
+            Ok(Partitioning::UnknownPartitioning(*partitions))
+        }
+    }
+}
+
+fn checkpoint_schema_ordering(
+    ordering: &LexOrdering,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<LexOrdering> {
+    let expressions = ordering
+        .iter()
+        .map(|sort| {
+            Ok(PhysicalSortExpr::new(
+                checkpoint_schema_expression(Arc::clone(&sort.expr), schema)?,
+                sort.options,
+            ))
+        })
+        .collect::<datafusion_common::Result<Vec<_>>>()?;
+    LexOrdering::new(expressions)
+        .ok_or_else(|| internal_datafusion_err!("checkpoint output ordering cannot be empty"))
+}
+
+fn checkpoint_schema_expression(
+    expression: Arc<dyn PhysicalExpr>,
+    schema: &datafusion::arrow::datatypes::Schema,
+) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+    expression
+        .transform_down(|expression| {
+            let Some(column) = expression.downcast_ref::<Column>() else {
+                return Ok(Transformed::no(expression));
+            };
+            let field = schema.fields().get(column.index()).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "checkpoint property references column {} at invalid index {}",
+                    column.name(),
+                    column.index()
+                )
+            })?;
+            Ok(Transformed::yes(
+                Arc::new(Column::new(field.name(), column.index())) as Arc<dyn PhysicalExpr>,
+            ))
+        })
+        .data()
+}
+
 /// Plans the explicit repartitioning emitted by the logical planner.
 /// Empty expressions keep round-robin explicit here, while hash repartitioning
 /// and `UnknownPartitioning(1)` are normalized later by `RewriteExplicitRepartition`.
@@ -293,7 +637,8 @@ fn plan_explicit_partitioning(
     num_partitions: Option<usize>,
     kind: ExplicitRepartitionKind,
     expressions: &[Expr],
-    session_state: &SessionState,
+    session: &dyn Session,
+    planning_ctx: &PhysicalPlanningContext,
 ) -> datafusion_common::Result<Partitioning> {
     let input_partition_count = input.properties().output_partitioning().partition_count();
     match kind {
@@ -325,7 +670,7 @@ fn plan_explicit_partitioning(
             let num_partitions = num_partitions.max(1);
             let expressions = expressions
                 .iter()
-                .map(|e| planner.create_physical_expr(e, schema, session_state))
+                .map(|e| planner.create_physical_expr(e, schema, session, planning_ctx))
                 .collect::<datafusion_common::Result<Vec<_>>>()?;
             Ok(Partitioning::Hash(expressions, num_partitions))
         }
@@ -342,16 +687,274 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::execution::runtime_env::RuntimeEnv;
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion::physical_plan::collect;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::ToDFSchema;
-    use datafusion_expr::col;
+    use datafusion_expr::{LogicalPlanBuilder, col};
+    use object_store::memory::InMemory;
+    use sail_common::spec;
+    use sail_plan::config::PlanConfig;
 
     use super::*;
 
     fn schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]))
+    }
+
+    #[test]
+    fn scalar_subquery_projection_allows_zero_row_null() -> datafusion_common::Result<()> {
+        use datafusion::logical_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+        use datafusion::physical_expr::expressions::BinaryExpr;
+
+        let input_schema = schema();
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&input_schema)));
+        let scalar = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int64,
+            false,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+        let shifted = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("id", 0)),
+            datafusion_expr::Operator::Plus,
+            scalar,
+        ));
+        let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [ProjectionExpr::new(shifted, "shifted")],
+            input,
+        )?);
+
+        assert!(!projection.schema().field(0).is_nullable());
+        let projection = ensure_scalar_subquery_nullability(projection)?;
+        assert!(projection.schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_properties_map_columns_to_target_schema_by_position() {
+        let target_schema = Schema::new(vec![
+            Field::new("_c0", DataType::Int64, false),
+            Field::new("_c1", DataType::Int64, false),
+        ]);
+        let first = Arc::new(Column::new("value", 0)) as Arc<dyn PhysicalExpr>;
+        let second = Arc::new(Column::new("value", 1)) as Arc<dyn PhysicalExpr>;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(first)]).unwrap();
+
+        let partitioning =
+            checkpoint_schema_partitioning(&Partitioning::Hash(vec![second], 2), &target_schema)
+                .unwrap();
+        let ordering = checkpoint_schema_ordering(&ordering, &target_schema).unwrap();
+
+        let Partitioning::Hash(expressions, 2) = partitioning else {
+            panic!("expected hash partitioning");
+        };
+        let partition_column = expressions[0].downcast_ref::<Column>().unwrap();
+        assert_eq!(partition_column.name(), "_c1");
+        assert_eq!(partition_column.index(), 1);
+        let ordering_column = ordering.first().expr.downcast_ref::<Column>().unwrap();
+        assert_eq!(ordering_column.name(), "_c0");
+        assert_eq!(ordering_column.index(), 0);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_command_optimizer_coalesces_writer_before_commit()
+    -> datafusion_common::Result<()> {
+        let registry = Arc::new(RemoteCheckpointRegistry::new(
+            Some("memory:///checkpoint".to_string()),
+            "session".to_string(),
+        ));
+        let config = SessionConfig::new().with_extension(registry);
+        let runtime_env = Arc::new(RuntimeEnv::default());
+        let object_store_url =
+            datafusion::execution::object_store::ObjectStoreUrl::parse("memory://")?;
+        runtime_env.register_object_store(object_store_url.as_ref(), Arc::new(InMemory::new()));
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let command = spec::Plan::Command(spec::CommandPlan::new(
+            spec::CommandNode::RemoteCheckpoint {
+                relation_id: "relation".to_string(),
+                input: Box::new(spec::QueryPlan::new(spec::QueryNode::Range(spec::Range {
+                    start: Some(0),
+                    end: 10,
+                    step: 1,
+                    num_partitions: Some(2),
+                }))),
+            },
+        ));
+
+        let (physical, _) =
+            sail_plan::resolve_and_execute_plan(&context, Arc::new(PlanConfig::default()), command)
+                .await
+                .map_err(|error| internal_datafusion_err!("{error}"))?;
+
+        let commit = physical
+            .downcast_ref::<RemoteCheckpointCommitExec>()
+            .ok_or_else(|| internal_datafusion_err!("checkpoint command did not plan a commit"))?;
+        let coalesce = commit
+            .input()
+            .downcast_ref::<CoalescePartitionsExec>()
+            .ok_or_else(|| internal_datafusion_err!("checkpoint commit input is not coalesced"))?;
+        assert!(coalesce.input().is::<RemoteCheckpointWriteExec>());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_column_checkpoint_scan_preserves_partition_rows() -> datafusion_common::Result<()>
+    {
+        let registry = Arc::new(RemoteCheckpointRegistry::new(
+            Some("memory:///checkpoint".to_string()),
+            "session".to_string(),
+        ));
+        registry.insert(sail_cache::remote_checkpoint::RemoteCheckpointDescriptor {
+            relation_id: "zero-columns".to_string(),
+            object_store_url: datafusion::execution::object_store::ObjectStoreUrl::parse(
+                "memory://",
+            )?,
+            prefix: object_store::path::Path::from("checkpoint/session/zero-columns"),
+            logical_schema: Arc::new(Schema::empty()),
+            storage_schema: Arc::new(Schema::empty()),
+            output_partitioning: Partitioning::RoundRobinBatch(2),
+            output_ordering: None,
+            partitions: vec![
+                sail_cache::remote_checkpoint::RemoteCheckpointPartition {
+                    partition: 0,
+                    row_count: 2,
+                    file: None,
+                },
+                sail_cache::remote_checkpoint::RemoteCheckpointPartition {
+                    partition: 1,
+                    row_count: 3,
+                    file: None,
+                },
+            ],
+        })?;
+        let config = SessionConfig::new().with_extension(registry);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let logical = LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(RemoteCheckpointRelationNode::try_new(
+                "zero-columns".to_string(),
+                Arc::new(Schema::empty()),
+            )?),
+        });
+        let state = context.state();
+        let physical = state
+            .query_planner()
+            .create_physical_plan(&logical, &state)
+            .await?;
+
+        assert!(physical.is::<DataSourceExec>());
+        assert!(matches!(
+            physical.output_partitioning(),
+            Partitioning::RoundRobinBatch(2)
+        ));
+        let batches = collect(physical, context.task_ctx()).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+        assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn checkpoint_scan_uses_data_source_properties() -> datafusion_common::Result<()> {
+        let logical_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let storage_schema = checkpoint_storage_schema(&logical_schema);
+        let storage_key = Arc::new(Column::new("_c0", 0)) as Arc<dyn PhysicalExpr>;
+        let registry = Arc::new(RemoteCheckpointRegistry::new(
+            Some("memory:///checkpoint".to_string()),
+            "session".to_string(),
+        ));
+        registry.insert(sail_cache::remote_checkpoint::RemoteCheckpointDescriptor {
+            relation_id: "relation".to_string(),
+            object_store_url: datafusion::execution::object_store::ObjectStoreUrl::parse(
+                "memory://",
+            )?,
+            prefix: object_store::path::Path::from("checkpoint/session/relation"),
+            logical_schema: Arc::clone(&logical_schema),
+            storage_schema,
+            output_partitioning: Partitioning::Hash(vec![Arc::clone(&storage_key)], 2),
+            output_ordering: LexOrdering::new([PhysicalSortExpr::new_default(storage_key)]),
+            partitions: (0..2)
+                .map(
+                    |partition| sail_cache::remote_checkpoint::RemoteCheckpointPartition {
+                        partition,
+                        row_count: 0,
+                        file: None,
+                    },
+                )
+                .collect(),
+        })?;
+        let config = SessionConfig::new().with_extension(registry);
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .with_query_planner(new_query_planner())
+            .build();
+        let context = SessionContext::new_with_state(state);
+        let logical = LogicalPlan::Extension(datafusion_expr::Extension {
+            node: Arc::new(RemoteCheckpointRelationNode::try_new(
+                "relation".to_string(),
+                logical_schema,
+            )?),
+        });
+        let state = context.state();
+        let physical = state
+            .query_planner()
+            .create_physical_plan(&logical, &state)
+            .await?;
+
+        assert!(physical.is::<DataSourceExec>());
+        let Partitioning::Hash(expressions, 2) = physical.output_partitioning() else {
+            return internal_err!("checkpoint scan lost its hash partitioning");
+        };
+        let partition_column = expressions[0]
+            .downcast_ref::<Column>()
+            .ok_or_else(|| internal_datafusion_err!("checkpoint hash key is not a column"))?;
+        assert_eq!(partition_column.name(), "id");
+        assert_eq!(partition_column.index(), 0);
+        let ordering = physical
+            .output_ordering()
+            .ok_or_else(|| internal_datafusion_err!("checkpoint scan lost its ordering"))?;
+        let ordering_column = ordering[0]
+            .expr
+            .downcast_ref::<Column>()
+            .ok_or_else(|| internal_datafusion_err!("checkpoint ordering key is not a column"))?;
+        assert_eq!(ordering_column.name(), "id");
+        assert_eq!(ordering_column.index(), 0);
+
+        let projected_logical = LogicalPlanBuilder::from(logical)
+            .project(vec![col("id").alias("key")])?
+            .build()?;
+        let projected = state
+            .query_planner()
+            .create_physical_plan(&projected_logical, &state)
+            .await?;
+        let Partitioning::Hash(expressions, 2) = projected.output_partitioning() else {
+            return internal_err!("checkpoint projection lost its hash partitioning");
+        };
+        let partition_column = expressions[0]
+            .downcast_ref::<Column>()
+            .ok_or_else(|| internal_datafusion_err!("projected hash key is not a column"))?;
+        assert_eq!(partition_column.name(), "key");
+        assert_eq!(partition_column.index(), 0);
+        Ok(())
     }
 
     fn plan_partitioning(
@@ -363,6 +966,7 @@ mod tests {
     ) -> datafusion_common::Result<Partitioning> {
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![]);
         let session_state = SessionContext::new().state();
+        let planning_ctx = PhysicalPlanningContext::default();
         let df_schema = schema.as_ref().clone().to_dfschema()?;
 
         plan_explicit_partitioning(
@@ -373,6 +977,7 @@ mod tests {
             kind,
             expressions,
             &session_state,
+            &planning_ctx,
         )
     }
 

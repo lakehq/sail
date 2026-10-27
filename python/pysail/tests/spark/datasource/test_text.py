@@ -23,6 +23,17 @@ def test_text_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_text_path_glob_filter(spark, tmp_path):
+    path = tmp_path / "text_path_glob_filter"
+    path.mkdir()
+    (path / "keep.txt").write_text("keep\n")
+    (path / "drop.txt").write_text("drop\n")
+
+    df = spark.read.option("pathGlobFilter", "keep.*").text(str(path))
+
+    assert df.collect() == [Row(value="keep")]
+
+
 def test_text_read_write_compressed(spark, sample_df, tmp_path):
     path = str(tmp_path / "text_compressed_gzip")
     sample_df = sample_df.select("col1")
@@ -115,3 +126,15 @@ def test_text_read_partition_columns(spark, tmp_path):
     }
     expected_us_rows = 3
     assert read_df.filter("country = 'us'").count() == expected_us_rows
+
+
+def test_text_read_large_file(spark, tmp_path):
+    # The file is larger than 1 MiB, so the scan is eligible for byte-range splitting.
+    path = tmp_path / "text_large"
+    path.mkdir()
+    lines = [f"line {i}" for i in range(300_000)]
+    content = "".join(f"{line}\n" for line in lines)
+    (path / "large.txt").write_bytes(content.encode("utf-8"))
+
+    assert spark.read.text(str(path), wholetext=True).collect() == [Row(value=content)]
+    assert sorted(r.value for r in spark.read.text(str(path)).collect()) == sorted(lines)

@@ -17,6 +17,9 @@ use datafusion_expr_common::signature::Volatility;
 use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
 
+use crate::scalar::datetime::timestamp_parser::parse_timestamp_string;
+use crate::schema_inference::{InferredType, TypeMerger};
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfJson {
     signature: Signature,
@@ -200,26 +203,6 @@ fn infer_json_schema_type(json_string: &str, options: &SparkSchemaOfJsonOptions)
 
 /// The maximum precision of Spark's `DecimalType`.
 const MAX_DECIMAL_PRECISION: usize = 38;
-
-/// A JSON type inferred from a literal JSON string, mirroring the types that
-/// Spark's `JsonInferSchema` can produce for `schema_of_json`.
-#[derive(Debug, Clone, PartialEq)]
-enum InferredType {
-    Null,
-    Boolean,
-    Long,
-    /// A number inferred as a decimal with the given precision and scale.
-    Decimal(u8, u8),
-    Double,
-    String,
-    /// A string inferred as a timestamp when the `inferTimestamp` option is
-    /// enabled and the value matches a recognized timestamp/date pattern.
-    Timestamp,
-    Array(Box<InferredType>),
-    /// Fields are sorted by name and duplicate names are preserved, matching
-    /// Spark's `JsonInferSchema`.
-    Struct(Vec<(String, InferredType)>),
-}
 
 /// A parser that infers the Spark type of a literal JSON string, mirroring
 /// the Jackson lexing behavior that Spark relies on for `schema_of_json`,
@@ -585,178 +568,6 @@ fn is_unquoted_name_char(c: char) -> bool {
         || !c.is_ascii()
 }
 
-/// The parsed pieces of a timestamp string: nine integer segments
-/// (year, month, day, hour, minute, second, microsecond, and two spare zone
-/// segments), an optional timezone string, and whether only a time was given.
-struct ParsedTimestamp {
-    segments: [i64; 9],
-    timezone: Option<String>,
-    just_time: bool,
-}
-
-/// Mirrors Spark's `isValidDigits`: the year segment allows 4-6 digits, the
-/// microsecond segment any number of digits, the zone segment 0-2 digits, and
-/// every other segment 1-2 digits.
-fn is_valid_timestamp_digits(segment: usize, digits: usize) -> bool {
-    const MAX_DIGITS_YEAR: usize = 6;
-    segment == 6
-        || (segment == 0 && (4..=MAX_DIGITS_YEAR).contains(&digits))
-        || (segment == 7 && digits <= 2)
-        || (segment != 0 && segment != 6 && segment != 7 && (1..=2).contains(&digits))
-}
-
-/// Spark trims leading/trailing whitespace and ISO control characters.
-fn is_whitespace_or_iso_control(b: u8) -> bool {
-    b <= b' ' || b == 0x7f
-}
-
-/// A faithful port of Spark's `SparkDateTimeUtils.parseTimestampString`. Splits
-/// the input into timestamp segments using Spark's exact delimiter rules, or
-/// returns `None` if the string is not shaped like a timestamp.
-fn parse_timestamp_string(s: &str) -> Option<ParsedTimestamp> {
-    let bytes = s.as_bytes();
-    let mut segments: [i64; 9] = [1, 1, 1, 0, 0, 0, 0, 0, 0];
-    let mut i: usize = 0;
-    let mut current_value: i64 = 0;
-    let mut current_digits: usize = 0;
-
-    let mut start = 0;
-    while start < bytes.len() && is_whitespace_or_iso_control(bytes[start]) {
-        start += 1;
-    }
-    let mut str_end = bytes.len();
-    while str_end > start && is_whitespace_or_iso_control(bytes[str_end - 1]) {
-        str_end -= 1;
-    }
-    if start == str_end {
-        return None;
-    }
-
-    let mut digits_milli = 0usize;
-    let mut just_time = false;
-    let mut timezone: Option<String> = None;
-    let mut year_sign: Option<i64> = None;
-    let mut j = start;
-    if bytes[j] == b'-' || bytes[j] == b'+' {
-        year_sign = Some(if bytes[j] == b'-' { -1 } else { 1 });
-        j += 1;
-    }
-
-    while j < str_end {
-        let b = bytes[j];
-        if b.is_ascii_digit() {
-            let parsed = i64::from(b - b'0');
-            if i == 6 {
-                digits_milli += 1;
-            }
-            // Truncate the fractional part beyond six digits, matching Spark.
-            if i != 6 || current_digits < 6 {
-                current_value = current_value * 10 + parsed;
-            }
-            current_digits += 1;
-        } else if j == 0 && b == b'T' {
-            just_time = true;
-            i += 3;
-        } else if i < 2 {
-            if b == b'-' {
-                if !is_valid_timestamp_digits(i, current_digits) {
-                    return None;
-                }
-                segments[i] = current_value;
-                current_value = 0;
-                current_digits = 0;
-                i += 1;
-            } else if i == 0 && b == b':' && year_sign.is_none() {
-                just_time = true;
-                if !is_valid_timestamp_digits(3, current_digits) {
-                    return None;
-                }
-                segments[3] = current_value;
-                current_value = 0;
-                current_digits = 0;
-                i = 4;
-            } else {
-                return None;
-            }
-        } else if i == 2 {
-            if b == b' ' || b == b'T' {
-                if !is_valid_timestamp_digits(i, current_digits) {
-                    return None;
-                }
-                segments[i] = current_value;
-                current_value = 0;
-                current_digits = 0;
-                i += 1;
-            } else {
-                return None;
-            }
-        } else if i == 3 || i == 4 {
-            if b == b':' {
-                if !is_valid_timestamp_digits(i, current_digits) {
-                    return None;
-                }
-                segments[i] = current_value;
-                current_value = 0;
-                current_digits = 0;
-                i += 1;
-            } else {
-                return None;
-            }
-        } else if i == 5 || i == 6 {
-            if b == b'.' && i == 5 {
-                if !is_valid_timestamp_digits(i, current_digits) {
-                    return None;
-                }
-                segments[i] = current_value;
-                current_value = 0;
-                current_digits = 0;
-                i += 1;
-            } else {
-                if !is_valid_timestamp_digits(i, current_digits) {
-                    return None;
-                }
-                segments[i] = current_value;
-                current_value = 0;
-                current_digits = 0;
-                i += 1;
-                timezone = Some(String::from_utf8_lossy(&bytes[j..str_end]).into_owned());
-                j = str_end - 1;
-            }
-            if i == 6 && b != b'.' {
-                i += 1;
-            }
-        } else if i < segments.len() && (b == b':' || b == b' ') {
-            if !is_valid_timestamp_digits(i, current_digits) {
-                return None;
-            }
-            segments[i] = current_value;
-            current_value = 0;
-            current_digits = 0;
-            i += 1;
-        } else {
-            return None;
-        }
-        j += 1;
-    }
-
-    if i >= segments.len() || !is_valid_timestamp_digits(i, current_digits) {
-        return None;
-    }
-    segments[i] = current_value;
-
-    while digits_milli < 6 {
-        segments[6] *= 10;
-        digits_milli += 1;
-    }
-
-    segments[0] *= year_sign.unwrap_or(1);
-    Some(ParsedTimestamp {
-        segments,
-        timezone,
-        just_time,
-    })
-}
-
 /// Validates a timezone string the way Spark's `getZoneId` does for the cases
 /// that appear in JSON: `Z`, numeric offsets (`+02:00`, `-0800`), and IANA
 /// region IDs (`America/Los_Angeles`).
@@ -831,18 +642,22 @@ fn is_timestamp_string(s: &str) -> bool {
 /// Returns the most specific type that both types can be promoted to,
 /// mirroring Spark's `JsonInferSchema.compatibleType`.
 fn merge_types(left: InferredType, right: InferredType) -> InferredType {
-    use InferredType::*;
-    match (left, right) {
-        (Null, t) | (t, Null) => t,
-        (l, r) if l == r => l,
-        (Long, Double) | (Double, Long) => Double,
-        // A long is at most `DECIMAL(20, 0)` when promoted to a decimal.
-        (Long, Decimal(p, s)) | (Decimal(p, s), Long) => merge_decimals(p.max(20), s, 20, 0),
-        (Double, Decimal(_, _)) | (Decimal(_, _), Double) => Double,
-        (Decimal(p1, s1), Decimal(p2, s2)) => merge_decimals(p1, s1, p2, s2),
-        (Array(l), Array(r)) => Array(Box::new(merge_types(*l, *r))),
-        (Struct(l), Struct(r)) => Struct(merge_fields(l, r)),
-        _ => String,
+    left.merge_with(right, &JsonTypeMerger)
+}
+
+struct JsonTypeMerger;
+
+impl TypeMerger for JsonTypeMerger {
+    fn merge_atomic(&self, left: InferredType, right: InferredType) -> InferredType {
+        use InferredType::*;
+        match (left, right) {
+            (Long, Double) | (Double, Long) => Double,
+            // A long is at most `DECIMAL(20, 0)` when promoted to a decimal.
+            (Long, Decimal(p, s)) | (Decimal(p, s), Long) => merge_decimals(p.max(20), s, 20, 0),
+            (Double, Decimal(_, _)) | (Decimal(_, _), Double) => Double,
+            (Decimal(p1, s1), Decimal(p2, s2)) => merge_decimals(p1, s1, p2, s2),
+            _ => String,
+        }
     }
 }
 
@@ -859,27 +674,6 @@ fn merge_decimals(p1: u8, s1: u8, p2: u8, s2: u8) -> InferredType {
     }
 }
 
-/// Merges the fields of two structs by name, mirroring Spark's behavior of
-/// grouping fields by name and reducing each group with `compatibleType`.
-fn merge_fields(
-    left: Vec<(String, InferredType)>,
-    right: Vec<(String, InferredType)>,
-) -> Vec<(String, InferredType)> {
-    let mut fields = left;
-    fields.extend(right);
-    fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-    let mut merged: Vec<(String, InferredType)> = Vec::new();
-    for (name, t) in fields {
-        match merged.last_mut() {
-            Some((last_name, last_type)) if *last_name == name => {
-                *last_type = merge_types(last_type.clone(), t);
-            }
-            _ => merged.push((name, t)),
-        }
-    }
-    merged
-}
-
 /// Writes the type as a Spark DDL string, returning `None` for types that
 /// Spark drops during canonicalization (empty structs, fields with empty
 /// names, and arrays of dropped types). `NULL` types become `STRING`.
@@ -888,10 +682,14 @@ fn canonicalize_ddl(t: &InferredType) -> Option<String> {
         InferredType::Null => Some("STRING".to_string()),
         InferredType::Boolean => Some("BOOLEAN".to_string()),
         InferredType::Long => Some("BIGINT".to_string()),
+        InferredType::Float => Some("FLOAT".to_string()),
         InferredType::Decimal(p, s) => Some(format!("DECIMAL({p},{s})")),
         InferredType::Double => Some("DOUBLE".to_string()),
         InferredType::String => Some("STRING".to_string()),
+        InferredType::Binary => Some("BINARY".to_string()),
+        InferredType::Date => Some("DATE".to_string()),
         InferredType::Timestamp => Some("TIMESTAMP".to_string()),
+        InferredType::TimestampNtz => Some("TIMESTAMP_NTZ".to_string()),
         InferredType::Array(element) => canonicalize_ddl(element).map(|e| format!("ARRAY<{e}>")),
         InferredType::Struct(fields) => {
             let fields = fields
@@ -907,6 +705,7 @@ fn canonicalize_ddl(t: &InferredType) -> Option<String> {
                 Some(format!("STRUCT<{}>", fields.join(", ")))
             }
         }
+        InferredType::Variant => Some("VARIANT".to_string()),
     }
 }
 
@@ -1096,7 +895,7 @@ mod tests {
 
     #[test]
     fn timestamp_inference_matches_spark() {
-        // (input, expected) pairs verified against Spark 4.1.1 JVM
+        // (input, expected) pairs verified against Spark 4.x JVM
         // (`schema_of_json(..., map('inferTimestamp','true'))`).
         let cases: &[(&str, bool)] = &[
             ("2024", true),

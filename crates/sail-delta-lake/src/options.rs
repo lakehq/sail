@@ -10,8 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::num::NonZeroUsize;
-
 use datafusion::catalog::Session;
 use sail_common_datafusion::datasource::OptionLayer;
 pub(crate) use sail_data_source::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
@@ -51,17 +49,6 @@ pub fn parse_delta_log_replay_strategy(
             value: value.to_string(),
             cause: None,
         }),
-    }
-}
-
-pub fn default_delta_log_replay_hash_threshold() -> NonZeroUsize {
-    non_zero_usize(100)
-}
-
-fn non_zero_usize(value: usize) -> NonZeroUsize {
-    match NonZeroUsize::new(value) {
-        Some(value) => value,
-        None => unreachable!("non-zero default"),
     }
 }
 

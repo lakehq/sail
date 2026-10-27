@@ -1,7 +1,7 @@
 use datafusion::physical_plan::Metric;
 use datafusion::physical_plan::metrics::{Label, MetricValue};
+use sail_common::telemetry::KeyValue;
 
-use crate::common::KeyValue;
 use crate::execution::metrics::{MetricEmitter, MetricHandled};
 use crate::metrics::{MetricAttribute, MetricRegistry};
 
@@ -106,7 +106,10 @@ impl MetricEmitter for DefaultMetricEmitter {
                     )
                     .emit();
             }
-            MetricValue::Count { .. }
+            // Peak-memory metrics are handled only by emitters that recognize both the physical
+            // operator and the DataFusion metric name.
+            MetricValue::PeakMemoryUsage { .. }
+            | MetricValue::Count { .. }
             | MetricValue::Gauge { .. }
             | MetricValue::Time { .. }
             | MetricValue::Ratio { .. }

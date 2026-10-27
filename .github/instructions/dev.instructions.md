@@ -20,6 +20,8 @@ Tests use "gold data" files for validation. If you change logic that affects out
 env SAIL_UPDATE_GOLD_DATA=1 cargo nextest run
 ```
 
+Please do not add test cases manually to the gold data files.
+
 ### Python Development
 
 - **Formatting**: `hatch fmt`

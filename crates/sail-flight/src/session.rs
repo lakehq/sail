@@ -5,6 +5,7 @@ use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionConfig;
+use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
@@ -66,12 +67,14 @@ fn create_flight_session_factory(
 pub async fn create_flight_session_manager(
     config: Arc<AppConfig>,
     runtime: RuntimeHandle,
+    system: &mut ActorSystem,
 ) -> Result<SessionManager, FlightError> {
     create_session_manager(
         config.clone(),
         runtime,
         create_flight_session_factory,
         Duration::from_secs(config.flight.session_timeout_secs),
+        system,
     )
     .await
     .map_err(|e| {

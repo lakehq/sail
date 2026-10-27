@@ -17,6 +17,7 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/partition.rs
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -24,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use crate::spec::schema::Schema;
 use crate::spec::transform::Transform;
 use crate::spec::types::{NestedField, StructType};
+use crate::spec::{FormatVersion, PrimitiveType, TableMetadata, Type};
 
-#[expect(unused)]
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 
@@ -131,17 +132,11 @@ impl PartitionSpec {
 
         for partition_field in self.fields.iter() {
             let source_id = partition_field.source_id()?;
-            let source_field = schema
-                .field_by_id(source_id)
-                .ok_or_else(|| format!("Cannot find source field with id {source_id}"))?;
-
-            // Prefer logical date type for Day transform to align with Iceberg writers
-            let result_type = if matches!(partition_field.transform, Transform::Day) {
-                crate::spec::types::Type::Primitive(crate::spec::types::PrimitiveType::Date)
-            } else {
-                partition_field
+            let result_type = match schema.field_by_id(source_id) {
+                Some(source_field) => partition_field
                     .transform
-                    .result_type(&source_field.field_type)?
+                    .result_type(&source_field.field_type)?,
+                None => Type::Primitive(PrimitiveType::Unknown),
             };
 
             let nested_field = NestedField::new(
@@ -162,9 +157,93 @@ impl PartitionSpec {
         Self { spec_id, ..self }
     }
 
+    pub(crate) fn assign_ids(mut self, metadata: &TableMetadata) -> Result<Self, String> {
+        let mut next_field_id = metadata.last_partition_id + 1;
+        if metadata.format_version == FormatVersion::V1 {
+            let mut requested = self.fields;
+            let requested_names = requested
+                .iter()
+                .map(|field| field.name.clone())
+                .collect::<Vec<_>>();
+            let mut fields = Vec::new();
+            if let Some(current) = metadata.default_partition_spec() {
+                for previous in current.fields() {
+                    if let Some(index) = requested.iter().position(|field| {
+                        field.source_id == previous.source_id
+                            && field.transform == previous.transform
+                    }) {
+                        let mut field = requested.remove(index);
+                        field.field_id = previous.field_id;
+                        fields.push(field);
+                    } else {
+                        let mut field = previous.clone();
+                        if requested_names.contains(&field.name) {
+                            field.name = format!("{}_{}", field.name, field.field_id);
+                        }
+                        field.transform = Transform::Void;
+                        fields.push(field);
+                    }
+                }
+            }
+            for mut field in requested {
+                field.field_id = next_field_id;
+                next_field_id += 1;
+                fields.push(field);
+            }
+            self.fields = fields;
+        } else {
+            for field in &mut self.fields {
+                field.field_id = metadata
+                    .partition_specs
+                    .iter()
+                    .flat_map(|spec| spec.fields())
+                    .filter(|previous| {
+                        previous.source_id == field.source_id
+                            && previous.source_ids == field.source_ids
+                            && previous.transform == field.transform
+                    })
+                    .map(|previous| previous.field_id)
+                    .max()
+                    .unwrap_or_else(|| {
+                        let id = next_field_id;
+                        next_field_id += 1;
+                        id
+                    });
+            }
+        }
+        // V1 tombstone restoration can introduce names absent from the requested spec.
+        let mut names = HashSet::new();
+        for field in &self.fields {
+            if !names.insert(&field.name) {
+                return Err(format!("Duplicate partition field '{}'", field.name));
+            }
+        }
+        if let Some(previous) = metadata
+            .partition_specs
+            .iter()
+            .find(|previous| previous.is_compatible_with(&self))
+        {
+            return Ok(previous.clone());
+        }
+        self.spec_id = metadata
+            .partition_specs
+            .iter()
+            .map(Self::spec_id)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+        Ok(self)
+    }
+
     /// Get the highest field id in the partition spec.
     pub fn highest_field_id(&self) -> Option<i32> {
         self.fields.iter().map(|f| f.field_id).max()
+    }
+
+    /// Return the Iceberg table metadata `last-partition-id` value for this spec.
+    pub fn last_assigned_field_id(&self) -> i32 {
+        self.highest_field_id()
+            .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID)
     }
 
     /// Check if the partition spec has sequential field ids starting from 1000.

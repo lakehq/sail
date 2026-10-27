@@ -137,6 +137,37 @@ def test_iceberg_write_append_mode(spark, sql_catalog):
         sql_catalog.drop_table(identifier)
 
 
+def test_iceberg_write_honors_absolute_data_path(spark, sql_catalog, tmp_path):
+    identifier = "default.write_absolute_data_path"
+    table_path = tmp_path / "absolute_data_path_table"
+    data_path = tmp_path / "absolute_data_path_files"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        location=table_path.as_uri(),
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+        ),
+        properties={"write.data.path": data_path.as_uri()},
+    )
+    try:
+        df = spark.createDataFrame([(1, "v0")], schema="id LONG, value STRING")
+        df.write.format("iceberg").mode("append").save(table.location())
+
+        data_files = set(data_path.rglob("*.parquet"))
+        assert data_files
+        assert not set(table_path.rglob("*.parquet"))
+
+        static_table = StaticTable.from_metadata(table.location(), properties=pyiceberg_file_io_properties())
+        manifest_data_files = {task.file.file_path for task in static_table.scan().plan_files()}
+        assert manifest_data_files == {path.absolute().as_uri() for path in data_files}
+
+        rows = [tuple(row) for row in spark.read.format("iceberg").load(table.location()).collect()]
+        assert rows == [(1, "v0")]
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
 def test_iceberg_sql_read_after_write(spark, sql_catalog):
     identifier = "default.write_sql_table"
     table = sql_catalog.create_table(

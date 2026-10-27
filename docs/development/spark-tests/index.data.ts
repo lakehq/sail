@@ -1,5 +1,5 @@
 import { createContentLoader } from "vitepress";
 
 export default createContentLoader([
-  "/development/spark-tests/!(index|_*/**|**/_*/**).md",
+  "development/spark-tests/!(index|_*/**|**/_*/**).md",
 ]);

@@ -2,6 +2,7 @@
 name = "sail-catalog-hms"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -11,6 +12,7 @@ sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-common-hms = { path = "../sail-common-hms" }
+sail-thrift = { path = "../sail-thrift" }
 
 arrow = { workspace = true }
 async-trait = { workspace = true }
@@ -19,13 +21,5 @@ chrono = { workspace = true }
 datafusion = { workspace = true }
 futures = { workspace = true }
 libloading = { workspace = true }
-pilota = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-volo = { workspace = true }
-volo-thrift = { workspace = true }
-
-[dev-dependencies]
-arrow = { workspace = true }
-tempfile = { workspace = true }
-testcontainers = { workspace = true }

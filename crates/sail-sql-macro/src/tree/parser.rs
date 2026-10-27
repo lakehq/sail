@@ -19,6 +19,7 @@ impl AttributeArgument {
     const DEPENDENCY: &'static str = "dependency";
     const LABEL: &'static str = "label";
     const FUNCTION: &'static str = "function";
+    const BACKTRACK: &'static str = "backtrack";
 }
 
 /// The maximum number of choices in a flat list of parser choices.
@@ -33,7 +34,7 @@ const BOXED_ENUM_MIN_VARIANTS: usize = 5;
 
 enum ParserDependency {
     None,
-    One(Type),
+    One(Box<Type>),
     Tuple(Vec<Type>),
 }
 
@@ -42,7 +43,7 @@ impl ParserDependency {
         e.map(|value| {
             let t = parse_string_value(&value, Type::parse)?;
             match t {
-                Type::Path(ref path) if path.qself.is_none() => Ok(Self::One(t)),
+                Type::Path(ref path) if path.qself.is_none() => Ok(Self::One(Box::new(t))),
                 Type::Tuple(tuple) => Ok(Self::Tuple(tuple.elems.into_iter().collect())),
                 _ => Err(syn::Error::new(
                     t.span(),
@@ -67,15 +68,22 @@ fn derive_fields_inner<'a>(
     spanned: impl Spanned,
     fields: impl IntoIterator<Item = &'a Field>,
 ) -> syn::Result<ParseFields> {
+    // Build from the end so optional choices can include all subsequent fields.
     fields
         .into_iter()
         .enumerate()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
         .try_fold(None, |acc, (i, field)| -> syn::Result<_> {
-            let field_function = {
+            let (field_function, backtrack) = {
                 let mut extractor = AttributeExtractor::try_new(ATTRIBUTE, &field.attrs)?;
                 let f = extractor.extract_argument_value(AttributeArgument::FUNCTION, Ok)?;
+                let backtrack = extractor
+                    .extract_path(AttributeArgument::BACKTRACK)?
+                    .is_some();
                 extractor.expect_empty()?;
-                f
+                (f, backtrack)
             };
             let field_arg = field
                 .ident
@@ -93,12 +101,28 @@ fn derive_fields_inner<'a>(
                     args,
                     initializer,
                 }) => Ok(Some(ParseFields {
-                    parser: quote! { #parser.then(#field_parser) },
-                    args: quote! { (#args, #field_arg) },
-                    initializer: quote! { #initializer, #field_arg },
+                    parser: if backtrack {
+                        quote! {{
+                            let rest = #parser.boxed();
+                            #field_parser
+                                .filter(core::option::Option::is_some)
+                                .then(rest.clone())
+                                .or(chumsky::prelude::empty()
+                                    .to(core::option::Option::None)
+                                    .then(rest))
+                        }}
+                    } else {
+                        quote! { #field_parser.then(#parser) }
+                    },
+                    args: quote! { (#field_arg, #args) },
+                    initializer: quote! { #field_arg, #initializer },
                 })),
                 None => Ok(Some(ParseFields {
-                    parser: field_parser,
+                    parser: if backtrack {
+                        quote! { #field_parser.or(chumsky::prelude::empty().to(core::option::Option::None)) }
+                    } else {
+                        field_parser
+                    },
                     args: quote! { #field_arg },
                     initializer: quote! { #field_arg },
                 })),

@@ -2,13 +2,13 @@
 name = "sail-object-store"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
-sail-telemetry = { path = "../sail-telemetry" }
 
 object_store = { workspace = true }
 aws-config = { workspace = true }
@@ -20,6 +20,7 @@ hdfs-native-object-store = { workspace = true, optional = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tokio-stream = { workspace = true }
 async-stream = { workspace = true }

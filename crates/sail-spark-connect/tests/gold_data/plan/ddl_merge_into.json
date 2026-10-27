@@ -2577,6 +2577,13 @@
       }
     },
     {
+      "input": "MERGE INTO t1 USING t2 ON t1.id = t2.id\nWHEN NOT MATCHED THEN INSERT (col1, col2) VALUES (1)",
+      "exception": "\n[MERGE_INSERT_VALUE_COUNT_MISMATCH] The number of provided values (1) must match the number of expected columns (2) in the INSERT clause of MERGE. SQLSTATE: 21S01\n== SQL (line 1, position 1) ==\nMERGE INTO t1 USING t2 ON t1.id = t2.id\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nWHEN NOT MATCHED THEN INSERT (col1, col2) VALUES (1)\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: INSERT action has 2 columns but 1 expressions"
+      }
+    },
+    {
       "input": "MERGE INTO testcat1.ns1.ns2.tbl AS target\nUSING testcat2.ns1.ns2.tbl AS source\nON target.col1 = source.col1",
       "exception": "\n[MERGE_WITHOUT_WHEN] There must be at least one WHEN clause in a MERGE statement. SQLSTATE: 42601\n== SQL (line 1, position 1) ==\nMERGE INTO testcat1.ns1.ns2.tbl AS target\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nUSING testcat2.ns1.ns2.tbl AS source\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nON target.col1 = source.col1\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {

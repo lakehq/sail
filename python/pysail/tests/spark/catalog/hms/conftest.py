@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import os
 import re
@@ -17,9 +16,10 @@ from pyspark.sql import SparkSession
 from pyspark.sql.utils import AnalysisException
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
-from testcontainers.core.waiting_utils import wait_for_logs
+from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.utils.jvm import classic_spark_mode, delta_spark_maven_coordinate
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -35,11 +35,10 @@ _HMS_STARTUP_TIMEOUT = 180  # seconds
 # Use 127.0.0.1 explicitly instead of 'localhost' to avoid IPv6 resolution
 # on macOS where Docker only binds exposed ports on IPv4 (0.0.0.0).
 _HMS_HOST = "127.0.0.1"
-_MINIO_IMAGE = "minio/minio:RELEASE.2025-05-24T17-08-30Z"
-_MINIO_MC_IMAGE = "minio/mc:RELEASE.2025-05-21T01-59-54Z"
-_MINIO_PORT = 9000
-_MINIO_USER = "admin"
-_MINIO_PASSWORD = "password"
+_SILO_IMAGE = "pgsty/silo:RELEASE.2026-09-03T13-18-01Z"
+_SILO_PORT = 9000
+_SILO_USER = "admin"
+_SILO_PASSWORD = "password"
 _HMS_S3_BUCKET = "hms-warehouse"
 
 
@@ -51,6 +50,16 @@ def _hms_test_database_name(request: pytest.FixtureRequest, prefix: str, max_nam
     suffix = f"_{digest}"
     available = max_name_len - len(prefix) - len(suffix)
     return f"{prefix}{safe_name[:available]}{suffix}"
+
+
+def _hadoop_aws_package() -> str:
+    from pyspark.find_spark_home import _find_spark_home
+
+    jars = list((Path(_find_spark_home()) / "jars").glob("hadoop-client-api-*.jar"))
+    if len(jars) != 1:
+        raise RuntimeError(f"Expected one Hadoop client API jar, found {jars}")
+    version = jars[0].name.removeprefix("hadoop-client-api-").removesuffix(".jar")
+    return f"org.apache.hadoop:hadoop-aws:{version}"
 
 
 def _hms_s3_core_site_xml(endpoint: str) -> str:
@@ -82,11 +91,11 @@ def _hms_s3_core_site_xml(endpoint: str) -> str:
   </property>
   <property>
     <name>fs.s3a.access.key</name>
-    <value>{_MINIO_USER}</value>
+    <value>{_SILO_USER}</value>
   </property>
   <property>
     <name>fs.s3a.secret.key</name>
-    <value>{_MINIO_PASSWORD}</value>
+    <value>{_SILO_PASSWORD}</value>
   </property>
   <property>
     <name>fs.s3a.aws.credentials.provider</name>
@@ -98,36 +107,17 @@ def _hms_s3_core_site_xml(endpoint: str) -> str:
 
 def _spark_s3_options(endpoint: str) -> dict[str, str]:
     return {
-        "spark.jars.packages": "org.apache.hadoop:hadoop-aws:3.4.2",
+        "spark.jars.packages": _hadoop_aws_package(),
         "spark.hadoop.fs.s3.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
         "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
         "spark.hadoop.fs.s3a.endpoint": endpoint,
         "spark.hadoop.fs.s3a.endpoint.region": "us-east-1",
         "spark.hadoop.fs.s3a.path.style.access": "true",
         "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
-        "spark.hadoop.fs.s3a.access.key": _MINIO_USER,
-        "spark.hadoop.fs.s3a.secret.key": _MINIO_PASSWORD,
+        "spark.hadoop.fs.s3a.access.key": _SILO_USER,
+        "spark.hadoop.fs.s3a.secret.key": _SILO_PASSWORD,
         "spark.hadoop.fs.s3a.aws.credentials.provider": ("org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"),
     }
-
-
-@contextlib.contextmanager
-def _classic_spark_mode() -> Generator[None, None, None]:
-    old_api_mode = os.environ.get("SPARK_API_MODE")
-    old_remote = os.environ.pop("SPARK_REMOTE", None)
-    old_connect_mode = os.environ.pop("SPARK_CONNECT_MODE_ENABLED", None)
-    os.environ["SPARK_API_MODE"] = "classic"
-    try:
-        yield
-    finally:
-        if old_api_mode is None:
-            os.environ.pop("SPARK_API_MODE", None)
-        else:
-            os.environ["SPARK_API_MODE"] = old_api_mode
-        if old_remote is not None:
-            os.environ["SPARK_REMOTE"] = old_remote
-        if old_connect_mode is not None:
-            os.environ["SPARK_CONNECT_MODE_ENABLED"] = old_connect_mode
 
 
 def _wait_for_port(host: str, port: int, timeout: float) -> None:
@@ -180,13 +170,13 @@ def hms_warehouse_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# MinIO-backed S3 warehouse
+# Silo-backed S3 warehouse
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
 def hms_s3_network() -> Generator[Network, None, None]:
-    """Return a Docker network shared by MinIO and the short-lived mc setup."""
+    """Return a Docker network shared by Silo and Hive Metastore."""
     network = Network()
     network.create()
     try:
@@ -196,66 +186,48 @@ def hms_s3_network() -> Generator[Network, None, None]:
 
 
 @pytest.fixture(scope="session")
-def hms_s3_minio_container(
+def hms_s3_silo_container(
     hms_s3_network: Network,
 ) -> Generator[DockerContainer, None, None]:
-    """Start MinIO for S3-backed HMS warehouse tests."""
-    container = DockerContainer(_MINIO_IMAGE)
-    container.with_exposed_ports(_MINIO_PORT)
-    container.with_env("MINIO_ROOT_USER", _MINIO_USER)
-    container.with_env("MINIO_ROOT_PASSWORD", _MINIO_PASSWORD)
+    """Start Silo for S3-backed HMS warehouse tests."""
+    container = DockerContainer(_SILO_IMAGE)
+    container.with_exposed_ports(_SILO_PORT)
+    container.with_env("MINIO_ROOT_USER", _SILO_USER)
+    container.with_env("MINIO_ROOT_PASSWORD", _SILO_PASSWORD)
     container.with_network(hms_s3_network)
-    container.with_network_aliases("minio")
+    container.with_network_aliases("silo")
     container.with_command(["server", "/data", "--console-address", ":9001"])
-    container.start()
-
-    wait_for_logs(container, "MinIO Object Storage Server", timeout=120)
-
-    yield container
-    container.stop()
+    container.waiting_for(HttpWaitStrategy(_SILO_PORT, "/minio/health/ready").with_startup_timeout(120))
+    with container:
+        yield container
 
 
 @pytest.fixture(scope="session")
-def hms_s3_endpoint(hms_s3_minio_container: DockerContainer) -> str:
-    """Return the host-visible MinIO endpoint used by Sail and Spark."""
-    host = hms_s3_minio_container.get_container_host_ip()
-    port = hms_s3_minio_container.get_exposed_port(_MINIO_PORT)
+def hms_s3_endpoint(hms_s3_silo_container: DockerContainer) -> str:
+    """Return the host-visible Silo endpoint used by Sail and Spark."""
+    host = hms_s3_silo_container.get_container_host_ip()
+    port = hms_s3_silo_container.get_exposed_port(_SILO_PORT)
     return f"http://{host}:{port}"
 
 
 @pytest.fixture(scope="session")
 def hms_s3_internal_endpoint(_hms_s3_bucket: None) -> str:
-    """Return the MinIO endpoint visible to containers on the shared network."""
+    """Return the Silo endpoint visible to containers on the shared network."""
     del _hms_s3_bucket
-    return f"http://minio:{_MINIO_PORT}"
+    return f"http://silo:{_SILO_PORT}"
 
 
 @pytest.fixture(scope="session")
 def _hms_s3_bucket(
-    hms_s3_network: Network,
-    hms_s3_minio_container: DockerContainer,
-) -> Generator[None, None, None]:
-    """Create the S3 warehouse bucket with a short-lived MinIO mc container."""
-    del hms_s3_minio_container
-    command = (
-        "until mc alias set "
-        f"minio http://minio:{_MINIO_PORT} {_MINIO_USER} {_MINIO_PASSWORD}; "
-        "do sleep 1; done; "
-        f"mc rm -r --force minio/{_HMS_S3_BUCKET} || true; "
-        f"mc mb minio/{_HMS_S3_BUCKET}; "
-        "echo hms-s3-bucket-ready; "
-        "tail -f /dev/null"
-    )
-    container = DockerContainer(_MINIO_MC_IMAGE)
-    container.with_network(hms_s3_network)
-    container.with_kwargs(entrypoint="/bin/sh")
-    container.with_command(["-c", command])
-    container.start()
-
-    wait_for_logs(container, "hms-s3-bucket-ready", timeout=120)
-
-    yield
-    container.stop()
+    hms_s3_silo_container: DockerContainer,
+) -> None:
+    """Create the S3 warehouse bucket with Silo's bundled mcli client."""
+    for command in [
+        ["mcli", "alias", "set", "local", f"http://127.0.0.1:{_SILO_PORT}", _SILO_USER, _SILO_PASSWORD],
+        ["mcli", "mb", "--ignore-existing", f"local/{_HMS_S3_BUCKET}"],
+    ]:
+        exit_code, output = hms_s3_silo_container.exec(command)
+        assert exit_code == 0, output.decode()
 
 
 @pytest.fixture(scope="session")
@@ -263,8 +235,8 @@ def hms_s3_env(hms_s3_endpoint: str, _hms_s3_bucket: None) -> dict[str, str]:
     """Return AWS-compatible environment for Sail's S3 object-store client."""
     del _hms_s3_bucket
     return {
-        "AWS_ACCESS_KEY_ID": _MINIO_USER,
-        "AWS_SECRET_ACCESS_KEY": _MINIO_PASSWORD,
+        "AWS_ACCESS_KEY_ID": _SILO_USER,
+        "AWS_SECRET_ACCESS_KEY": _SILO_PASSWORD,
         "AWS_REGION": "us-east-1",
         "AWS_ENDPOINT": hms_s3_endpoint,
         "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
@@ -277,7 +249,7 @@ def hms_s3_core_site_path(
     tmp_path_factory: pytest.TempPathFactory,
     hms_s3_internal_endpoint: str,
 ) -> Path:
-    """Write a Hadoop core-site.xml that maps s3:// URIs to S3A/MinIO."""
+    """Write a Hadoop core-site.xml that maps s3:// URIs to S3A/Silo."""
     path = tmp_path_factory.mktemp("hms_s3_conf") / "core-site.xml"
     path.write_text(_hms_s3_core_site_xml(hms_s3_internal_endpoint), encoding="utf-8")
     return path
@@ -305,7 +277,8 @@ def hms_s3_container(
     container.with_env("HIVE_AUX_JARS_PATH", s3a_classpath)
     container.with_env(
         "SERVICE_OPTS",
-        f"-Dhive.metastore.warehouse.dir={hms_warehouse_dir.as_uri()}",
+        f"-Dhive.metastore.warehouse.dir={hms_warehouse_dir.as_uri()} "
+        "-Dhive.metastore.disallow.incompatible.col.type.changes=false",
     )
     container.with_network(hms_s3_network)
     container.with_volume_mapping(hms_warehouse_dir, str(hms_warehouse_dir), mode="rw")
@@ -341,7 +314,7 @@ def remote(
     hms_s3_metastore_endpoint: str,
     hms_s3_env: dict[str, str],
 ) -> Generator[str, None, None]:
-    """Start a separate Sail server configured for HMS plus MinIO-backed S3."""
+    """Start a separate Sail server configured for HMS plus Silo-backed S3."""
     catalogs_config = f'[{{name="sail", type="hms", uris=["{hms_s3_metastore_endpoint}"]}}]'
     with spark_connect_server(
         envs={
@@ -367,33 +340,14 @@ def _wait_for_hms_catalog(remote: str) -> None:
 # 4.x uses Scala 2.13) instead of hardcoding a single Spark minor.
 import pyspark as _pyspark  # noqa: E402
 
-_SPARK_VERSION = _pyspark.__version__  # e.g. "4.1.1", "3.5.7"
+_SPARK_VERSION = _pyspark.__version__
 _SPARK_MAJOR, _SPARK_MINOR_PART = _SPARK_VERSION.split(".")[:2]
 _SCALA_BINARY = "2.12" if _SPARK_MAJOR == "3" else "2.13"
-_SPARK_MINOR = f"{_SPARK_MAJOR}.{_SPARK_MINOR_PART}"  # e.g. "4.1", "3.5"
-# Delta Maven coordinates per Spark minor version. Delta renamed its artifact at
-# 4.1.0 to embed the Spark minor (``delta-spark_<spark-minor>_<scala>``); earlier
-# releases (3.3.x, 4.0.x) keep the legacy ``delta-spark_<scala>`` name. The previous
-# ``delta-spark_{minor}_{scala}`` rule for every Spark 4.x produced a 404 for 4.0
-# (``delta-spark_4.0_2.13`` does not exist at 4.0.1), so pin the full coordinate
-# explicitly per Spark version: a future Delta rename then cannot silently break
-# the JVM classpath. Each row was verified against Maven Central:
-#   Spark 3.5 -> io.delta:delta-spark_2.12:3.3.2
-#   Spark 4.0 -> io.delta:delta-spark_2.13:4.0.1   (legacy name; 4.0 minor not embedded)
-#   Spark 4.1 -> io.delta:delta-spark_4.1_2.13:4.1.0 (new name introduced at Delta 4.1.0)
-_DELTA_SPARK_COORDINATES: dict[str, tuple[str, str, str]] = {
-    "3.5": ("io.delta", "delta-spark_2.12", "3.3.2"),
-    "4.0": ("io.delta", "delta-spark_2.13", "4.0.1"),
-    "4.1": ("io.delta", "delta-spark_4.1_2.13", "4.1.0"),
-}
-if _SPARK_MINOR not in _DELTA_SPARK_COORDINATES:
-    raise RuntimeError(
-        f"No Delta Maven coordinate mapping for Spark {_SPARK_VERSION}; "
-        "add an entry to _DELTA_SPARK_COORDINATES in "
-        "python/pysail/tests/spark/catalog/hms/conftest.py."
-    )
-_DELTA_GROUP, _DELTA_ARTIFACT, _DELTA_VERSION = _DELTA_SPARK_COORDINATES[_SPARK_MINOR]
-_DELTA_SPARK_PACKAGE = f"{_DELTA_GROUP}:{_DELTA_ARTIFACT}:{_DELTA_VERSION}"
+_SPARK_MINOR = f"{_SPARK_MAJOR}.{_SPARK_MINOR_PART}"
+try:
+    _DELTA_SPARK_PACKAGE = delta_spark_maven_coordinate(_SPARK_VERSION)
+except RuntimeError as error:
+    pytest.skip(reason=str(error))
 # Avro is a built-in but *external* datasource in Spark 2.4+: the runtime jar must
 # be on the classpath for `USING AVRO`.
 _AVRO_SPARK_PACKAGE = f"org.apache.spark:spark-avro_{_SCALA_BINARY}:{_SPARK_VERSION}"
@@ -443,14 +397,14 @@ def jvm_spark(
     ]
     spark_packages = [
         _DELTA_SPARK_PACKAGE,
-        "org.apache.hadoop:hadoop-aws:3.4.2",
+        _hadoop_aws_package(),
         # Avro is a built-in but *external* datasource in Spark 2.4+: the runtime jar
         # must be on the classpath for `USING AVRO`.
         _AVRO_SPARK_PACKAGE,
         _ICEBERG_SPARK_PACKAGE,
     ]
 
-    with _classic_spark_mode():
+    with classic_spark_mode():
         builder = (
             SparkSession.builder.master("local[1]")
             .appName("hms-jvm-unified")
@@ -466,7 +420,7 @@ def jvm_spark(
             )
             # Iceberg gets a NAMED catalog so it never fights Delta over ``spark_catalog``
             # ownership. It points at the same HMS thrift endpoint; both engines share
-            # table registrations and the S3 (MinIO) metadata files.
+            # table registrations and the S3 (Silo) metadata files.
             .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
             .config("spark.sql.catalog.iceberg.type", "hive")
             .config("spark.sql.catalog.iceberg.uri", f"thrift://{hms_s3_metastore_endpoint}")

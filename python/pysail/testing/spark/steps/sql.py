@@ -5,6 +5,8 @@ import json
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 from jinja2 import Template
@@ -64,6 +66,31 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
     return variables
 
 
+@given(parsers.parse("variable {name} for location of table {table}"), target_fixture="variables")
+def variable_for_table_location(name: str, table: str, spark, variables: dict) -> dict:
+    """Defines a variable for the directory of a table, taken from `DESCRIBE EXTENDED`.
+
+    A `file:` URI is percent-decoded, as Sail does when it reads and writes the table;
+    a bare path is used as is.
+    """
+    rows = spark.sql(f"DESCRIBE EXTENDED {table}").collect()
+    location = next(r.data_type for r in rows if r.col_name == "Location")
+    if location[:5].lower() == "file:":
+        uri = urlparse(location)
+        location = url2pathname(f"//{uri.netloc}{uri.path}" if uri.netloc and uri.netloc != "localhost" else uri.path)
+    variables[name] = PathWrapper(Path(location))
+    return variables
+
+
+@given(parsers.parse("variable {name} for subdirectory {subdir} of {location_var}"), target_fixture="variables")
+def variable_for_subdirectory(name: str, subdir: str, location_var: str, variables: dict) -> dict:
+    """Defines a variable pointing to a subdirectory of a location."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    variables[name] = PathWrapper(Path(location.path) / subdir)
+    return variables
+
+
 @given(parsers.parse("variable {name} for delta log of {location_var}"), target_fixture="variables")
 def variable_for_delta_log(name: str, location_var: str, variables: dict) -> dict:
     """Defines a variable pointing to the _delta_log subdirectory of a Delta table location."""
@@ -94,6 +121,29 @@ def statement(template, docstring, spark, variables):
     """Executes a SQL statement that is expected to succeed."""
     s = Template(docstring).render(**variables) if template else docstring
     spark.sql(s)
+
+
+@given(parsers.parse("sample with replacement fraction {fraction} seed {seed} as temporary view {view}"))
+def sample_with_replacement_as_temporary_view(fraction, seed, view, spark):
+    """Create a seeded replacement sample for parity scenarios."""
+    sampled = spark.range(10, numPartitions=1).sample(True, float(fraction), int(seed))
+    sampled.createOrReplaceTempView(view)
+
+
+@given(parsers.parse("scalar Python UDF {name} returns {value:d}"))
+def scalar_python_udf(name, value, spark):
+    """Register a scalar Python UDF that ignores its argument."""
+    spark.udf.register(name, lambda _value: value, "long")
+
+
+@given(parsers.parse("scalar Python UDF {name} raises {message}"))
+def failing_scalar_python_udf(name, message, spark):
+    """Register a scalar Python UDF that always raises an error."""
+
+    def fail(_value):
+        raise RuntimeError(message)
+
+    spark.udf.register(name, fail, "string")
 
 
 @given(parsers.re(r"statement(?P<template>( template)?) with error (?P<error>.*)"))
@@ -168,10 +218,68 @@ def dataframe_for(case, spark):
         pytest.fail(f"Unknown DataFrame case: {case}")
 
 
+@when(
+    parsers.parse("dataframe sample without replacement with bounds {lower_bound} and {upper_bound}"),
+    target_fixture="dataframe",
+)
+def dataframe_sample_without_replacement_with_bounds(lower_bound, upper_bound, spark):
+    """Build a Spark Connect sample plan with independently controlled bounds."""
+    dataframe = spark.range(10, numPartitions=1).sample(False, 0.0, 1)
+    dataframe._plan.lower_bound = float(lower_bound)  # noqa: SLF001
+    dataframe._plan.upper_bound = float(upper_bound)  # noqa: SLF001
+    return dataframe
+
+
+def _sample_input(case, spark):
+    cases = {
+        "failing projection": lambda: spark.range(1, numPartitions=1).selectExpr(
+            "raise_error('projection-error') AS result"
+        ),
+        "failing filter": lambda: spark.range(1, numPartitions=1).filter("raise_error('filter-error') IS NULL"),
+        "unresolved projection": lambda: spark.range(1, numPartitions=1).select("missing"),
+        "zero-step range": lambda: spark.range(0, 1, 0, numPartitions=1),
+    }
+    try:
+        return cases[case]()
+    except KeyError:
+        pytest.fail(f"Unknown sample input: {case}")
+
+
+@when(
+    parsers.parse("dataframe replacement sample fraction {fraction} over {case}"),
+    target_fixture="dataframe",
+)
+def dataframe_replacement_sample(fraction, case, spark):
+    """Build a replacement sample over a named input plan."""
+    return _sample_input(case, spark).sample(True, float(fraction), 1)
+
+
+@when(
+    parsers.parse("dataframe sample fraction {fraction} over {case}"),
+    target_fixture="dataframe",
+)
+def dataframe_sample(fraction, case, spark):
+    """Build a sample without replacement over a named input plan."""
+    return _sample_input(case, spark).sample(False, float(fraction), 1)
+
+
 @then("dataframe schema")
 def dataframe_schema(docstring, dataframe):
     """Compare a DataFrame schema with expected schema tree string."""
     assert_schema_tree(dataframe, docstring)
+
+
+@then(parsers.parse("dataframe error {error}"))
+def dataframe_error(error, dataframe):
+    """Collect the DataFrame and expect it to fail with an error."""
+    with pytest.raises(Exception, match=error):
+        _ = dataframe.collect()
+
+
+@then("dataframe is empty")
+def dataframe_is_empty(dataframe):
+    """Collect the DataFrame and verify that it has no rows."""
+    assert dataframe.collect() == []
 
 
 def assert_schema_tree(df, docstring):

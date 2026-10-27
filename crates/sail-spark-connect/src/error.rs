@@ -7,6 +7,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use prost::{DecodeError, UnknownEnumValue};
 use sail_cache::error::CacheError;
+use sail_common::actor::ActorSendError;
 use sail_common::error::CommonError;
 use sail_common_datafusion::error::{CommonErrorCause, PythonErrorCause};
 use sail_execution::error::ExecutionError;
@@ -46,6 +47,8 @@ pub enum SparkError {
     InternalError(String),
     #[error("analysis error: {0}")]
     AnalysisError(String),
+    #[error("parse error: {0}")]
+    ParseError(String),
 }
 
 impl SparkError {
@@ -119,6 +122,7 @@ impl From<ExecutionError> for SparkError {
             ExecutionError::JsonError(e) => SparkError::JsonError(e),
             ExecutionError::IoError(e) => SparkError::IoError(e),
             ExecutionError::TonicTransportError(e) => SparkError::InternalError(e.to_string()),
+            ExecutionError::FlightTransportError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::TonicStatusError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::KubernetesError(e) => SparkError::InternalError(e.to_string()),
             ExecutionError::InternalError(e) => SparkError::InternalError(e),
@@ -156,6 +160,12 @@ impl<T> From<PoisonError<T>> for SparkError {
 
 impl<T> From<SendError<T>> for SparkError {
     fn from(error: SendError<T>) -> Self {
+        SparkError::SendError(error.to_string())
+    }
+}
+
+impl<T> From<ActorSendError<T>> for SparkError {
+    fn from(error: ActorSendError<T>) -> Self {
         SparkError::SendError(error.to_string())
     }
 }
@@ -347,9 +357,9 @@ impl From<CommonErrorCause> for SparkThrowable {
         match value {
             CommonErrorCause::NotImplemented(x) => SparkThrowable::UnsupportedOperationException(x),
             CommonErrorCause::InvalidArgument(x) => SparkThrowable::IllegalArgumentException(x),
-            CommonErrorCause::Unknown(x) | CommonErrorCause::Internal(x) => {
-                SparkThrowable::SparkRuntimeException(x)
-            }
+            CommonErrorCause::Unknown(x)
+            | CommonErrorCause::Internal(x)
+            | CommonErrorCause::CommitStateUnknown(x) => SparkThrowable::SparkRuntimeException(x),
             CommonErrorCause::Io(x)
             | CommonErrorCause::ArrowMemory(x)
             | CommonErrorCause::ArrowCompute(x)
@@ -450,6 +460,7 @@ impl From<SparkError> for Status {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
             SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
+            SparkError::ParseError(s) => SparkThrowable::ParseException(s).into(),
             e @ SparkError::SendError(_) => {
                 Status::cancelled(truncate_grpc_message(&e.to_string()))
             }

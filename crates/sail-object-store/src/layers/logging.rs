@@ -12,9 +12,7 @@ use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result, UploadPart,
 };
-use sail_telemetry::common::SpanAttribute;
-use sail_telemetry::futures::TracingFutureExt;
-use sail_telemetry::recorder::record_error;
+use sail_common::telemetry::{SpanAttribute, TracingFutureExt, record_error};
 use tonic::codegen::Bytes;
 
 #[derive(Debug)]

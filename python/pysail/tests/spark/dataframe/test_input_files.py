@@ -97,30 +97,25 @@ def test_input_files_excludes_explicitly_targeted_hidden_file(spark, tmp_path):
 
 
 def test_input_files_honors_path_glob_filter(spark, tmp_path):
-    """The binary ``pathGlobFilter`` restricts the files that compose the dataset."""
-    (tmp_path / "keep.png").write_bytes(b"\x89PNG")
-    (tmp_path / "drop.pdf").write_bytes(b"%PDF")
-    df = spark.read.format("binaryFile").option("pathGlobFilter", "*.png").load(str(tmp_path))
+    """A listing-format ``pathGlobFilter`` restricts the files that compose the dataset."""
+    (tmp_path / "keep.json").write_text('{"id": 1}\n')
+    (tmp_path / "drop.json").write_text('{"id": 2}\n')
+    df = spark.read.format("json").option("pathGlobFilter", "keep.*").load(str(tmp_path))
 
     files = df.inputFiles()
     assert len(files) == 1
-    assert files[0].endswith("keep.png")
+    assert files[0].endswith("keep.json")
 
 
 def test_input_files_matches_scan_under_glob_alternation(spark, tmp_path):
-    """``inputFiles`` applies ``pathGlobFilter`` with the same matcher as the scan for ``{a,b}`` syntax.
-
-    The binary scan matches ``pathGlobFilter`` with ``glob::Pattern``, which treats ``{...}``
-    as literal characters rather than expanding the alternation. ``inputFiles`` mirrors that
-    matcher, so it must report exactly the files the scan reads -- never more.
-    """
+    """``inputFiles`` and scans both support ``{a,b}`` alternation."""
     (tmp_path / "a.png").write_bytes(b"\x89PNG")
     (tmp_path / "b.jpg").write_bytes(b"\xff\xd8\xff")
+    (tmp_path / "c.pdf").write_bytes(b"%PDF")
     df = spark.read.format("binaryFile").option("pathGlobFilter", "*.{png,jpg}").load(str(tmp_path))
 
-    # `{png,jpg}` is literal, so it matches neither file; the scan and inputFiles must still agree.
     assert df.count() == len(df.inputFiles())
-    assert df.inputFiles() == []
+    assert {file.rsplit("/", 1)[-1] for file in df.inputFiles()} == {"a.png", "b.jpg"}
 
 
 def test_input_files_rejects_invalid_path_glob_filter(spark, tmp_path):

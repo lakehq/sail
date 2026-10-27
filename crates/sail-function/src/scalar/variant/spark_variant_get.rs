@@ -277,7 +277,9 @@ impl ScalarUDFImpl for SparkVariantGet {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        datafusion_common::internal_err!("return_field_from_args should be used")
+        datafusion_common::internal_err!(
+            "`return_type` should not be called; `return_field_from_args` is used instead"
+        )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
@@ -336,10 +338,7 @@ fn spark_type_to_arrow(type_str: &str) -> Result<DataType> {
     let trimmed = lower.trim();
 
     // Handle parameterized types: decimal(p,s)
-    if let Some(params) = trimmed
-        .strip_prefix("decimal(")
-        .and_then(|s| s.strip_suffix(')'))
-    {
+    if let Some(params) = trimmed.strip_circumfix("decimal(", ')') {
         let parts: Vec<&str> = params.split(',').map(|s| s.trim()).collect();
         return match parts.as_slice() {
             [p, s] => {

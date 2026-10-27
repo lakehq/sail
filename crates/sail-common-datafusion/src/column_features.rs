@@ -8,7 +8,7 @@
 //!
 //! # Separation from format-level metadata
 //!
-//! Table-format writers (Delta, Iceberg, …) are responsible for translating
+//! Lake source writers (Delta, Iceberg, …) are responsible for translating
 //! these engine-level keys into format-specific on-disk keys at commit time,
 //! and for translating them back at read time. The engine pipeline itself
 //! never reasons about format-specific metadata directly.
@@ -25,7 +25,7 @@ use datafusion::arrow::datatypes::Field;
 use crate::catalog::CatalogTableColumnIdentity;
 
 /// Sail-private field metadata used while planning writes. It records the target
-/// catalog field nullability so table formats can preserve it even if expression
+/// catalog field nullability so lake sources can preserve it even if expression
 /// simplification proves the current write value itself is non-null.
 pub const SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY: &str = "__sail.writeTargetNullable";
 
@@ -42,6 +42,8 @@ pub enum ColumnFeatureKey {
     /// Delta/Spark persists the current default in `StructField.metadata` under
     /// the `CURRENT_DEFAULT` key when the `allowColumnDefaults` table feature is enabled.
     CurrentDefault,
+    /// Typed literal used as a write default when supplied by a table format.
+    CurrentDefaultValue,
     /// Sail-only marker used in the planning pipeline to preserve a Delta NOT NULL
     /// constraint when DataFusion expression rewrites make the output nullable.
     /// Delta/Spark stores this as `StructField(nullable = false)`, not as column metadata.
@@ -61,6 +63,7 @@ impl ColumnFeatureKey {
         match self {
             Self::GenerationExpression => "delta.generationExpression",
             Self::CurrentDefault => "CURRENT_DEFAULT",
+            Self::CurrentDefaultValue => "sail.column.defaultValue",
             Self::NotNullConstraint => "sail.column.notNull",
             Self::IdentityStart => "delta.identity.start",
             Self::IdentityStep => "delta.identity.step",
@@ -113,6 +116,15 @@ impl<'a> ColumnFeatures<'a> {
         self.metadata
             .get(ColumnFeatureKey::CurrentDefault.as_str())
             .map(|v| serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone()))
+    }
+
+    pub fn current_default_value(
+        &self,
+    ) -> datafusion_common::Result<Option<datafusion_common::ScalarValue>> {
+        self.metadata
+            .get(ColumnFeatureKey::CurrentDefaultValue.as_str())
+            .map(|value| crate::schema_evolution::decode_field_default(value))
+            .transpose()
     }
 
     pub fn is_not_null_constraint(&self) -> bool {

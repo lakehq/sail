@@ -20,7 +20,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::path::Path::new(&std::env::var("OUT_DIR")?).join("iceberg_rest_catalog_gen.rs"),
         OpenApiConfig {
             excluded_operations: ["getToken".to_owned()].into_iter().collect(),
-            excluded_schemas: ["ReportMetricsRequest".to_owned()].into_iter().collect(),
+            excluded_schemas: ["ReportMetricsRequest".to_owned(), "Snapshot".to_owned()]
+                .into_iter()
+                .collect(),
         },
     )?;
 

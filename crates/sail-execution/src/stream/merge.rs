@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::array::RecordBatch;
@@ -6,8 +7,8 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::error::DataFusionError;
 use datafusion::execution::RecordBatchStream;
-use futures::Stream;
 use futures::stream::{SelectAll, select_all};
+use futures::{Stream, StreamExt};
 
 use crate::stream::reader::TaskStreamSource;
 
@@ -40,4 +41,10 @@ impl RecordBatchStream for MergedRecordBatchStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+}
+
+pub(crate) fn merged_stream(schema: SchemaRef, streams: Vec<TaskStreamSource>) -> TaskStreamSource {
+    Box::pin(MergedRecordBatchStream::new(schema, streams).map(|item| {
+        item.map_err(|error| crate::stream::error::TaskStreamError::External(Arc::new(error)))
+    }))
 }

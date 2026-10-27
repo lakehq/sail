@@ -54,8 +54,8 @@ Feature: Unity Catalog managed Delta table operations
       | path                                                   | value                                  |
       | protocol.minReaderVersion                              | 3                                      |
       | protocol.minWriterVersion                              | 7                                      |
-      | protocol.readerFeatures                                | ["catalogManaged"]                     |
-      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp"] |
+      | protocol.readerFeatures                                | ["catalogManaged","vacuumProtocolCheck"] |
+      | protocol.writerFeatures                                | ["appendOnly","invariants","catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                            |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                |
 
@@ -178,8 +178,8 @@ Feature: Unity Catalog managed Delta table operations
       | path                                                   | value                                      |
       | protocol.minReaderVersion                              | 3                                          |
       | protocol.minWriterVersion                              | 7                                          |
-      | protocol.readerFeatures                                | ["catalogManaged"]                         |
-      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp"]     |
+      | protocol.readerFeatures                                | ["catalogManaged","vacuumProtocolCheck"]   |
+      | protocol.writerFeatures                                | ["catalogManaged","inCommitTimestamp","vacuumProtocolCheck"] |
       | metaData.configuration["delta.feature.catalogManaged"]  | "supported"                                |
       | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                    |
 
@@ -501,6 +501,36 @@ Feature: Unity Catalog managed Delta table operations
     Then Unity Catalog table unity_table_test.managed_delta_delete_t is a managed Delta table
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_delete_t version 2 references staged Delta commit in location
 
+  Scenario: UPDATE on managed Delta table is coordinated by Unity Catalog
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_update_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'one'),
+        (2, 'two'),
+        (3, 'three')
+      AS t(id, name)
+      """
+    Given statement
+      """
+      UPDATE unity_table_test.managed_delta_update_t
+      SET name = concat(name, ' updated')
+      WHERE id = 2
+      """
+    Given variable location for table unity_table_test.managed_delta_update_t
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_update_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name        |
+      | 1  | one         |
+      | 2  | two updated |
+      | 3  | three       |
+    Then Unity Catalog table unity_table_test.managed_delta_update_t is a managed Delta table
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_update_t version 2 references staged Delta commit in location
+
   Scenario: DELETE can infer schema from managed Delta log when catalog columns are empty
     Given Unity Catalog managed Delta table unity_table_test.managed_delta_empty_catalog_schema_t exists with no catalog columns and id and name Delta schema
     Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_empty_catalog_schema_t
@@ -619,7 +649,7 @@ Feature: Unity Catalog managed Delta table operations
       """
     Then query error catalog commit replay context
 
-  Scenario: Metadata ALTER operations are rejected for catalog-managed Delta tables
+  Scenario: Metadata ALTER commits through the catalog for managed Delta tables
     Given statement
       """
       CREATE TABLE unity_table_test.managed_delta_alter_t (
@@ -634,7 +664,7 @@ Feature: Unity Catalog managed Delta table operations
       """
     Then query result ordered
       | id | name |
-    Given statement with error catalog-managed Delta tables
+    Given statement
       """
       ALTER TABLE unity_table_test.managed_delta_alter_t
       SET TBLPROPERTIES ('my.tag' = 'blocked')
@@ -644,7 +674,7 @@ Feature: Unity Catalog managed Delta table operations
       ALTER TABLE unity_table_test.managed_delta_alter_t
       ADD CONSTRAINT positive_id CHECK (id > 0)
       """
-    Given statement with error catalog-managed Delta tables
+    Given statement
       """
       ALTER TABLE unity_table_test.managed_delta_alter_t
       ALTER COLUMN name SET DEFAULT 'unknown'
@@ -686,3 +716,44 @@ Feature: Unity Catalog managed Delta table operations
       | metaData.configuration["my.tag"]    | "managed" |
       | metaData.configuration["delta.feature.catalogManaged"] | "supported" |
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_partitioned_t version 1 references staged Delta commit in location
+
+  Scenario: Show catalog table properties reads Unity managed Delta tables before and after writes
+    Given statement
+      """
+      CREATE TABLE sail.sail_test_catalog.unity_table_test.show_properties (id INT) USING delta
+      TBLPROPERTIES ('custom.show' = 'initial')
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.sail_test_catalog.unity_table_test.show_properties
+      """
+    Then query result row where "key" is "custom.show" has "value" equal to "initial"
+    Then query schema
+      """
+      root
+       |-- key: string (nullable = false)
+       |-- value: string (nullable = false)
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.sail_test_catalog.unity_table_test.show_properties ('custom.show')
+      """
+    Then query result
+      | key | value |
+      | custom.show | initial |
+    When query
+      """
+      SHOW TBLPROPERTIES sail.sail_test_catalog.unity_table_test.show_properties ('custom.missing')
+      """
+    Then query result row where "key" is "custom.missing" has "value" containing "does not have property: custom.missing"
+    Given statement
+      """
+      INSERT INTO sail.sail_test_catalog.unity_table_test.show_properties VALUES (1)
+      """
+    When query
+      """
+      SHOW TBLPROPERTIES sail.sail_test_catalog.unity_table_test.show_properties ('custom.show')
+      """
+    Then query result
+      | key | value |
+      | custom.show | initial |

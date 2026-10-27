@@ -9,11 +9,11 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
-use datafusion::execution::SessionState;
-use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
+use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_expr::create_lex_ordering;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
@@ -24,7 +24,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_scan_config::{
+    FileScanConfig, output_partitioning_from_partition_fields,
+};
 use datafusion_datasource::source::DataSourceExec;
 use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
@@ -35,7 +37,9 @@ use sail_physical_plan::barrier::BarrierExec;
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
-use crate::listing::utils::{can_be_evaluated_for_partition_pruning, has_hidden_path_component};
+use crate::listing::utils::{
+    can_be_evaluated_for_partition_pruning, has_hidden_path_component, matches_path_glob_filter,
+};
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
 /// Result of a file listing operation for listing table scans.
@@ -60,7 +64,8 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() {
             let [logical_input] = logical_inputs else {
@@ -69,7 +74,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             let [physical_input] = physical_inputs else {
                 return internal_err!("FileWriteNode requires exactly one physical input");
             };
-            return plan_file_write(session_state, logical_input, physical_input.clone(), node)
+            return plan_file_write(session, logical_input, physical_input.clone(), node)
                 .await
                 .map(Some);
         }
@@ -80,7 +85,8 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         &self,
         _planner: &dyn PhysicalPlanner,
         scan: &TableScan,
-        session_state: &SessionState,
+        session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let Some(source) = scan.source.downcast_ref::<ListingTableSource>() else {
             return Ok(None);
@@ -109,13 +115,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             mut file_groups,
             statistics,
             grouped_by_partition: partitioned_by_file_group,
-        } = list_files_for_scan(
-            source,
-            session_state,
-            &partition_filters,
-            statistic_file_limit,
-        )
-        .await?;
+        } = list_files_for_scan(source, session, &partition_filters, statistic_file_limit).await?;
 
         let table_schema = source.config().schema.table_schema();
         if file_groups.is_empty() {
@@ -124,9 +124,9 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         }
 
         let output_ordering =
-            try_create_output_ordering(source, session_state.execution_props(), &file_groups)?;
+            try_create_output_ordering(source, session.execution_props(), &file_groups)?;
 
-        match session_state
+        match session
             .config_options()
             .execution
             .split_file_groups_by_statistics
@@ -168,11 +168,21 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
             )))));
         };
 
+        let output_partitioning = if partitioned_by_file_group {
+            output_partitioning_from_partition_fields(
+                table_schema,
+                source.config().schema.table_partition_cols(),
+                file_groups.len(),
+            )
+        } else {
+            None
+        };
+
         let config = source
             .config()
             .read_format
             .scan(
-                session_state,
+                session,
                 ListingScanInput {
                     object_store_url,
                     file_groups,
@@ -182,7 +192,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
                     preserve_order: false,
                     output_ordering,
                     statistics,
-                    partitioned_by_file_group,
+                    output_partitioning,
                     schema: source.config().schema.clone(),
                     compression: source.config().compression,
                 },
@@ -194,7 +204,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
 }
 
 async fn plan_file_write(
-    session_state: &SessionState,
+    session: &dyn Session,
     logical_input: &LogicalPlan,
     physical_input: Arc<dyn ExecutionPlan>,
     node: &FileWriteNode,
@@ -229,10 +239,10 @@ async fn plan_file_write(
         file_extension: String::new(),
         file_output_mode: FileOutputMode::Automatic,
     };
-    let sort_order = create_sort_order(session_state, sort_by.clone(), logical_input.schema())?;
+    let sort_order = create_sort_order(session, sort_by.clone(), logical_input.schema())?;
     let plan = format
         .sink(
-            session_state,
+            session,
             ListingSinkInput {
                 input: physical_input,
                 sink: conf,
@@ -352,24 +362,27 @@ async fn list_files_for_scan<'a>(
 
     let store_ref = store.as_ref();
     let partition_cols_ref = partition_cols.as_slice();
+    let path_glob_filter = source.config().path_glob_filter.as_ref();
     let file_list = future::try_join_all(source.config().table_paths.iter().map(
         |table_path| async move {
             let files =
                 pruned_partition_list(ctx, store_ref, table_path, filters, "", partition_cols_ref)
                     .await?;
-            // Skip hidden files so scans agree with `inputFiles` and schema sampling.
+            // Apply listing-level file-name filters so scans agree with `inputFiles` and sampling.
             let files = files.try_filter(move |file| {
-                futures::future::ready(!has_hidden_path_component(
-                    table_path,
-                    &file.object_meta.location,
-                ))
+                let location = &file.object_meta.location;
+                futures::future::ready(
+                    !has_hidden_path_component(table_path, location)
+                        && matches_path_glob_filter(path_glob_filter, location),
+                )
             });
             Ok::<_, datafusion_common::DataFusionError>(files.boxed())
         },
     ))
     .await?;
 
-    let meta_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
+    let meta_fetch_concurrency: usize =
+        ctx.config_options().execution.meta_fetch_concurrency.into();
     let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
 
     let files = file_list
@@ -437,6 +450,7 @@ async fn do_collect_statistics_and_ordering(
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
     let meta = &part_file.object_meta;
     let file_schema = source.config().schema.file_schema();
+    let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(file_schema.as_ref()));
     let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
     let cache_key = TableScopedPath {
         table: Some(statistics_cache_table_ref(
@@ -451,7 +465,7 @@ async fn do_collect_statistics_and_ordering(
         .and_then(|x| x.get(&cache_key))
     {
         // Skip a cached entry whose column count differs to avoid an out-of-bounds panic
-        if cached.is_valid_for(meta)
+        if cached.is_valid_for(meta, &schema_fingerprint)
             && cached.statistics.column_statistics.len() == file_schema.fields().len()
         {
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
@@ -476,6 +490,7 @@ async fn do_collect_statistics_and_ordering(
             &cache_key,
             CachedFileMetadata::new(
                 meta.clone(),
+                schema_fingerprint,
                 Arc::clone(&statistics),
                 file_meta.ordering.clone(),
             ),

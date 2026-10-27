@@ -316,3 +316,67 @@ Feature: Delta Lake Checkpoint stats_parsed and partitionValues_parsed
         | 10  |
         | 50  |
         | 100 |
+
+  Rule: Typed checkpoint statistics survive Delta type widening
+
+    Scenario: SMALLINT checkpoint bounds are widened to the current INT schema
+      Given variable location for temporary directory delta_cp_stats_type_widening
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_cp_stats_type_widening_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_cp_stats_type_widening_test (id SMALLINT)
+        USING DELTA
+        LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead 'true')
+        TBLPROPERTIES (
+          'delta.enableTypeWidening' = 'true',
+          'delta.checkpointInterval' = '1',
+          'delta.checkpoint.writeStatsAsStruct' = 'true',
+          'delta.checkpoint.writeStatsAsJson' = 'false'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_cp_stats_type_widening_test
+        VALUES (CAST(1 AS SMALLINT)), (CAST(2 AS SMALLINT))
+        """
+      Given statement
+        """
+        ALTER TABLE delta_cp_stats_type_widening_test
+        SET TBLPROPERTIES ('delta.checkpointInterval' = '100')
+        """
+      Given statement
+        """
+        ALTER TABLE delta_cp_stats_type_widening_test
+        ALTER COLUMN id TYPE INT
+        """
+      Given statement
+        """
+        INSERT INTO delta_cp_stats_type_widening_test VALUES (40000)
+        """
+      Then checkpoint parquet file 00000000000000000001.checkpoint.parquet in location contains add fields
+        | path                      | value |
+        | stats_parsed.minValues.id | 1     |
+        | stats_parsed.maxValues.id | 2     |
+      When query
+        """
+        SELECT id
+        FROM delta_cp_stats_type_widening_test
+        WHERE id >= 2
+        ORDER BY id
+        """
+      Then query result ordered
+        | id    |
+        | 2     |
+        | 40000 |
+      When query
+        """
+        SELECT MIN(id) AS min_id, MAX(id) AS max_id
+        FROM delta_cp_stats_type_widening_test
+        """
+      Then query result
+        | min_id | max_id |
+        | 1      | 40000  |

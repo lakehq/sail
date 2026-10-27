@@ -13,13 +13,19 @@ use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 mod catalog;
+mod checkpoint;
 mod delete;
 mod delta;
 mod explain;
 mod function;
 mod insert;
 mod merge;
+mod procedure;
+mod row_level;
 mod show;
+mod table_properties;
+mod truncate;
+mod update;
 mod variable;
 mod with_relations;
 mod write;
@@ -44,6 +50,14 @@ impl PlanResolver<'_> {
                 self.resolve_command_with_relations(*root, references, state)
                     .await
             }
+            CommandNode::CallProcedure {
+                procedure,
+                arguments,
+                named_arguments,
+            } => {
+                self.resolve_command_call_procedure(procedure, arguments, named_arguments, state)
+                    .await
+            }
             CommandNode::CurrentDatabase => {
                 self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
             }
@@ -57,6 +71,9 @@ impl PlanResolver<'_> {
                     qualifier: qualifier.map(|x| x.into()).unwrap_or_default(),
                     pattern,
                 })
+            }
+            CommandNode::ShowTableProperties { table, property } => {
+                self.resolve_show_table_properties(table, property).await
             }
             CommandNode::ShowTables { database, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ShowTables {
@@ -134,6 +151,7 @@ impl PlanResolver<'_> {
             CommandNode::FunctionExists { function } => {
                 self.resolve_catalog_command(CatalogCommand::FunctionExists {
                     function: function.into(),
+                    system_functions: list_built_in_function_statuses(),
                 })
             }
             CommandNode::CreateTable { table, definition } => {
@@ -230,6 +248,10 @@ impl PlanResolver<'_> {
                 self.resolve_catalog_create_temporary_view(view, is_global, definition, state)
                     .await
             }
+            CommandNode::RemoteCheckpoint { relation_id, input } => {
+                self.resolve_command_remote_checkpoint(relation_id, *input, state)
+                    .await
+            }
             CommandNode::Write(write) => self.resolve_command_write(write, state).await,
             CommandNode::WriteTo(write_to) => self.resolve_command_write_to(write_to, state).await,
             CommandNode::WriteStream(write_stream) => {
@@ -278,7 +300,21 @@ impl PlanResolver<'_> {
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }
-            CommandNode::Update { .. } => Err(PlanError::todo("CommandNode::Update")),
+            CommandNode::ResetVariable {
+                variable: Some(variable),
+            } => Ok(self.resolve_command_reset_variable(variable)),
+            CommandNode::ResetVariable { variable: None } => {
+                Err(PlanError::unsupported("RESET requires a Spark session"))
+            }
+            CommandNode::Update {
+                table,
+                table_alias,
+                assignments,
+                condition,
+            } => {
+                self.resolve_command_update(table, table_alias, assignments, condition, state)
+                    .await
+            }
             CommandNode::Delete {
                 table,
                 table_alias,
@@ -290,6 +326,9 @@ impl PlanResolver<'_> {
                     condition,
                 };
                 self.resolve_command_delete(delete, state).await
+            }
+            CommandNode::TruncateTable { table } => {
+                self.resolve_command_truncate(table, state).await
             }
             CommandNode::AlterTable {
                 table,
@@ -343,11 +382,11 @@ impl PlanResolver<'_> {
             CommandNode::CommentOnDatabase { .. } => {
                 Err(PlanError::todo("CommandNode::CommentOnDatabase"))
             }
-            CommandNode::CommentOnTable { .. } => {
-                Err(PlanError::todo("CommandNode::CommentOnTable"))
+            CommandNode::CommentOnTable { table, value } => {
+                self.resolve_comment_on_table(table, value).await
             }
-            CommandNode::CommentOnColumn { .. } => {
-                Err(PlanError::todo("CommandNode::CommentOnColumn"))
+            CommandNode::CommentOnColumn { column, value } => {
+                self.resolve_comment_on_column(column, value).await
             }
         }
     }

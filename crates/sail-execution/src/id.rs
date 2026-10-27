@@ -66,6 +66,7 @@ macro_rules! define_id_type {
 define_id_type!(JobId, u64);
 define_id_type!(DriverId, u64);
 define_id_type!(WorkerId, u64);
+define_id_type!(WorkerDemandId, u64);
 
 #[derive(Debug)]
 pub struct IdGenerator<T: IdType> {
@@ -100,6 +101,24 @@ where
     }
 }
 
+/// Identifies a task attempt within a stage.
+#[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
+pub struct TaskAttempt {
+    pub partition: usize,
+    pub attempt: usize,
+}
+
+impl TaskAttempt {
+    pub fn task_key(&self, job_id: JobId, stage: usize) -> TaskKey {
+        TaskKey {
+            job_id,
+            stage,
+            partition: self.partition,
+            attempt: self.attempt,
+        }
+    }
+}
+
 /// Uniquely identifies a task attempt within a job by stage, partition, and attempt number.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct TaskKey {
@@ -107,6 +126,18 @@ pub struct TaskKey {
     pub stage: usize,
     pub partition: usize,
     pub attempt: usize,
+}
+
+impl TaskKey {
+    pub fn task_stream_key(&self, channel: usize) -> TaskStreamKey {
+        TaskStreamKey {
+            job_id: self.job_id,
+            stage: self.stage,
+            partition: self.partition,
+            attempt: self.attempt,
+            channel,
+        }
+    }
 }
 
 pub struct TaskKeyDisplay<'a>(pub &'a TaskKey);
@@ -137,18 +168,6 @@ impl fmt::Display for TaskStreamKeyDisplay<'_> {
         write!(
             f,
             "job {} stage {} partition {} attempt {} channel {}",
-            self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
-        )
-    }
-}
-
-pub struct TaskStreamKeyDenseDisplay<'a>(pub &'a TaskStreamKey);
-
-impl fmt::Display for TaskStreamKeyDenseDisplay<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}/{}/{}/{}/{}",
             self.0.job_id, self.0.stage, self.0.partition, self.0.attempt, self.0.channel
         )
     }

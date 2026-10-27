@@ -1,9 +1,14 @@
+import base64
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
+from pyspark.sql.types import TimestampType
 
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
@@ -15,6 +20,58 @@ def safe_sort_key(row):
     return tuple((v is not None, v) for v in row)
 
 
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_merges_mixed_timestamp_units_with_different_arrow_timezones(spark, tmp_path, session_timezone):
+    _ = session_timezone
+    path = tmp_path / "mixed_timestamp_units_and_timezones"
+    path.mkdir()
+    files = [
+        ("a_us_new_york.parquet", "us", "America/New_York", datetime(2024, 1, 2, 3, 4, 6, 123456, tzinfo=UTC)),
+        ("b_ms_utc.parquet", "ms", "UTC", datetime(2024, 1, 2, 3, 4, 5, 123000, tzinfo=UTC)),
+    ]
+    for name, unit, timezone, value in files:
+        pq.write_table(
+            pa.table({"ts": pa.array([value], type=pa.timestamp(unit, tz=timezone))}),
+            path / name,
+        )
+
+    df = spark.read.parquet(str(path))
+    rows = df.selectExpr("CAST(ts AS STRING) AS value").orderBy("value").collect()
+
+    assert df.schema.simpleString() == "struct<ts:timestamp>"
+    assert rows == [
+        Row(value="2024-01-01 19:04:05.123"),
+        Row(value="2024-01-01 19:04:06.123456"),
+    ]
+
+
+def test_parquet_nanosecond_timestamp_is_reported_not_truncated(spark, tmp_path):
+    # The counterpart of `test_csv_infer_schema_timestamp_fractional_digits`: a nanosecond
+    # timestamp is widened for CSV, where Spark's reader truncates, but not for Parquet, where
+    # Spark rejects `NANOS` rather than losing precision silently (SPARK-40819). Pinned here so
+    # the two formats stay deliberately different rather than accidentally so.
+    path = str(tmp_path / "parquet_nanosecond_timestamp.parquet")
+    value = datetime(2018, 5, 1, 0, 0, 5, 123456, tzinfo=UTC)
+    pq.write_table(
+        pa.table({"t": pa.array([value], type=pa.timestamp("ns", tz="UTC"))}),
+        path,
+        version="2.6",
+    )
+
+    with pytest.raises(Exception, match="Nanosecond"):
+        _ = spark.read.parquet(path).schema
+
+
+def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
+    # collect() is the honest probe (unlike toArrow(), which casts view types away): a binary
+    # column read as BinaryView must still reach the client as Spark binary.
+    path = str(tmp_path / "parquet_binary_collect.parquet")
+    pq.write_table(pa.table({"b": pa.array([b"\x00\x01", None], type=pa.binary())}), path)
+    df = spark.read.parquet(path)
+    assert df.schema.simpleString() == "struct<b:binary>"
+    assert {bytes(r.b) if r.b is not None else None for r in df.collect()} == {b"\x00\x01", None}
+
+
 def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     path = str(tmp_path / "parquet_basic")
     sample_df.write.parquet(path, mode="overwrite")
@@ -22,6 +79,22 @@ def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     assert sample_df.count() == read_df.count()
     assert sample_df.schema == read_df.schema
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+def test_parquet_path_glob_filter(spark, tmp_path):
+    keep_source = tmp_path / "parquet_keep_source"
+    drop_source = tmp_path / "parquet_drop_source"
+    spark.createDataFrame([(1,)], "id INT").coalesce(1).write.parquet(str(keep_source))
+    spark.createDataFrame([(2,)], "id INT").coalesce(1).write.parquet(str(drop_source))
+
+    path = tmp_path / "parquet_path_glob_filter"
+    path.mkdir()
+    next(keep_source.glob("*.parquet")).rename(path / "keep.parquet")
+    next(drop_source.glob("*.parquet")).rename(path / "drop.parquet")
+
+    df = spark.read.option("pathGlobFilter", "keep.*").parquet(str(path))
+
+    assert df.collect() == [Row(id=1)]
 
 
 def test_parquet_write_modes(spark, tmp_path):
@@ -115,6 +188,87 @@ def test_parquet_read_options(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+@pytest.mark.parametrize(
+    ("physical_schema", "requested_schema", "value"),
+    [
+        ("value DOUBLE", "value INT", 1.5),
+        ("value INT", "value BOOLEAN", 1),
+        ("value STRUCT<nested: DOUBLE>", "value STRUCT<nested: INT>", Row(nested=1.5)),
+        ("value ARRAY<DOUBLE>", "value ARRAY<INT>", [1.5]),
+        ("value MAP<STRING, DOUBLE>", "value MAP<STRING, INT>", {"key": 1.5}),
+    ],
+)
+def test_parquet_explicit_schema_rejects_incompatible_types(spark, tmp_path, physical_schema, requested_schema, value):
+    path = str(tmp_path / "incompatible_explicit_schema")
+    spark.createDataFrame([(value,)], physical_schema).write.parquet(path)
+
+    with pytest.raises(Exception, match="PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        spark.read.schema(requested_schema).parquet(path).collect()
+
+
+def test_parquet_explicit_schema_allows_supported_widening(spark, tmp_path):
+    path = str(tmp_path / "supported_explicit_schema_widening")
+    spark.createDataFrame([(1, 1.5), (None, None)], "id INT, value FLOAT").write.parquet(path)
+
+    rows = spark.read.schema("id BIGINT, value DOUBLE").parquet(path).orderBy("id").collect()
+
+    assert rows == [Row(id=None, value=None), Row(id=1, value=1.5)]
+
+
+def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
+    path = str(tmp_path / "missing_explicit_schema_field")
+    spark.createDataFrame([(1,)], "id INT").write.parquet(path)
+
+    rows = spark.read.schema("id INT, missing STRING").parquet(path).collect()
+
+    assert rows == [Row(id=1, missing=None)]
+
+
+def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):
+    # Parquet has no seconds timestamp logical type: an Arrow `timestamp[s]` is written as a
+    # physical INT64 with the Arrow type kept only in `ARROW:schema`. Spark ignores that hint
+    # and reads the column as long, so Sail must too.
+    path = tmp_path / "arrow_second_timestamp.parquet"
+    encoded_arrow_schema = base64.b64encode(
+        pa.schema([pa.field("ts", pa.timestamp("s"))]).serialize().to_pybytes()
+    ).decode()
+    table = pa.table({"ts": pa.array([1704164645, -1], type=pa.int64())})
+    with pq.ParquetWriter(path, table.schema, store_schema=False) as writer:
+        writer.add_key_value_metadata({"ARROW:schema": encoded_arrow_schema})
+        writer.write_table(table)
+
+    df = spark.read.parquet(str(path))
+
+    assert df.schema.simpleString() == "struct<ts:bigint>"
+    assert df.orderBy("ts").collect() == [
+        Row(ts=-1),
+        Row(ts=1704164645),
+    ]
+
+
+@pytest.mark.parametrize("requested_type", ["TIMESTAMP", "TIMESTAMP_NTZ"])
+def test_parquet_explicit_schema_determines_int96_timestamp_family(spark, tmp_path, requested_type):
+    path = tmp_path / "int96_explicit_timestamp_schema.parquet"
+    table = pa.table(
+        {
+            "value": pa.array(
+                [datetime(2024, 1, 2, 3, 4, 5, tzinfo=UTC)],
+                type=pa.timestamp("us"),
+            )
+        }
+    )
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    rows = (
+        spark.read.schema(f"value {requested_type}")
+        .parquet(str(path))
+        .selectExpr("CAST(value AS STRING) AS value")
+        .collect()
+    )
+
+    assert rows == [Row(value="2024-01-02 03:04:05")]
+
+
 def test_parquet_write_with_bloom_filter(spark, tmpdir):
     def size(p):
         return get_data_directory_size(p, extension=".parquet")
@@ -190,15 +344,12 @@ def test_parquet_format_path(spark, sample_df, tmp_path):
 
 
 def test_parquet_read_with_custom_extension(spark, sample_pandas_df, tmp_path):
-    """Parquet files written under a non-standard suffix (e.g. `.hive`, as
-    emitted by Hive-managed tables) can be read via the `extension` /
-    `fileExtension` option."""
+    """`pathGlobFilter` selects Parquet files with a custom suffix."""
     directory = tmp_path / "parquet_custom_extension"
     directory.mkdir()
     file_path = directory / "data.hive"
     sample_pandas_df.to_parquet(str(file_path))
-    # TODO: add a file with another extension and the file should be ignored
-    #   when the filtering logic is implemented properly
+    sample_pandas_df.to_parquet(str(directory / "ignored.parquet"))
 
     expected_count = len(sample_pandas_df)
     expected_rows = sorted(sample_pandas_df.to_dict(orient="records"), key=safe_sort_key)
@@ -206,32 +357,17 @@ def test_parquet_read_with_custom_extension(spark, sample_pandas_df, tmp_path):
     def actual_rows(df):
         return sorted(df.toPandas().to_dict(orient="records"), key=safe_sort_key)
 
-    # Option key `extension`, directory path.
-    read_df = spark.read.option("extension", ".hive").parquet(str(directory))
+    read_df = spark.read.option("pathGlobFilter", "*.hive").parquet(str(directory))
     assert read_df.count() == expected_count
     assert actual_rows(read_df) == expected_rows
 
-    # Camel-case alias `fileExtension`, single-file path.
-    read_df = spark.read.option("fileExtension", ".hive").parquet(str(file_path))
-    assert read_df.count() == expected_count
-    assert actual_rows(read_df) == expected_rows
-
-    # Empty string disables extension filtering entirely.
-    read_df = spark.read.option("extension", "").parquet(str(directory))
-    assert read_df.count() == expected_count
-    assert actual_rows(read_df) == expected_rows
-
-    # SQL CREATE TABLE with OPTIONS (fileExtension '.hive').
-    # Use a separate directory so DROP TABLE side effects don't affect other cases.
-    sql_directory = tmp_path / "parquet_custom_extension_sql"
-    sql_directory.mkdir()
-    sample_pandas_df.to_parquet(str(sql_directory / "data.hive"))
+    # SQL CREATE TABLE with OPTIONS (pathGlobFilter '*.hive').
     table_name = "parquet_custom_extension_table"
     try:
         spark.sql(
             f"CREATE TABLE {table_name} USING parquet "
-            f"OPTIONS (fileExtension '.hive') "
-            f"LOCATION '{escape_sql_string_literal(str(sql_directory))}'"
+            f"OPTIONS (pathGlobFilter '*.hive') "
+            f"LOCATION '{escape_sql_string_literal(str(directory))}'"
         )
         read_df = spark.sql(f"SELECT * FROM {table_name}")  # noqa: S608
         assert read_df.count() == expected_count
@@ -650,3 +786,21 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     df = spark.read.schema(sample_df.schema).parquet(str(upper))
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_int96_timestamp_is_instant(spark, tmp_path, session_timezone):
+    # Spark reads INT96 as TIMESTAMP, which compares with other TIMESTAMP values as instants.
+    _ = session_timezone
+    path = tmp_path / "int96.parquet"
+    value = datetime(2020, 6, 14, 4, tzinfo=UTC)
+    pq.write_table(
+        pa.table({"ts": pa.array([value], type=pa.timestamp("us", tz="UTC"))}),
+        path,
+        use_deprecated_int96_timestamps=True,
+        store_schema=False,
+    )
+    df = spark.read.parquet(str(path))
+    assert isinstance(df.schema["ts"].dataType, TimestampType)
+    assert df.selectExpr("unix_micros(ts)").collect() == [(1592107200000000,)]
+    assert df.filter("ts = TIMESTAMP '2020-06-13 21:00:00'").count() == 1

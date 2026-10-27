@@ -1,27 +1,27 @@
-use std::str::FromStr;
 use std::sync::Arc;
 
-use datafusion::common::parquet_config::DFParquetWriterVersion;
+use datafusion::common::config::ConfigNonZeroUsize;
 use datafusion::common::{Result, internal_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
+use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
-use sail_common::config::AppConfig;
+use sail_common::actor::ActorHandle;
+use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
-use sail_server::actor::ActorHandle;
+use sail_telemetry::telemetry::global_system_store_reader;
 
 use crate::catalog::create_catalog_manager;
-use crate::formats::create_table_format_registry;
-use crate::observable::SessionManagerHandle;
+use crate::formats::create_data_source_registry;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
 use crate::runtime::RuntimeEnvFactory;
@@ -108,7 +108,7 @@ impl ServerSessionFactory {
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
-            .with_extension(create_table_format_registry()?)
+            .with_extension(create_data_source_registry()?)
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),
@@ -116,14 +116,21 @@ impl ServerSessionFactory {
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
+            .with_extension(Arc::new(RemoteCheckpointRegistry::new(
+                self.config.execution.checkpoint.path.clone(),
+                info.session_id.clone(),
+            )))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
-        self.apply_execution_config(&mut config);
-        self.apply_execution_parquet_config(&mut config);
-        self.apply_optimizer_config(&mut config);
+        self.apply_execution_config(&mut config)?;
+        super::apply_parquet_config(
+            &mut config.options_mut().execution.parquet,
+            &self.config.parquet,
+        );
+        self.apply_optimizer_config(&mut config)?;
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -134,7 +141,7 @@ impl ServerSessionFactory {
             .runtime_env
             .create(|builder| self.mutator.mutate_runtime_env(builder, info))?;
         // We do not add default features to the session state,
-        // since we manage table formats and functions ourselves.
+        // since we manage data sources and functions ourselves.
         let builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
@@ -149,79 +156,51 @@ impl ServerSessionFactory {
         Ok(builder.build())
     }
 
-    fn create_system_table_service(&self, info: &ServerSessionInfo) -> Result<SystemTableService> {
-        Ok(SystemTableService::new(Box::new(
-            SessionManagerHandle::new(info.session_manager.clone()),
-        )))
+    fn create_system_table_service(&self, _info: &ServerSessionInfo) -> Result<SystemTableService> {
+        let reader = global_system_store_reader().ok_or_else(|| {
+            datafusion::common::DataFusionError::Internal(
+                "telemetry is not initialized for system store".to_string(),
+            )
+        })?;
+        Ok(SystemTableService::new(
+            reader,
+            self.config.execution.batch_size,
+        ))
     }
 
-    fn apply_execution_config(&mut self, config: &mut SessionConfig) {
+    fn apply_execution_config(&mut self, config: &mut SessionConfig) -> Result<()> {
         let execution = &mut config.options_mut().execution;
 
-        execution.batch_size = self.config.execution.batch_size;
+        execution.batch_size = ConfigNonZeroUsize::try_new(self.config.execution.batch_size)?;
         if self.config.execution.default_parallelism > 0 {
             execution.target_partitions = self.config.execution.default_parallelism;
         }
         execution.collect_statistics = self.config.execution.collect_statistics;
+        execution.spill_compression =
+            super::temporary_file_compression(self.config.runtime.temporary_files.compression);
         execution.use_row_number_estimates_to_optimize_partitioning = self
             .config
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+        Ok(())
     }
 
-    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) -> Result<()> {
         let optimizer = &mut config.options_mut().optimizer;
+        optimizer.join_reordering = self.config.optimizer.enable_join_swap;
+        optimizer.prefer_hash_join = self.config.optimizer.prefer_hash_join;
+        optimizer.enable_window_topn = self.config.optimizer.enable_window_topn;
         optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
-    }
-
-    fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
-        let parquet = &mut config.options_mut().execution.parquet;
-
-        parquet.created_by = concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
-        parquet.enable_page_index = self.config.parquet.enable_page_index;
-        parquet.pruning = self.config.parquet.pruning;
-        parquet.skip_metadata = self.config.parquet.skip_metadata;
-        parquet.metadata_size_hint = self.config.parquet.metadata_size_hint;
-        parquet.pushdown_filters = self.config.parquet.pushdown_filters;
-        parquet.reorder_filters = self.config.parquet.reorder_filters;
-        parquet.schema_force_view_types = self.config.parquet.schema_force_view_types;
-        parquet.binary_as_string = self.config.parquet.binary_as_string;
-        parquet.max_predicate_cache_size = Some(self.config.parquet.max_predicate_cache_size);
-        parquet.coerce_int96 = Some("us".to_string());
-        parquet.data_pagesize_limit = self.config.parquet.data_page_size_limit;
-        parquet.write_batch_size = self.config.parquet.write_batch_size;
-        parquet.writer_version =
-            DFParquetWriterVersion::from_str(self.config.parquet.writer_version.as_str())
-                .unwrap_or_default();
-        parquet.skip_arrow_metadata = self.config.parquet.skip_arrow_metadata;
-        parquet.compression = Some(self.config.parquet.compression.clone());
-        parquet.dictionary_enabled = Some(self.config.parquet.dictionary_enabled);
-        parquet.dictionary_page_size_limit = self.config.parquet.dictionary_page_size_limit;
-        parquet.statistics_enabled = Some(self.config.parquet.statistics_enabled.clone());
-        parquet.max_row_group_size = self.config.parquet.max_row_group_size;
-        parquet.column_index_truncate_length = self.config.parquet.column_index_truncate_length;
-        parquet.statistics_truncate_length = self.config.parquet.statistics_truncate_length;
-        parquet.data_page_row_count_limit = self.config.parquet.data_page_row_count_limit;
-        parquet.encoding = self.config.parquet.encoding.clone();
-        parquet.bloom_filter_on_read = self.config.parquet.bloom_filter_on_read;
-        parquet.bloom_filter_on_write = self.config.parquet.bloom_filter_on_write;
-        parquet.bloom_filter_fpp = Some(self.config.parquet.bloom_filter_fpp);
-        parquet.bloom_filter_ndv = Some(self.config.parquet.bloom_filter_ndv);
-        parquet.allow_single_file_parallelism = self.config.parquet.allow_single_file_parallelism;
-        parquet.maximum_parallel_row_group_writers =
-            self.config.parquet.maximum_parallel_row_group_writers;
-        parquet.maximum_buffered_record_batches_per_stream = self
-            .config
-            .parquet
-            .maximum_buffered_record_batches_per_stream;
-        parquet.content_defined_chunking.enabled =
-            self.config.parquet.content_defined_chunking.enabled;
-        parquet.content_defined_chunking.min_chunk_size =
-            self.config.parquet.content_defined_chunking.min_chunk_size;
-        parquet.content_defined_chunking.max_chunk_size =
-            self.config.parquet.content_defined_chunking.max_chunk_size;
-        parquet.content_defined_chunking.norm_level =
-            self.config.parquet.content_defined_chunking.norm_level;
+        // DataFusion 55's hash-join dynamic filter assumes every plan partition reports to
+        // process-local state. Cluster execution uses independently decoded task plans, so keep
+        // join filters disabled while allowing task-local TopK and aggregate filters.
+        if matches!(
+            self.config.mode,
+            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster
+        ) {
+            optimizer.enable_join_dynamic_filter_pushdown = false;
+        }
+        Ok(())
     }
 }

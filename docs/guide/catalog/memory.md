@@ -7,11 +7,13 @@ rank: 1
 
 The memory catalog provider in Sail stores table metadata in memory for the duration of your session. This is a useful default choice if you do not need persistent table metadata across sessions.
 
+## Options
+
 A memory catalog can be configured using the following options.
 
-- `type` (required): The string `memory`.
-- `name` (required): The name of the catalog.
-- `initial_database` (required): The initial database namespace as an array of strings.
+- `type` (required): The catalog provider. Set this option to `memory`.
+- `name` (required): The catalog name.
+- `initial_database` (required): The initial database namespace. Provide an array of strings.
 - `initial_database_comment` (optional): The comment for the initial database.
 
 ## Examples

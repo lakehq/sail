@@ -95,6 +95,34 @@ Feature: Delta Lake CHECK Constraints
         | id | value |
         | 0  | bad   |
 
+    Scenario: ADD CONSTRAINT canonicalizes names and rejects case-insensitive duplicates
+      Given statement template
+        """
+        CREATE TABLE delta_check_constraints_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_check_constraints_test VALUES (1, 'existing')
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test
+        ADD CONSTRAINT ÄRule_ID CHECK (id > 0)
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                   | value                                            |
+        | metaData.configuration | {"delta.constraints.ärule_id":"id > 0"}       |
+      Given statement with error already exists
+        """
+        ALTER TABLE delta_check_constraints_test
+        ADD CONSTRAINT äRULE_id CHECK (id > 1)
+        """
+
     Scenario: Direct mutation of delta.constraints table properties is rejected
       Given statement template
         """
@@ -207,3 +235,183 @@ Feature: Delta Lake CHECK Constraints
         WHEN NOT MATCHED THEN INSERT *
         """
       Then query error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
+
+  Rule: MERGE respects NOT NULL constraints
+
+    Background:
+      Given variable location for temporary directory delta_not_null_merge
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_not_null_merge_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_not_null_merge_test (
+          id INT NOT NULL,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+
+    Scenario: MERGE inserts valid rows into a table with a NOT NULL column
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_delta_not_null_merge AS
+        SELECT 1 AS id, 'valid' AS value
+        """
+      Given statement
+        """
+        MERGE INTO delta_not_null_merge_test AS t
+        USING src_delta_not_null_merge AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        """
+      When query
+        """
+        SELECT id, value FROM delta_not_null_merge_test
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | valid |
+
+    Scenario: MERGE rejects null values for non-nullable target columns
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_delta_not_null_merge AS
+        SELECT CAST(NULL AS INT) AS id, 'invalid' AS value
+        """
+      When query
+        """
+        MERGE INTO delta_not_null_merge_test AS t
+        USING src_delta_not_null_merge AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN INSERT (id, value) VALUES (s.id, s.value)
+        """
+      Then query error DELTA_NOT_NULL_CONSTRAINT_VIOLATED.*column: id
+
+  Rule: Partitioned MERGE resolves non-leading NOT NULL columns
+
+    Background:
+      Given variable location for temporary directory delta_partitioned_not_null_merge
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_partitioned_not_null_merge
+        """
+      Given final statement
+        """
+        DROP VIEW IF EXISTS src_delta_partitioned_not_null_merge
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_partitioned_not_null_merge (
+          day INT,
+          id BIGINT NOT NULL,
+          value BIGINT
+        )
+        USING DELTA PARTITIONED BY (day) LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_partitioned_not_null_merge VALUES (0, 1, 10), (1, 2, 20)
+        """
+      Given statement
+        """
+        CREATE TEMP VIEW src_delta_partitioned_not_null_merge AS
+        SELECT * FROM VALUES
+          (1, CAST(1 AS BIGINT), CAST(100 AS BIGINT)),
+          (2, CAST(3 AS BIGINT), CAST(300 AS BIGINT)) AS s(day, id, value)
+        """
+
+    Scenario: MERGE collects its result while updating partitions and inserting NOT NULL rows
+      When query
+        """
+        MERGE INTO delta_partitioned_not_null_merge AS t
+        USING src_delta_partitioned_not_null_merge AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET day = s.day, value = s.value
+        WHEN NOT MATCHED THEN INSERT (day, id, value) VALUES (s.day, s.id, s.value)
+        """
+      Then query result collected
+        | count |
+        | 2     |
+      Then delta log latest commit info contains
+        | path                                   | value   |
+        | operation                              | "MERGE" |
+        | operationMetrics.numTargetRowsUpdated   | 1       |
+        | operationMetrics.numTargetRowsInserted  | 1       |
+      When query
+        """
+        SELECT id, day, value FROM delta_partitioned_not_null_merge ORDER BY id
+        """
+      Then query result collected ordered
+        | id | day | value |
+        | 1  | 1   | 100   |
+        | 2  | 1   | 20    |
+        | 3  | 2   | 300   |
+
+    Scenario: MERGE rejects a null update using the visible target name and preserves rows
+      When query
+        """
+        MERGE INTO delta_partitioned_not_null_merge AS t
+        USING src_delta_partitioned_not_null_merge AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN UPDATE SET id = CAST(NULL AS BIGINT), value = s.value
+        WHEN NOT MATCHED THEN INSERT (day, id, value) VALUES (s.day, s.id, s.value)
+        """
+      Then query error DELTA_NOT_NULL_CONSTRAINT_VIOLATED.*column: id
+      When query
+        """
+        SELECT id, day, value FROM delta_partitioned_not_null_merge ORDER BY id
+        """
+      Then query result collected ordered
+        | id | day | value |
+        | 1  | 0   | 10    |
+        | 2  | 1   | 20    |
+
+  Rule: CHECK constraints can be removed
+
+    Background:
+      Given variable location for temporary directory delta_drop_constraint
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_check_constraints_test
+        """
+
+    Scenario: DROP CONSTRAINT removes enforcement and respects IF EXISTS
+      Given statement template
+        """
+        CREATE TABLE delta_check_constraints_test (id INT) USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test ADD CONSTRAINT positive_id CHECK (id > 0)
+        """
+      Given statement with error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
+        """
+        INSERT INTO delta_check_constraints_test VALUES (-1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test DROP CONSTRAINT POSITIVE_ID
+        """
+      Given statement
+        """
+        INSERT INTO delta_check_constraints_test VALUES (-1)
+        """
+      Given statement
+        """
+        ALTER TABLE delta_check_constraints_test DROP CONSTRAINT IF EXISTS positive_id
+        """
+      Given statement with error does not exist
+        """
+        ALTER TABLE delta_check_constraints_test DROP CONSTRAINT positive_id
+        """
+      When query
+        """
+        SELECT id FROM delta_check_constraints_test
+        """
+      Then query result
+        | id |
+        | -1 |

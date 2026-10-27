@@ -1,7 +1,7 @@
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
-use datafusion_common::{DataFusionError, Result, exec_err};
-use datasketches::hash_value::{raw_bytes, sign_extend};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err};
+use datasketches::hash::value::{raw_bytes, sign_extend};
 use datasketches::hll::{HllSketch, HllType, HllUnion};
 
 pub(crate) const MIN_LG_CONFIG_K: i32 = 4;
@@ -18,16 +18,17 @@ pub(crate) fn validate_lg_config_k(value: i32, function_name: &str) -> Result<u8
     }
 }
 
-pub(crate) fn new_hll_sketch(lg_config_k: u8) -> HllSketch {
+pub(crate) fn new_hll_sketch(lg_config_k: u8) -> Result<HllSketch> {
     HllSketch::new(lg_config_k, HllType::Hll8)
+        .map_err(|error| exec_datafusion_err!("could not create HLL sketch: {error}"))
 }
 
-pub(crate) fn empty_hll_sketch_bytes() -> Vec<u8> {
-    new_hll_sketch(DEFAULT_LG_CONFIG_K as u8).serialize()
+pub(crate) fn empty_hll_sketch_bytes() -> Result<Vec<u8>> {
+    Ok(new_hll_sketch(DEFAULT_LG_CONFIG_K as u8)?.serialize())
 }
 
-pub(crate) fn empty_hll_union_bytes() -> Vec<u8> {
-    new_hll_sketch(DEFAULT_LG_CONFIG_K as u8).serialize()
+pub(crate) fn empty_hll_union_bytes() -> Result<Vec<u8>> {
+    empty_hll_sketch_bytes()
 }
 
 pub(crate) fn estimate_hll_sketch(bytes: &[u8], function_name: &str) -> Result<i64> {
@@ -107,7 +108,10 @@ pub(crate) fn union_hll_sketch_bytes(
             right.lg_config_k()
         );
     }
-    let mut union = HllUnion::new(left.lg_config_k().min(right.lg_config_k()));
+    let mut union =
+        HllUnion::new(left.lg_config_k().min(right.lg_config_k())).map_err(|error| {
+            exec_datafusion_err!("{function_name} could not create HLL union: {error}")
+        })?;
     union.update(&left);
     union.update(&right);
     Ok(union.to_sketch(HllType::Hll8).serialize())
@@ -137,16 +141,19 @@ where
                 *expected_lg_config_k = union.lg_config_k();
             }
             None => {
-                let mut next_union = HllUnion::new(sketch.lg_config_k());
+                let mut next_union = HllUnion::new(sketch.lg_config_k()).map_err(|error| {
+                    exec_datafusion_err!("{function_name} could not create HLL union: {error}")
+                })?;
                 next_union.update(&sketch);
                 union = Some((next_union.lg_config_k(), next_union));
             }
         }
     }
 
-    Ok(union
-        .map(|(_, union)| union.to_sketch(HllType::Hll8).serialize())
-        .unwrap_or_else(empty_hll_sketch_bytes))
+    match union {
+        Some((_, union)) => Ok(union.to_sketch(HllType::Hll8).serialize()),
+        None => empty_hll_sketch_bytes(),
+    }
 }
 
 fn deserialize_hll_sketch(bytes: &[u8], function_name: &str) -> Result<HllSketch> {

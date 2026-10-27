@@ -1,6 +1,8 @@
 import pandas as pd
 import pytest
-from pyspark.errors.exceptions.connect import AnalysisException
+from pyspark.errors.exceptions.connect import IllegalArgumentException
+
+from pysail.testing.spark.utils.common import is_jvm_spark
 
 
 def test_format_string_basic(spark):
@@ -88,43 +90,45 @@ def test_format_string_grouping_separator(spark):
 
 
 def test_format_string_float_basic(spark):
-    actual = spark.sql("SELECT format_string('Float: %f', 3.14159) AS result").toPandas()
+    actual = spark.sql("SELECT format_string('Float: %f', 3.14159D) AS result").toPandas()
     expected = pd.DataFrame({"result": ["Float: 3.141590"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_format_string_float_precision(spark):
-    actual = spark.sql("SELECT format_string('Precision: %.2f', 3.14159) AS result").toPandas()
+    actual = spark.sql("SELECT format_string('Precision: %.2f', 3.14159D) AS result").toPandas()
     expected = pd.DataFrame({"result": ["Precision: 3.14"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_format_string_scientific_lowercase(spark):
-    actual = spark.sql("SELECT format_string('Scientific: %e', 1234.5) AS result").toPandas()
+    actual = spark.sql("SELECT format_string('Scientific: %e', 1234.5D) AS result").toPandas()
     expected = pd.DataFrame({"result": ["Scientific: 1.234500e+03"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_format_string_scientific_uppercase(spark):
-    actual = spark.sql("SELECT format_string('Scientific: %E', 1234.5) AS result").toPandas()
+    actual = spark.sql("SELECT format_string('Scientific: %E', 1234.5D) AS result").toPandas()
     expected = pd.DataFrame({"result": ["Scientific: 1.234500E+03"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Java's %g keeps 6 significant digits (`1234.50`); Sail trims to `1234.5`.
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_format_string_compact_lowercase(spark):
-    actual = spark.sql("SELECT format_string('Compact: %g', 1234.5) AS result").toPandas()
-    expected = pd.DataFrame({"result": ["Compact: 1234.5"]})
+    actual = spark.sql("SELECT format_string('Compact: %g', 1234.5D) AS result").toPandas()
+    expected = pd.DataFrame({"result": ["Compact: 1234.50"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_format_string_float_width_precision(spark):
-    actual = spark.sql("SELECT format_string('Formatted: %10.2f', 3.14159) AS result").toPandas()
+    actual = spark.sql("SELECT format_string('Formatted: %10.2f', 3.14159D) AS result").toPandas()
     expected = pd.DataFrame({"result": ["Formatted:       3.14"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_format_string_float_zero_precision(spark):
-    actual = spark.sql("SELECT format_string('Precision 0: %.0f', 3.14) AS result").toPandas()
+    actual = spark.sql("SELECT format_string('Precision 0: %.0f', 3.14D) AS result").toPandas()
     expected = pd.DataFrame({"result": ["Precision 0: 3"]})
     pd.testing.assert_frame_equal(actual, expected)
 
@@ -177,6 +181,11 @@ def test_format_string_char_uppercase(spark):
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Spark feeds the timestamp's microseconds to `java.util.Formatter`, which expects
+# milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
+# timestamp yields `55952`). Sail formats the real value, so this assertion only holds
+# on Sail. Drop the marker if Spark starts passing milliseconds.
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
 def test_format_string_time_hour_24(spark):
     actual = spark.sql("SELECT format_string('Hour: %tH', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Hour: 14"]})
@@ -189,18 +198,33 @@ def test_format_string_time_minute(spark):
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Spark feeds the timestamp's microseconds to `java.util.Formatter`, which expects
+# milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
+# timestamp yields `55952`). Sail formats the real value, so this assertion only holds
+# on Sail. Drop the marker if Spark starts passing milliseconds.
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
 def test_format_string_time_second(spark):
     actual = spark.sql("SELECT format_string('Second: %tS', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Second: 45"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Spark feeds the timestamp's microseconds to `java.util.Formatter`, which expects
+# milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
+# timestamp yields `55952`). Sail formats the real value, so this assertion only holds
+# on Sail. Drop the marker if Spark starts passing milliseconds.
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
 def test_format_string_date_year(spark):
     actual = spark.sql("SELECT format_string('Year: %tY', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Year: 2023"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Spark feeds the timestamp's microseconds to `java.util.Formatter`, which expects
+# milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
+# timestamp yields `55952`). Sail formats the real value, so this assertion only holds
+# on Sail. Drop the marker if Spark starts passing milliseconds.
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
 def test_format_string_date_month(spark):
     actual = spark.sql("SELECT format_string('Month: %tm', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Month: 12"]})
@@ -213,18 +237,33 @@ def test_format_string_date_day(spark):
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Spark feeds the timestamp's microseconds to `java.util.Formatter`, which expects
+# milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
+# timestamp yields `55952`). Sail formats the real value, so this assertion only holds
+# on Sail. Drop the marker if Spark starts passing milliseconds.
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
 def test_format_string_date_iso(spark):
     actual = spark.sql("SELECT format_string('ISO Date: %tF', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["ISO Date: 2023-12-25"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Spark feeds the timestamp's microseconds to `java.util.Formatter`, which expects
+# milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
+# timestamp yields `55952`). Sail formats the real value, so this assertion only holds
+# on Sail. Drop the marker if Spark starts passing milliseconds.
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
 def test_format_string_full_month_name(spark):
     actual = spark.sql("SELECT format_string('Month: %tB', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Month: December"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Spark feeds the timestamp's microseconds to `java.util.Formatter`, which expects
+# milliseconds, so its `%t` conversions land far from the input date (`%tY` on a 2023
+# timestamp yields `55952`). Sail formats the real value, so this assertion only holds
+# on Sail. Drop the marker if Spark starts passing milliseconds.
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark's %t conversions misread the timestamp")
 def test_format_string_full_day_name(spark):
     actual = spark.sql("SELECT format_string('Day: %tA', TIMESTAMP '2023-12-25 14:30:45') AS result").toPandas()
     expected = pd.DataFrame({"result": ["Day: Monday"]})
@@ -304,31 +343,37 @@ def test_format_string_float_negative_infinity(spark):
 
 def test_format_string_mixed_specifiers(spark):
     actual = spark.sql(
-        "SELECT format_string('String: %s, Integer: %d, Float: %.2f', 'test', 42, 3.14159) AS result"
+        "SELECT format_string('String: %s, Integer: %d, Float: %.2f', 'test', 42, 3.14159D) AS result"
     ).toPandas()
     expected = pd.DataFrame({"result": ["String: test, Integer: 42, Float: 3.14"]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
+# Spark surfaces Java's MissingFormatArgumentException verbatim; Sail words it differently.
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_format_string_missing_args_error(spark):
     with pytest.raises(
-        AnalysisException,
-        match=r"Argument index .* out of bounds",
+        IllegalArgumentException,
+        match=r"Format specifier '%d'",
     ):
         spark.sql("SELECT format_string('Value: %d')").collect()
 
 
+# Same: Spark reports `Format specifier '%s'`, Sail its own message.
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_format_string_too_few_args_error(spark):
     with pytest.raises(
-        AnalysisException,
-        match="Argument index 2 is out of bounds",
+        IllegalArgumentException,
+        match=r"Format specifier '%s'",
     ):
         spark.sql("SELECT format_string('Values: %d %s', 42)").collect()
 
 
+# Spark reports Java's IllegalFormatConversionException; Sail its own message.
+@pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)
 def test_format_string_invalid_conversion_error(spark):
     with pytest.raises(
-        AnalysisException,
-        match="Invalid argument type",
+        IllegalArgumentException,
+        match=r"d != org\.apache\.spark\.unsafe\.types\.UTF8String",
     ):
         spark.sql("SELECT format_string('Value: %d', 'not_a_number')").collect()

@@ -1,6 +1,12 @@
+use std::sync::Arc;
+
 use async_recursion::async_recursion;
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion::arrow::datatypes::Schema;
+use datafusion_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder};
+use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_logical_plan::remote_checkpoint::RemoteCheckpointRelationNode;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -17,6 +23,7 @@ mod lateral;
 mod lateral_join;
 mod limit;
 mod misc;
+mod missing_input;
 mod na;
 mod pivoting;
 mod project;
@@ -33,6 +40,9 @@ mod udtf;
 mod values;
 mod window;
 mod with_relations;
+
+pub(super) use cte::{CteInfo, CteKind};
+pub(super) use missing_input::{MissingInputBoundaries, MissingInputResolution};
 
 impl PlanResolver<'_> {
     /// Resolve query plan.
@@ -52,7 +62,7 @@ impl PlanResolver<'_> {
     /// Resolve query plan.
     /// The resolved plan may contain hidden fields.
     /// If the hidden fields cannot be handled,
-    /// [`Self::resolve_query_plan`] should be used instead,
+    /// [`Self::resolve_query_plan`] should be used instead.
     #[async_recursion]
     async fn resolve_query_plan_with_hidden_fields(
         &self,
@@ -227,8 +237,28 @@ impl PlanResolver<'_> {
             QueryNode::CachedLocalRelation { .. } => {
                 return Err(PlanError::todo("cached local relation"));
             }
-            QueryNode::CachedRemoteRelation { .. } => {
-                return Err(PlanError::todo("cached remote relation"));
+            QueryNode::CachedRemoteRelation { relation_id } => {
+                let registry = self.ctx.extension::<RemoteCheckpointRegistry>()?;
+                let descriptor = registry.get(&relation_id)?.ok_or_else(|| {
+                    PlanError::analysis(format!(
+                        "remote checkpoint relation does not exist: {relation_id}"
+                    ))
+                })?;
+                let names = state.register_fields(descriptor.logical_schema.fields());
+                let fields = descriptor
+                    .logical_schema
+                    .fields()
+                    .iter()
+                    .zip(names)
+                    .map(|(field, name)| Arc::new(field.as_ref().clone().with_name(name)))
+                    .collect::<Vec<_>>();
+                let schema = Arc::new(Schema::new_with_metadata(
+                    fields,
+                    descriptor.logical_schema.metadata().clone(),
+                ));
+                LogicalPlan::Extension(Extension {
+                    node: Arc::new(RemoteCheckpointRelationNode::try_new(relation_id, schema)?),
+                })
             }
             QueryNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 self.resolve_query_common_inline_udtf(udtf, state).await?
@@ -424,9 +454,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<()> {
         if let Some(plan_id) = plan_id {
-            for field in plan.schema().fields() {
-                state.register_plan_id_for_field(field.name(), plan_id)?;
-            }
+            state.register_plan_schema(plan.schema(), plan_id)?;
         }
         Ok(())
     }

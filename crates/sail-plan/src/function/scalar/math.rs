@@ -5,13 +5,15 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
-    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
+    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast, when,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
+use sail_function::scalar::datetime::spark_interval::SparkDayTimeIntervalToCalendarInterval;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -20,10 +22,11 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::SparkDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
+use sail_function::scalar::math::spark_sqrt::SparkSqrt;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
@@ -32,22 +35,50 @@ use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
+fn add_day_time_interval_to_string(
+    string: Expr,
+    interval: Expr,
+    string_type: DataType,
+    session_timezone: Arc<str>,
+    ansi_mode: bool,
+) -> PlanResult<Expr> {
+    let timestamp = ScalarUDF::from(SparkTimestamp::try_new(
+        Some(session_timezone),
+        ansi_mode,
+        false,
+    )?)
+    .call(vec![string]);
+    let calendar_interval =
+        ScalarUDF::from(SparkDayTimeIntervalToCalendarInterval::new()).call(vec![interval]);
+    let shifted = timestamp + calendar_interval;
+    match string_type {
+        DataType::Utf8 => Ok(ScalarUDF::from(SparkToUtf8::new()).call(vec![shifted])),
+        DataType::LargeUtf8 => Ok(ScalarUDF::from(SparkToLargeUtf8::new()).call(vec![shifted])),
+        DataType::Utf8View => Ok(ScalarUDF::from(SparkToUtf8View::new()).call(vec![shifted])),
+        data_type => Err(PlanError::internal(format!(
+            "expected string type for interval arithmetic, got {data_type}"
+        ))),
+    }
+}
+
 /// Arguments:
-///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
+///   - left: A numeric, STRING, DATE, TIMESTAMP, or INTERVAL expression.
 ///   - right: If left is a numeric right must be numeric expression, or an INTERVAL otherwise.
 ///
 /// Returns:
 ///   - If left is a numeric, the common maximum type of the arguments.
+///   - If one expression is a STRING and the other is a day-time interval, the result is a STRING.
 ///   - If left is a DATE and right is a day-time interval the result is a TIMESTAMP.
 ///   - If both expressions are interval they must be of the same class.
 ///   - Otherwise, the result type matches left.
 ///
-/// All of the above conditions should be handled by the DataFusion.
-/// If there is a discrepancy in parity, check the link below and adjust Sail's logic accordingly:
+/// Most of the above conditions are handled by DataFusion. Spark-specific coercion differences are
+/// rewritten here before constructing the DataFusion expression. For DataFusion's rules, see:
 ///   https://github.com/apache/datafusion/blob/a28f2834c6969a0c0eb26165031f8baa1e1156a5/datafusion/expr-common/src/type_coercion/binary.rs#L194
 fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
@@ -63,6 +94,26 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             right.get_type(function_context.schema),
         );
         Ok(match (left_type, right_type) {
+            (
+                Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
+                Ok(DataType::Duration(TimeUnit::Microsecond)),
+            ) => add_day_time_interval_to_string(
+                left,
+                right,
+                string_type,
+                Arc::clone(&function_context.plan_config.session_timezone),
+                function_context.plan_config.ansi_mode,
+            )?,
+            (
+                Ok(DataType::Duration(TimeUnit::Microsecond)),
+                Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
+            ) => add_day_time_interval_to_string(
+                right,
+                left,
+                string_type,
+                Arc::clone(&function_context.plan_config.session_timezone),
+                function_context.plan_config.ansi_mode,
+            )?,
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
                 left + cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
             }
@@ -378,17 +429,9 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // Match duration because we cast Spark's DayTime interval to Duration.
             cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
         }
-        // Handle Interval / Interval division using custom UDF
-        (Ok(DataType::Interval(_)), Ok(DataType::Interval(_))) => {
-            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new()));
-            Expr::ScalarFunction(expr::ScalarFunction {
-                func: interval_div,
-                args: vec![dividend, divisor],
-            })
-        }
-        // TODO: In case getting the type fails, we don't want to fail the query.
-        //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
-        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => dividend / divisor,
+        // Keep the original operands intact through grouping and aggregate extraction.
+        // SparkDiv's normal argument coercion handles resolved numeric and interval types.
+        _ => ScalarUDF::from(SparkDiv::new()).call(vec![dividend, divisor]),
     };
 
     Ok(cast(div_expr, DataType::Int64))
@@ -529,6 +572,10 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
     move |arg1: Expr, arg2| func(cast(arg1, DataType::Float64), cast(arg2, DataType::Float64))
 }
 
+fn spark_sqrt(arg: Expr) -> Expr {
+    ScalarUDF::from(SparkSqrt::new()).call(vec![cast(arg, DataType::Float64)])
+}
+
 /// Modulo operation with division-by-zero handling.
 ///
 /// In ANSI mode: raises error for integral/decimal modulo by zero.
@@ -611,6 +658,49 @@ fn negate_literal(arg: &Expr) -> Option<Expr> {
     Some(lit(negated))
 }
 
+fn string_to_double(arg: Expr, ansi_mode: bool) -> Expr {
+    if ansi_mode {
+        cast(arg, DataType::Float64)
+    } else {
+        try_cast(arg, DataType::Float64)
+    }
+}
+
+// TODO: Spark rounds a DOUBLE via `BigDecimal(d).setScale(scale, HALF_UP)` on the shortest
+//  decimal representation, while DataFusion computes `(x * 10^scale).round() / 10^scale`,
+//  so inexact binary ties differ (e.g. `round('1.005', 2)` is 1.01 in Spark but 1.0 in Sail).
+fn spark_round(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    } = input;
+    let scale = arguments.get(1).cloned().unwrap_or_else(|| lit(0));
+    // TODO: A SQL parameter marker (`:p` or `?`) is resolved as an untyped placeholder whose
+    //  value is bound after planning, so a STRING parameter is not cast here and `round(:p)`
+    //  still fails to plan, while Spark binds parameters before analysis.
+    // TODO: Resolve CASE branch coercion before checking the argument type here. Mixed
+    //  CASE expressions can expose the first branch's type instead of their final type,
+    //  and their shared coercion does not yet follow Spark's ANSI rules.
+    if let Some(value) = arguments.first_mut()
+        && matches!(
+            value.get_type(function_context.schema),
+            Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+        )
+    {
+        // Guard the string before casting so a NULL scale skips malformed literals too.
+        // TODO: Shared expression resolution raises literal division-by-zero errors before
+        //  this guard; defer those errors so a NULL scale can skip the entire value.
+        let guarded =
+            when(scale.is_null(), lit(ScalarValue::Utf8(None))).otherwise(value.clone())?;
+        // Preserve Spark's nullable result; the inner ANSI cast still propagates errors.
+        *value = try_cast(
+            string_to_double(guarded, function_context.plan_config.ansi_mode),
+            DataType::Float64,
+        );
+    }
+    Ok(expr_fn::round(arguments))
+}
+
 /// Spark unary minus / `negative(x)`. Duration negation goes through
 /// `NegateDuration`; everything else uses `SparkNegative`, which honors the ANSI
 /// overflow semantics with `ansi_mode` baked at planning time.
@@ -624,12 +714,8 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
         // errors under ANSI on. (Without this, the `SparkNegative` signature
         // would coerce the string to an interval instead.)
         Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
-            let casted = if ansi_mode {
-                cast(arg, DataType::Float64)
-            } else {
-                try_cast(arg, DataType::Float64)
-            };
-            ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![casted])
+            ScalarUDF::from(SparkNegative::new(ansi_mode))
+                .call(vec![string_to_double(arg, ansi_mode)])
         }
         // Floating-point negation never overflows and is identical in both ANSI
         // modes, so use the native (vectorized, foldable) operator.
@@ -715,13 +801,13 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),
-        ("round", F::var_arg(expr_fn::round)),
+        ("round", F::custom(spark_round)),
         ("sec", F::unary(double(|arg| lit(1.0) / expr_fn::cos(arg)))),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
         ("sin", F::unary(double(expr_fn::sin))),
         ("sinh", F::unary(double(expr_fn::sinh))),
-        ("sqrt", F::unary(double(expr_fn::sqrt))),
+        ("sqrt", F::unary(spark_sqrt)),
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
         ("try_add", F::udf(SparkTryAdd::new())),

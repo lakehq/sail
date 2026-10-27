@@ -36,11 +36,11 @@ def normalize_plan_text(plan_text: str) -> str:
 
     # Normalize temp paths / file URIs that appear in plans.
     pytest_tmp_prefix = re.compile(
-        r"(^|[\s\[\(=,:{\"])"
+        r"(^|[\s\[\(=,:{\"]|[A-Za-z][A-Za-z0-9+.\-]+://)"
         r"(?!\[)"
         r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
         r"(?:[^ \t\r\n\),\]/]+/)*"
-        r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
+        r"pytest-of-[^/]+/pytest-\d+/(?:popen-gw\d+/)?[^/]+/",
         re.IGNORECASE,
     )
 
@@ -69,11 +69,30 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
     text = re.sub(
+        r"data_file=file://([^\s\),]+)",
+        lambda m: f"data_file=file://{normalize_path(m.group(1))}",
+        text,
+    )
+    text = re.sub(
         r'location: "([^"]+)"',
         lambda m: f'location: "{normalize_path(m.group(1))}"',
         text,
     )
     text = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", text)
+    # Preserve checkpoint partition layout while removing generated identifiers.
+    checkpoint_uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    text = re.sub(
+        rf"(__checkpoint_testing__/){checkpoint_uuid}/{checkpoint_uuid}",
+        r"\1<session>/<relation>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        rf"(__checkpoint_testing__/<session>/<relation>/part-\d{{5}}-){checkpoint_uuid}(\.parquet)",
+        r"\1<uuid>\2",
+        text,
+        flags=re.IGNORECASE,
+    )
     # Normalize Delta Lake parquet files: part-<number>-<UUID>-c<number>.snappy.parquet
     text = re.sub(
         r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
@@ -89,9 +108,9 @@ def normalize_plan_text(plan_text: str) -> str:
         flags=re.IGNORECASE,
     )
     # Normalize Delta V2 UUID-named checkpoint files:
-    # e.g. 00000000000000000001.checkpoint.{uuid}.parquet -> 00000000000000000001.checkpoint.<uuid>.parquet
+    # e.g. 00000000000000000001.checkpoint.{uuid}.json -> 00000000000000000001.checkpoint.<uuid>.json
     text = re.sub(
-        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+        r"(\d{20}\.checkpoint\.)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.(?:parquet|json))",
         r"\1<uuid>\2",
         text,
         flags=re.IGNORECASE,
@@ -110,9 +129,23 @@ def normalize_plan_text(plan_text: str) -> str:
         r"<id>_\1.\2.parquet",
         text,
     )
+    # Normalize Sail default CSV filenames: <16-char random>_<partition>.csv.
+    text = re.sub(
+        r"[A-Za-z0-9]{16}_(\d+)\.csv",
+        r"<id>_\1.csv",
+        text,
+    )
 
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
     # TODO: consider sorting the file groups during planner.
+
+    procedure_invocation_uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    text = re.sub(
+        rf"(invocation_id=){procedure_invocation_uuid}",
+        r"\1<invocation_id>",
+        text,
+        flags=re.IGNORECASE,
+    )
 
     # Normalize IcebergManifestScanExec metadata:
     # - table_url with temp paths
@@ -130,11 +163,28 @@ def normalize_plan_text(plan_text: str) -> str:
 
     def _normalize_file_groups_block(match: re.Match[str]) -> str:
         block = match.group(0)  # e.g. "file_groups={2 groups: [[...], [...]]}"
+        # Row-group byte offsets depend on compression and parallel write order.
+        # Retain the ranges and file-group layout without snapshotting exact bytes.
+        block = re.sub(r"(\.parquet):\d+\.\.\d+(?=[,\]])", r"\1:<range>", block)
+        # PyIceberg filenames retain their task and file counters; only the write UUID varies.
+        block = re.sub(
+            r"(?<![\w.-])(\d{5}-\d+-)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.parquet)",
+            r"\1<uuid>\2",
+            block,
+            flags=re.IGNORECASE,
+        )
         # Extract the group list between the first "[" and the last "]"
         start = block.find("[")
         end = block.rfind("]")
         if start == -1 or end == -1 or end <= start:
             return block
+
+        # Checkpoint scans retain the input's physical partition layout. For iterative queries,
+        # repartitioning can leave different partitions empty across runs, so individual checkpoint
+        # files are execution details rather than stable plan properties.
+        if "__checkpoint_testing__/" in block:
+            return block[:start] + "<checkpoint files>" + block[end + 1 :]
+
         groups_list = block[start : end + 1]
 
         # Parse top-level groups inside the outer list.

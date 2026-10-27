@@ -10,15 +10,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
+use crate::checkpoint::inspect_checkpoint_main_file;
 pub(crate) use crate::delta_log::ReplayedTableHeader;
 use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
-use crate::spec::{DeltaResult, is_uuid_checkpoint_filename, sidecar_log_path};
+use crate::spec::{DeltaResult, sidecar_log_path};
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
 #[derive(Debug, Clone, Default)]
 pub struct LogSegmentFiles {
-    /// Parquet checkpoint files for the latest checkpoint at or before `max_version`.
+    /// Checkpoint files for the latest checkpoint at or before `max_version`.
+    /// UUID-named V2 top-level files may be JSON or Parquet.
     pub checkpoint_files: Vec<String>,
     /// Commit JSON files sorted by version, strictly newer than the latest checkpoint.
     pub commit_files: Vec<String>,
@@ -40,7 +41,7 @@ pub struct LogSegmentResolveOptions {
 /// List all Delta log files up to `max_version` from the given log store.
 ///
 /// Returns a [`LogSegmentFiles`] containing:
-/// - all parquet files belonging to the **latest** checkpoint at or before `max_version`
+/// - all files belonging to the **latest** checkpoint at or before `max_version`
 /// - all commit JSON files at or before `max_version`
 ///
 /// Commit files are **not** filtered against the checkpoint here.
@@ -60,23 +61,18 @@ pub async fn list_log_segment_files(
     let mut checkpoint_files: Vec<String> = Vec::new();
     let mut sidecar_files: Vec<String> = Vec::new();
 
-    if let Some(meta) = checkpoint_meta {
-        let filename = meta
-            .location
-            .as_ref()
-            .rsplit('/')
-            .next()
-            .unwrap_or_default()
-            .to_string();
-        checkpoint_files.push(filename.clone());
+    if let Some(checkpoint) = checkpoint_meta {
+        let checkpoint_metas = checkpoint.into_files();
+        for meta in &checkpoint_metas {
+            checkpoint_files.push(meta.location.filename().unwrap_or_default().to_string());
+        }
 
-        // Only UUID-named checkpoints (V2) can contain sidecar references.
-        if is_uuid_checkpoint_filename(&filename) {
-            let rows = read_checkpoint_main_rows_from_checkpoint_file(store, meta).await?;
-            for row in &rows {
-                if let Some(ref sidecar) = row.sidecar {
-                    sidecar_files.push(sidecar_log_path(&sidecar.path));
-                }
+        // Multi-part checkpoints are always V1. Single-file classic or UUID-named checkpoints may
+        // follow the V2 format and refer to sidecars.
+        if let [checkpoint_meta] = checkpoint_metas.as_slice() {
+            let sidecars = inspect_checkpoint_main_file(store, checkpoint_meta.clone()).await?;
+            for sidecar in sidecars {
+                sidecar_files.push(sidecar_log_path(&sidecar.path));
             }
         }
     }
@@ -86,25 +82,13 @@ pub async fn list_log_segment_files(
 
     let mut commit_files: Vec<String> = commit_metas
         .into_iter()
-        .filter_map(|(_, meta)| {
-            meta.location
-                .as_ref()
-                .rsplit('/')
-                .next()
-                .map(|s| s.to_string())
-        })
+        .filter_map(|(_, meta)| meta.location.filename().map(str::to_string))
         .collect();
     commit_files.sort();
 
     let mut compaction_files: Vec<String> = compaction_metas
         .into_iter()
-        .filter_map(|(_, meta)| {
-            meta.location
-                .as_ref()
-                .rsplit('/')
-                .next()
-                .map(|s| s.to_string())
-        })
+        .filter_map(|(_, meta)| meta.location.filename().map(str::to_string))
         .collect();
     compaction_files.sort();
 

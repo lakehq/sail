@@ -1,6 +1,7 @@
 use std::fmt;
 
 use datafusion_common::DataFusionError;
+use sail_common_datafusion::error::CommitStateUnknownError;
 use thiserror::Error;
 
 pub type CatalogResult<T> = Result<T, CatalogError>;
@@ -65,8 +66,10 @@ pub enum CatalogError {
     UnsupportedCapability(String),
     #[error("stale lakehouse metadata: {0}")]
     StaleMetadata(String),
-    #[error("commit state unknown: {0}")]
-    CommitStateUnknown(String),
+    #[error("{0}")]
+    CommitStateUnknown(#[from] CommitStateUnknownError),
+    #[error("commit rejected: {0}")]
+    CommitRejected(String),
     #[error("credential unavailable: {0}")]
     CredentialUnavailable(String),
     #[error("cross-format metadata conversion lag: {0}")]

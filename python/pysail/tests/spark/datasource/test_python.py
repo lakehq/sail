@@ -15,6 +15,7 @@ import pyarrow as pa
 import pytest
 
 from pysail.testing.spark.session import spark_session_factory
+from pysail.testing.spark.utils.common import pyspark_version
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 try:
@@ -446,7 +447,7 @@ def test_python_empty_partitions(spark):
 def test_python_default_single_partition(spark):
     """Test that missing partitions() defaults to a single partition."""
     import pyarrow as pa
-    from pyspark.sql.datasource import DataSource, DataSourceReader
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 
     class DefaultPartitionDataSource(DataSource):
         """DataSource that relies on the default partitions()."""
@@ -463,8 +464,12 @@ def test_python_default_single_partition(spark):
 
     class DefaultPartitionReader(DataSourceReader):
         def read(self, partition):
-            if partition is not None:
-                msg = f"Expected default partition to be None, got {partition!r}"
+            if pyspark_version() >= (4, 2):
+                is_default_partition = isinstance(partition, InputPartition) and partition.value is None
+            else:
+                is_default_partition = partition is None
+            if not is_default_partition:
+                msg = f"Expected default partition, got {partition!r}"
                 raise ValueError(msg)
             batch = pa.RecordBatch.from_pydict({"id": [1, 2, 3]}, schema=pa.schema([("id", pa.int32())]))
             yield batch
@@ -720,6 +725,107 @@ def test_python_filter_pushdown_equality(spark):
     assert filtered_rows[0].id == 3  # noqa: PLR2004
 
 
+def test_python_filter_pushdown_reader_without_push_filters(spark):
+    """A reader that does not implement pushFilters must still filter correctly.
+
+    `DataSourceReader.pushFilters` was added in PySpark 4.1, so on 4.0 no reader
+    has one and calling it unconditionally fails every filtered scan. The reader
+    below omits the method entirely to stand in for that, which also covers any
+    duck-typed reader that is not a `DataSourceReader` subclass.
+
+    Filters are reported to DataFusion as `Inexact`, so the predicate stays in
+    the plan and is applied above the scan; the rows must come back filtered
+    even though nothing was pushed.
+    """
+    import pyarrow as pa
+    from pyspark.sql.datasource import DataSource, InputPartition
+
+    table_schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
+
+    class NoPushFiltersReader:
+        """Deliberately not a DataSourceReader, so it has no pushFilters."""
+
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict(
+                {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}, schema=table_schema
+            )
+
+    class NoPushFiltersDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return "no_push_filters_test"
+
+        def schema(self):
+            return table_schema
+
+        def reader(self, schema):  # noqa: ARG002
+            return NoPushFiltersReader()
+
+    assert not hasattr(NoPushFiltersReader, "pushFilters")
+
+    spark.dataSource.register(NoPushFiltersDataSource)
+    df = spark.read.format("no_push_filters_test").load()
+
+    expected_all_rows = 5
+    assert len(df.collect()) == expected_all_rows
+
+    filtered_rows = df.filter("id = 3").collect()
+    assert len(filtered_rows) == 1
+    assert filtered_rows[0].id == 3  # noqa: PLR2004
+
+
+def test_python_filter_pushdown_reader_with_non_callable_push_filters(spark):
+    """A non-callable `pushFilters` attribute must not break a filtered scan.
+
+    `hasattr` alone would report the attribute as present and then fail at the
+    call site, reintroducing the very failure this guard prevents. Treat a
+    non-callable the same as an absent one and filter above the scan.
+    """
+    import pyarrow as pa
+    from pyspark.sql.datasource import DataSource, InputPartition
+
+    table_schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
+
+    class NonCallablePushFiltersReader:
+        # Present, but not a method — e.g. a stub someone left behind.
+        pushFilters = None  # noqa: N815
+
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict(
+                {"id": [1, 2, 3, 4, 5], "value": ["a", "b", "c", "d", "e"]}, schema=table_schema
+            )
+
+    class NonCallablePushFiltersDataSource(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return "non_callable_push_filters_test"
+
+        def schema(self):
+            return table_schema
+
+        def reader(self, schema):  # noqa: ARG002
+            return NonCallablePushFiltersReader()
+
+    assert hasattr(NonCallablePushFiltersReader, "pushFilters")
+    assert not callable(NonCallablePushFiltersReader.pushFilters)
+
+    spark.dataSource.register(NonCallablePushFiltersDataSource)
+    df = spark.read.format("non_callable_push_filters_test").load()
+
+    expected_all_rows = 5
+    assert len(df.collect()) == expected_all_rows
+
+    filtered_rows = df.filter("id = 3").collect()
+    assert len(filtered_rows) == 1
+    assert filtered_rows[0].id == 3  # noqa: PLR2004
+
+
 def test_python_ddl_schema_fallback(spark):
     """Test that DDL string schema is correctly parsed and used."""
     spark.dataSource.register(RangeDataSource)
@@ -740,6 +846,14 @@ def test_python_ddl_schema_fallback(spark):
     # Sort by ID to ensure deterministic check
     rows.sort(key=lambda r: r.id)
     assert rows[0].id == 0
+
+
+def test_python_datasource_options_are_case_insensitive(spark):
+    spark.dataSource.register(RangeDataSource)
+
+    rows = spark.read.format("range").option("END", "2").load().collect()
+
+    assert sorted(row.id for row in rows) == [0, 1]
 
 
 def test_python_filter_pushdown_comparison(spark):
@@ -1316,6 +1430,42 @@ def test_python_write_save_path_passed(spark, tmp_path):
     received_options = _read_test_state(state_path).get("received_options", {})
     assert "path" in received_options, "Save path should be passed to DataSource via options['path']"
     assert received_options["path"] == "/my/test/path"
+
+
+def test_python_read_load_path_passed(spark):
+    """Test that `.load("/my/path")` passes the path to DataSource via options["path"]."""
+    import pyarrow as pa
+    from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+
+    class LoadPathReader(DataSourceReader):
+        def __init__(self, seen):
+            self.seen = seen
+
+        def partitions(self):
+            return [InputPartition(0)]
+
+        def read(self, partition):  # noqa: ARG002
+            yield pa.RecordBatch.from_pydict({"path": [self.seen]}, schema=pa.schema([("path", pa.string())]))
+
+    class LoadPathDataSource(DataSource):
+        @classmethod
+        def name(cls):
+            return "load_path_check"
+
+        def schema(self):
+            return pa.schema([("path", pa.string())])
+
+        def reader(self, schema):  # noqa: ARG002
+            return LoadPathReader(self.options.get("path", "<missing>"))
+
+    spark.dataSource.register(LoadPathDataSource)
+
+    rows = spark.read.format("load_path_check").load("/my/test/path").collect()
+    assert [row.path for row in rows] == ["/my/test/path"]
+
+    # An explicit option keeps precedence over the positional path.
+    rows = spark.read.format("load_path_check").option("path", "/explicit").load("/positional").collect()
+    assert [row.path for row in rows] == ["/explicit"]
 
 
 def test_python_write_commit_failure_triggers_abort(spark, tmp_path):

@@ -1,25 +1,28 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef};
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
+use datafusion::functions::core::expr_fn::nullif;
+use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::logical_expr::expr::{Between, BinaryExpr, Cast, InList};
-use datafusion::logical_expr::utils::{conjunction, disjunction};
-use datafusion::logical_expr::{Expr, Operator};
+use datafusion::logical_expr::utils::{conjunction, disjunction, split_conjunction};
+use datafusion::logical_expr::{Expr, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 
-use crate::datasource::simplify_expr;
+use crate::datasource::{predicate_uses_struct_value, simplify_expr};
 use crate::physical_plan::DeltaMetadataStatsExec;
-use crate::schema::make_physical_arrow_schema;
+use crate::schema::{logical_to_physical_arrow_paths, make_physical_arrow_schema};
 use crate::spec::fields::{
     FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
     STATS_FIELD_NULL_COUNT, STATS_FIELD_NUM_RECORDS,
 };
-use crate::spec::{StructType, stats_schema};
+use crate::spec::{ColumnMappingMode, DataSkippingNumIndexedCols, StructType, stats_schema};
 use crate::table::DeltaSnapshot;
 
 pub(crate) fn predicate_requires_stats(expr: &Expr, partition_columns: &[String]) -> bool {
@@ -33,67 +36,154 @@ pub(crate) fn build_metadata_filter(
     session: &dyn Session,
     input: Arc<dyn ExecutionPlan>,
     snapshot: &DeltaSnapshot,
+    logical_schema: &ArrowSchema,
     predicate: Expr,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let partition_columns = snapshot.metadata().partition_columns().clone();
+    let predicate = if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
+        predicate
+    } else {
+        // File statistics of column-mapped tables use physical struct field names, so a
+        // conjunct using a whole struct value cannot be evaluated against them. Dropping a
+        // top-level conjunct only keeps more files, and the rows are filtered after the scan.
+        let df_schema = logical_schema.clone().to_dfschema()?;
+        conjunction(
+            split_conjunction(&predicate)
+                .into_iter()
+                .filter(|conjunct| !predicate_uses_struct_value(conjunct, &df_schema))
+                .cloned(),
+        )
+        .unwrap_or_else(|| lit(true))
+    };
     let needs_stats = predicate_requires_stats(&predicate, &partition_columns);
-    let rewritten = rewrite_predicate_for_metadata(predicate, &partition_columns);
-    if !needs_stats {
-        let df_schema = input.schema().to_dfschema()?;
-        let physical_expr = simplify_expr(session, &df_schema, rewritten)?;
-        return Ok(Arc::new(FilterExec::try_new(physical_expr, input)?));
-    }
-
-    let input: Arc<dyn ExecutionPlan> = Arc::new(DeltaMetadataStatsExec::new(
-        input,
-        build_metadata_stats_schema(snapshot)?,
-    ));
+    let stats_paths = logical_to_physical_arrow_paths(
+        snapshot.schema(),
+        snapshot.effective_column_mapping_mode(),
+    );
+    let (input, predicate) = if needs_stats {
+        let stats_schema = build_metadata_stats_schema(snapshot, &predicate)?;
+        (
+            Arc::new(DeltaMetadataStatsExec::new(input, stats_schema)) as Arc<dyn ExecutionPlan>,
+            rewrite_predicate_for_metadata(predicate, &partition_columns, &stats_paths),
+        )
+    } else {
+        (input, predicate)
+    };
+    let predicate = type_partition_columns(predicate, &partition_columns, logical_schema)?;
     let df_schema = input.schema().to_dfschema()?;
-    let physical_expr = simplify_expr(session, &df_schema, rewritten)?;
+    let physical_expr = simplify_expr(session, &df_schema, predicate)?;
     Ok(Arc::new(FilterExec::try_new(physical_expr, input)?))
 }
 
-pub(crate) fn build_metadata_stats_schema(snapshot: &DeltaSnapshot) -> Result<SchemaRef> {
+fn type_partition_columns(
+    predicate: Expr,
+    partition_columns: &[String],
+    logical_schema: &ArrowSchema,
+) -> Result<Expr> {
+    // Replay carries raw strings for Add decoding; only predicate inputs use logical types.
+    predicate
+        .transform_up(|expr| {
+            let Expr::Column(column) = &expr else {
+                return Ok(Transformed::no(expr));
+            };
+            if !partition_columns.contains(&column.name) {
+                return Ok(Transformed::no(expr));
+            }
+            let data_type = logical_schema
+                .field_with_name(&column.name)?
+                .data_type()
+                .clone();
+            let value = nullif(expr, lit(""));
+            Ok(Transformed::yes(Expr::Cast(Cast::new(
+                Box::new(value),
+                data_type,
+            ))))
+        })
+        .map(|transformed| transformed.data)
+}
+
+pub(crate) fn build_metadata_stats_schema(
+    snapshot: &DeltaSnapshot,
+    predicate: &Expr,
+) -> Result<SchemaRef> {
     let partition_columns = snapshot.metadata().partition_columns();
     let mode = snapshot.effective_column_mapping_mode();
+    let referenced_columns = predicate
+        .column_refs()
+        .iter()
+        .filter_map(|column| {
+            if snapshot.schema().field_with_name(&column.name).is_ok() {
+                Some(column.name.clone())
+            } else {
+                let root = column.name.split('.').next()?;
+                snapshot
+                    .schema()
+                    .field_with_name(root)
+                    .is_ok()
+                    .then(|| root.to_string())
+            }
+        })
+        .collect::<HashSet<_>>();
     let non_partition_fields = snapshot
         .schema()
         .fields()
         .iter()
         .filter(|field| !partition_columns.contains(field.name()))
+        .filter(|field| referenced_columns.contains(field.name()))
         .map(|field| field.as_ref().clone())
         .collect::<Vec<_>>();
     let logical_non_partition = ArrowSchema::new(non_partition_fields);
     let physical_arrow = make_physical_arrow_schema(&logical_non_partition, mode);
     let physical_kernel = StructType::try_from(&physical_arrow)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let stats_schema = stats_schema(&physical_kernel, snapshot.table_properties())
+    // The parsing schema describes predicate-referenced columns, including columns for which an
+    // individual Add has no statistics. Missing JSON fields then materialize as NULL and keep the
+    // file conservatively. Applying the table's logical stats-column configuration after mapping
+    // this schema to physical names can instead omit the field and make get_field fail planning.
+    let mut parsing_properties = snapshot.table_properties().clone();
+    parsing_properties.data_skipping_stats_columns = None;
+    parsing_properties.data_skipping_num_indexed_cols =
+        Some(DataSkippingNumIndexedCols::AllColumns);
+    let stats_schema = stats_schema(&physical_kernel, &parsing_properties)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Ok(Arc::new(
         ArrowSchema::try_from(&stats_schema).map_err(|e| DataFusionError::External(Box::new(e)))?,
     ))
 }
 
-fn rewrite_predicate_for_metadata(expr: Expr, partition_columns: &[String]) -> Expr {
+fn rewrite_predicate_for_metadata(
+    expr: Expr,
+    partition_columns: &[String],
+    stats_paths: &HashMap<Vec<String>, Vec<String>>,
+) -> Expr {
     let partition_columns = partition_columns.iter().cloned().collect::<HashSet<_>>();
-    MetadataPredicateRewriter { partition_columns }.rewrite(expr)
+    MetadataPredicateRewriter {
+        partition_columns,
+        stats_paths,
+    }
+    .rewrite(expr)
 }
 
-struct MetadataPredicateRewriter {
+struct MetadataPredicateRewriter<'a> {
     partition_columns: HashSet<String>,
+    stats_paths: &'a HashMap<Vec<String>, Vec<String>>,
 }
 
 #[derive(Clone)]
-enum ExprTemplate {
-    Raw(LogicalColumn),
-    Cast {
-        column: LogicalColumn,
-        data_type: ArrowDataType,
-    },
+struct ExprTemplate {
+    logical_path: Vec<String>,
+    cast_type: Option<ArrowDataType>,
 }
 
-impl MetadataPredicateRewriter {
+impl MetadataPredicateRewriter<'_> {
     fn rewrite(&self, expr: Expr) -> Expr {
+        if expr
+            .column_refs()
+            .iter()
+            .all(|column| self.partition_columns.contains(&column.name))
+        {
+            return expr;
+        }
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => match op {
                 Operator::And | Operator::Or => Expr::BinaryExpr(BinaryExpr::new(
@@ -176,7 +266,7 @@ impl MetadataPredicateRewriter {
             return None;
         }
         let template = Self::extract_template(&expr)?;
-        if self.is_partition_column(template.column_name()) {
+        if self.is_partition_column(&template) {
             return Some(Expr::Between(Between::new(
                 Box::new(expr),
                 negated,
@@ -184,9 +274,12 @@ impl MetadataPredicateRewriter {
                 Box::new(high),
             )));
         }
+        if template.cast_type.is_some() {
+            return None;
+        }
 
-        let min_expr = template.apply(self.stats_bound_expr(template.column_name(), true));
-        let max_expr = template.apply(self.stats_bound_expr(template.column_name(), false));
+        let min_expr = template.apply(self.stats_bound_expr(&template.logical_path, true));
+        let max_expr = template.apply(self.stats_bound_expr(&template.logical_path, false));
         let missing = any_null([min_expr.clone(), max_expr.clone()]);
         let actual = if negated {
             disjunction(vec![
@@ -209,8 +302,11 @@ impl MetadataPredicateRewriter {
         if list.iter().any(|expr| !expr.column_refs().is_empty()) {
             return None;
         }
-        if self.is_partition_column(template.column_name()) {
+        if self.is_partition_column(&template) {
             return Some(Expr::InList(InList::new(Box::new(expr), list, negated)));
+        }
+        if template.cast_type.is_some() {
+            return None;
         }
         let mut rewritten = Vec::with_capacity(list.len());
         for value in list {
@@ -230,15 +326,18 @@ impl MetadataPredicateRewriter {
 
     fn rewrite_null_check(&self, expr: Expr, is_not_null: bool) -> Option<Expr> {
         let template = Self::extract_template(&expr)?;
-        if self.is_partition_column(template.column_name()) {
+        if self.is_partition_column(&template) {
             return Some(if is_not_null {
                 Expr::IsNotNull(Box::new(expr))
             } else {
                 Expr::IsNull(Box::new(expr))
             });
         }
+        if template.cast_type.is_some() {
+            return None;
+        }
 
-        let null_count = template.apply(self.stats_null_count_expr(template.column_name()));
+        let null_count = template.apply(self.stats_null_count_expr(&template.logical_path));
         if is_not_null {
             let num_records = self.stats_num_records_expr();
             Some(
@@ -266,16 +365,17 @@ impl MetadataPredicateRewriter {
         op: Operator,
         value: Expr,
     ) -> Expr {
-        if self.is_partition_column(template.column_name()) {
-            return binary(
-                template.apply(column_expr(template.column_name())),
-                op,
-                value,
-            );
+        if self.is_partition_column(&template) {
+            return binary(template.apply(column_expr(template.root_name())), op, value);
+        }
+        // File bounds can only be pushed through a proven order-preserving cast. Keep the file
+        // when cast monotonicity is unknown rather than risking false pruning.
+        if template.cast_type.is_some() {
+            return literal_true();
         }
 
-        let min_expr = template.apply(self.stats_bound_expr(template.column_name(), true));
-        let max_expr = template.apply(self.stats_bound_expr(template.column_name(), false));
+        let min_expr = template.apply(self.stats_bound_expr(&template.logical_path, true));
+        let max_expr = template.apply(self.stats_bound_expr(&template.logical_path, false));
         match op {
             Operator::Eq => or(
                 any_null([min_expr.clone(), max_expr.clone()]),
@@ -312,8 +412,8 @@ impl MetadataPredicateRewriter {
         }
     }
 
-    fn is_partition_column(&self, name: &str) -> bool {
-        self.partition_columns.contains(name)
+    fn is_partition_column(&self, template: &ExprTemplate) -> bool {
+        template.logical_path.len() == 1 && self.partition_columns.contains(template.root_name())
     }
 
     fn stats_num_records_expr(&self) -> Expr {
@@ -323,58 +423,80 @@ impl MetadataPredicateRewriter {
         )
     }
 
-    fn stats_null_count_expr(&self, name: &str) -> Expr {
-        self.stats_nested_expr(STATS_FIELD_NULL_COUNT, name)
+    fn stats_null_count_expr(&self, logical_path: &[String]) -> Expr {
+        self.stats_nested_expr(STATS_FIELD_NULL_COUNT, logical_path)
     }
 
-    fn stats_bound_expr(&self, name: &str, is_min: bool) -> Expr {
+    fn stats_bound_expr(&self, logical_path: &[String], is_min: bool) -> Expr {
         self.stats_nested_expr(
             if is_min {
                 STATS_FIELD_MIN_VALUES
             } else {
                 STATS_FIELD_MAX_VALUES
             },
-            name,
+            logical_path,
         )
     }
 
-    fn stats_nested_expr(&self, root: &str, name: &str) -> Expr {
+    fn stats_nested_expr(&self, root: &str, logical_path: &[String]) -> Expr {
         let mut expr = get_field(column_expr(FIELD_NAME_STATS_PARSED), root);
-        for segment in name.split('.') {
-            expr = get_field(expr, segment);
+        let path = self
+            .stats_paths
+            .get(logical_path)
+            .cloned()
+            .unwrap_or_else(|| logical_path.to_vec());
+        for segment in path {
+            expr = get_field(expr, &segment);
         }
         expr
     }
 
     fn extract_template(expr: &Expr) -> Option<ExprTemplate> {
         match expr {
-            Expr::Column(column) => Some(ExprTemplate::Raw(column.clone())),
-            Expr::Cast(Cast { expr, field }) => match expr.as_ref() {
-                Expr::Column(column) => Some(ExprTemplate::Cast {
-                    column: column.clone(),
-                    data_type: field.data_type().clone(),
-                }),
-                _ => None,
-            },
-            _ => None,
+            Expr::Cast(Cast { expr, field }) => Some(ExprTemplate {
+                logical_path: extract_column_path(expr)?,
+                cast_type: Some(field.data_type().clone()),
+            }),
+            _ => Some(ExprTemplate {
+                logical_path: extract_column_path(expr)?,
+                cast_type: None,
+            }),
         }
     }
 }
 
 impl ExprTemplate {
-    fn column_name(&self) -> &str {
-        match self {
-            ExprTemplate::Raw(column) | ExprTemplate::Cast { column, .. } => column.name.as_str(),
-        }
+    fn root_name(&self) -> &str {
+        self.logical_path[0].as_str()
     }
 
     fn apply(&self, expr: Expr) -> Expr {
-        match self {
-            ExprTemplate::Raw(_) => expr,
-            ExprTemplate::Cast { data_type, .. } => {
-                Expr::Cast(Cast::new(Box::new(expr), data_type.clone()))
-            }
+        if let Some(data_type) = &self.cast_type {
+            Expr::Cast(Cast::new(Box::new(expr), data_type.clone()))
+        } else {
+            expr
         }
+    }
+}
+
+fn extract_column_path(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Column(column) => Some(vec![column.name.clone()]),
+        Expr::ScalarFunction(function) if function.func.inner().is::<GetFieldFunc>() => {
+            let [base, field] = function.args.as_slice() else {
+                return None;
+            };
+            let field = match field {
+                Expr::Literal(ScalarValue::Utf8(Some(field)), _)
+                | Expr::Literal(ScalarValue::LargeUtf8(Some(field)), _)
+                | Expr::Literal(ScalarValue::Utf8View(Some(field)), _) => field,
+                _ => return None,
+            };
+            let mut path = extract_column_path(base)?;
+            path.push(field.clone());
+            Some(path)
+        }
+        _ => None,
     }
 }
 
@@ -517,8 +639,77 @@ mod tests {
             Operator::Eq,
             Expr::Literal(ScalarValue::Utf8(Some("b".to_string())), None),
         );
-        let rewritten = rewrite_predicate_for_metadata(expr.clone(), &["p".to_string()]);
+        let rewritten =
+            rewrite_predicate_for_metadata(expr.clone(), &["p".to_string()], &HashMap::new());
         assert_eq!(rewritten, expr);
+    }
+
+    #[test]
+    fn replay_partition_comparisons_use_logical_types_and_nulls() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "p",
+                Arc::new(StringArray::from(vec![
+                    Some("10"),
+                    Some("2"),
+                    Some(""),
+                    None,
+                ])) as Arc<_>,
+            ),
+            (
+                "q",
+                Arc::new(StringArray::from(vec!["2", "10", "2", "2"])) as Arc<_>,
+            ),
+        ])?;
+        let ctx = SessionContext::new();
+        let partition_columns = vec!["p".to_string(), "q".to_string()];
+        for (data_type, expected) in [
+            (
+                ArrowDataType::Int32,
+                vec![Some(true), Some(false), None, None],
+            ),
+            (
+                ArrowDataType::Decimal128(10, 2),
+                vec![Some(true), Some(false), None, None],
+            ),
+            (
+                ArrowDataType::Utf8,
+                vec![Some(false), Some(true), None, None],
+            ),
+        ] {
+            let logical_schema = ArrowSchema::new(vec![
+                Field::new("p", data_type.clone(), true),
+                Field::new("q", data_type, true),
+            ]);
+            let predicate = Expr::Column(LogicalColumn::new_unqualified("p"))
+                .gt(Expr::Column(LogicalColumn::new_unqualified("q")));
+            let predicate = type_partition_columns(predicate, &partition_columns, &logical_schema)?;
+            let physical = simplify_expr(&ctx.state(), &batch.schema().to_dfschema()?, predicate)?;
+            let actual = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(
+                actual.as_ref(),
+                &datafusion::arrow::array::BooleanArray::from(expected)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_metadata_predicates_preserve_exact_partition_subexpressions() {
+        let p = Expr::Column(LogicalColumn::new_unqualified("p"));
+        let q = Expr::Column(LogicalColumn::new_unqualified("q"));
+        let value = Expr::Column(LogicalColumn::new_unqualified("value"));
+        let exact = p.gt(q);
+        // A data-column comparison has no usable bounds; its OR must retain every file.
+        let unsupported = value.clone().gt(value);
+        for op in [Operator::And, Operator::Or] {
+            let actual = rewrite_predicate_for_metadata(
+                binary(exact.clone(), op, unsupported.clone()),
+                &["p".to_string(), "q".to_string()],
+                &HashMap::new(),
+            );
+            assert_eq!(actual, binary(exact.clone(), op, literal_true()));
+        }
     }
 
     #[test]
@@ -529,7 +720,7 @@ mod tests {
             Operator::Gt,
             literal_i64(3),
         );
-        let rewritten = rewrite_predicate_for_metadata(expr, &["p".to_string()]);
+        let rewritten = rewrite_predicate_for_metadata(expr, &["p".to_string()], &HashMap::new());
         let ctx = SessionContext::new();
         let physical = simplify_expr(&ctx.state(), &schema.to_dfschema()?, rewritten)?;
         let values = physical.evaluate(&batch)?.into_array(batch.num_rows())?;

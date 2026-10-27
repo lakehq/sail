@@ -65,6 +65,59 @@ services:
     profiles:
       - storage
 
+  celeborn-master:
+    image: apache/celeborn:0.6.3
+    hostname: celeborn-master
+    environment:
+      CELEBORN_LOCAL_HOSTNAME: celeborn-master
+      CELEBORN_MASTER_MEMORY: 512m
+      CELEBORN_NO_DAEMONIZE: "1"
+    command: ["start-master.sh", "--host", "celeborn-master", "--port", "12097"]
+    volumes:
+      - ./deployments/celeborn/celeborn-defaults.conf:/opt/celeborn/conf/celeborn-defaults.conf:ro
+    ports:
+      - "12097:12097"
+      - "12098:12098"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/celeborn-master/12097'"]
+      start_period: 15s
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    profiles:
+      - celeborn
+
+  celeborn-worker:
+    image: apache/celeborn:0.6.3
+    hostname: celeborn-worker
+    depends_on:
+      celeborn-master:
+        condition: service_healthy
+    environment:
+      CELEBORN_LOCAL_HOSTNAME: celeborn-worker
+      CELEBORN_NO_DAEMONIZE: "1"
+      CELEBORN_WORKER_MEMORY: 512m
+      CELEBORN_WORKER_OFFHEAP_MEMORY: 512m
+    command:
+      [
+        "start-worker.sh",
+        "--host",
+        "celeborn-worker",
+        "--port",
+        "12000",
+        "celeborn://celeborn-master:12097",
+      ]
+    volumes:
+      - ./deployments/celeborn/celeborn-defaults.conf:/opt/celeborn/conf/celeborn-defaults.conf:ro
+    ports:
+      - "12000:12000"
+      - "12001:12001"
+      - "12002:12002"
+      - "12003:12003"
+      - "12096:12096"
+    profiles:
+      - celeborn
+
   otel-collector:
     image: otel/opentelemetry-collector:latest
     command: ["--config=/etc/otel-collector.yaml"]

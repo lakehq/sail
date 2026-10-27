@@ -169,6 +169,7 @@ class _JsonPathNgRequiredError(RuntimeError):
 
 
 _JSONPATH_DQ_KEY_RE = re.compile(r'\["((?:[^"\\]|\\.)*)"\]')
+_CLASSIC_CHECKPOINT_FILE_RE = re.compile(r"^(?P<version>\d{20})\.checkpoint\.parquet$")
 
 
 def _normalize_to_jsonpath(path: str) -> str:
@@ -236,14 +237,21 @@ def _normalize_column_mapping_schema(schema: object, field_path: str = "") -> ob
     normalized = dict(schema)
     if "fields" in normalized and isinstance(normalized["fields"], list):
         for i, field in enumerate(normalized["fields"]):
+            if not isinstance(field, dict):
+                continue
             current_path = f"{field_path}.{i}" if field_path else str(i)
-            if isinstance(field, dict) and "metadata" in field:
-                meta = field.get("metadata", {})
+            meta = field.get("metadata")
+            if isinstance(meta, dict):
                 phys = meta.get("delta.columnMapping.physicalName", "")
                 if isinstance(phys, str) and phys.startswith("col-"):
                     meta["delta.columnMapping.physicalName"] = f"<physical_name_{current_path}>"
-            if isinstance(field, dict) and "type" in field and isinstance(field["type"], dict):
-                field["type"] = _normalize_column_mapping_schema(field["type"], field_path=current_path)
+            field_type = field.get("type")
+            if isinstance(field_type, dict):
+                field["type"] = _normalize_column_mapping_schema(field_type, field_path=current_path)
+    for child_key in ("elementType", "keyType", "valueType"):
+        child_type = normalized.get(child_key)
+        if isinstance(child_type, dict):
+            normalized[child_key] = _normalize_column_mapping_schema(child_type, field_path=field_path)
     return normalized
 
 
@@ -281,6 +289,21 @@ def _normalize_delta_log_json_file_for_snapshot(filename: str, obj: object) -> o
 def delta_log_cache() -> dict[str, dict]:
     """Per-scenario cache for normalized delta log objects."""
     return {}
+
+
+@given(parsers.parse("append query to delta table in {location_var} with mergeSchema"))
+def append_query_to_delta_table_with_merge_schema(
+    docstring: str,
+    location_var: str,
+    variables: dict,
+    spark,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    spark.sql(docstring).write.format("delta").mode("append").option(
+        "mergeSchema",
+        "true",
+    ).save(str(location.path.absolute()))
 
 
 def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, dict]) -> dict:
@@ -390,6 +413,32 @@ def delta_log_json_file_matches_snapshot(
     obj = _read_delta_log_json_file(Path(location.path), filename)
     obj = _normalize_delta_log_json_file_for_snapshot(filename, obj)
     assert obj == snapshot
+
+
+@then(parsers.parse("delta log latest removes in {location_var} match adds from versions {versions}"))
+def delta_log_latest_removes_match_adds(location_var: str, versions: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    log_dir = Path(location.path) / "_delta_log"
+    commits = sorted(log_dir.glob("*.json"))
+    assert commits, f"No Delta commits found in {log_dir}"
+
+    def file_identities(path: Path, action_type: str) -> list[str]:
+        actions = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        return [
+            json.dumps({"path": action["path"], "deletionVector": action.get("deletionVector")}, sort_keys=True)
+            for entry in actions
+            if (action := entry.get(action_type)) is not None
+        ]
+
+    expected = [
+        identity
+        for version in _parse_version_list(versions)
+        for identity in file_identities(log_dir / f"{version:020}.json", "add")
+    ]
+    assert expected, "Expected at least one original Add action"
+    actual = file_identities(commits[-1], "remove")
+    assert sorted(actual) == sorted(expected)
 
 
 @then(parsers.parse("delta log JSON file {filename} in {location_var} contains"))
@@ -556,6 +605,60 @@ def _load_checkpoint_parquet(location: Path, filename: str) -> list[dict]:
     assert checkpoint_path.exists(), f"checkpoint parquet not found: {checkpoint_path}"
     table = pq.read_table(checkpoint_path)
     return [_checkpoint_row_to_dict(table, i) for i in range(table.num_rows)]
+
+
+@given(parsers.parse("classic checkpoint parquet file {filename} in {location_var} is split into {parts:d} parts"))
+def classic_checkpoint_parquet_is_split_into_parts(
+    filename: str,
+    location_var: str,
+    parts: int,
+    variables: dict,
+) -> None:
+    """Replace a classic checkpoint with an equivalent complete multipart checkpoint."""
+    try:
+        import pyarrow.parquet as pq  # noqa: PLC0415
+    except ModuleNotFoundError as e:  # pragma: no cover
+        msg = "pyarrow is required for checkpoint parquet mutation"
+        raise RuntimeError(msg) from e
+
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    log_path = Path(location.path)
+    checkpoint_path = log_path / filename
+    assert checkpoint_path.is_file(), f"checkpoint parquet not found: {checkpoint_path}"
+
+    match = _CLASSIC_CHECKPOINT_FILE_RE.fullmatch(filename)
+    assert match is not None, f"expected a classic checkpoint filename, got {filename!r}"
+    assert parts > 1, "a multipart checkpoint must contain at least two parts"
+
+    checkpoint = pq.read_table(checkpoint_path)
+    assert checkpoint.num_rows >= parts, (
+        f"checkpoint has {checkpoint.num_rows} rows, fewer than the requested {parts} non-empty parts"
+    )
+
+    rows_per_part, larger_parts = divmod(checkpoint.num_rows, parts)
+    offset = 0
+    part_paths = []
+    for part in range(1, parts + 1):
+        row_count = rows_per_part + int(part <= larger_parts)
+        part_path = log_path / f"{match.group('version')}.checkpoint.{part:010}.{parts:010}.parquet"
+        pq.write_table(checkpoint.slice(offset, row_count), part_path)
+        part_paths.append(part_path)
+        offset += row_count
+
+    hint_path = log_path / "_last_checkpoint"
+    with hint_path.open(encoding="utf-8") as handle:
+        hint = json.load(handle)
+    assert hint.get("version") == int(match.group("version")), (
+        f"_last_checkpoint version does not match {filename!r}: {hint.get('version')!r}"
+    )
+    hint["parts"] = parts
+    hint["sizeInBytes"] = sum(path.stat().st_size for path in part_paths)
+    hint.pop("checksum", None)
+    with hint_path.open("w", encoding="utf-8") as handle:
+        json.dump(hint, handle, separators=(",", ":"))
+
+    checkpoint_path.unlink()
 
 
 def _physical_name_for_column(location: Path, column: str) -> str:
