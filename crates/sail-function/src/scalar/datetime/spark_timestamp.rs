@@ -151,7 +151,7 @@ fn parse_digits(value: &str, min: usize, max: usize) -> Option<u32> {
     value.parse().ok()
 }
 
-fn parse_zone_offset(value: &str) -> Option<FixedOffset> {
+pub(crate) fn parse_zone_offset(value: &str) -> Option<FixedOffset> {
     let (sign, body) = match value.as_bytes().first() {
         Some(b'+') => (1_i32, &value[1..]),
         Some(b'-') => (-1_i32, &value[1..]),

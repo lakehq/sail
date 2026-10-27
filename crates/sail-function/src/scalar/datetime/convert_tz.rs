@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, FixedOffset, MappedLocalTime, NaiveDateTime, Offset, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, NaiveDateTime, Offset, TimeZone, Utc};
 use chrono_tz::{GapInfo, Tz};
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, FixedSizeListArray, Int64Array, LargeListArray, ListArray, MapArray,
@@ -29,6 +29,7 @@ use datafusion_functions::utils::make_scalar_function;
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
+use crate::scalar::datetime::spark_timestamp::parse_zone_offset;
 
 /// How [`ConvertTz`] converts values, which differs for Spark's casts between TIMESTAMP_NTZ and
 /// TIMESTAMP.
@@ -413,17 +414,11 @@ enum CastZone {
 }
 
 fn parse_cast_zone(timezone: &str) -> Result<CastZone> {
-    if timezone.starts_with(['+', '-']) {
-        let offset = if timezone.len() == 3 {
-            format!("{timezone}:00")
-        } else {
-            timezone.to_string()
-        };
-        if let Ok(offset) = offset.parse::<FixedOffset>() {
-            return Ok(CastZone::Fixed(
-                i64::from(offset.local_minus_utc()) * MICROS_PER_SECOND,
-            ));
-        }
+    // Spark's offsets can have seconds, which Chrono's parser ignores.
+    if let Some(offset) = parse_zone_offset(timezone) {
+        return Ok(CastZone::Fixed(
+            i64::from(offset.local_minus_utc()) * MICROS_PER_SECOND,
+        ));
     }
     match timezone.parse::<Tz>() {
         // A zone that is always UTC converts without looking up its offsets.
@@ -995,6 +990,25 @@ fn microseconds_to_timestamp(array: Int64Array, time_unit: TimeUnit) -> Result<A
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_cast_zone_offset_with_seconds() -> Result<()> {
+        for zone in ["+05:30:45", "+053045"] {
+            assert!(matches!(
+                parse_cast_zone(zone)?,
+                CastZone::Fixed(19_845_000_000)
+            ));
+        }
+        assert!(matches!(
+            parse_cast_zone("+08")?,
+            CastZone::Fixed(28_800_000_000)
+        ));
+        assert!(matches!(
+            parse_cast_zone("-0800")?,
+            CastZone::Fixed(-28_800_000_000)
+        ));
+        Ok(())
+    }
 
     #[test]
     fn test_parse_cast_zone_utc_is_fixed() -> Result<()> {
