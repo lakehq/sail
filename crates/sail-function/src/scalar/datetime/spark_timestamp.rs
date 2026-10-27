@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::{Datelike, FixedOffset, NaiveDate, Utc};
-use datafusion::arrow::array::Array;
+use datafusion::arrow::array::{Array, AsArray};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType};
 use datafusion_common::arrow::array::PrimitiveArray;
@@ -415,6 +415,59 @@ impl SparkTimestamp {
     fn safe(&self) -> bool {
         self.is_try || !self.ansi_mode
     }
+
+    /// A TIMESTAMP_NTZ value is already a wall clock, so it is localized rather than parsed.
+    /// Arrow's own cast cannot do this: it resolves the local time with `.single()`, which has no
+    /// answer inside a DST gap or inside the repeated hour of a fall-back, and so errors or
+    /// nullifies exactly where Spark moves the value forward, or takes the earlier offset.
+    fn localize_naive_micros(&self, micros: i64, safe: bool) -> Result<Option<i64>> {
+        let TimestampParser::Ltz { default_timezone } = &self.parser else {
+            return Ok(Some(micros));
+        };
+        let datetime = chrono::DateTime::from_timestamp_micros(micros)
+            .ok_or_else(|| exec_datafusion_err!("timestamp out of range: {micros}"))?
+            .naive_utc();
+        let timezone: Tz = match default_timezone.parse() {
+            Ok(timezone) => timezone,
+            Err(_) if safe => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        match localize_with_fallback(&timezone, &datetime) {
+            Ok(instant) => Ok(Some(truncate_datetime_to_microseconds(&instant))),
+            Err(_) if safe => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn localize_naive(&self, arg: ColumnarValue, safe: bool) -> Result<ColumnarValue> {
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(value, _)) => {
+                let value = value
+                    .map(|micros| self.localize_naive_micros(micros, safe))
+                    .transpose()?
+                    .flatten();
+                Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
+                    value,
+                    self.timezone.clone(),
+                )))
+            }
+            ColumnarValue::Array(array) => {
+                let array: PrimitiveArray<TimestampMicrosecondType> = array
+                    .as_primitive::<TimestampMicrosecondType>()
+                    .iter()
+                    .map(|value| match value {
+                        Some(micros) => self.localize_naive_micros(micros, safe),
+                        None => Ok(None),
+                    })
+                    .collect::<Result<_>>()?;
+                let array = array.with_timezone_opt(self.timezone.clone());
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            ColumnarValue::Scalar(other) => {
+                exec_err!("expected a TIMESTAMP_NTZ scalar, got {}", other.data_type())
+            }
+        }
+    }
 }
 
 impl ScalarUDFImpl for SparkTimestamp {
@@ -451,15 +504,21 @@ impl ScalarUDFImpl for SparkTimestamp {
             // sibling parsers `SparkDate`/`SparkTime`. The planner casts/handles
             // DATE/TIMESTAMP inputs directly, so they never reach this UDF.
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+            // A TIMESTAMP_NTZ has to be localized the way Spark localizes it, which the Arrow
+            // cast cannot do across a DST transition, so the planner routes it here instead.
+            DataType::Timestamp(_, None) => {}
             other => {
                 return Err(unsupported_data_type_exec_err(
                     self.name(),
-                    "STRING or NULL",
+                    "STRING, TIMESTAMP_NTZ or NULL",
                     other,
                 ));
             }
         }
         let mut coerced = arg_types.to_vec();
+        if matches!(arg_types[0], DataType::Timestamp(_, None)) {
+            coerced[0] = DataType::Timestamp(TimeUnit::Microsecond, None);
+        }
         if let Some(format) = arg_types.get(1) {
             match format {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {}
@@ -484,6 +543,12 @@ impl ScalarUDFImpl for SparkTimestamp {
             _ => return exec_err!("spark_timestamp requires 1 or 2 arguments"),
         };
         let safe = self.safe();
+        if matches!(
+            arg.data_type(),
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        ) {
+            return self.localize_naive(arg, safe);
+        }
         match (arg, format) {
             (ColumnarValue::Array(array), Some(ColumnarValue::Array(format_array))) => {
                 self.parse_array_with_format_array(&array, &format_array, safe)
