@@ -12,6 +12,8 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use ordered_float::OrderedFloat;
 
+use crate::aggregate::vector::normalize;
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VectorSum {
     signature: Signature,
@@ -111,6 +113,11 @@ impl VectorSumAccumulator {
                 vector.len()
             );
         }
+        let normalized = self
+            .seen
+            .as_ref()
+            .map(|_| vector.iter().copied().map(normalize).collect::<Vec<_>>());
+        let vector = normalized.as_deref().unwrap_or(vector);
         if let Some(seen) = &mut self.seen {
             if !seen.insert(vector.iter().copied().map(OrderedFloat).collect()) {
                 return Ok(());
@@ -439,6 +446,48 @@ mod tests {
         empty_group.merge_batch(&[empty.state()?[0].to_array()?])?;
         assert!(!empty_group.evaluate()?.is_null());
         assert_eq!(empty_group.sum, Some(vec![]));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_normalizes_signed_zero_in_inputs_and_merged_states() -> Result<()> {
+        for (first, second) in [(-0.0, 0.0), (0.0, -0.0)] {
+            let mut left = VectorSumAccumulator::new(true);
+            left.add(&[first])?;
+            left.add(&[second])?;
+            assert_eq!(
+                left.sum.as_ref().map(|sum| sum[0].to_bits()),
+                Some(0.0_f32.to_bits())
+            );
+            assert_eq!(left.vectors[0][0].to_bits(), 0.0_f32.to_bits());
+
+            let mut right = VectorSumAccumulator::new(true);
+            right.add(&[second])?;
+            let state = right.state()?[0].to_array()?;
+            left.merge_batch(&[state])?;
+            assert_eq!(left.vectors.len(), 1);
+            assert_eq!(
+                left.sum.as_ref().map(|sum| sum[0].to_bits()),
+                Some(0.0_f32.to_bits())
+            );
+
+            let mut merged = VectorSumAccumulator::new(true);
+            merged.merge_batch(&[left.state()?[0].to_array()?])?;
+            assert_eq!(merged.vectors[0][0].to_bits(), 0.0_f32.to_bits());
+        }
+
+        let mut nan = VectorSumAccumulator::new(true);
+        nan.add(&[f32::from_bits(0x7fc0_0001)])?;
+        nan.add(&[f32::from_bits(0xffc0_0002)])?;
+        assert_eq!(nan.vectors.len(), 1);
+        assert_eq!(nan.vectors[0][0].to_bits(), f32::NAN.to_bits());
+
+        let mut ordinary = VectorSumAccumulator::default();
+        ordinary.add(&[-0.0])?;
+        assert_eq!(
+            ordinary.sum.as_ref().map(|sum| sum[0].to_bits()),
+            Some((-0.0_f32).to_bits())
+        );
         Ok(())
     }
 

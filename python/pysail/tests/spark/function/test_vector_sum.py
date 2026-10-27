@@ -41,6 +41,39 @@ def test_vector_sum_distinct_merges_partitions(spark):
     }
 
 
+@pytest.mark.parametrize(
+    ("sql", "first_sign"),
+    [
+        (
+            "SELECT array(CAST('-0.0' AS FLOAT)) AS v UNION ALL SELECT array(0.0F) AS v",
+            -1.0,
+        ),
+        (
+            "SELECT array(0.0F) AS v UNION ALL SELECT array(CAST('-0.0' AS FLOAT)) AS v",
+            1.0,
+        ),
+    ],
+)
+def test_vector_sum_distinct_normalizes_signed_zero(spark, sql, first_sign):
+    vectors = spark.sql(sql)
+    assert math.copysign(1.0, vectors.first().v[0]) == first_sign
+    result = vectors.selectExpr("vector_sum(DISTINCT v) AS total").first()
+    assert result.total == [0.0]
+    assert math.copysign(1.0, result.total[0]) == 1.0
+
+
+def test_vector_sum_distinct_normalizes_signed_zero_across_partitions(spark):
+    vectors = spark.sql(
+        """
+        SELECT array(CAST(CASE WHEN id % 2 = 0 THEN '-0.0' ELSE '0.0' END AS FLOAT)) AS v
+        FROM range(100)
+        """
+    ).repartition(4)
+    result = vectors.selectExpr("vector_sum(DISTINCT v) AS total").first()
+    assert result.total == [0.0]
+    assert math.copysign(1.0, result.total[0]) == 1.0
+
+
 def test_vector_sum_distinct_empty_and_null_vectors(spark):
     rows = spark.sql(
         """

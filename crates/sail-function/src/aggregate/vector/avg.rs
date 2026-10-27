@@ -15,6 +15,7 @@ use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{AggregateUDFImpl, Signature, Volatility};
 use datafusion_expr_common::accumulator::Accumulator;
 
+use super::normalize;
 use crate::scalar::vector::is_float_vector;
 
 fn float_vector_field() -> FieldRef {
@@ -164,18 +165,6 @@ impl Accumulator for VectorAvgAccumulator {
 
 fn float_vectors_field() -> FieldRef {
     Arc::new(Field::new_list_field(float_vector_type(), false))
-}
-
-/// Spark normalizes NaN and -0.0 in grouping keys before it removes duplicates
-/// (`NormalizeFloatingNumbers`), so `DISTINCT` treats them as one value.
-fn normalize(value: f32) -> f32 {
-    if value.is_nan() {
-        f32::NAN
-    } else if value == 0.0 {
-        0.0
-    } else {
-        value
-    }
 }
 
 /// Accumulator for `vector_avg(DISTINCT ...)`.
