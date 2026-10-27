@@ -12,6 +12,7 @@ use datafusion_expr::utils::{conjunction, split_conjunction};
 use datafusion_expr::{
     Expr, LogicalPlan, LogicalPlanBuilder, Operator, WindowFrame, WindowFunctionDefinition, lit,
 };
+use sail_logical_plan::sort::RequiredSortNode;
 
 /// A correlated LIMIT applies independently to every equality key. Rank the
 /// decorrelated input within each key, then put the correlation above the rank.
@@ -99,6 +100,20 @@ impl OptimizerRule for DecorrelateLimit {
                         order = Some(sort.expr);
                     }
                     Ok(Transformed::yes(Arc::unwrap_or_clone(sort.input)))
+                } else if let LogicalPlan::Extension(extension) = &node
+                    && let Some(sort) = extension.node.as_any().downcast_ref::<RequiredSortNode>()
+                    && sort.fetch().is_none_or(|top| {
+                        fetch.is_some_and(|fetch| top >= skip.saturating_add(fetch))
+                    })
+                    && !sort.preserve_partitioning()
+                {
+                    // Order-sensitive aggregates protect their input sort with
+                    // an extension node before optimization. The per-key rank
+                    // carries that ordering when decorrelating a nested limit.
+                    if order.is_none() {
+                        order = Some(sort.sort_expr().to_vec());
+                    }
+                    Ok(Transformed::yes(extension.node.inputs()[0].clone()))
                 } else {
                     Ok(Transformed::no(node))
                 }

@@ -702,3 +702,59 @@ Feature: Correlated query results
       | k | result |
       | 1 | 10     |
       | 2 | NULL   |
+
+  Scenario Outline: Scalar cardinality checks preserve a nested correlated ordered limit
+    When query
+      """
+      SELECT k,
+        (SELECT v FROM
+          (SELECT v FROM VALUES (1, 10), (1, 20), (1, 30), (2, 40) u(k, v)
+           WHERE u.k = t.k ORDER BY v DESC LIMIT 1 OFFSET <offset>) q) AS selected
+      FROM VALUES (1), (2), (3) t(k)
+      """
+    Then query result collected
+      | k | selected |
+      | 1 | <first>  |
+      | 2 | <second> |
+      | 3 | NULL     |
+
+    Examples:
+      | offset | first | second |
+      | 0      | 30    | 40     |
+      | 1      | 20    | NULL   |
+
+  Scenario Outline: Scalar cardinality checks preserve an uncorrelated inner ordered limit
+    When query
+      """
+      SELECT k,
+        (SELECT v FROM
+          (SELECT k, v FROM VALUES (1, 10), (1, 20), (2, 30) u(k, v)
+           ORDER BY v DESC LIMIT 1 OFFSET <offset>) q
+         WHERE q.k = t.k) AS selected
+      FROM VALUES (1), (2), (3) t(k)
+      """
+    Then query result collected
+      | k | selected |
+      | 1 | <first>  |
+      | 2 | <second> |
+      | 3 | NULL     |
+
+    Examples:
+      | offset | first | second |
+      | 0      | NULL  | 30     |
+      | 1      | 20    | NULL   |
+
+  Scenario: Transferring a scalar ordering preserves a different inner top-k ordering
+    When query
+      """
+      SELECT k,
+        (SELECT v FROM
+          (SELECT k, v FROM VALUES (1, 10), (1, 20), (1, 30) u(k, v)
+           ORDER BY v DESC LIMIT 2) q
+         WHERE q.k = t.k ORDER BY v ASC LIMIT 1) AS selected
+      FROM VALUES (1), (2) t(k)
+      """
+    Then query result collected
+      | k | selected |
+      | 1 | 20       |
+      | 2 | NULL     |

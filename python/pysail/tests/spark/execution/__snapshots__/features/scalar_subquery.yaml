@@ -58,9 +58,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -83,6 +80,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -227,9 +227,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -262,6 +259,9 @@ data:
                   Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -337,9 +337,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -362,6 +359,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -753,9 +753,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -778,6 +775,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -890,9 +890,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -915,6 +912,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -1319,9 +1319,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -1344,6 +1341,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -1456,9 +1456,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -1481,6 +1478,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -1901,9 +1901,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -1926,6 +1923,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -2111,9 +2111,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -2152,6 +2149,9 @@ data:
                   Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -2233,9 +2233,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -2258,6 +2255,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -2751,9 +2751,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -2776,6 +2773,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -2915,9 +2915,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -2940,6 +2937,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -3421,9 +3421,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -3446,6 +3443,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -3520,9 +3520,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -3545,6 +3542,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -3864,9 +3864,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -3889,6 +3886,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -3976,9 +3976,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -4001,6 +3998,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -4351,9 +4351,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -4376,6 +4373,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -4457,9 +4457,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -4482,6 +4479,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -4895,9 +4895,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -4920,6 +4917,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -5001,9 +5001,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -5026,6 +5023,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -5428,9 +5428,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -5465,6 +5462,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -5540,9 +5540,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -5565,6 +5562,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -5899,9 +5899,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -5924,6 +5921,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -5999,9 +5999,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -6024,6 +6021,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -6401,9 +6401,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -6438,6 +6435,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -6527,9 +6527,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -6552,6 +6549,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -6928,9 +6928,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -6953,6 +6950,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -7042,9 +7042,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -7067,6 +7064,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -7454,9 +7454,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -7479,6 +7476,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -7554,9 +7554,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -7579,6 +7576,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -7942,9 +7942,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -7967,6 +7964,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -8042,9 +8042,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -8067,6 +8064,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -8446,9 +8446,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -8471,6 +8468,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -8547,9 +8547,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -8572,6 +8569,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -8951,9 +8951,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -8976,6 +8973,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -9072,9 +9072,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -9097,6 +9094,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -9524,9 +9524,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -9549,6 +9546,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -9647,9 +9647,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -9672,6 +9669,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -10059,9 +10059,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -10084,6 +10081,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -10161,9 +10161,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -10186,6 +10183,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -10569,9 +10569,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -10606,6 +10603,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -10681,9 +10681,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -10706,6 +10703,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -11040,9 +11040,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -11065,6 +11062,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -11140,9 +11140,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -11165,6 +11162,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -11499,9 +11499,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -11524,6 +11521,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -11600,9 +11600,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -11625,6 +11622,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -11977,9 +11977,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -12015,6 +12012,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -12091,9 +12091,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -12116,6 +12113,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -12481,9 +12481,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -12519,6 +12516,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:
@@ -12595,9 +12595,6 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
-    logical_plan after decorrelate_limit:
-    SAME TEXT AS ABOVE
-
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
 
@@ -12620,6 +12617,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_domain:

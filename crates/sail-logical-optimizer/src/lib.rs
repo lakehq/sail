@@ -43,12 +43,14 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // Projection expressions (e.g. `LATERAL (SELECT t1.a + 1)`), rewriting
     // it into a CrossJoin + Projection. The remaining complex cases (OuterRef
     // in Filter/Aggregate) are left for DataFusion's `DecorrelateLateralJoin`.
-    let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![
-        Arc::new(correlated_limit::DecorrelateLimit),
-        Arc::new(DecorrelateLateralProjection::new()),
-    ];
+    let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
+        vec![Arc::new(DecorrelateLateralProjection::new())];
     for rule in rules {
         if rule.name() == ScalarSubqueryToJoin::new().name() {
+            // SimplifyExpressions must first fold LIMIT/OFFSET casts into
+            // literals. Decorrelate before limit pushdown can turn the sort
+            // into a global top-k or scalar-subquery conversion consumes it.
+            custom.push(Arc::new(correlated_limit::DecorrelateLimit));
             custom.push(Arc::new(
                 scalar_subquery_domain::NormalizeScalarSubqueryDomain,
             ));

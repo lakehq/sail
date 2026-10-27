@@ -180,3 +180,60 @@ Feature: Projection and alias resolution
       | column | type |
       | a      | int  |
       | b      | int  |
+
+  Scenario Outline: Aggregate projections evaluate each volatile lateral alias once
+    When query
+      """
+      SELECT n, x = y AS same_value, y + n = z AS same_chain, x <> independent AS separate_value
+      FROM (
+        SELECT count(*) AS n, rand() AS x, x AS y, y + n AS z, rand() AS independent
+        FROM range(<rows>)
+      ) q
+      """
+    Then query result collected
+      | n      | same_value | same_chain | separate_value |
+      | <rows> | true       | true       | true           |
+
+    Examples:
+      | rows |
+      | 0    |
+      | 10   |
+
+  Scenario: Window results can be reused through lateral aliases
+    When query
+      """
+      SELECT row_number() OVER (ORDER BY id) AS x, x + 1 AS y, y + 1 AS z
+      FROM range(3)
+      """
+    Then query result collected
+      | x | y | z |
+      | 1 | 2 | 3 |
+      | 2 | 3 | 4 |
+      | 3 | 4 | 5 |
+
+  Scenario Outline: Partition expressions are lowered before materializing lateral aliases
+    When query
+      """
+      SELECT count(*) AS n, bool_and(x = y) AS same_value
+      FROM (SELECT <expression> AS x, x AS y FROM range(3)) q
+      """
+    Then query result collected
+      | n | same_value |
+      | 3 | true       |
+
+    Examples:
+      | expression                    |
+      | monotonically_increasing_id() |
+      | spark_partition_id()          |
+
+  Scenario: Existence predicates can be reused through lateral aliases
+    When query
+      """
+      SELECT id, EXISTS(SELECT 1 FROM VALUES (1L), (2L) u(k) WHERE u.k = t.id) AS x, x AS y
+      FROM range(3) t
+      """
+    Then query result collected
+      | id | x     | y     |
+      | 0  | false | false |
+      | 1  | true  | true  |
+      | 2  | true  | true  |

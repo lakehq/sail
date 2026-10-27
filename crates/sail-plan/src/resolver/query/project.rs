@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{Alias, FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
@@ -81,15 +81,34 @@ impl PlanResolver<'_> {
         let inlined = self
             .resolve_lateral_expressions(expressions.clone(), &schema, state)
             .await?;
-        if inlined.iter().any(|expr| {
-            !datafusion_expr::utils::find_aggregate_exprs(std::slice::from_ref(&expr.expr))
-                .is_empty()
-        }) {
-            return Ok((input, inlined));
-        }
+        let aggregates = datafusion_expr::utils::find_aggregate_exprs(
+            &inlined
+                .iter()
+                .map(|named| named.expr.clone())
+                .collect::<Vec<_>>(),
+        );
+        // Compute aggregates first, then materialize the SELECT aliases above
+        // them. Inlining the entire SELECT list would evaluate a volatile alias
+        // again at every reference (e.g. COUNT(*), RAND() AS x, x AS y).
+        let aggregate_columns = if aggregates.is_empty() {
+            vec![]
+        } else {
+            input = self.rewrite_aggregate(
+                input,
+                aggregates
+                    .iter()
+                    .map(|expr| NamedExpr::new(vec![String::new()], expr.clone()))
+                    .collect(),
+                vec![],
+                None,
+                false,
+                state,
+            )?;
+            input.schema().columns()
+        };
         let mut resolved = vec![];
         for expression in expressions {
-            let named = {
+            let mut named = {
                 let mut scope =
                     state.enter_aggregate_scope(crate::resolver::state::AggregateState::Lateral {
                         projections: resolved.clone(),
@@ -97,12 +116,36 @@ impl PlanResolver<'_> {
                 self.resolve_named_expression(expression, &schema, scope.state())
                     .await?
             };
+            named.expr = named
+                .expr
+                .transform_down(|expr| {
+                    Ok(
+                        match aggregates.iter().position(|aggregate| aggregate == &expr) {
+                            Some(index) => {
+                                Transformed::yes(Expr::Column(aggregate_columns[index].clone()))
+                            }
+                            None => Transformed::no(expr),
+                        },
+                    )
+                })?
+                .data;
             // Wildcards/generators are expanded by the regular projection rewrite.
             if named.name.len() != 1 || matches!(named.expr, Expr::Wildcard { .. }) {
                 return Err(PlanError::analysis(
                     "unsupported lateral alias with wildcard or generator",
                 ));
             }
+            // These expressions must be lowered before they are hidden behind
+            // the materialized alias's column reference.
+            let (next, named) =
+                self.rewrite_projection::<MonotonicIdRewriter>(input, vec![named], state)?;
+            let (next, named) =
+                self.rewrite_projection::<SparkPartitionIdRewriter>(next, named, state)?;
+            let (next, named) = self.rewrite_projection::<ExplodeRewriter>(next, named, state)?;
+            let (next, named) = self.rewrite_projection::<WindowRewriter>(next, named, state)?;
+            let (next, named) = self.rewrite_projection::<ExistsRewriter>(next, named, state)?;
+            input = next;
+            let named = named.one()?;
             let field = state.register_field_name(named.name[0].clone());
             let mut exprs = input
                 .schema()

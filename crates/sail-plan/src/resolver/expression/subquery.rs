@@ -216,16 +216,29 @@ impl PlanResolver<'_> {
             )?
             .data;
         let order = Self::find_input_sort_ordering(&query).unwrap_or_default();
-        // Ordering is carried by FIRST_VALUE. A Sort over correlated input would
-        // prevent DataFusion from pulling the equality predicate into the join.
+        // Remove sorts only through operators that select rows independently of ordering.
+        // a sort below a nested LIMIT/OFFSET determines which rows survive and
+        // cannot be replaced by ordering the enclosing FIRST_VALUE.
         query = query
-            .transform_up(|plan| {
-                if let LogicalPlan::Sort(sort) = plan {
-                    Ok(Transformed::yes(Arc::unwrap_or_clone(sort.input)))
-                } else {
-                    Ok(Transformed::no(plan))
-                }
-            })?
+            .transform_down_up(
+                |plan| {
+                    let recursion = match plan {
+                        LogicalPlan::Projection(_)
+                        | LogicalPlan::SubqueryAlias(_)
+                        | LogicalPlan::Filter(_)
+                        | LogicalPlan::Distinct(datafusion_expr::Distinct::All(_))
+                        | LogicalPlan::Sort(_) => TreeNodeRecursion::Continue,
+                        _ => TreeNodeRecursion::Jump,
+                    };
+                    Ok(Transformed::new(plan, false, recursion))
+                },
+                |plan| match plan {
+                    LogicalPlan::Sort(sort) => {
+                        Ok(Transformed::yes(Arc::unwrap_or_clone(sort.input)))
+                    }
+                    _ => Ok(Transformed::no(plan)),
+                },
+            )?
             .data;
         let value_name = state.register_field_name("");
         let count_name = state.register_field_name("");
