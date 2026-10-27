@@ -450,6 +450,43 @@ Feature: Correlated query results
       | column | type   |
       | id     | bigint |
 
+  Scenario: A correlated lateral alias chain retains materialized values
+    When query
+      """
+      SELECT q.a30
+      FROM VALUES (1L), (2L), (1L), (CAST(NULL AS BIGINT)) o(k), LATERAL (
+        SELECT o.k AS a0,
+               a0 + a0 AS a1, a1 + a1 AS a2, a2 + a2 AS a3, a3 + a3 AS a4,
+               a4 + a4 AS a5, a5 + a5 AS a6, a6 + a6 AS a7, a7 + a7 AS a8,
+               a8 + a8 AS a9, a9 + a9 AS a10, a10 + a10 AS a11, a11 + a11 AS a12,
+               a12 + a12 AS a13, a13 + a13 AS a14, a14 + a14 AS a15, a15 + a15 AS a16,
+               a16 + a16 AS a17, a17 + a17 AS a18, a18 + a18 AS a19, a19 + a19 AS a20,
+               a20 + a20 AS a21, a21 + a21 AS a22, a22 + a22 AS a23, a23 + a23 AS a24,
+               a24 + a24 AS a25, a25 + a25 AS a26, a26 + a26 AS a27, a27 + a27 AS a28,
+               a28 + a28 AS a29, a29 + a29 AS a30
+      ) q
+      """
+    Then query result collected
+      | a30        |
+      | 1073741824 |
+      | 2147483648 |
+      | 1073741824 |
+      | NULL       |
+
+  Scenario: A lateral alias chain retains local columns and join conditions
+    When query
+      """
+      SELECT o.k, q.a2
+      FROM VALUES (1L), (2L) o(k)
+      INNER JOIN LATERAL (
+        SELECT i.v + o.k AS a0, a0 + a0 AS a1, a1 + a1 AS a2
+        FROM VALUES (10L), (20L) i(v)
+      ) q ON q.a2 = 48 AND o.k = 2
+      """
+    Then query result collected
+      | k | a2 |
+      | 2 | 48 |
+
   Scenario: A lateral scalar expression resolves an outer column
     When query
       """

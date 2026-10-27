@@ -176,6 +176,26 @@ fn normalize(plan: LogicalPlan, restore_qualifiers: bool) -> Result<LogicalPlan>
         if inner.expr.iter().any(Expr::is_volatile) {
             break;
         }
+        let mut references = vec![0usize; inner.expr.len()];
+        for expr in &projection.expr {
+            expr.apply(|expr| {
+                if let Expr::Column(column) = expr {
+                    references[inner.schema.index_of_column(column)?] += 1;
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        // Repeated substitution must not undo alias materialization and grow
+        // expressions exponentially across a chain of projections.
+        if inner.expr.iter().zip(references).any(|(expr, count)| {
+            count > 1
+                && !matches!(
+                    expr.clone().unalias(),
+                    Expr::Column(_) | Expr::OuterReferenceColumn(..) | Expr::Literal(..)
+                )
+        }) {
+            break;
+        }
         let exprs = projection
             .expr
             .iter()

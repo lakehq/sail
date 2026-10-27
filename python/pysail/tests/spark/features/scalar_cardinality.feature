@@ -1,3 +1,4 @@
+@spark-4
 Feature: Correlated scalar cardinality checks
   Background:
     Given statement

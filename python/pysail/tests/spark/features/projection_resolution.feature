@@ -284,3 +284,68 @@ Feature: Projection and alias resolution
       | x      | int  |
       | v      | int  |
       | y      | int  |
+
+  Scenario: Aggregate aliases preserve scalar subquery identities
+    When query
+      """
+      SELECT sum((SELECT 1)) AS x, x + 1 AS y FROM range(3)
+      """
+    Then query result collected
+      | x | y |
+      | 3 | 4 |
+
+  Scenario: Aggregate aliases retain distinct scalar subquery results
+    When query
+      """
+      SELECT sum((SELECT 1)) AS x, sum((SELECT 2)) AS y, x + y AS z FROM range(3)
+      """
+    Then query result collected
+      | x | y | z |
+      | 3 | 6 | 9 |
+
+  Scenario: Grouped aliases retain their types in HAVING
+    When query
+      """
+      SELECT id % 2 AS k, sum(id) AS s, s + 1 AS next, cast(next AS STRING) AS label
+      FROM range(4)
+      GROUP BY k
+      HAVING cast(next AS BIGINT) > 2
+      """
+    Then query result collected
+      | k | s | next | label |
+      | 0 | 2 | 3    | 3     |
+      | 1 | 4 | 5    | 5     |
+
+  Scenario Outline: Grouped alias chains use materialized values
+    When query
+      """
+      SELECT a0, a16 FROM (
+        SELECT id AS a0,
+               a0 + a0 AS a1, a1 + a1 AS a2, a2 + a2 AS a3, a3 + a3 AS a4,
+               a4 + a4 AS a5, a5 + a5 AS a6, a6 + a6 AS a7, a7 + a7 AS a8,
+               a8 + a8 AS a9, a9 + a9 AS a10, a10 + a10 AS a11, a11 + a11 AS a12,
+               a12 + a12 AS a13, a13 + a13 AS a14, a14 + a14 AS a15, a15 + a15 AS a16
+        FROM range(2)
+        GROUP BY <grouping>
+        HAVING id >= 0
+      ) q
+      """
+    Then query result collected
+      | a0 | a16   |
+      | 0  | 0     |
+      | 1  | 65536 |
+
+    Examples:
+      | grouping               |
+      | id                     |
+      | ALL                    |
+      | a0, cast(a16 AS BIGINT) |
+
+  Scenario: GROUP BY ALL excludes aliases derived from aggregates
+    When query
+      """
+      SELECT sum(id) AS x, x + 1 AS y, y + 1 AS z FROM range(3) GROUP BY ALL
+      """
+    Then query result collected
+      | x | y | z |
+      | 3 | 4 | 5 |
