@@ -356,6 +356,30 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         "Division by zero",
     );
 
+    if matches!(
+        (&dividend_type, &divisor_type),
+        (
+            Ok(DataType::Decimal128(..)),
+            Ok(DataType::Decimal128(..)
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64)
+        ) | (
+            Ok(DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64),
+            Ok(DataType::Decimal128(..))
+        )
+    ) && let DataType::Decimal128(precision, scale) =
+        (dividend.clone() / divisor.clone()).get_type(function_context.schema)?
+    {
+        return Ok(ScalarUDF::from(
+            sail_function::scalar::math::decimal_divide::DecimalDivide::new(
+                precision, scale, ansi_mode,
+            ),
+        )
+        .call(vec![dividend, divisor]));
+    }
+
     let div_expr = match (&dividend_type, &divisor_type) {
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.

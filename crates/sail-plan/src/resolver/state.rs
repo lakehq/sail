@@ -63,8 +63,13 @@ pub(super) struct PlanResolverStateConfig {
 
 #[derive(Debug, Default)]
 pub(super) enum AggregateState {
+    Lateral {
+        projections: Vec<NamedExpr>,
+    },
     /// The expressions in the `GROUP BY` clause is being resolved.
-    Grouping { projections: Vec<NamedExpr> },
+    Grouping {
+        projections: Vec<NamedExpr>,
+    },
     /// The expressions in the `HAVING` clause is being resolved.
     Having {
         projections: Vec<NamedExpr>,
@@ -341,6 +346,13 @@ impl PlanResolverState {
         MissingInputScope {
             state: self,
             previous,
+        }
+    }
+
+    pub fn get_lateral_projections(&self) -> &[NamedExpr] {
+        match &self.aggregate_state {
+            AggregateState::Lateral { projections } => projections,
+            _ => &[],
         }
     }
 

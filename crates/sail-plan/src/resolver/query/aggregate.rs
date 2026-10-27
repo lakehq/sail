@@ -88,7 +88,17 @@ impl PlanResolver<'_> {
             .resolve_projections_deferring(&projections, schema, state)
             .await?;
 
-        let grouping = {
+        let grouping = if matches!(grouping.as_slice(), [spec::Expr::UnresolvedAttribute { name, .. }]
+            if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("all")
+            && self.resolve_column_candidates(schema, "all", None, state).is_empty())
+        {
+            resolved_projections
+                .iter()
+                .flatten()
+                .filter(|expr| find_aggregate_exprs(std::slice::from_ref(&expr.expr)).is_empty())
+                .cloned()
+                .collect()
+        } else {
             let projections = resolved_projections.iter().flatten().cloned().collect();
             let mut scope = state.enter_aggregate_scope(AggregateState::Grouping { projections });
             let state = scope.state();
@@ -182,6 +192,9 @@ impl PlanResolver<'_> {
         exprs: Vec<NamedExpr>,
         projections: &[NamedExpr],
     ) -> PlanResult<Vec<NamedExpr>> {
+        if !self.config.group_by_ordinal {
+            return Ok(exprs);
+        }
         let num_projections = projections.len() as i64;
         exprs
             .into_iter()
@@ -425,7 +438,9 @@ impl PlanResolver<'_> {
             .collect()
     }
 
-    fn find_input_sort_ordering(input: &LogicalPlan) -> Option<Vec<SortExpr>> {
+    pub(in crate::resolver) fn find_input_sort_ordering(
+        input: &LogicalPlan,
+    ) -> Option<Vec<SortExpr>> {
         match input {
             LogicalPlan::Sort(sort) => Some(sort.expr.clone()),
             LogicalPlan::SubqueryAlias(alias) => {
@@ -811,7 +826,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<ResolvedProjections> {
         if let Ok(resolved) = self
-            .resolve_named_expressions(projections.to_vec(), schema, state)
+            .resolve_lateral_expressions(projections.to_vec(), schema, state)
             .await
         {
             return Ok((resolved.into_iter().map(Some).collect(), vec![]));

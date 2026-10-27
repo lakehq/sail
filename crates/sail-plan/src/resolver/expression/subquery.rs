@@ -90,10 +90,126 @@ impl PlanResolver<'_> {
             let mut scope = state.enter_query_scope(Arc::clone(schema));
             self.resolve_query_plan(subquery, scope.state()).await?
         };
+        let mut root = &subquery;
+        while let LogicalPlan::Projection(projection) = root {
+            root = &projection.input;
+        }
+        if !subquery.all_out_ref_exprs().is_empty()
+            && let LogicalPlan::Aggregate(aggregate) = root
+            && aggregate.group_expr.iter().any(|expr| {
+                if let Expr::GroupingSet(datafusion_expr::expr::GroupingSet::GroupingSets(sets)) =
+                    expr
+                {
+                    let mut seen = std::collections::HashSet::new();
+                    sets.iter().any(|set| !seen.insert(set))
+                } else {
+                    false
+                }
+            })
+        {
+            return Err(PlanError::analysis(
+                "Correlated scalar subquery has duplicate grouping sets and can return more than one row",
+            ));
+        }
+        let subquery = self.protect_scalar_cardinality(subquery, state)?;
         Ok(NamedExpr::new(
             vec!["subquery".to_string()],
             expr_fn::scalar_subquery(Arc::new(subquery)),
         ))
+    }
+
+    /// Aggregate non-aggregate correlated scalar queries with a runtime cardinality
+    /// check. A top-level LIMIT 1 instead selects its first ordered value per key.
+    fn protect_scalar_cardinality(
+        &self,
+        mut query: LogicalPlan,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        use datafusion::functions_aggregate::expr_fn::{count, first_value};
+        use datafusion_common::Column;
+        use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, lit, when};
+        use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+        use sail_function::scalar::misc::raise_error::RaiseError;
+        if query.all_out_ref_exprs().is_empty() || query.schema().fields().len() != 1 {
+            return Ok(query);
+        }
+        if query.exists(|plan| Ok(matches!(plan, LogicalPlan::Aggregate(_))))? {
+            return Ok(query);
+        }
+        let mut limited = false;
+        if let LogicalPlan::Limit(limit) = &query {
+            let evaluator = LiteralEvaluator::new();
+            let skip = limit
+                .skip
+                .as_ref()
+                .map(|expr| {
+                    evaluator
+                        .evaluate(expr)
+                        .and_then(|value| LiteralValue(&value).try_to_i64())
+                })
+                .transpose()?
+                .unwrap_or(0);
+            let fetch = limit
+                .fetch
+                .as_ref()
+                .map(|expr| {
+                    evaluator
+                        .evaluate(expr)
+                        .and_then(|value| LiteralValue(&value).try_to_i64())
+                })
+                .transpose()?;
+            if skip == 0 && fetch == Some(0) {
+                return Ok(LogicalPlan::EmptyRelation(datafusion_expr::EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::clone(query.schema()),
+                }));
+            }
+            if skip == 0 && fetch == Some(1) {
+                limited = true;
+                query = Arc::unwrap_or_clone(limit.input.clone());
+            } else {
+                return Ok(query);
+            }
+        }
+        let output = Column::from(query.schema().qualified_field(0));
+        let order = Self::find_input_sort_ordering(&query).unwrap_or_default();
+        // Ordering is carried by FIRST_VALUE. A Sort over correlated input would
+        // prevent DataFusion from pulling the equality predicate into the join.
+        query = query
+            .transform_up(|plan| {
+                if let LogicalPlan::Sort(sort) = plan {
+                    Ok(Transformed::yes(Arc::unwrap_or_clone(sort.input)))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            })?
+            .data;
+        let value_name = state.register_field_name("");
+        let count_name = state.register_field_name("");
+        let aggregate = LogicalPlanBuilder::from(query)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    first_value(Expr::Column(output.clone()), order).alias(&value_name),
+                    count(lit(1_i64)).alias(&count_name),
+                ],
+            )?
+            .build()?;
+        let value = Expr::Column(Column::new_unqualified(value_name));
+        let value = if limited {
+            value
+        } else {
+            when(
+                Expr::Column(Column::new_unqualified(count_name)).gt(lit(1_i64)),
+                ScalarUDF::from(RaiseError::new()).call(vec![lit(
+                    "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row",
+                )]),
+            )
+            .otherwise(value)?
+        };
+        Ok(LogicalPlanBuilder::from(aggregate)
+            .project(vec![value.alias_qualified(output.relation, output.name)])?
+            .build()?)
     }
 
     pub(super) async fn resolve_expression_exists(
@@ -177,7 +293,12 @@ impl PlanResolver<'_> {
                     subquery_plan.schema(),
                     &self.config,
                 )?;
-                Ok(Expr::eq(inner, outer))
+                let equal = Expr::eq(inner, outer);
+                Ok(if negated {
+                    equal.clone().or(equal.is_null())
+                } else {
+                    equal
+                })
             })
             .collect::<PlanResult<Vec<_>>>()?
             .into_iter()

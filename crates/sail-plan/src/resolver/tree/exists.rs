@@ -36,6 +36,44 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
     type Node = Expr;
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
+        if let Expr::InSubquery(query) = expr {
+            let inner = query.subquery.subquery;
+            let column = inner
+                .schema()
+                .columns()
+                .into_iter()
+                .next()
+                .ok_or_else(|| plan_datafusion_err!("IN subquery has no output"))?;
+            let outer = query
+                .expr
+                .transform_up(|expr| {
+                    if let Expr::Column(column) = expr {
+                        let (_, field) = self.plan.schema().qualified_field_from_column(&column)?;
+                        Ok(Transformed::yes(Expr::OuterReferenceColumn(
+                            field.clone(),
+                            column,
+                        )))
+                    } else {
+                        Ok(Transformed::no(expr))
+                    }
+                })?
+                .data;
+            let equal = Expr::Column(column).eq(outer);
+            // Spark projects IN as an existence test. NOT IN additionally excludes
+            // rows whose comparison can be unknown because either operand is null.
+            let predicate = if query.negated {
+                equal.clone().or(equal.is_null())
+            } else {
+                equal
+            };
+            let result = self
+                .correlated_exists(LogicalPlanBuilder::from(inner).filter(predicate)?.build()?)?;
+            return Ok(Transformed::yes(if query.negated {
+                !result
+            } else {
+                result
+            }));
+        }
         let Expr::Exists(exists) = expr else {
             return Ok(Transformed::no(expr));
         };

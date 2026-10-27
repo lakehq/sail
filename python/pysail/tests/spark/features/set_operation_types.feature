@@ -1,0 +1,208 @@
+Feature: Set operation multiplicity and type coercion
+  Background:
+    Given config spark.sql.caseSensitive = false
+    Given config spark.sql.ansi.enabled = true
+    Given statement
+      """
+      CREATE OR REPLACE TEMPORARY VIEW t AS
+      SELECT * FROM VALUES
+        (1L, 'a', 10, 100),
+        (2L, 'a', 20, 200),
+        (3L, 'b', CAST(NULL AS INT), 300),
+        (4L, 'b', 40, CAST(NULL AS INT)),
+        (5L, CAST(NULL AS STRING), 50, 500),
+        (6L, 'a', 10, 600),
+        (7L, 'c', 70, 700)
+      AS t(id, g, v, w)
+      """
+    Given final statement
+      """
+      DROP VIEW IF EXISTS t
+      """
+    Given statement
+      """
+      CREATE OR REPLACE TEMPORARY VIEW u AS SELECT *
+      FROM VALUES (1L, 'a', 100), (2L, 'a', 200), (4L, 'b', 400), (8L, 'z', 800), (CAST(NULL AS BIGINT), 'n',
+        900) AS u(id, g, z)
+      """
+    Given final statement
+      """
+      DROP VIEW IF EXISTS u
+      """
+
+  Scenario: INTERSECT ALL retains the minimum multiplicity of each row
+    When query
+      """
+      SELECT g, v
+      FROM t
+      INTERSECT ALL SELECT g, v
+      FROM t
+      WHERE id <= 3
+      """
+    Then query result collected
+      | g | v    |
+      | a | 10   |
+      | a | 20   |
+      | b | NULL |
+    Then query column types
+      | column | type   |
+      | g      | string |
+      | v      | int    |
+
+  Scenario: UNION ALL widens a small integer column to bigint
+    When query
+      """
+      SELECT CAST(v AS SMALLINT) AS x
+      FROM t
+      UNION ALL SELECT id AS x
+      FROM u
+      """
+    Then query result collected
+      | x    |
+      | 10   |
+      | 10   |
+      | 1    |
+      | 20   |
+      | 2    |
+      | 40   |
+      | 4    |
+      | 50   |
+      | 70   |
+      | 8    |
+      | NULL |
+      | NULL |
+    Then query column types
+      | column | type   |
+      | x      | bigint |
+
+  Scenario: UNION ALL widens nested array elements to bigint
+    When query
+      """
+      SELECT array(v) AS a
+      FROM t
+      UNION ALL SELECT array(CAST(z AS BIGINT)) AS a
+      FROM u
+      """
+    Then query result collected
+      | a      |
+      | [100]  |
+      | [10]   |
+      | [10]   |
+      | [200]  |
+      | [20]   |
+      | [400]  |
+      | [40]   |
+      | [50]   |
+      | [70]   |
+      | [800]  |
+      | [900]  |
+      | [None] |
+    Then query column types
+      | column | type          |
+      | a      | array<bigint> |
+
+  Scenario: Decimal division rounds fractional results to the output scale
+    When query
+      """
+      SELECT CAST(v AS DECIMAL(10, 2)) / 3 AS x
+      FROM t
+      """
+    Then query result collected
+      | x         |
+      | NULL      |
+      | 13.333333 |
+      | 16.666667 |
+      | 23.333333 |
+      | 3.333333  |
+      | 3.333333  |
+      | 6.666667  |
+    Then query column types
+      | column | type          |
+      | x      | decimal(14,6) |
+
+  Scenario: INTERSECT ALL emits one row when only one right copy exists
+    When query
+      """
+      SELECT *
+      FROM VALUES (1), (1) l(x)
+      INTERSECT ALL SELECT *
+      FROM VALUES (1) r(x)
+      """
+    Then query result collected
+      | x |
+      | 1 |
+    Then query column types
+      | column | type |
+      | x      | int  |
+
+  Scenario: INTERSECT ALL counts null rows as matching values
+    When query
+      """
+      SELECT *
+      FROM VALUES (CAST(NULL AS INT)), (CAST(NULL AS INT)) l(x)
+      INTERSECT ALL SELECT CAST(NULL AS INT) AS x
+      """
+    Then query result collected
+      | x    |
+      | NULL |
+    Then query column types
+      | column | type |
+      | x      | int  |
+
+  Scenario: UNION ALL preserves bigint values outside the small integer range
+    When query
+      """
+      SELECT CAST(1 AS SMALLINT) AS x
+      UNION ALL SELECT 10000000000L AS x
+      """
+    Then query result collected
+      | x           |
+      | 10000000000 |
+      | 1           |
+    Then query column types
+      | column | type   |
+      | x      | bigint |
+
+  Scenario: Arithmetic above UNION ALL uses the widened integer type
+    When query
+      """
+      SELECT x + 1 AS x
+      FROM (SELECT CAST(1 AS SMALLINT) AS x UNION ALL SELECT 10000000000L AS x)
+      """
+    Then query result collected
+      | x           |
+      | 10000000001 |
+      | 2           |
+    Then query column types
+      | column | type   |
+      | x      | bigint |
+
+  Scenario: An empty left input still determines UNION ALL type coercion
+    When query
+      """
+      SELECT CAST(1 AS SMALLINT) AS x
+      WHERE false
+      UNION ALL SELECT 10000000000L AS x
+      """
+    Then query result collected
+      | x           |
+      | 10000000000 |
+    Then query column types
+      | column | type   |
+      | x      | bigint |
+
+  Scenario Outline: Decimal division rounds halfway values away from zero
+    When query
+      """
+      SELECT CAST(<numerator> AS DECIMAL(10, 2)) / CAST(<denominator> AS DECIMAL(3, 0)) AS x
+      """
+    Then query result collected
+      | x          |
+      | <expected> |
+
+    Examples:
+      | numerator | denominator | expected  |
+      | 20        | 3           | 6.666667  |
+      | -20       | 3           | -6.666667 |
+      | 1         | 128         | 0.007813  |
+      | -1        | 128         | -0.007813 |

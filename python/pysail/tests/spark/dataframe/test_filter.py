@@ -1478,11 +1478,6 @@ def test_filter_missing_lambda_fields_preserve_staged_bindings(spark, predicate_
 
 
 @pytest.mark.parametrize("subset", [None, ["key"]], ids=["distinct", "drop-duplicates-subset"])
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Sail lowers DataFrame deduplication to Distinct, which cannot expose missing attributes",
-    strict=True,
-)
 def test_filter_missing_attribute_through_dataframe_distinct(filter_source, subset):
     projected = filter_source.select("key", "value")
     projected = projected.distinct() if subset is None else projected.dropDuplicates(subset)

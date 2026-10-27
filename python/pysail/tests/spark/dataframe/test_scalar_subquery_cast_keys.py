@@ -358,12 +358,6 @@ def test_injective_cast_correlation_groups_by_raw_key(spark):
         pytest.param(
             *case,
             ansi,
-            # TODO: Remove these marks when correlated TRY_CAST keys are supported.
-            marks=pytest.mark.xfail(
-                not is_jvm_spark() and not ansi and case[0] == "BIGINT",
-                reason="Existing DataFusion alias error for ANSI-off BIGINT-to-decimal TRY_CAST correlation",
-                strict=True,
-            ),
         )
         for case in [
             ("BOOLEAN", "TINYINT", "false", "true"),

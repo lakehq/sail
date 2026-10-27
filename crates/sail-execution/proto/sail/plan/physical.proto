@@ -265,6 +265,7 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    DecimalDivideUdf decimal_divide = 40;
   }
 }
 
@@ -1274,4 +1275,10 @@ message IcebergRewriteExecNode {
 
 message IcebergRewriteGroupAssignment {
   repeated uint64 groups = 1;
+}
+
+message DecimalDivideUdf {
+  uint32 precision = 1;
+  int32 scale = 2;
+  bool ansi_mode = 3;
 }

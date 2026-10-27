@@ -4,7 +4,6 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
-use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
@@ -28,6 +27,7 @@ use crate::input_file_name::{
 };
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
+use crate::offset::OffsetSafeRequirements;
 use crate::projection_pushdown::LambdaSafeProjectionPushdown;
 use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
 
@@ -37,6 +37,7 @@ mod explicit_repartition;
 mod filter_pushdown;
 mod input_file_name;
 mod join_reorder;
+mod offset;
 mod projection_pushdown;
 mod scan_partitions;
 mod select_semi_join_build_side;
@@ -69,7 +70,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(WindowTopN::new()));
     rules.push(Arc::new(WrapInputFileMetadataSource::new()));
     rules.push(Arc::new(PushDownInputFileMetadata::new()));
-    rules.push(Arc::new(EnsureRequirements::new()));
+    rules.push(Arc::new(OffsetSafeRequirements));
     rules.push(Arc::new(scan_partitions::OptimizeScanPartitions));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));

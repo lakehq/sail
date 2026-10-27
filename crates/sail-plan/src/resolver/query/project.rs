@@ -14,6 +14,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::qualifier_matches;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::exists::ExistsRewriter;
@@ -33,8 +34,7 @@ impl PlanResolver<'_> {
             Some(x) => self.resolve_query_plan_with_hidden_fields(x, state).await?,
             None => self.resolve_query_empty(true)?,
         };
-        let schema = input.schema();
-        let expr = self.resolve_named_expressions(expr, schema, state).await?;
+        let (input, expr) = self.resolve_projection_list(input, expr, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
@@ -62,20 +62,104 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Resolve aliases left to right, with input attributes taking precedence.
+    /// Scalar aliases are materialized so nondeterministic expressions are evaluated once.
+    #[expect(deprecated)]
+    pub(super) async fn resolve_projection_list(
+        &self,
+        mut input: LogicalPlan,
+        expressions: Vec<spec::Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
+        let schema = Arc::clone(input.schema());
+        if let Ok(exprs) = self
+            .resolve_named_expressions(expressions.clone(), &schema, state)
+            .await
+        {
+            return Ok((input, exprs));
+        }
+        let inlined = self
+            .resolve_lateral_expressions(expressions.clone(), &schema, state)
+            .await?;
+        if inlined.iter().any(|expr| {
+            !datafusion_expr::utils::find_aggregate_exprs(std::slice::from_ref(&expr.expr))
+                .is_empty()
+        }) {
+            return Ok((input, inlined));
+        }
+        let mut resolved = vec![];
+        for expression in expressions {
+            let named = match self
+                .resolve_named_expression(expression.clone(), &schema, state)
+                .await
+            {
+                Ok(named) => named,
+                Err(_) => {
+                    self.resolve_named_expression(expression, input.schema(), state)
+                        .await?
+                }
+            };
+            // Wildcards/generators are expanded by the regular projection rewrite.
+            if named.name.len() != 1 || matches!(named.expr, Expr::Wildcard { .. }) {
+                return Err(PlanError::analysis(
+                    "unsupported lateral alias with wildcard or generator",
+                ));
+            }
+            let field = state.register_field_name(named.name[0].clone());
+            let mut exprs = input
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            exprs.push(named.expr.alias(&field));
+            input = LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(input))?);
+            resolved.push(NamedExpr {
+                expr: Expr::Column(Column::new_unqualified(field)),
+                ..named
+            });
+        }
+        Ok((input, resolved))
+    }
+
+    pub(super) async fn resolve_lateral_expressions(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<NamedExpr>> {
+        let mut resolved = vec![];
+        for expression in expressions {
+            let mut scope =
+                state.enter_aggregate_scope(crate::resolver::state::AggregateState::Lateral {
+                    projections: resolved.clone(),
+                });
+            let named = self
+                .resolve_named_expression(expression, schema, scope.state())
+                .await?;
+            resolved.push(named);
+        }
+        Ok(resolved)
+    }
+
     pub(super) fn rewrite_wildcard(
         &self,
         input: LogicalPlan,
         expr: Vec<NamedExpr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
-        fn to_named_expr(expr: Expr, state: &PlanResolverState) -> PlanResult<Option<NamedExpr>> {
+        fn to_named_expr(
+            expr: Expr,
+            qualified: bool,
+            state: &PlanResolverState,
+        ) -> PlanResult<Option<NamedExpr>> {
             let Expr::Column(column) = expr else {
                 return Err(PlanError::invalid(
                     "column expected for expanded wildcard expression",
                 ));
             };
             let info = state.get_field_info(column.name())?;
-            if info.is_hidden() {
+            if info.is_hidden() && !qualified {
                 return Ok(None);
             }
             Ok(Some(NamedExpr::new(
@@ -140,7 +224,7 @@ impl PlanResolver<'_> {
                     options,
                 } => {
                     for e in expand_wildcard(schema, &input, Some(&options))? {
-                        projected.extend(to_named_expr(e, state)?)
+                        projected.extend(to_named_expr(e, false, state)?)
                     }
                     expand_outer_wildcard(None, schema, state, &mut projected)?;
                 }
@@ -149,15 +233,53 @@ impl PlanResolver<'_> {
                     qualifier: Some(qualifier),
                     options,
                 } => {
-                    let qualifier_in_input = schema
+                    let parts = state
+                        .relation_name(&qualifier)
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect();
+                    let qualifiers = schema
                         .iter()
-                        .any(|(q, _)| q.is_some_and(|q| *q == qualifier));
-                    if qualifier_in_input {
-                        for e in expand_qualified_wildcard(&qualifier, schema, Some(&options))? {
-                            projected.extend(to_named_expr(e, state)?)
+                        .filter_map(|(q, _)| q)
+                        .filter(|q| {
+                            qualifier_matches(
+                                Some(&parts),
+                                Some(q),
+                                self.config.case_sensitive,
+                                state,
+                            )
+                        })
+                        .cloned()
+                        .collect::<std::collections::HashSet<_>>();
+                    if !qualifiers.is_empty() {
+                        let expanded = qualifiers
+                            .iter()
+                            .map(|qualifier| {
+                                expand_qualified_wildcard(qualifier, schema, Some(&options))
+                            })
+                            .collect::<datafusion_common::Result<Vec<_>>>()?
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>();
+                        // Walk the schema to preserve source column order.
+                        for (q, field) in schema.iter() {
+                            if expanded.contains(&Expr::Column(Column::from((q, field)))) {
+                                projected.extend(to_named_expr(
+                                    Expr::Column(Column::from((q, field))),
+                                    true,
+                                    state,
+                                )?);
+                            }
+                        }
+                    } else {
+                        let before = projected.len();
+                        expand_outer_wildcard(Some(&qualifier), schema, state, &mut projected)?;
+                        if projected.len() == before {
+                            return Err(PlanError::analysis(format!(
+                                "cannot resolve wildcard: {qualifier}.*"
+                            )));
                         }
                     }
-                    expand_outer_wildcard(Some(&qualifier), schema, state, &mut projected)?;
                 }
                 _ => projected.push(NamedExpr {
                     name,
@@ -288,12 +410,20 @@ impl PlanResolver<'_> {
                 } else {
                     state.register_field_name(name)
                 };
+                let qualifier = if let Expr::Column(column) = &expr {
+                    column
+                        .relation
+                        .clone()
+                        .filter(|relation| relation.table() != datafusion_expr::UNNAMED_TABLE)
+                } else {
+                    None
+                };
                 if !metadata.is_empty() {
                     let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                     let field_metadata = Some(FieldMetadata::from(metadata_map));
                     Ok(expr.alias_with_metadata(field_id, field_metadata))
                 } else {
-                    Ok(expr.alias(field_id))
+                    Ok(expr.alias_qualified(qualifier, field_id))
                 }
             })
             .collect()

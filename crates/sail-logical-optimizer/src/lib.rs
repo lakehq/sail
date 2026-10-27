@@ -3,11 +3,14 @@ use std::sync::Arc;
 use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
+mod correlated_limit;
 mod lateral_join;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
+mod scalar_subquery_domain;
 mod scalar_subquery_keys;
+mod subquery_aliases;
 
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
@@ -22,8 +25,10 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
         function_rewrites: _,
         rules: built_in_rules,
     } = Analyzer::default();
-    let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
-        vec![Arc::new(ResolveLambdaVariables)];
+    let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
+        Arc::new(ResolveLambdaVariables),
+        Arc::new(subquery_aliases::NormalizeSubqueryAliases),
+    ];
     rules.extend(built_in_rules);
     // Iterator UDFs need partition streams and must be extracted before scalar folding.
     rules.push(Arc::new(ExtractScalarIteratorUDF));
@@ -38,10 +43,15 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     // Projection expressions (e.g. `LATERAL (SELECT t1.a + 1)`), rewriting
     // it into a CrossJoin + Projection. The remaining complex cases (OuterRef
     // in Filter/Aggregate) are left for DataFusion's `DecorrelateLateralJoin`.
-    let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
-        vec![Arc::new(DecorrelateLateralProjection::new())];
+    let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![
+        Arc::new(correlated_limit::DecorrelateLimit),
+        Arc::new(DecorrelateLateralProjection::new()),
+    ];
     for rule in rules {
         if rule.name() == ScalarSubqueryToJoin::new().name() {
+            custom.push(Arc::new(
+                scalar_subquery_domain::NormalizeScalarSubqueryDomain,
+            ));
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
         }
         custom.push(rule);

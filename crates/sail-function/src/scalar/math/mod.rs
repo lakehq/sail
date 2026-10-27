@@ -1,3 +1,4 @@
+pub mod decimal_divide;
 pub mod java_random;
 pub mod rand_poisson;
 pub mod randn;

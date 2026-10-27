@@ -27,21 +27,44 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let (expressions, _) = self
-            .resolve_missing_input_expressions(
-                order.iter().cloned().map(spec::Expr::SortOrder).collect(),
-                &input,
-                true,
-                state,
-            )
-            .await?;
-        let sorts = expressions
-            .into_iter()
-            .zip(order)
-            .map(|(expr, sort)| Self::sort_with_options(expr, sort.direction, sort.null_ordering))
-            .collect();
-        let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
         let output_schema = Arc::clone(input.schema());
+        let sorts = if is_global
+            && matches!(order.as_slice(), [sort]
+            if matches!(sort.child.as_ref(), spec::Expr::UnresolvedAttribute { name, .. }
+                if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("all")
+                && self.resolve_column_candidates(input.schema(), "all", None, state).is_empty()))
+        {
+            input
+                .schema()
+                .columns()
+                .into_iter()
+                .map(|column| {
+                    Self::sort_with_options(
+                        Expr::Column(column),
+                        order[0].direction.clone(),
+                        order[0].null_ordering.clone(),
+                    )
+                })
+                .collect()
+        } else {
+            let (expressions, _) = self
+                .resolve_missing_input_expressions(
+                    order.iter().cloned().map(spec::Expr::SortOrder).collect(),
+                    &input,
+                    true,
+                    state,
+                )
+                .await?;
+            expressions
+                .into_iter()
+                .zip(order)
+                .map(|(expr, sort)| {
+                    Self::sort_with_options(expr, sort.direction, sort.null_ordering)
+                })
+                .collect()
+        };
+        let sorts = Self::rebase_query_sort_orders(sorts, &input)?;
+        let (input, sorts) = Self::materialize_sort_aggregates(input, sorts, state)?;
         let (input, sorts) = if is_global {
             // Visible sort orders need no recovery, so leave their rewrite to the builder.
             // Rewriting scans the input projection for each sort order.
@@ -77,6 +100,107 @@ impl PlanResolver<'_> {
             })
         };
         Self::restore_missing_input_output(plan, output_schema)
+    }
+
+    /// Materialize aggregates mentioned only by ORDER BY, carrying their outputs
+    /// through intervening projections/HAVING and restoring the visible schema above.
+    fn materialize_sort_aggregates(
+        input: LogicalPlan,
+        sorts: Vec<Sort>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<Sort>)> {
+        let aggregates = datafusion_expr::utils::find_aggregate_exprs(
+            &sorts
+                .iter()
+                .map(|sort| sort.expr.clone())
+                .collect::<Vec<_>>(),
+        );
+        if aggregates.is_empty() {
+            return Ok((input, sorts));
+        }
+        fn extend(
+            plan: LogicalPlan,
+            aggregates: &[Expr],
+            state: &mut PlanResolverState,
+        ) -> PlanResult<(LogicalPlan, Vec<(Expr, Expr)>)> {
+            match plan {
+                LogicalPlan::Aggregate(aggregate) => {
+                    let mut exprs = aggregate.aggr_expr.clone();
+                    let mut replacements = vec![];
+                    for expr in aggregates {
+                        let column = if let Some(index) = exprs
+                            .iter()
+                            .position(|existing| existing.clone().unalias() == *expr)
+                        {
+                            Expr::Column(Column::from(
+                                aggregate
+                                    .schema
+                                    .qualified_field(aggregate.group_expr.len() + index),
+                            ))
+                        } else {
+                            let name = state.register_field_name("");
+                            exprs.push(expr.clone().alias(&name));
+                            Expr::Column(Column::new_unqualified(name))
+                        };
+                        replacements.push((expr.clone(), column));
+                    }
+                    Ok((
+                        LogicalPlan::Aggregate(Aggregate::try_new(
+                            aggregate.input,
+                            aggregate.group_expr,
+                            exprs,
+                        )?),
+                        replacements,
+                    ))
+                }
+                LogicalPlan::Projection(projection) => {
+                    let (input, replacements) =
+                        extend(Arc::unwrap_or_clone(projection.input), aggregates, state)?;
+                    let mut exprs = projection.expr;
+                    for (_, column) in &replacements {
+                        if !exprs.contains(column) {
+                            exprs.push(column.clone());
+                        }
+                    }
+                    Ok((
+                        LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(input))?),
+                        replacements,
+                    ))
+                }
+                LogicalPlan::Filter(mut filter) => {
+                    for expr in aggregates {
+                        if !filter.input.exists(|plan| Ok(matches!(plan, LogicalPlan::Aggregate(aggregate)
+                            if aggregate.aggr_expr.iter().any(|existing| existing.clone().unalias() == *expr))))? {
+                            return Err(crate::error::PlanError::analysis("cannot resolve new ORDER BY aggregate through HAVING"));
+                        }
+                    }
+                    let (input, replacements) =
+                        extend(Arc::unwrap_or_clone(filter.input), aggregates, state)?;
+                    filter.input = Arc::new(input);
+                    Ok((LogicalPlan::Filter(filter), replacements))
+                }
+                plan => Ok((plan, vec![])),
+            }
+        }
+        let (input, replacements) = extend(input, &aggregates, state)?;
+        let sorts = sorts
+            .into_iter()
+            .map(|sort| {
+                let expr = sort
+                    .expr
+                    .transform_up(|expr| {
+                        Ok(
+                            match replacements.iter().find(|(original, _)| original == &expr) {
+                                Some((_, column)) => Transformed::yes(column.clone()),
+                                None => Transformed::no(expr),
+                            },
+                        )
+                    })?
+                    .data;
+                Ok(Sort { expr, ..sort })
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        Ok((input, sorts))
     }
 
     /// Spark adds the attributes missing from sort orders to every operator between the

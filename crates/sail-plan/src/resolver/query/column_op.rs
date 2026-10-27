@@ -70,21 +70,6 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
 
-        let mut inverse_map: HashMap<String, HashSet<String>> = HashMap::new();
-        for (from, to) in rename_columns_map
-            .iter()
-            .map(|(a, b)| (a.as_ref().to_string(), b.as_ref().to_string()))
-        {
-            let from_froms = inverse_map.remove(&from).unwrap_or_default(); //.unwrap_or_else(|| HashSet::new());
-            let to_froms = inverse_map.entry(to.clone()).or_default();
-            to_froms.extend(from_froms);
-            to_froms.insert(from);
-        }
-
-        let rename_columns_map: HashMap<String, String> = inverse_map
-            .into_iter()
-            .flat_map(|(to, froms)| froms.into_iter().map(move |from| (from, to.clone())))
-            .collect();
         let schema = input.schema();
         let expr = schema
             .columns()
@@ -93,9 +78,18 @@ impl PlanResolver<'_> {
                 let name = state.get_field_info(column.name())?.name().to_string();
                 // Spark aliases each renamed column, even to its own name, so only
                 // the columns that are not renamed remain the same attributes.
-                let field_id = match rename_columns_map.get(&name) {
-                    Some(n) => state.register_field_name(n),
-                    None => state.register_identity_field(name, column.name())?,
+                let mut renamed = name.clone();
+                let mut changed = false;
+                for (from, to) in &rename_columns_map {
+                    if self.merge_name_key(&renamed) == self.merge_name_key(from.as_ref()) {
+                        renamed = to.as_ref().to_string();
+                        changed = true;
+                    }
+                }
+                let field_id = if changed {
+                    state.register_field_name(renamed)
+                } else {
+                    state.register_identity_field(name, column.name())?
                 };
                 Ok(Expr::Column(column).alias(field_id))
             })
@@ -168,37 +162,29 @@ impl PlanResolver<'_> {
         type AliasEntry = (Expr, bool, Option<Vec<(String, String)>>);
 
         let input = self.resolve_query_plan(input, state).await?;
-        let schema = input.schema();
-        // We use `IndexMap` to ensure the result schema has a deterministic column order.
-        let mut aliases: IndexMap<String, AliasEntry> = async {
-            let mut results = IndexMap::new();
-            for alias in aliases {
-                let (name, expr, metadata) = match alias {
-                    spec::Expr::Alias {
-                        name,
-                        expr,
-                        metadata,
-                    } => {
-                        let name = name
-                            .one()
-                            .map_err(|_| PlanError::invalid("multi-alias for column"))?;
-                        (name, *expr, metadata)
-                    }
-                    _ => return Err(PlanError::invalid("alias expression expected for column")),
-                };
-                let expr = self.resolve_expression(expr, schema, state).await?;
-                // Replacements are new attributes in Spark, even when their value is
-                // another column. Only untouched columns inherit their input plan IDs.
-                let expr = if matches!(expr, Expr::Column(_)) {
-                    expr.alias(name.as_ref())
-                } else {
-                    expr
-                };
-                results.insert(name.into(), (expr, false, metadata));
-            }
-            Ok(results) as PlanResult<_>
+        let schema = Arc::clone(input.schema());
+        if aliases
+            .iter()
+            .any(|alias| !matches!(alias, spec::Expr::Alias { .. }))
+        {
+            return Err(PlanError::invalid("alias expression expected for column"));
         }
-        .await?;
+        let (input, resolved) = self.resolve_projection_list(input, aliases, state).await?;
+        let mut aliases: IndexMap<String, AliasEntry> = resolved
+            .into_iter()
+            .map(|named| {
+                let name = named
+                    .name
+                    .one()
+                    .map_err(|_| PlanError::invalid("multi-alias for column"))?;
+                let expr = if matches!(named.expr, Expr::Column(_)) {
+                    named.expr.alias(&name)
+                } else {
+                    named.expr
+                };
+                Ok((name, (expr, false, Some(named.metadata))))
+            })
+            .collect::<PlanResult<_>>()?;
         // Index replacements once instead of scanning them for every input column.
         let mut alias_indices = HashMap::with_capacity(aliases.len());
         for (index, name) in aliases.keys().enumerate() {

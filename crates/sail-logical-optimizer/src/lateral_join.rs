@@ -74,6 +74,7 @@ impl OptimizerRule for DecorrelateLateralProjection {
         let join_filter = join.filter;
 
         let left: LogicalPlan = Arc::unwrap_or_clone(join.left);
+        let left_schema = Arc::clone(left.schema());
 
         // Unwrap right: (Subquery ->) (SubqueryAlias ->) Projection
         let right_unwrapped = match Arc::unwrap_or_clone(join.right) {
@@ -109,7 +110,7 @@ impl OptimizerRule for DecorrelateLateralProjection {
         for expr in right_exprs {
             let replaced = expr
                 .transform(|e| match e {
-                    Expr::OuterReferenceColumn(_field, col) => {
+                    Expr::OuterReferenceColumn(_field, col) if left_schema.has_column(&col) => {
                         Ok(Transformed::yes(Expr::Column(col)))
                     }
                     _ => Ok(Transformed::no(e)),

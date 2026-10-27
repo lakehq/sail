@@ -180,6 +180,14 @@ def query_schema(docstring, query, spark):
     assert_schema_tree(df, docstring)
 
 
+@then("query column types")
+def query_column_types(datatable, query, spark):
+    """Compare ordered column names and types, without nullability or metadata."""
+    header, *columns = datatable
+    assert header == ["column", "type"]
+    assert [list(column) for column in spark.sql(query).dtypes] == columns
+
+
 @when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
 def dataframe_for(case, spark):
     """Builds a DataFrame for a named BDD case."""
