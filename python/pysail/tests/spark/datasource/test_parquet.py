@@ -1,6 +1,7 @@
 import base64
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pyarrow as pa
@@ -8,7 +9,8 @@ import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
-from pyspark.sql.types import TimestampType
+from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.types import TimestampNTZType, TimestampType
 
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
