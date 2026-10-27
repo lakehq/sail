@@ -46,6 +46,29 @@ Feature: vector_sum
         | distinct_total | total       |
         | [4.0, 6.0]     | [5.0, 8.0]  |
 
+    Scenario: partitioned running window sum skips null vectors
+      When query
+        """
+        SELECT k, n,
+          vector_sum(v) OVER (
+            PARTITION BY k ORDER BY n
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+          ) AS total
+        FROM VALUES
+          (1, 1, array(1.0F, 2.0F)),
+          (1, 2, array(3.0F, 4.0F)),
+          (2, 1, array(5.0F, 6.0F)),
+          (2, 2, CAST(NULL AS ARRAY<FLOAT>))
+        AS t(k, n, v)
+        ORDER BY k, n
+        """
+      Then query result ordered
+        | k | n | total      |
+        | 1 | 1 | [1.0, 2.0] |
+        | 1 | 2 | [4.0, 6.0] |
+        | 2 | 1 | [5.0, 6.0] |
+        | 2 | 2 | [5.0, 6.0] |
+
   Rule: Null handling
 
     Scenario: null vectors and vectors containing null elements are skipped

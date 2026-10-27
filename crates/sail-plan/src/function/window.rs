@@ -38,6 +38,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
@@ -844,6 +845,10 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("var_pop", F::aggregate(variance::var_pop_udaf)),
         ("var_samp", F::aggregate(variance::var_samp_udaf)),
         ("variance", F::aggregate(variance::var_samp_udaf)),
+        (
+            "vector_sum",
+            F::aggregate(|| Arc::new(AggregateUDF::from(VectorSum::new()))),
+        ),
     ]
 }
 
