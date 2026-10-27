@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType, Field as ArrowField, Fields, Schema as ArrowSchema, SchemaRef,
+};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableSource};
@@ -621,6 +623,79 @@ fn describe_sort_order(order: &SortOrder, schema: &Schema) -> Result<String> {
         .map(|fields| fields.join(", "))
 }
 
+/// Iceberg accepts only UTC timestamp labels, while Sail labels TIMESTAMP values with the session
+/// time zone. Relabeling keeps the stored instants.
+fn relabel_timestamps_as_utc(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::expressions::{CastExpr, Column};
+    use datafusion::physical_plan::projection::ProjectionExec;
+
+    let schema = input.schema();
+    let relabeled = schema
+        .fields()
+        .iter()
+        .map(|field| relabel_timestamp_field(field.as_ref()))
+        .collect::<Vec<_>>();
+    if schema
+        .fields()
+        .iter()
+        .zip(&relabeled)
+        .all(|(field, relabeled)| field.data_type() == relabeled.data_type())
+    {
+        return Ok(input);
+    }
+    let expressions = schema
+        .fields()
+        .iter()
+        .zip(relabeled)
+        .enumerate()
+        .map(|(index, (field, relabeled))| {
+            let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+            let expression: Arc<dyn PhysicalExpr> = if field.data_type() == relabeled.data_type() {
+                column
+            } else {
+                Arc::new(CastExpr::new(column, relabeled.data_type().clone(), None))
+            };
+            (expression, field.name().clone())
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
+}
+
+/// Relabels TIMESTAMP values with UTC, including in nested fields, like Delta's schema normalization.
+fn relabel_timestamp_field(field: &ArrowField) -> ArrowField {
+    let data_type = match field.data_type() {
+        DataType::Timestamp(unit, Some(tz)) if !matches!(tz.as_ref(), "UTC" | "+00:00") => {
+            DataType::Timestamp(*unit, Some("UTC".into()))
+        }
+        data_type => transform_nested_fields(data_type, relabel_timestamp_field),
+    };
+    field.clone().with_data_type(data_type)
+}
+
+// Copied from the Delta Lake schema normalization, where it is private.
+fn transform_nested_fields(
+    data_type: &DataType,
+    transform: fn(&ArrowField) -> ArrowField,
+) -> DataType {
+    match data_type {
+        DataType::Struct(fields) => {
+            let transformed_fields = fields
+                .iter()
+                .map(|field| Arc::new(transform(field.as_ref())))
+                .collect::<Fields>();
+            DataType::Struct(transformed_fields)
+        }
+        DataType::List(field) => DataType::List(Arc::new(transform(field.as_ref()))),
+        DataType::LargeList(field) => DataType::LargeList(Arc::new(transform(field.as_ref()))),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(Arc::new(transform(field.as_ref())), *size)
+        }
+        DataType::Map(field, sorted) => DataType::Map(Arc::new(transform(field.as_ref())), *sorted),
+        _ => data_type.clone(),
+    }
+}
+
 fn validate_scoped_overwrite_table(mode: &PhysicalSinkMode, table_exists: bool) -> Result<()> {
     if matches!(mode, PhysicalSinkMode::OverwritePartitions) && !table_exists {
         return plan_err!("Iceberg dynamic partition overwrite requires an existing table");
@@ -635,6 +710,8 @@ pub(crate) async fn plan_iceberg_write(
     node: &IcebergWriteNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     use datafusion::physical_plan::empty::EmptyExec;
+
+    let physical_input = relabel_timestamps_as_utc(physical_input)?;
 
     let IcebergWriteNodeOptions {
         path,
