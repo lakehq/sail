@@ -202,7 +202,6 @@ use sail_function::scalar::json::{JsonObjectKeys, SparkFromJson, SparkSchemaOfJs
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::map_from::{SparkMapFromArrays, SparkMapFromEntries};
 use sail_function::scalar::map::str_to_map::StrToMap;
-use sail_function::scalar::math::decimal_divide::DecimalDivide;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -3535,9 +3534,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkToChar(r#gen::SparkToCharUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkToChar::new(ansi_mode))));
             }
-            UdfKind::DecimalDivide(r#gen::DecimalDivideUdf { ansi_mode }) => {
-                return Ok(Arc::new(ScalarUDF::from(DecimalDivide::new(ansi_mode))));
-            }
             UdfKind::SparkAbs(r#gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
@@ -4092,10 +4088,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkToChar>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkToChar(r#gen::SparkToCharUdf { ansi_mode })
-        } else if let Some(func) = node.inner().downcast_ref::<DecimalDivide>() {
-            UdfKind::DecimalDivide(r#gen::DecimalDivideUdf {
-                ansi_mode: func.ansi_mode,
-            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(r#gen::SparkAbsUdf { ansi_mode })

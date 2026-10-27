@@ -99,10 +99,10 @@ def test_divide(spark):
         Row(result=any_of(Decimal("1.500000"), Decimal("1.50000")))
     ]
     assert spark.sql("SELECT 2 / Decimal(3) AS result").collect() == [
-        Row(result=any_of(Decimal("0.66666666667"), Decimal("0.6667")))
+        Row(result=any_of(Decimal("0.66666666667"), Decimal("0.6666")))
     ]
     assert spark.sql("SELECT 2.0 / 3.0 AS result").collect() == [
-        Row(result=any_of(Decimal("0.666667"), Decimal("0.66667")))
+        Row(result=any_of(Decimal("0.666667"), Decimal("0.66666")))
     ]
     if not is_jvm_spark():
         pytest.skip("the following tests are not supported in Sail yet")

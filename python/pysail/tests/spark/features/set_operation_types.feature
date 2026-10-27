@@ -101,25 +101,6 @@ Feature: Set operation multiplicity and type coercion
       | column | type          |
       | a      | array<bigint> |
 
-  Scenario: Decimal division rounds fractional results to the output scale
-    When query
-      """
-      SELECT CAST(v AS DECIMAL(10, 2)) / 3 AS x
-      FROM t
-      """
-    Then query result collected
-      | x         |
-      | NULL      |
-      | 13.333333 |
-      | 16.666667 |
-      | 23.333333 |
-      | 3.333333  |
-      | 3.333333  |
-      | 6.666667  |
-    Then query column types
-      | column | type          |
-      | x      | decimal(14,6) |
-
   Scenario: INTERSECT ALL emits one row when only one right copy exists
     When query
       """
@@ -190,66 +171,6 @@ Feature: Set operation multiplicity and type coercion
     Then query column types
       | column | type   |
       | x      | bigint |
-
-  Scenario Outline: Decimal division rounds halfway values away from zero
-    When query
-      """
-      SELECT CAST(<numerator> AS DECIMAL(10, 2)) / CAST(<denominator> AS DECIMAL(3, 0)) AS x
-      """
-    Then query result collected
-      | x          |
-      | <expected> |
-
-    Examples:
-      | numerator | denominator | expected  |
-      | 20        | 3           | 6.666667  |
-      | -20       | 3           | -6.666667 |
-      | 1         | 128         | 0.007813  |
-      | -1        | 128         | -0.007813 |
-
-  Scenario Outline: Decimal division uses the widened UNION input precision
-    Given config spark.sql.ansi.enabled = <ansi>
-    When query
-      """
-      SELECT x / 3 AS result
-      FROM (SELECT CAST(1 AS DECIMAL(5, 2)) AS x
-            UNION ALL SELECT CAST(999999999999 AS DECIMAL(20, 2)) AS x)
-      """
-    Then query result collected
-      | result              |
-      | 0.333333            |
-      | 333333333333.000000  |
-    Then query column types
-      | column | type          |
-      | result | decimal(24,6) |
-
-    Examples:
-      | ansi  |
-      | true  |
-      | false |
-
-  Scenario: Decimal division uses a widened integer UNION argument
-    When query
-      """
-      SELECT x / CAST(4 AS DECIMAL(3, 0)) AS result
-      FROM (SELECT CAST(1 AS SMALLINT) AS x UNION ALL SELECT 10000000000L AS x)
-      """
-    Then query result collected
-      | result            |
-      | 0.2500          |
-      | 2500000000.0000 |
-
-  Scenario: Decimal division retains a widened UNION scale
-    When query
-      """
-      SELECT x / 4 AS result
-      FROM (SELECT CAST(1 AS DECIMAL(5, 2)) AS x
-            UNION ALL SELECT CAST(0.00000001 AS DECIMAL(20, 8)) AS x)
-      """
-    Then query result collected
-      | result         |
-      | 0.250000000000 |
-      | 2.500E-9       |
 
   Scenario Outline: Set operations widen their output before matching rows
     When query
