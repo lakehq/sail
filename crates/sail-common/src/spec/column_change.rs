@@ -28,7 +28,7 @@ pub enum ColumnChange<T = DataType> {
     },
     Comment {
         path: Vec<String>,
-        comment: String,
+        comment: Option<String>,
     },
     Nullability {
         path: Vec<String>,

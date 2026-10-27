@@ -90,6 +90,7 @@ impl ReadFormat for ParquetReadFormat {
             .as_deref()
             .map(parse_coerce_int96_string)
             .transpose()?;
+        let coerce_int96_tz = options.global.coerce_int96_tz.as_deref().map(Arc::from);
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata_size_hint = options.global.metadata_size_hint;
@@ -117,8 +118,7 @@ impl ReadFormat for ParquetReadFormat {
                 // reads the `ARROW:schema` key-value hint and then applies `coerce_int96` to the
                 // INT96-derived columns. Reproduced here (rather than calling `fetch_schema()`)
                 // so the inferred types stay identical to today for hinted and INT96 columns.
-                // `coerce_int96_tz` is never set on the reader, so INT96 columns coerce to a
-                // `None`-timezone timestamp, matching `fetch_schema`'s default.
+                // INT96 columns coerce to a UTC timestamp, matching the reader's `coerce_int96_tz`.
                 let schema = parquet_to_arrow_schema(
                     file_metadata.schema_descr(),
                     file_metadata.key_value_metadata(),
@@ -126,7 +126,9 @@ impl ReadFormat for ParquetReadFormat {
                 let schema = coerce_int96
                     .as_ref()
                     .and_then(|time_unit| {
-                        Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit).coerce()
+                        Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit)
+                            .with_timezone(coerce_int96_tz.clone())
+                            .coerce()
                     })
                     .unwrap_or(schema);
                 // Metadata-free physical schema: no `ARROW:schema` hint, so an Arrow-only

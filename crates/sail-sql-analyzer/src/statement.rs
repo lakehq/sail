@@ -2740,7 +2740,7 @@ fn from_ast_alter_table_operation(
             let change = match operation {
                 AlterColumnOperation::Comment(_, value) => spec::ColumnChange::Comment {
                     path,
-                    comment: from_ast_string(value)?,
+                    comment: Some(from_ast_string(value)?),
                 },
                 AlterColumnOperation::SetNotNull(..) => spec::ColumnChange::Nullability {
                     path,

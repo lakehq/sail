@@ -382,11 +382,11 @@ impl PlanResolver<'_> {
             CommandNode::CommentOnDatabase { .. } => {
                 Err(PlanError::todo("CommandNode::CommentOnDatabase"))
             }
-            CommandNode::CommentOnTable { .. } => {
-                Err(PlanError::todo("CommandNode::CommentOnTable"))
+            CommandNode::CommentOnTable { table, value } => {
+                self.resolve_comment_on_table(table, value).await
             }
-            CommandNode::CommentOnColumn { .. } => {
-                Err(PlanError::todo("CommandNode::CommentOnColumn"))
+            CommandNode::CommentOnColumn { column, value } => {
+                self.resolve_comment_on_column(column, value).await
             }
         }
     }
