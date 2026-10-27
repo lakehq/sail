@@ -1,5 +1,13 @@
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr-common/src/type_coercion/binary.rs
-
+//! [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr-common/src/type_coercion/binary.rs
+//!
+//! # Intentional divergences from Spark
+//!
+//! Sail diverges from Spark only when correctness is preserved: to fix Spark's bugs or incorrect
+//! errors, to replace undesirable Spark inconsistencies with more consistent behavior within Sail,
+//! or as a deliberate design choice. Each divergence below states which.
+//!
+//! - Explicit casts: `CAST(expr AS type)` supports some casts that Spark rejects.
+//!
 //! Coercion rules for matching argument types for binary operators
 
 // The file is copied as a whole, including the functions that Sail does not use.

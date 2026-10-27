@@ -1,26 +1,33 @@
-use std::borrow::Cow;
-use std::sync::{Arc, LazyLock};
+//! [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/analyzer/type_coercion.rs
+//!
+//! Spark-compatible type coercion for Sail's logical analyzer.
+//!
+//! Spark implements type coercion as Catalyst analyzer rules in the `Resolution` batch.
+//! `Analyzer.scala` is `AnsiTypeCoercion.typeCoercionRules` when ANSI mode is enabled, otherwise
+//! `TypeCoercion.typeCoercionRules`, and inserts into `Batch("Resolution", fixedPoint, ...)`.
+//!
+//! Spark reference points:
+//! - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/Analyzer.scala:411`
+//! - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/Analyzer.scala:502`
+//! - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala:47`
+//! - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiTypeCoercion.scala:76`
+//! - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercionBase.scala:56`
+//! - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala:364`
+//! - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/resolver/CoercesExpressionTypes.scala:65`
+//!
+//! This rule starts from DataFusion's analyzer coercion and keeps DataFusion behavior where it is
+//! already more permissive than Spark. Sail-specific changes should only add cases Spark accepts
+//! but DataFusion rejects, or resolve conflicts in favor of Spark semantics, except for the
+//! intentional divergences below.
+//!
+//! # Intentional divergences from Spark
+//!
+//! Sail diverges from Spark only when correctness is preserved: to fix Spark's bugs or incorrect
+//! errors, to replace undesirable Spark inconsistencies with more consistent behavior within Sail,
+//! or as a deliberate design choice. Each divergence below states which.
+//!
+//! - Explicit casts: `CAST(expr AS type)` supports some casts that Spark rejects.
 
-/// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/optimizer/src/analyzer/type_coercion.rs
-///
-/// Spark-compatible type coercion for Sail's logical analyzer.
-///
-/// Spark implements type coercion as Catalyst analyzer rules in the `Resolution` batch.
-/// `Analyzer.scala` is `AnsiTypeCoercion.typeCoercionRules` when ANSI mode is enabled, otherwise
-/// `TypeCoercion.typeCoercionRules`, and inserts into `Batch("Resolution", fixedPoint, ...)`.
-///
-/// Spark reference points:
-/// - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/Analyzer.scala:411`
-/// - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/Analyzer.scala:502`
-/// - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala:47`
-/// - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiTypeCoercion.scala:76`
-/// - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercionBase.scala:56`
-/// - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala:364`
-/// - `opt/spark/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/resolver/CoercesExpressionTypes.scala:65`
-///
-/// This rule starts from DataFusion's analyzer coercion and keeps DataFusion behavior where it is
-/// already more permissive than Spark. Sail-specific changes should only add cases Spark accepts
-/// but DataFusion rejects, or resolve conflicts in favor of Spark semantics.
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
@@ -45,6 +52,8 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
+use std::borrow::Cow;
+use std::sync::{Arc, LazyLock};
 // DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
 #[expect(clippy::disallowed_types)]
 use datafusion_expr::{
