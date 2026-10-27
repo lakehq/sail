@@ -202,9 +202,7 @@ impl LakeSource for DeltaLakeSource {
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
-        let (schema, properties) =
-            infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
-        Ok(LakeSourceMetadata { schema, properties })
+        infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await
     }
 
     async fn create_table_metadata(
