@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -9,6 +10,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Float32Type};
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use ordered_float::OrderedFloat;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VectorSum {
@@ -51,36 +53,62 @@ impl AggregateUDFImpl for VectorSum {
         Ok(Self::data_type())
     }
 
-    fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        let state_type = if args.is_distinct {
+            DataType::List(Arc::new(Field::new("item", Self::data_type(), false)))
+        } else {
+            Self::data_type()
+        };
         Ok(vec![Arc::new(Field::new(
-            "vector_sum",
-            Self::data_type(),
+            if args.is_distinct {
+                "distinct_vector_sum"
+            } else {
+                "vector_sum"
+            },
+            state_type,
             true,
         ))])
     }
 
-    fn accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VectorSumAccumulator::default()))
+    fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(VectorSumAccumulator::new(args.is_distinct)))
     }
 }
 
 #[derive(Debug, Default)]
 struct VectorSumAccumulator {
     sum: Option<Vec<f32>>,
+    seen: Option<HashSet<Vec<OrderedFloat<f32>>>>,
+    vectors: Vec<Vec<f32>>,
 }
 
 impl VectorSumAccumulator {
+    fn new(is_distinct: bool) -> Self {
+        Self {
+            seen: is_distinct.then(HashSet::new),
+            ..Self::default()
+        }
+    }
+
     fn add(&mut self, vector: &[f32]) -> Result<()> {
+        if let Some(sum) = &self.sum
+            && sum.len() != vector.len()
+        {
+            return exec_err!(
+                "vector_sum requires vectors with matching dimensions, got {} and {}",
+                sum.len(),
+                vector.len()
+            );
+        }
+        if let Some(seen) = &mut self.seen {
+            if !seen.insert(vector.iter().copied().map(OrderedFloat).collect()) {
+                return Ok(());
+            }
+            self.vectors.push(vector.to_vec());
+        }
         match &mut self.sum {
             None => self.sum = Some(vector.to_vec()),
             Some(sum) => {
-                if sum.len() != vector.len() {
-                    return exec_err!(
-                        "vector_sum requires vectors with matching dimensions, got {} and {}",
-                        sum.len(),
-                        vector.len()
-                    );
-                }
                 for (total, value) in sum.iter_mut().zip(vector) {
                     *total += value;
                 }
@@ -123,6 +151,49 @@ impl VectorSumAccumulator {
         };
         Ok(ScalarValue::List(Arc::new(list)))
     }
+
+    fn distinct_state(&self) -> Result<ScalarValue> {
+        let field = Arc::new(Field::new("item", VectorSum::data_type(), false));
+        if self.sum.is_none() {
+            return Ok(ScalarValue::List(Arc::new(ListArray::new_null(field, 1))));
+        }
+
+        let mut offsets = Vec::with_capacity(self.vectors.len() + 1);
+        let mut values = Vec::new();
+        let mut offset = 0_i32;
+        offsets.push(offset);
+        for vector in &self.vectors {
+            let len = i32::try_from(vector.len()).map_err(|_| {
+                datafusion_common::DataFusionError::Execution(
+                    "vector_sum dimension exceeds the maximum list size".to_string(),
+                )
+            })?;
+            offset = offset.checked_add(len).ok_or_else(|| {
+                datafusion_common::DataFusionError::Execution(
+                    "vector_sum state exceeds the maximum list size".to_string(),
+                )
+            })?;
+            offsets.push(offset);
+            values.extend_from_slice(vector);
+        }
+        let count = i32::try_from(self.vectors.len()).map_err(|_| {
+            datafusion_common::DataFusionError::Execution(
+                "vector_sum state exceeds the maximum list size".to_string(),
+            )
+        })?;
+        let vectors = ListArray::new(
+            Arc::new(Field::new("item", DataType::Float32, false)),
+            OffsetBuffer::new(offsets.into()),
+            Arc::new(Float32Array::from(values)),
+            None,
+        );
+        Ok(ScalarValue::List(Arc::new(ListArray::new(
+            field,
+            OffsetBuffer::new(vec![0, count].into()),
+            Arc::new(vectors),
+            None,
+        ))))
+    }
 }
 
 impl Accumulator for VectorSumAccumulator {
@@ -142,12 +213,28 @@ impl Accumulator for VectorSumAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.result()?])
+        Ok(vec![if self.seen.is_some() {
+            self.distinct_state()?
+        } else {
+            self.result()?
+        }])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         match states {
-            [array] if matches!(array.data_type(), DataType::List(_)) => {
+            [array]
+                if self.seen.is_some()
+                    && matches!(array.data_type(), DataType::List(field) if field.data_type() == &VectorSum::data_type()) =>
+            {
+                let states = as_list_array(array);
+                for row in 0..states.len() {
+                    if !states.is_null(row) {
+                        self.update(as_list_array(&states.value(row)))?;
+                    }
+                }
+                Ok(())
+            }
+            [array] if self.seen.is_none() && matches!(array.data_type(), DataType::List(_)) => {
                 self.update(as_list_array(array))
             }
             _ => exec_err!("vector_sum expects one list state"),
@@ -160,6 +247,19 @@ impl Accumulator for VectorSumAccumulator {
                 .sum
                 .as_ref()
                 .map_or(0, |sum| sum.capacity() * size_of::<f32>())
+            + self.vectors.capacity() * size_of::<Vec<f32>>()
+            + self
+                .vectors
+                .iter()
+                .map(|v| v.capacity() * size_of::<f32>())
+                .sum::<usize>()
+            + self.seen.as_ref().map_or(0, |seen| {
+                seen.capacity() * size_of::<Vec<OrderedFloat<f32>>>()
+                    + seen
+                        .iter()
+                        .map(|v| v.capacity() * size_of::<OrderedFloat<f32>>())
+                        .sum::<usize>()
+            })
     }
 }
 
@@ -214,7 +314,10 @@ mod tests {
             left.add(&[1.0]),
             Err(error) if error.to_string().contains("matching dimensions")
         ));
-        let mut empty = VectorSumAccumulator { sum: Some(vec![]) };
+        let mut empty = VectorSumAccumulator {
+            sum: Some(vec![]),
+            ..Default::default()
+        };
         assert!(left.merge_batch(&[empty.state()?[0].to_array()?]).is_err());
         Ok(())
     }
@@ -228,6 +331,37 @@ mod tests {
         let mut acc = VectorSumAccumulator::default();
         acc.update_batch(&[Arc::new(vectors)])?;
         assert_eq!(acc.sum, Some(vec![4.0, 6.0]));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_states_deduplicate_across_partitions() -> Result<()> {
+        let vectors = ListArray::from_iter_primitive::<Float32Type, _, _>(vec![
+            None,
+            Some(vec![Some(8.0), None]),
+            Some(vec![Some(1.0), Some(2.0)]),
+            Some(vec![Some(1.0), Some(2.0)]),
+        ]);
+        let mut left = VectorSumAccumulator::new(true);
+        left.update_batch(&[Arc::new(vectors)])?;
+        let mut right = VectorSumAccumulator::new(true);
+        right.add(&[1.0, 2.0])?;
+        right.add(&[3.0, 4.0])?;
+        left.merge_batch(&[right.state()?[0].to_array()?])?;
+        assert_eq!(left.sum, Some(vec![4.0, 6.0]));
+        assert_eq!(left.vectors.len(), 2);
+        assert!(left.merge_batch(&[right.state()?[0].to_array()?]).is_ok());
+        assert_eq!(left.sum, Some(vec![4.0, 6.0]));
+
+        let mut empty = VectorSumAccumulator::new(true);
+        left.merge_batch(&[empty.state()?[0].to_array()?])?;
+        assert_eq!(left.sum, Some(vec![4.0, 6.0]));
+        empty.add(&[])?;
+        assert!(left.merge_batch(&[empty.state()?[0].to_array()?]).is_err());
+        let mut empty_group = VectorSumAccumulator::new(true);
+        empty_group.merge_batch(&[empty.state()?[0].to_array()?])?;
+        assert!(!empty_group.evaluate()?.is_null());
+        assert_eq!(empty_group.sum, Some(vec![]));
         Ok(())
     }
 }

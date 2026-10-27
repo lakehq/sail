@@ -32,6 +32,20 @@ Feature: vector_sum
         | total |
         | []    |
 
+    Scenario: distinct vectors are counted only once alongside an ordinary sum
+      When query
+        """
+        SELECT vector_sum(DISTINCT v) AS distinct_total, vector_sum(v) AS total
+        FROM VALUES
+          (array(1.0F, 2.0F)),
+          (array(1.0F, 2.0F)),
+          (array(3.0F, 4.0F))
+        AS t(v)
+        """
+      Then query result
+        | distinct_total | total       |
+        | [4.0, 6.0]     | [5.0, 8.0]  |
+
   Rule: Null handling
 
     Scenario: null vectors and vectors containing null elements are skipped
@@ -61,6 +75,21 @@ Feature: vector_sum
       Then query result
         | total |
         | NULL  |
+
+    Scenario: distinct aggregation skips null vectors but keeps an empty vector
+      When query
+        """
+        SELECT vector_sum(DISTINCT v) AS total
+        FROM VALUES
+          (CAST(NULL AS ARRAY<FLOAT>)),
+          (array(CAST(NULL AS FLOAT))),
+          (CAST(array() AS ARRAY<FLOAT>)),
+          (CAST(array() AS ARRAY<FLOAT>))
+        AS t(v)
+        """
+      Then query result
+        | total |
+        | []    |
 
     Scenario: an empty group returns NULL
       When query
