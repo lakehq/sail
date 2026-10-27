@@ -1,0 +1,28 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sail-server-worker-manager
+  labels:
+    app.kubernetes.io/name: sail
+    app.kubernetes.io/component: spark-server
+rules:
+  # Each session's worker manager gets the server pod to create worker owner
+  # references, creates workers, and deletes its labeled worker collection.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "create", "deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sail-server-worker-manager
+  labels:
+    app.kubernetes.io/name: sail
+    app.kubernetes.io/component: spark-server
+subjects:
+  - kind: ServiceAccount
+    name: sail-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sail-server-worker-manager

@@ -125,6 +125,7 @@ The `--help` option shows the available options for the server.
 ::: info
 Currently, we use the `RUST_LOG` environment variable to control the logging level of the server.
 This may change in the future.
+Refer to the [Observability](/guide/observability/) guide for more information about logging.
 :::
 
 In another terminal, you can connect to the Sail Spark Connect server using PySpark.

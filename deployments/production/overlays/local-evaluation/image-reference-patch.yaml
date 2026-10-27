@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sail-production-settings
+data:
+  image: sail-production:local
+  source-revision: local-worktree
