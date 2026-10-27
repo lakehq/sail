@@ -28,6 +28,9 @@
 //!
 //! - Explicit casts: `CAST(expr AS type)` supports some casts that Spark rejects.
 
+use std::borrow::Cow;
+use std::sync::{Arc, LazyLock};
+
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
@@ -52,8 +55,6 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
-use std::borrow::Cow;
-use std::sync::{Arc, LazyLock};
 // DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
 #[expect(clippy::disallowed_types)]
 use datafusion_expr::{
