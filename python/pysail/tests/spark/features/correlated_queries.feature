@@ -835,3 +835,123 @@ Feature: Correlated query results
       FROM VALUES (1) o(k)
       """
     Then query error (?i)correlated scalar aggregate with volatile inner expressions
+
+  Scenario Outline: Scalar ordering carries hidden keys through a derived table alias
+    When query
+      """
+      SELECT o.k,
+        (SELECT v FROM (
+           SELECT v FROM VALUES (1, 10, 3), (1, 20, 1),
+                                (2, 30, CAST(NULL AS INT)), (2, 40, 2) u(k, v, s)
+           WHERE u.k = o.k ORDER BY <ordering>
+         ) q LIMIT 1) AS selected
+      FROM VALUES (1), (2), (3) o(k)
+      """
+    Then query result collected
+      | k | selected |
+      | 1 | <one>    |
+      | 2 | <two>    |
+      | 3 | NULL     |
+
+    Examples:
+      | ordering           | one | two |
+      | s ASC NULLS LAST   | 20  | 40  |
+      | s DESC NULLS FIRST | 10  | 30  |
+
+  Scenario: Scalar ordering carries hidden keys through multiple derived table aliases
+    When query
+      """
+      SELECT (SELECT result FROM (
+        SELECT v AS result FROM (
+          SELECT v FROM VALUES (1, 10, 3), (1, 20, 1) u(k, v, s)
+          WHERE u.k = o.k ORDER BY s
+        ) q WHERE v > 0
+      ) r LIMIT 1) AS selected
+      FROM VALUES (1) o(k)
+      """
+    Then query result
+      | selected |
+      | 20       |
+
+  Scenario Outline: Correlated aggregate membership distinguishes HAVING rejection from null values
+    When query
+      """
+      SELECT o.k, o.x,
+        x IN (SELECT <aggregate> FROM VALUES (1, CAST(NULL AS INT)), (3, 0) u(k, v)
+              WHERE u.k = o.k HAVING count(*) > 0) AS included,
+        x NOT IN (SELECT <aggregate> FROM VALUES (1, CAST(NULL AS INT)), (3, 0) u(k, v)
+                  WHERE u.k = o.k HAVING count(*) > 0) AS excluded
+      FROM VALUES (1, 0), (2, 0), (CAST(NULL AS INT), 0),
+                  (1, CAST(NULL AS INT)), (2, CAST(NULL AS INT)), (3, 0), (3, 0) o(k, x)
+      """
+    Then query result collected
+      | k    | x    | included | excluded   |
+      | 1    | 0    | false    | <one>      |
+      | 2    | 0    | false    | true       |
+      | NULL | 0    | false    | true       |
+      | 1    | NULL | false    | false      |
+      | 2    | NULL | false    | true       |
+      | 3    | 0    | <three>  | <notthree> |
+      | 3    | 0    | <three>  | <notthree> |
+
+    Examples:
+      | aggregate | one   | three | notthree |
+      | count(*)  | true  | false | true     |
+      | sum(v)    | false | true  | false    |
+
+  Scenario Outline: Correlated aggregate membership retains empty-input rows accepted by HAVING
+    When query
+      """
+      SELECT o.k, o.x,
+        x IN (SELECT <aggregate> FROM VALUES (1) u(v)
+              WHERE u.v = o.k HAVING count(*) = 0) AS included,
+        x NOT IN (SELECT <aggregate> FROM VALUES (1) u(v)
+                  WHERE u.v = o.k HAVING count(*) = 0) AS excluded
+      FROM VALUES (1, 0), (2, 0), (2, CAST(NULL AS INT)) o(k, x)
+      """
+    Then query result collected
+      | k | x    | included | excluded |
+      | 1 | 0    | false    | true     |
+      | 2 | 0    | <empty>  | false    |
+      | 2 | NULL | false    | false    |
+
+    Examples:
+      | aggregate | empty |
+      | count(*)  | true  |
+      | sum(v)    | false |
+
+  Scenario: Correlated inequality membership preserves HAVING row existence
+    When query
+      """
+      SELECT o.k,
+        0 NOT IN (SELECT count(*) FROM VALUES (1), (2) u(v)
+                  WHERE u.v < o.k HAVING count(*) > 0) AS excluded
+      FROM VALUES (1), (3) o(k)
+      """
+    Then query result collected
+      | k | excluded |
+      | 1 | true     |
+      | 3 | true     |
+
+  Scenario Outline: Ordered correlated inequality aggregates preserve empty-input defaults
+    When query
+      """
+      SELECT o.k,
+        (SELECT <aggregate> AS result FROM VALUES (1), (2) u(v)
+         WHERE u.v < o.k
+         HAVING <having> ORDER BY result DESC) AS result
+      FROM VALUES (1), (2), (3), (CAST(NULL AS INT)) o(k)
+      """
+    Then query result collected
+      | k    | result  |
+      | 1    | <empty> |
+      | 2    | <one>   |
+      | 3    | <two>   |
+      | NULL | <empty> |
+
+    Examples:
+      | aggregate            | having        | empty | one | two |
+      | count(*)             | count(*) >= 0 | 0     | 1   | 2   |
+      | count(*)             | count(*) > 0  | NULL  | 1   | 2   |
+      | sum(v)               | count(*) >= 0 | NULL  | 1   | 3   |
+      | coalesce(sum(v), 99) | count(*) >= 0 | 99    | 1   | 3   |

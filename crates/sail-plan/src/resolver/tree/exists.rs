@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use datafusion::functions::core::expr_fn::coalesce;
 use datafusion::functions_aggregate::expr_fn::count;
+use datafusion::functions_nested::expr_fn::{array_element, make_array};
 use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -70,7 +71,7 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                     result
                 }));
             }
-            if Self::is_scalar_aggregate(&inner) {
+            if Self::scalar_aggregate_has_filter(&inner) == Some(false) {
                 // A global aggregate produces exactly one row even when its
                 // correlated input is empty. Let scalar decorrelation preserve
                 // that row before applying the membership comparison.
@@ -79,6 +80,38 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                     if query.negated { !equal } else { equal },
                     lit(false),
                 ])));
+            }
+            if Self::scalar_aggregate_has_filter(&inner) == Some(true) {
+                // A scalar subquery uses NULL both for a missing row and for
+                // a null value. A singleton array distinguishes HAVING's rejected
+                // rows (NULL) from retained null values ([NULL]). Use DataFusion's
+                // nullable make_array result so scalar-subquery nullability does
+                // not let simplification discard the missing-row check.
+                let packed = make_array(vec![Expr::Column(column)]);
+                let inner = LogicalPlanBuilder::from(inner)
+                    .project(vec![packed])?
+                    .build()?;
+                let field = self.state.register_field_name("");
+                let mut expressions = self
+                    .plan
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect::<Vec<_>>();
+                expressions.push(expr_fn::scalar_subquery(Arc::new(inner)).alias(&field));
+                let input = mem::replace(&mut self.plan, empty_logical_plan());
+                self.plan = LogicalPlanBuilder::from(input)
+                    .project(expressions)?
+                    .build()?;
+                let packed = ident(field);
+                let value = array_element(packed.clone(), lit(1_i64));
+                let equal = (*query.expr).eq(value);
+                return Ok(Transformed::yes(
+                    datafusion_expr::when(packed.is_null(), lit(query.negated)).otherwise(
+                        coalesce(vec![if query.negated { !equal } else { equal }, lit(false)]),
+                    )?,
+                ));
             }
             let outer = query
                 .expr
@@ -178,7 +211,7 @@ impl ExistsRewriter<'_> {
                     match limit.get_skip_type()? {
                         SkipType::Literal(0) => Arc::unwrap_or_clone(limit.input),
                         SkipType::Literal(skip) => {
-                            if Self::is_scalar_aggregate(&limit.input) {
+                            if Self::scalar_aggregate_has_filter(&limit.input).is_some() {
                                 return Ok(lit(false));
                             }
                             if limit.input.exists(|plan| {
@@ -294,13 +327,19 @@ impl ExistsRewriter<'_> {
         Ok(())
     }
 
-    fn is_scalar_aggregate(query: &LogicalPlan) -> bool {
+    /// Identify a scalar aggregate and whether a filter can remove its output row.
+    fn scalar_aggregate_has_filter(query: &LogicalPlan) -> Option<bool> {
         match query {
-            LogicalPlan::Projection(projection) => Self::is_scalar_aggregate(&projection.input),
-            LogicalPlan::SubqueryAlias(alias) => Self::is_scalar_aggregate(&alias.input),
-            LogicalPlan::Sort(sort) => Self::is_scalar_aggregate(&sort.input),
-            LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty(),
-            _ => false,
+            LogicalPlan::Projection(projection) => {
+                Self::scalar_aggregate_has_filter(&projection.input)
+            }
+            LogicalPlan::SubqueryAlias(alias) => Self::scalar_aggregate_has_filter(&alias.input),
+            LogicalPlan::Sort(sort) => Self::scalar_aggregate_has_filter(&sort.input),
+            LogicalPlan::Filter(filter) => {
+                Self::scalar_aggregate_has_filter(&filter.input).map(|_| true)
+            }
+            LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty().then_some(false),
+            _ => None,
         }
     }
 }

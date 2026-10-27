@@ -190,6 +190,14 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                                 ));
                                 aggregate
                             }
+                            // Ordering a scalar aggregate cannot change its value.
+                            // Remove this sort so native decorrelation can reach
+                            // the correlation we attached above the aggregate.
+                            LogicalPlan::Sort(sort)
+                                if aggregate_marker.is_some() && sort.fetch.is_none() =>
+                            {
+                                Arc::unwrap_or_clone(sort.input)
+                            }
                             other => other,
                         };
                         Ok(Transformed::yes(result))
@@ -280,6 +288,7 @@ fn empty_scalar_value(plan: &LogicalPlan) -> Result<Expr> {
                 Ok((input, predicate))
             }
             LogicalPlan::SubqueryAlias(alias) => values(&alias.input),
+            LogicalPlan::Sort(sort) if sort.fetch.is_none() => values(&sort.input),
             _ => datafusion_common::not_impl_err!("empty result of scalar correlation"),
         }
     }

@@ -128,6 +128,7 @@ impl PlanResolver<'_> {
         fn extend(
             plan: LogicalPlan,
             aggregates: &[Expr],
+            allow_new: bool,
             state: &mut PlanResolverState,
         ) -> PlanResult<(LogicalPlan, Vec<(Expr, Expr)>)> {
             match plan {
@@ -135,9 +136,15 @@ impl PlanResolver<'_> {
                     let mut exprs = aggregate.aggr_expr.clone();
                     let mut replacements = vec![];
                     for expr in aggregates {
+                        let rebound = PlanResolver::rebase_to_projection_input(
+                            expr.clone(),
+                            &PlanResolver::distinct_grouping_expressions_from_exprs(
+                                &aggregate.group_expr,
+                            ),
+                        )?;
                         let column = if let Some(index) = exprs
                             .iter()
-                            .position(|existing| existing.clone().unalias() == *expr)
+                            .position(|existing| existing.clone().unalias() == rebound)
                         {
                             Expr::Column(Column::from(
                                 aggregate
@@ -145,8 +152,13 @@ impl PlanResolver<'_> {
                                     .qualified_field(aggregate.group_expr_len()? + index),
                             ))
                         } else {
+                            if !allow_new {
+                                return Err(crate::error::PlanError::analysis(
+                                    "cannot resolve new ORDER BY aggregate through HAVING",
+                                ));
+                            }
                             let name = state.register_field_name("");
-                            exprs.push(expr.clone().alias(&name));
+                            exprs.push(rebound.alias(&name));
                             Expr::Column(Column::new_unqualified(name))
                         };
                         replacements.push((expr.clone(), column));
@@ -161,8 +173,23 @@ impl PlanResolver<'_> {
                     ))
                 }
                 LogicalPlan::Projection(projection) => {
-                    let (input, replacements) =
-                        extend(Arc::unwrap_or_clone(projection.input), aggregates, state)?;
+                    let rebound = aggregates
+                        .iter()
+                        .map(|expr| {
+                            PlanResolver::rebase_to_projection_input(expr.clone(), &projection.expr)
+                        })
+                        .collect::<PlanResult<Vec<_>>>()?;
+                    let (input, replacements) = extend(
+                        Arc::unwrap_or_clone(projection.input),
+                        &rebound,
+                        allow_new,
+                        state,
+                    )?;
+                    let replacements = aggregates
+                        .iter()
+                        .zip(replacements)
+                        .map(|(original, (_, column))| (original.clone(), column))
+                        .collect::<Vec<_>>();
                     let mut exprs = projection.expr;
                     for (_, column) in &replacements {
                         if !exprs.contains(column) {
@@ -175,21 +202,15 @@ impl PlanResolver<'_> {
                     ))
                 }
                 LogicalPlan::Filter(mut filter) => {
-                    for expr in aggregates {
-                        if !filter.input.exists(|plan| Ok(matches!(plan, LogicalPlan::Aggregate(aggregate)
-                            if aggregate.aggr_expr.iter().any(|existing| existing.clone().unalias() == *expr))))? {
-                            return Err(crate::error::PlanError::analysis("cannot resolve new ORDER BY aggregate through HAVING"));
-                        }
-                    }
                     let (input, replacements) =
-                        extend(Arc::unwrap_or_clone(filter.input), aggregates, state)?;
+                        extend(Arc::unwrap_or_clone(filter.input), aggregates, false, state)?;
                     filter.input = Arc::new(input);
                     Ok((LogicalPlan::Filter(filter), replacements))
                 }
                 plan => Ok((plan, vec![])),
             }
         }
-        let (input, replacements) = extend(input, &aggregates, state)?;
+        let (input, replacements) = extend(input, &aggregates, true, state)?;
         let sorts = sorts
             .into_iter()
             .map(|sort| {
@@ -343,11 +364,13 @@ impl PlanResolver<'_> {
     }
 
     fn rebase_sort_to_projection_input(sort: Sort, projection: &[Expr]) -> PlanResult<Sort> {
-        let Sort {
-            expr,
-            asc,
-            nulls_first,
-        } = sort;
+        Ok(Sort {
+            expr: Self::rebase_to_projection_input(sort.expr, projection)?,
+            ..sort
+        })
+    }
+
+    fn rebase_to_projection_input(expr: Expr, projection: &[Expr]) -> PlanResult<Expr> {
         let find = |col: &Column| -> Option<Expr> {
             projection.iter().find_map(|expr| {
                 if let Expr::Alias(Alias {
@@ -364,21 +387,16 @@ impl PlanResolver<'_> {
                 None
             })
         };
-        let expr = expr
-            .transform_down(|e| {
-                if let Expr::Column(ref col) = e
-                    && let Some(expr) = find(col)
-                {
-                    return Ok(Transformed::yes(expr));
-                }
-                Ok(Transformed::no(e))
-            })
-            .data()?;
-        Ok(Sort {
-            expr,
-            asc,
-            nulls_first,
+        expr.transform_down(|e| {
+            if let Expr::Column(ref col) = e
+                && let Some(expr) = find(col)
+            {
+                return Ok(Transformed::yes(expr));
+            }
+            Ok(Transformed::no(e))
         })
+        .data()
+        .map_err(Into::into)
     }
 
     fn rebase_sort_to_projection_output(sort: Sort, projection: &[Expr]) -> PlanResult<Sort> {

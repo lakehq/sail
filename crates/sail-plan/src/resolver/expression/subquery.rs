@@ -197,6 +197,11 @@ impl PlanResolver<'_> {
                     Ok(Transformed::new(plan, false, recursion))
                 },
                 |plan| {
+                    // TreeNode traversal retains the alias's cached schema when
+                    // its child projection gains hidden ordering columns.
+                    if matches!(plan, LogicalPlan::SubqueryAlias(_)) {
+                        return Ok(Transformed::yes(plan.recompute_schema()?));
+                    }
                     let LogicalPlan::Projection(mut projection) = plan else {
                         return Ok(Transformed::no(plan));
                     };

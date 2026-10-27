@@ -389,3 +389,50 @@ Feature: Grouping and sort resolution
       | sensitive |
       | true      |
       | false     |
+
+  Scenario Outline: Aggregate sort arguments resolve grouping keys through output aliases
+    When query
+      """
+      SELECT k, sum(k) AS s
+      FROM VALUES (1), (1), (3), (CAST(NULL AS INT)) source(k)
+      GROUP BY k
+      <having>
+      ORDER BY <ordering> NULLS FIRST, k
+      """
+    Then query result ordered
+      | k    | s    |
+      | NULL | NULL |
+      | 1    | 2    |
+      | 3    | 3    |
+
+    Examples:
+      | having                              | ordering   |
+      |                                     | sum(k)     |
+      |                                     | sum(k) + 1 |
+      | HAVING sum(k) IS NULL OR sum(k) > 0 | sum(k)     |
+
+  Scenario: A hidden sort aggregate resolves its grouping key argument
+    When query
+      """
+      SELECT k
+      FROM VALUES (1), (1), (3) source(k)
+      GROUP BY k
+      ORDER BY sum(k) DESC
+      """
+    Then query result ordered
+      | k |
+      | 3 |
+      | 1 |
+
+  Scenario: An aggregate sort resolves a computed grouping expression
+    When query
+      """
+      SELECT k + 1 AS g, sum(k + 1) AS s
+      FROM VALUES (1), (1), (4) source(k)
+      GROUP BY k + 1
+      ORDER BY sum(k + 1) DESC
+      """
+    Then query result ordered
+      | g | s |
+      | 5 | 5 |
+      | 2 | 4 |
