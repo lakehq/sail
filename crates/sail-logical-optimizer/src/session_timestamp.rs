@@ -78,8 +78,8 @@ pub(crate) fn session_wall_clock(expr: Expr, data_type: &DataType, timezone: &st
 
 struct Rewriter<'a> {
     timezone: &'a str,
-    /// Whether casts to the session time zone convert, which they need for DST gaps and overlaps.
-    /// Arrow's cast is exact for a fixed offset.
+    /// Whether casts to the session time zone convert, which they need for DST gaps and overlaps,
+    /// and for a fixed offset near the ends of Chrono's range, where Arrow's cast panics.
     converts: bool,
     config: &'a ConfigOptions,
     /// Built on first use, since most plans have no constant to evaluate.
