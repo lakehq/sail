@@ -41,6 +41,8 @@ As the first process, it ignores `SIGTERM` and keeps running until Kubernetes ki
 `deployments/production/Dockerfile` declares `STOPSIGNAL SIGINT`.
 With container runtimes that use the stop signal of the image, such as containerd and CRI-O, Kubernetes stops a server built from it with `SIGINT`.
 An image built with the [production image guide](./docker-images/production.md) declares no stop signal.
+Worker pods run `sail worker` as the first process, which has no handler for `SIGINT` or `SIGTERM`.
+A deleted worker pod keeps running until Kubernetes kills it with `SIGKILL` at the end of the termination grace period.
 
 ## Observability
 

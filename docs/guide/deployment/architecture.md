@@ -63,13 +63,18 @@ See [Security Baseline](./security-baseline.md#network-policy) for the NetworkPo
 
 ## Failures
 
-| Failure      | What happens                                                                                                                                        |
-| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Client loss  | The session stays until the client releases it or `spark.session_timeout_secs` passes without a client request                                      |
-| Worker loss  | Every task in the affected task region runs again, up to `cluster.task_max_attempts` attempts                                                       |
-| Shuffle loss | With `flight`, the region that produced the data runs again. With `storage` or `celeborn`, Sail does not rerun a completed region, so the job fails |
-| Server loss  | Every session and active query in that process ends                                                                                                 |
-| Node loss    | Depends on whether the server or only session workers ran there                                                                                     |
+| Failure      | What happens                                                                                                                                                            |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Client loss  | The session stays until the client releases it or `spark.session_timeout_secs` passes without a client request                                                          |
+| Worker loss  | Every task in the affected task region runs again, up to `cluster.task_max_attempts` attempts. The job can fail before Sail detects the loss                            |
+| Shuffle loss | With `flight`, the region that produced the data runs again, as for worker loss. With `storage` or `celeborn`, Sail does not rerun a completed region, so the job fails |
+| Server loss  | Every session and active query in that process ends                                                                                                                     |
+| Node loss    | Depends on whether the server or only session workers ran there                                                                                                         |
+
+Sail detects a lost worker when it receives no heartbeat from the worker for `cluster.worker_heartbeat_timeout_secs`, which defaults to `120`.
+Until then, Sail can assign tasks to the lost worker, including the tasks of a region that runs again.
+Sail runs a failed region again without delay.
+If the attempts run out before Sail detects the loss, the job fails.
 
 A replacement server pod starts with no sessions.
 Checkpoint files and stored shuffle data do not restore a session.

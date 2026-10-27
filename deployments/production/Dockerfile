@@ -70,9 +70,9 @@ ENV HOME="/tmp/sail-home" \
 
 USER 10001:10001
 
-# The current Sail CLI handles SIGINT explicitly. Container runtimes use this
-# image setting for normal stops. Active-request behavior still requires a
-# workload-specific termination test.
+# The Spark Connect server shuts down gracefully on SIGINT. `sail worker` has no
+# signal handler. Container runtimes use this image setting for normal stops.
+# Active-request behavior still requires a workload-specific termination test.
 STOPSIGNAL SIGINT
 
 ENTRYPOINT ["/usr/local/bin/sail"]
