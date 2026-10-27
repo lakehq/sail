@@ -206,3 +206,85 @@ Feature: Set operation multiplicity and type coercion
       | -20       | 3           | -6.666667 |
       | 1         | 128         | 0.007813  |
       | -1        | 128         | -0.007813 |
+
+  Scenario Outline: Decimal division uses the widened UNION input precision
+    Given config spark.sql.ansi.enabled = <ansi>
+    When query
+      """
+      SELECT x / 3 AS result
+      FROM (SELECT CAST(1 AS DECIMAL(5, 2)) AS x
+            UNION ALL SELECT CAST(999999999999 AS DECIMAL(20, 2)) AS x)
+      """
+    Then query result collected
+      | result              |
+      | 0.333333            |
+      | 333333333333.000000  |
+    Then query column types
+      | column | type          |
+      | result | decimal(24,6) |
+
+    Examples:
+      | ansi  |
+      | true  |
+      | false |
+
+  Scenario: Decimal division uses a widened integer UNION argument
+    When query
+      """
+      SELECT x / CAST(4 AS DECIMAL(3, 0)) AS result
+      FROM (SELECT CAST(1 AS SMALLINT) AS x UNION ALL SELECT 10000000000L AS x)
+      """
+    Then query result collected
+      | result            |
+      | 0.2500          |
+      | 2500000000.0000 |
+
+  Scenario: Decimal division retains a widened UNION scale
+    When query
+      """
+      SELECT x / 4 AS result
+      FROM (SELECT CAST(1 AS DECIMAL(5, 2)) AS x
+            UNION ALL SELECT CAST(0.00000001 AS DECIMAL(20, 8)) AS x)
+      """
+    Then query result collected
+      | result         |
+      | 0.250000000000 |
+      | 2.500E-9       |
+
+  Scenario Outline: Set operations widen their output before matching rows
+    When query
+      """
+      SELECT CAST(1 AS SMALLINT) AS x <operation> SELECT CAST(<right> AS BIGINT) AS x
+      """
+    Then query result collected
+      | x |
+      | 1 |
+    Then query column types
+      | column | type   |
+      | x      | bigint |
+
+    Examples:
+      | operation     | right |
+      | INTERSECT     | 1     |
+      | INTERSECT ALL | 1     |
+      | EXCEPT        | 2     |
+      | EXCEPT ALL    | 2     |
+
+  Scenario Outline: Set operation multiplicity is computed after lossy coercion
+    When query
+      """
+      SELECT x FROM VALUES (9007199254740992L), (9007199254740993L) t(x)
+      <operation> SELECT CAST(9007199254740992L AS DOUBLE) AS x
+      """
+    Then query result collected
+      | x                  |
+      | 9007199254740992.0 |
+    Then query column types
+      | column | type   |
+      | x      | double |
+
+    Examples:
+      | operation     |
+      | INTERSECT ALL |
+      | EXCEPT ALL    |
+      | INTERSECT     |

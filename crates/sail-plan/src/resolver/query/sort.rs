@@ -28,7 +28,16 @@ impl PlanResolver<'_> {
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
         let output_schema = Arc::clone(input.schema());
-        let sorts = if is_global
+        let resolved = self
+            .resolve_missing_input_expressions(
+                order.iter().cloned().map(spec::Expr::SortOrder).collect(),
+                &input,
+                true,
+                state,
+            )
+            .await;
+        let sorts = if resolved.is_err()
+            && is_global
             && matches!(order.as_slice(), [sort]
             if matches!(sort.child.as_ref(), spec::Expr::UnresolvedAttribute { name, .. }
                 if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("all")
@@ -52,14 +61,7 @@ impl PlanResolver<'_> {
                 })
                 .collect()
         } else {
-            let (expressions, _) = self
-                .resolve_missing_input_expressions(
-                    order.iter().cloned().map(spec::Expr::SortOrder).collect(),
-                    &input,
-                    true,
-                    state,
-                )
-                .await?;
+            let (expressions, _) = resolved?;
             expressions
                 .into_iter()
                 .zip(order)
@@ -140,7 +142,7 @@ impl PlanResolver<'_> {
                             Expr::Column(Column::from(
                                 aggregate
                                     .schema
-                                    .qualified_field(aggregate.group_expr.len() + index),
+                                    .qualified_field(aggregate.group_expr_len()? + index),
                             ))
                         } else {
                             let name = state.register_field_name("");

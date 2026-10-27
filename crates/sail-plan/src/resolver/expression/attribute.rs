@@ -99,8 +99,9 @@ impl PlanResolver<'_> {
         if let FieldResolution::Resolved(name, expr) = local {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_lateral_projections())?
+        if plan_id.is_none()
+            && let Some((name, expr)) =
+                self.resolve_aggregate_field(&name, state.get_lateral_projections())?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }

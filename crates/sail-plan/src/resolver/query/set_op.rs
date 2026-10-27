@@ -1,10 +1,14 @@
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
+use datafusion::optimizer::AnalyzerRule;
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
+use datafusion_expr::type_coercion::binary::type_union_coercion;
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, expr,
+    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition,
+    expr,
 };
 use sail_common::spec;
 
@@ -192,6 +196,11 @@ impl PlanResolver<'_> {
                 }
             }
             SetOpType::Except | SetOpType::Intersect => {
+                // Set equality and multiplicity apply to coerced values. In
+                // particular, distinct integers may become the same float.
+                let config = self.ctx.state();
+                let left = TypeCoercion::new().analyze(left, config.config_options())?;
+                let right = TypeCoercion::new().analyze(right, config.config_options())?;
                 let join_type = if matches!(set_op_type, SetOpType::Intersect) {
                     JoinType::LeftSemi
                 } else {
@@ -205,6 +214,38 @@ impl PlanResolver<'_> {
                         "`EXCEPT ALL` must have the same number of columns. Left has {left_len} columns, right has {right_len} columns."
                     )));
                 }
+
+                let types = left
+                    .schema()
+                    .fields()
+                    .iter()
+                    .zip(right.schema().fields())
+                    .map(|(left, right)| {
+                        type_union_coercion(left.data_type(), right.data_type()).ok_or_else(|| {
+                            PlanError::analysis(format!(
+                                "incompatible set operation types: {} and {}",
+                                left.data_type(),
+                                right.data_type()
+                            ))
+                        })
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let coerce = |plan: LogicalPlan| -> PlanResult<LogicalPlan> {
+                    let exprs = plan
+                        .schema()
+                        .columns()
+                        .into_iter()
+                        .zip(&types)
+                        .map(|(column, data_type)| {
+                            Ok(Expr::Column(column.clone())
+                                .cast_to(data_type, plan.schema())?
+                                .alias_qualified(column.relation, column.name))
+                        })
+                        .collect::<PlanResult<Vec<_>>>()?;
+                    Ok(LogicalPlanBuilder::from(plan).project(exprs)?.build()?)
+                };
+                let left = coerce(left)?;
+                let right = coerce(right)?;
 
                 let mut join_keys = left
                     .schema()

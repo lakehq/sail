@@ -353,3 +353,39 @@ Feature: Grouping and sort resolution
       | k1 | k2   | a    | b    |
       | 1  | NULL | NULL | NULL |
       | 1  | NULL | NULL | a    |
+
+  Scenario Outline: Aggregate ordering uses the aggregate output after grouping-set expansion
+    When query
+      """
+      SELECT a, b, count(*) AS n
+      FROM VALUES (1, 10), (1, 20), (2, 20) t(a, b)
+      GROUP BY <grouping>
+      HAVING count(*) > 0
+      ORDER BY count(*) DESC, a, b
+      LIMIT 1
+      """
+    Then query result collected
+      | a    | b    | n |
+      | NULL | NULL | 3 |
+
+    Examples:
+      | grouping                       |
+      | ROLLUP(a, b)                   |
+      | CUBE(a, b)                     |
+      | GROUPING SETS ((a, b), (a), ()) |
+
+  Scenario Outline: ORDER BY ALL recovers a real unselected input column
+    Given config spark.sql.caseSensitive = <sensitive>
+    When query
+      """
+      SELECT x FROM VALUES (1, 2), (2, 1) t(x, ALL) ORDER BY ALL
+      """
+    Then query result collected ordered
+      | x |
+      | 2 |
+      | 1 |
+
+    Examples:
+      | sensitive |
+      | true      |
+      | false     |

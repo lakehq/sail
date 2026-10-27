@@ -38,6 +38,11 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         if let Expr::InSubquery(query) = expr {
             let inner = query.subquery.subquery;
+            if inner.schema().fields().len() != 1 {
+                return Err(plan_datafusion_err!(
+                    "IN subquery must return exactly one column"
+                ));
+            }
             let column = inner
                 .schema()
                 .columns()
@@ -64,6 +69,16 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                 } else {
                     result
                 }));
+            }
+            if Self::is_scalar_aggregate(&inner) {
+                // A global aggregate produces exactly one row even when its
+                // correlated input is empty. Let scalar decorrelation preserve
+                // that row before applying the membership comparison.
+                let equal = (*query.expr).eq(expr_fn::scalar_subquery(inner));
+                return Ok(Transformed::yes(coalesce(vec![
+                    if query.negated { !equal } else { equal },
+                    lit(false),
+                ])));
             }
             let outer = query
                 .expr

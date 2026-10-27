@@ -369,13 +369,9 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
             Ok(DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64),
             Ok(DataType::Decimal128(..))
         )
-    ) && let DataType::Decimal128(precision, scale) =
-        (dividend.clone() / divisor.clone()).get_type(function_context.schema)?
-    {
+    ) {
         return Ok(ScalarUDF::from(
-            sail_function::scalar::math::decimal_divide::DecimalDivide::new(
-                precision, scale, ansi_mode,
-            ),
+            sail_function::scalar::math::decimal_divide::DecimalDivide::new(ansi_mode),
         )
         .call(vec![dividend, divisor]));
     }

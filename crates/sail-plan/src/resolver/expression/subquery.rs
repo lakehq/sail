@@ -44,7 +44,12 @@ impl PlanResolver<'_> {
         };
         // The RHS is not part of the parent expression tree, so timestamp coercion must update
         // both plans before DataFusion analyzes the IN-subquery comparison.
-        if subquery.schema().fields().len() == 1 {
+        if subquery.schema().fields().len() != 1 {
+            return Err(PlanError::analysis(
+                "IN subquery must return exactly one column",
+            ));
+        }
+        {
             let left_type = expr.get_type(schema.as_ref())?;
             let right_type = subquery.schema().field(0).data_type().clone();
             let right_column = subquery

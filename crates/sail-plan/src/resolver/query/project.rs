@@ -78,15 +78,9 @@ impl PlanResolver<'_> {
         {
             return Ok((input, exprs));
         }
-        let inlined = self
-            .resolve_lateral_expressions(expressions.clone(), &schema, state)
+        let aggregates = self
+            .discover_projection_aggregates(expressions.clone(), &schema, state)
             .await?;
-        let aggregates = datafusion_expr::utils::find_aggregate_exprs(
-            &inlined
-                .iter()
-                .map(|named| named.expr.clone())
-                .collect::<Vec<_>>(),
-        );
         // Compute aggregates first, then materialize the SELECT aliases above
         // them. Inlining the entire SELECT list would evaluate a volatile alias
         // again at every reference (e.g. COUNT(*), RAND() AS x, x AS y).
@@ -194,6 +188,68 @@ impl PlanResolver<'_> {
             }
         }
         Ok((input, resolved))
+    }
+
+    /// Discover aggregates using typed alias columns, rather than cloning a
+    /// previous alias's expression at every reference in a dependency chain.
+    async fn discover_projection_aggregates(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<Expr>> {
+        let mut schema = Arc::clone(schema);
+        let mut aliases = vec![];
+        let mut aggregates = vec![];
+        let mut alias_columns = std::collections::HashSet::new();
+        for expression in expressions {
+            let named = {
+                let mut scope =
+                    state.enter_aggregate_scope(crate::resolver::state::AggregateState::Lateral {
+                        projections: aliases.clone(),
+                    });
+                self.resolve_named_expression(expression, &schema, scope.state())
+                    .await?
+            };
+            for aggregate in
+                datafusion_expr::utils::find_aggregate_exprs(std::slice::from_ref(&named.expr))
+            {
+                if aggregate
+                    .column_refs()
+                    .iter()
+                    .any(|column| alias_columns.contains(*column))
+                {
+                    return Err(PlanError::analysis(
+                        "lateral column alias in aggregate function is not supported",
+                    ));
+                }
+                if !aggregates.contains(&aggregate) {
+                    aggregates.push(aggregate);
+                }
+            }
+            #[expect(deprecated)]
+            if matches!(named.expr, Expr::Wildcard { .. }) || named.name.len() != 1 {
+                continue;
+            }
+            let name = state.register_field_name("");
+            let (_, field) = named.expr.to_field(&schema)?;
+            let mut fields = schema
+                .iter()
+                .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
+                .collect::<Vec<_>>();
+            fields.push((None, Arc::new(field.as_ref().clone().with_name(&name))));
+            schema = Arc::new(DFSchema::new_with_metadata(
+                fields,
+                schema.metadata().clone(),
+            )?);
+            let column = Column::new_unqualified(name);
+            alias_columns.insert(column.clone());
+            aliases.push(NamedExpr {
+                expr: Expr::Column(column),
+                ..named
+            });
+        }
+        Ok(aggregates)
     }
 
     pub(super) async fn resolve_lateral_expressions(

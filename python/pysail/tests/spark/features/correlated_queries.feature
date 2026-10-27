@@ -785,3 +785,53 @@ Feature: Correlated query results
       | projection       | ordering |
       | v, s, k          | r.s      |
       | v, s AS rank_key | rank_key |
+
+  Scenario Outline: Scalar membership rejects multiple subquery output columns
+    When query
+      """
+      SELECT 1 <operator> (SELECT 1, 2) AS result
+      """
+    Then query error (?i)(one column|column.*mismatch|number.*column)
+
+    Examples:
+      | operator |
+      | IN       |
+      | NOT IN   |
+
+  Scenario Outline: Correlated aggregate membership retains its empty-input row
+    When query
+      """
+      SELECT k, 0 <operator> (SELECT count(*) FROM VALUES (1) u(v) WHERE u.v = o.k) AS b
+      FROM VALUES (1), (2), (CAST(NULL AS INT)) o(k)
+      """
+    Then query result collected
+      | k    | b       |
+      | 1    | <one>   |
+      | 2    | <empty> |
+      | NULL | <empty> |
+
+    Examples:
+      | operator | one   | empty |
+      | IN       | false | true  |
+      | NOT IN   | true  | false |
+
+  Scenario: HAVING-only correlation does not require an aggregate domain
+    When query
+      """
+      SELECT k, (SELECT count(*) FROM VALUES (1), (2) u(v) HAVING count(*) < o.k) AS n
+      FROM VALUES (1), (3), (CAST(NULL AS INT)) o(k)
+      """
+    Then query result collected
+      | k    | n    |
+      | 1    | NULL |
+      | 3    | 2    |
+      | NULL | NULL |
+
+  @sail-only
+  Scenario: Correlated inequality aggregates reject independently evaluated volatile inputs
+    When query
+      """
+      SELECT (SELECT count(*) FROM range(1) r WHERE r.id < o.k AND rand() < 0.5) AS n
+      FROM VALUES (1) o(k)
+      """
+    Then query error (?i)correlated scalar aggregate with volatile inner expressions

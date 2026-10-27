@@ -1278,7 +1278,6 @@ message IcebergRewriteGroupAssignment {
 }
 
 message DecimalDivideUdf {
-  uint32 precision = 1;
-  int32 scale = 2;
+  reserved 1, 2;
   bool ansi_mode = 3;
 }

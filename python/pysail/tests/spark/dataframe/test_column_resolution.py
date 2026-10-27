@@ -624,3 +624,28 @@ def test_hidden_sort_does_not_move_below_offset(spark):
 def test_lateral_alias_evaluates_random_once(spark):
     rows = spark.sql("SELECT rand() AS x, x AS y FROM range(10)").collect()
     assert all(row.x == row.y for row in rows)
+
+
+def test_lateral_alias_does_not_capture_unrelated_dataframe_column(spark):
+    left = spark.range(1)
+    right = spark.range(1).withColumn("x", f.lit(9))
+    with pytest.raises(PySparkException):
+        left.select(f.lit(7).alias("x"), right.x.alias("y")).collect()
+
+
+@pytest.mark.parametrize("aggregate", [False, True])
+def test_lateral_alias_chain_uses_materialized_values(spark, aggregate):
+    expressions = ["count(*) AS n"] if aggregate else []
+    expressions.append("1L AS a0")
+    expressions.extend(f"a{i - 1} + a{i - 1} AS a{i}" for i in range(1, 31))
+    result = spark.range(1).selectExpr(*expressions).collect()
+    assert len(result) == 1
+    assert result[0].a30 == 2**30
+
+
+def test_alias_over_using_join_keeps_hidden_key_provenance(spark):
+    left = spark.sql("SELECT 1 AS id, 'left' AS a").alias("l")
+    right = spark.sql("SELECT 1 AS id, 'right' AS b").alias("r")
+    joined = left.join(right, "id").alias("q")
+    assert joined.select("q.*").columns == ["id", "a", "b"]
+    assert [tuple(row) for row in joined.select("q.id", "l.id", "r.id").collect()] == [(1, 1, 1)]

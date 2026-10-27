@@ -50,6 +50,9 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                             unsupported |= !aggregate.group_expr.is_empty();
                         }
                         LogicalPlan::Filter(filter) if filter.predicate.contains_outer() => {
+                            // This traversal is top-down. A filter encountered
+                            // before the aggregate is HAVING, not its input.
+                            unsupported |= aggregates == 0;
                             filters += 1;
                             needs_domain |= split_conjunction(&filter.predicate)
                                 .iter()
@@ -71,6 +74,14 @@ impl OptimizerRule for NormalizeScalarSubqueryDomain {
                 // evaluations whose values must be shared with the original row.
                 if input.exists(|node| Ok(node.expressions().iter().any(Expr::is_volatile)))? {
                     return Ok(Transformed::no(Expr::ScalarSubquery(query)));
+                }
+                if query
+                    .subquery
+                    .exists(|node| Ok(node.expressions().iter().any(Expr::is_volatile)))?
+                {
+                    return datafusion_common::not_impl_err!(
+                        "correlated scalar aggregate with volatile inner expressions"
+                    );
                 }
                 let outer = query.subquery.all_out_ref_exprs();
                 let mut bindings = Vec::new();
