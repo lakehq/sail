@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
+from pyspark.sql.types import TimestampType
 
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
@@ -785,3 +786,21 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     df = spark.read.schema(sample_df.schema).parquet(str(upper))
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_int96_timestamp_is_instant(spark, tmp_path, session_timezone):
+    # Spark reads INT96 as TIMESTAMP, which compares with other TIMESTAMP values as instants.
+    _ = session_timezone
+    path = tmp_path / "int96.parquet"
+    value = datetime(2020, 6, 14, 4, tzinfo=UTC)
+    pq.write_table(
+        pa.table({"ts": pa.array([value], type=pa.timestamp("us", tz="UTC"))}),
+        path,
+        use_deprecated_int96_timestamps=True,
+        store_schema=False,
+    )
+    df = spark.read.parquet(str(path))
+    assert isinstance(df.schema["ts"].dataType, TimestampType)
+    assert df.selectExpr("unix_micros(ts)").collect() == [(1592107200000000,)]
+    assert df.filter("ts = TIMESTAMP '2020-06-13 21:00:00'").count() == 1
