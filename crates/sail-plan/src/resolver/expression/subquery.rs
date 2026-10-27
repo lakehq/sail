@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion_common::DFSchemaRef;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_expr::logical_plan::{Filter, Projection};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, expr_fn};
 use sail_common::spec;
@@ -172,6 +172,49 @@ impl PlanResolver<'_> {
             }
         }
         let output = Column::from(query.schema().qualified_field(0));
+        // ORDER BY can have hidden inputs removed by a projection above the sort.
+        // Carry them to FIRST_VALUE before removing the original Sort nodes.
+        query = query
+            .transform_down_up(
+                |plan| {
+                    let recursion = if matches!(
+                        plan,
+                        LogicalPlan::Projection(_)
+                            | LogicalPlan::SubqueryAlias(_)
+                            | LogicalPlan::Filter(_)
+                    ) {
+                        TreeNodeRecursion::Continue
+                    } else {
+                        // Do not change the schema below DISTINCT or other operators
+                        // whose semantics depend on the complete set of input columns.
+                        TreeNodeRecursion::Jump
+                    };
+                    Ok(Transformed::new(plan, false, recursion))
+                },
+                |plan| {
+                    let LogicalPlan::Projection(mut projection) = plan else {
+                        return Ok(Transformed::no(plan));
+                    };
+                    let order =
+                        Self::find_input_sort_ordering(&projection.input).unwrap_or_default();
+                    let columns = order
+                        .iter()
+                        .flat_map(|sort| sort.expr.column_refs())
+                        .filter(|column| !projection.schema.has_column(column))
+                        .cloned()
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if columns.is_empty() {
+                        return Ok(Transformed::no(LogicalPlan::Projection(projection)));
+                    }
+                    projection
+                        .expr
+                        .extend(columns.into_iter().map(Expr::Column));
+                    Ok(Transformed::yes(LogicalPlan::Projection(
+                        Projection::try_new(projection.expr, projection.input)?,
+                    )))
+                },
+            )?
+            .data;
         let order = Self::find_input_sort_ordering(&query).unwrap_or_default();
         // Ordering is carried by FIRST_VALUE. A Sort over correlated input would
         // prevent DataFusion from pulling the equality predicate into the join.

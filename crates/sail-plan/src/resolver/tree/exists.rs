@@ -44,6 +44,27 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                 .into_iter()
                 .next()
                 .ok_or_else(|| plan_datafusion_err!("IN subquery has no output"))?;
+            if inner.all_out_ref_exprs().is_empty() {
+                // Evaluate an uncorrelated RHS in full before testing membership.
+                // In particular, its scalar aggregate must retain its empty-input row.
+                let alias = self.state.register_field_name("");
+                let equal =
+                    Expr::Column(Column::new(Some(alias.clone()), column.name)).eq(*query.expr);
+                let predicate = if query.negated {
+                    equal.clone().or(equal.is_null())
+                } else {
+                    equal
+                };
+                let inner = LogicalPlanBuilder::from(inner)
+                    .alias(alias.clone())?
+                    .build()?;
+                let result = self.mark_join(inner, predicate, alias)?;
+                return Ok(Transformed::yes(if query.negated {
+                    !result
+                } else {
+                    result
+                }));
+            }
             let outer = query
                 .expr
                 .transform_up(|expr| {
@@ -201,6 +222,10 @@ impl ExistsRewriter<'_> {
         let query = LogicalPlanBuilder::from(query)
             .alias(alias.clone())?
             .build()?;
+        self.mark_join(query, predicate, alias)
+    }
+
+    fn mark_join(&mut self, query: LogicalPlan, predicate: Expr, alias: String) -> Result<Expr> {
         let input = mem::replace(&mut self.plan, empty_logical_plan());
         self.plan = LogicalPlanBuilder::from(input)
             .join_on(query, JoinType::LeftMark, Some(predicate))?

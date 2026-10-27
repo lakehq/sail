@@ -137,3 +137,18 @@ Feature: Projection and alias resolution
     Then query column types
       | column | type |
       | a      | int  |
+
+  Scenario Outline: Input columns take precedence over materialized lateral aliases
+    When query
+      """
+      SELECT <expression> AS V, 1 AS a, a + v AS b, b + a AS c
+      FROM VALUES (10) source(v)
+      """
+    Then query result collected
+      | V        | a | b  | c  |
+      | <value>  | 1 | 11 | 12 |
+
+    Examples:
+      | expression | value |
+      | v          | 10    |
+      | v + 100    | 110   |

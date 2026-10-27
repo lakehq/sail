@@ -89,15 +89,13 @@ impl PlanResolver<'_> {
         }
         let mut resolved = vec![];
         for expression in expressions {
-            let named = match self
-                .resolve_named_expression(expression.clone(), &schema, state)
-                .await
-            {
-                Ok(named) => named,
-                Err(_) => {
-                    self.resolve_named_expression(expression, input.schema(), state)
-                        .await?
-                }
+            let named = {
+                let mut scope =
+                    state.enter_aggregate_scope(crate::resolver::state::AggregateState::Lateral {
+                        projections: resolved.clone(),
+                    });
+                self.resolve_named_expression(expression, &schema, scope.state())
+                    .await?
             };
             // Wildcards/generators are expanded by the regular projection rewrite.
             if named.name.len() != 1 || matches!(named.expr, Expr::Wildcard { .. }) {

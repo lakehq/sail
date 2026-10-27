@@ -617,3 +617,88 @@ Feature: Correlated query results
       FROM VALUES (1) l(k)
       """
     Then query error (?i)(more than one row|too_many_rows)
+
+  Scenario Outline: A scalar limit retains hidden ordering columns through projections
+    When query
+      """
+      SELECT o.k,
+        (SELECT v AS result
+         FROM VALUES (1, 10, 3), (1, 20, 1), (1, 30, 1),
+                     (2, 40, CAST(NULL AS INT)), (2, 50, 2) u(k, v, s)
+         WHERE u.k = o.k
+         ORDER BY <ordering>
+         LIMIT 1) AS selected
+      FROM VALUES (1), (2), (3) o(k)
+      """
+    Then query result collected
+      | k | selected |
+      | 1 | <first>  |
+      | 2 | <second> |
+      | 3 | NULL     |
+
+    Examples:
+      | ordering                            | first | second |
+      | s + 1 ASC NULLS LAST, v DESC         | 30    | 50     |
+      | s + 1 DESC NULLS FIRST, v ASC        | 10    | 40     |
+
+  Scenario Outline: Projected membership evaluates an uncorrelated scalar aggregate
+    When query
+      """
+      SELECT x,
+        x IN (SELECT <aggregate> FROM VALUES (1), (2) u(v) WHERE <condition>) AS included,
+        x NOT IN (SELECT <aggregate> FROM VALUES (1), (2) u(v) WHERE <condition>) AS excluded
+      FROM VALUES (0L), (2L), (CAST(NULL AS BIGINT)) o(x)
+      """
+    Then query result collected
+      | x    | included | excluded |
+      | 0    | <zero>   | <notzero> |
+      | 2    | <two>    | <nottwo> |
+      | NULL | false    | false    |
+
+    Examples:
+      | aggregate | condition | zero  | notzero | two   | nottwo |
+      | count(*)  | true      | false | true    | true  | false  |
+      | count(*)  | false     | true  | false   | false | true   |
+      | sum(v)    | false     | false | false   | false | false  |
+
+  Scenario Outline: Correlated inequality aggregates preserve HAVING row existence
+    When query
+      """
+      SELECT o.k,
+        (SELECT <projection>
+         FROM VALUES (1), (2) u(v)
+         WHERE u.v < o.k
+         HAVING <having>) AS result
+      FROM VALUES (1), (2), (3), (3), (CAST(NULL AS INT)) o(k)
+      """
+    Then query result collected
+      | k    | result  |
+      | 1    | <empty> |
+      | 2    | <one>   |
+      | 3    | <two>   |
+      | 3    | <two>   |
+      | NULL | <empty> |
+
+    Examples:
+      | projection            | having             | empty | one  | two  |
+      | count(*)              | count(*) > 0       | NULL  | 1    | 2    |
+      | count(*)              | count(*) = 0       | 0     | NULL | NULL |
+      | coalesce(sum(v), 99)   | count(*) > 0       | NULL  | 1    | 3    |
+      | coalesce(sum(v), 99)   | sum(v) > 1         | NULL  | NULL | 3    |
+      | coalesce(sum(v), 99)   | count(*) = 0       | 99    | NULL | NULL |
+
+  Scenario: Scalar ordering recovery preserves distinct keys in nested projections
+    When query
+      """
+      SELECT o.k,
+        (SELECT DISTINCT v
+         FROM (SELECT v
+               FROM VALUES (1, 10, 3), (1, 10, 1) u(k, v, s)
+               WHERE u.k = o.k
+               ORDER BY s) d) AS result
+      FROM VALUES (1), (2) o(k)
+      """
+    Then query result collected
+      | k | result |
+      | 1 | 10     |
+      | 2 | NULL   |

@@ -92,11 +92,14 @@ impl PlanResolver<'_> {
             if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("all")
             && self.resolve_column_candidates(schema, "all", None, state).is_empty())
         {
-            resolved_projections
-                .iter()
-                .flatten()
+            let (_, expanded) = self.rewrite_wildcard(
+                input.clone(),
+                resolved_projections.iter().flatten().cloned().collect(),
+                state,
+            )?;
+            expanded
+                .into_iter()
                 .filter(|expr| find_aggregate_exprs(std::slice::from_ref(&expr.expr)).is_empty())
-                .cloned()
                 .collect()
         } else {
             let projections = resolved_projections.iter().flatten().cloned().collect();
@@ -125,6 +128,7 @@ impl PlanResolver<'_> {
             )
             .await?;
 
+        let (input, projections) = self.rewrite_wildcard(input, projections, state)?;
         let (input, projections, grouping) =
             self.prepare_aggregate_input(input, projections, grouping, state)?;
         let schema = input.schema();

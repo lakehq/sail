@@ -261,3 +261,32 @@ Feature: Grouping and sort resolution
       ORDER BY max(w) DESC, g
       """
     Then query error (?i)(cannot resolve|unresolved|not found)
+
+  Scenario Outline: GROUP BY ALL expands wildcard grouping keys
+    When query
+      """
+      SELECT <projection>, count(*) AS n
+      FROM VALUES (1, 10), (1, 10), (2, 20) source(v, w)
+      GROUP BY ALL
+      """
+    Then query result collected
+      | v | w  | n |
+      | 1 | 10 | 2 |
+      | 2 | 20 | 1 |
+
+    Examples:
+      | projection |
+      | *          |
+      | source.*   |
+
+  Scenario: GROUP BY ALL excludes columns removed by star EXCEPT
+    When query
+      """
+      SELECT * EXCEPT (w), count(*) AS n
+      FROM VALUES (1, 10), (1, 20), (2, 30) source(v, w)
+      GROUP BY ALL
+      """
+    Then query result collected
+      | v | n |
+      | 1 | 2 |
+      | 2 | 1 |
