@@ -7596,6 +7596,7 @@ dependencies = [
  "datafusion-expr",
  "insta",
  "itertools 0.15.0",
+ "sail-common",
  "sail-function",
  "sail-logical-plan",
  "sail-python-udf",

@@ -55,6 +55,7 @@ use datafusion_expr::{
 use itertools::{Itertools as _, izip};
 
 use crate::binary_type_coercion::BinaryTypeCoercer;
+use crate::session_timestamp::convert_session_timestamp_casts;
 
 /// Performs type coercion by determining the schema
 /// and performing the expression rewrites.
@@ -108,6 +109,7 @@ impl AnalyzerRule for TypeCoercion {
 
         // recurse
         let transformed_plan = coerce_plan_and_subqueries(plan, config)?;
+        let transformed_plan = convert_session_timestamp_casts(transformed_plan, config)?;
 
         // finish
         coerce_output(transformed_plan, config)
