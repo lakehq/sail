@@ -83,6 +83,7 @@ Feature: vector_avg
           AS tab(id, col)
         )
         WHERE id = 2
+        """
       Then query result
         | result                |
         | [NaN, NaN, -Infinity] |
