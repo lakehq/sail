@@ -288,7 +288,13 @@ impl ScalarUDFImpl for ConvertTz {
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
         let data_type = self.return_type(&arg_types)?;
-        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        // TRY_CAST returns NULL for a value out of range, so its result is nullable even when its
+        // input is not. This is an intentional divergence from Spark: Sail has the right answer and
+        // Spark has the wrong answer. Spark declares this TRY_CAST nullable only when its input is
+        // (`Cast.nullable`, since TIMESTAMP and TIMESTAMP_NTZ cast to each other with `canUpCast`),
+        // so it folds `IS NULL` of the NULL result to false.
+        let nullable = self.mode == ConvertTzMode::TryCast
+            || args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
@@ -1007,6 +1013,30 @@ mod tests {
             parse_cast_zone("-0800")?,
             CastZone::Fixed(-28_800_000_000)
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_cast_result_is_nullable() -> Result<()> {
+        let fields = [
+            Arc::new(Field::new("from", DataType::Utf8, false)),
+            Arc::new(Field::new("to", DataType::Utf8, false)),
+            Arc::new(Field::new(
+                "value",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            )),
+        ];
+        let nullable = |convert_tz: ConvertTz| -> Result<bool> {
+            Ok(convert_tz
+                .return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &fields,
+                    scalar_arguments: &[None, None, None],
+                })?
+                .is_nullable())
+        };
+        assert!(nullable(ConvertTz::cast(true))?);
+        assert!(!nullable(ConvertTz::cast(false))?);
         Ok(())
     }
 

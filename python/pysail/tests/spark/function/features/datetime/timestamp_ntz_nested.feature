@@ -368,3 +368,171 @@ Feature: Nested TIMESTAMP_NTZ values compare with TIMESTAMP values in the sessio
       | 4  | -28800              | false               | {2020-06-14 19:00:00} |
       | 5  | 0                   | true                | {2020-06-15 03:00:00} |
       | 6  | NULL                | NULL                | {null}                |
+
+  # The common type of nested TIMESTAMP_NTZ and TIMESTAMP values keeps NULL children from either side.
+  Scenario: Nested arrays keep NULL elements when TIMESTAMP_NTZ and TIMESTAMP widen in the session time zone (America/Los_Angeles)
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT
+        CAST(array(array(TIMESTAMP_NTZ '2020-06-14 12:00:00'), array(CAST(NULL AS TIMESTAMP))) AS STRING) AS ntz_then_null,
+        CAST(array(array(CAST(NULL AS TIMESTAMP)), array(TIMESTAMP_NTZ '2020-06-14 12:00:00')) AS STRING) AS null_then_ntz,
+        CAST(array(array(TIMESTAMP '2020-06-14 12:00:00'), array(CAST(NULL AS TIMESTAMP_NTZ))) AS STRING) AS ltz_then_null_ntz,
+        CAST(array(array(CAST(NULL AS TIMESTAMP_NTZ)), array(TIMESTAMP '2020-06-14 12:00:00')) AS STRING) AS null_ntz_then_ltz,
+        unix_seconds(array(array(TIMESTAMP_NTZ '2020-06-14 12:00:00'), array(CAST(NULL AS TIMESTAMP)))[0][0]) AS seconds
+      """
+    Then query result
+      | ntz_then_null                   | null_then_ntz                   | ltz_then_null_ntz               | null_ntz_then_ltz               | seconds    |
+      | [[2020-06-14 12:00:00], [null]] | [[null], [2020-06-14 12:00:00]] | [[2020-06-14 12:00:00], [null]] | [[null], [2020-06-14 12:00:00]] | 1592161200 |
+
+  Scenario: Map values and struct fields keep NULL values when TIMESTAMP_NTZ and TIMESTAMP widen in the session time zone (America/Los_Angeles)
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT
+        CAST(array(map('k', TIMESTAMP_NTZ '2020-06-14 12:00:00'), map('k', CAST(NULL AS TIMESTAMP))) AS STRING) AS map_null_second,
+        CAST(array(map('k', CAST(NULL AS TIMESTAMP)), map('k', TIMESTAMP_NTZ '2020-06-14 12:00:00')) AS STRING) AS map_null_first,
+        CAST(array(map('k', array(TIMESTAMP_NTZ '2020-06-14 12:00:00')), map('k', array(CAST(NULL AS TIMESTAMP)))) AS STRING) AS map_array_value,
+        CAST(array(named_struct('t', TIMESTAMP_NTZ '2020-06-14 12:00:00'), named_struct('t', CAST(NULL AS TIMESTAMP))) AS STRING) AS struct_null_second,
+        CAST(array(named_struct('t', CAST(NULL AS TIMESTAMP)), named_struct('t', TIMESTAMP_NTZ '2020-06-14 12:00:00')) AS STRING) AS struct_null_first,
+        unix_seconds(array(map('k', TIMESTAMP_NTZ '2020-06-14 12:00:00'), map('k', CAST(NULL AS TIMESTAMP)))[0]['k']) AS map_seconds,
+        unix_seconds(array(named_struct('t', TIMESTAMP_NTZ '2020-06-14 12:00:00'), named_struct('t', CAST(NULL AS TIMESTAMP)))[0].t) AS struct_seconds
+      """
+    Then query result
+      | map_null_second                           | map_null_first                            | map_array_value                               | struct_null_second              | struct_null_first               | map_seconds | struct_seconds |
+      | [{k -> 2020-06-14 12:00:00}, {k -> null}] | [{k -> null}, {k -> 2020-06-14 12:00:00}] | [{k -> [2020-06-14 12:00:00]}, {k -> [null]}] | [{2020-06-14 12:00:00}, {null}] | [{null}, {2020-06-14 12:00:00}] | 1592161200  | 1592161200     |
+
+  # A struct field that widens to TIMESTAMP converts through the DST gap while a TIMESTAMP_NTZ sibling is unchanged.
+  Scenario: Struct fields widen independently of unchanged TIMESTAMP_NTZ siblings in a DST gap (America/Los_Angeles)
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT
+        named_struct('a', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00')
+          = named_struct('a', TIMESTAMP '2020-03-08 03:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00') AS struct_equals,
+        CAST(coalesce(
+          named_struct('a', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00'),
+          named_struct('a', TIMESTAMP '2020-03-08 03:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00')) AS STRING) AS struct_coalesce,
+        unix_seconds(coalesce(
+          named_struct('a', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00'),
+          named_struct('a', TIMESTAMP '2020-03-08 03:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00')).a) AS struct_seconds,
+        CAST(array(
+          named_struct('a', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00'),
+          named_struct('a', TIMESTAMP '2020-03-08 03:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00')) AS STRING) AS struct_array
+      """
+    Then query result
+      | struct_equals | struct_coalesce                            | struct_seconds | struct_array                                                                             |
+      | true          | {2020-03-08 03:30:00, 2020-01-01 00:00:00} | 1583663400     | [{2020-03-08 03:30:00, 2020-01-01 00:00:00}, {2020-03-08 03:30:00, 2020-01-01 00:00:00}] |
+
+  Scenario: Unchanged TIMESTAMP_NTZ struct fields keep DST-gap wall-clock values (America/Los_Angeles)
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT
+        named_struct('a', TIMESTAMP_NTZ '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00')
+          = named_struct('a', TIMESTAMP '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00') AS gap_sibling_equals,
+        CAST(coalesce(
+          named_struct('a', TIMESTAMP_NTZ '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00'),
+          named_struct('a', TIMESTAMP '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00')) AS STRING) AS gap_sibling,
+        named_struct('a', TIMESTAMP_NTZ '2020-11-01 01:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00')
+          = named_struct('a', TIMESTAMP '2020-11-01 01:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00') AS overlap_equals,
+        unix_seconds(coalesce(
+          named_struct('a', TIMESTAMP_NTZ '2020-11-01 01:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00'),
+          named_struct('a', TIMESTAMP '2020-11-01 01:30:00', 'b', TIMESTAMP_NTZ '2020-01-01 00:00:00')).a) AS overlap_seconds
+      """
+    Then query result
+      | gap_sibling_equals | gap_sibling                                | overlap_equals | overlap_seconds |
+      | true               | {2020-06-14 12:00:00, 2020-03-08 02:30:00} | true           | 1604219400      |
+
+  # TRY_CAST of an out-of-range TIMESTAMP to TIMESTAMP_NTZ is NULL. Nullable input agrees with JVM Spark.
+  Scenario: TRY_CAST of the largest TIMESTAMP to TIMESTAMP_NTZ is NULL in a positive-offset session (+05:30)
+    Given variable location for temporary directory try_cast_timestamp_ntz_range
+    Given final statement
+      """
+      DROP TABLE IF EXISTS try_cast_timestamp_ntz_range
+      """
+    Given statement template
+      """
+      CREATE TABLE try_cast_timestamp_ntz_range (id INT, m BIGINT) USING parquet LOCATION {{ location.sql }}
+      """
+    Given statement
+      """
+      INSERT INTO try_cast_timestamp_ntz_range VALUES (0, 0), (1, 9223372036854775807)
+      """
+    Given config spark.sql.session.timeZone = +05:30
+    When query
+      """
+      SELECT
+        id,
+        TRY_CAST(timestamp_micros(m) AS TIMESTAMP_NTZ) IS NULL AS is_null,
+        TRY_CAST(timestamp_micros(m) AS TIMESTAMP_NTZ) AS value,
+        coalesce(TRY_CAST(timestamp_micros(m) AS TIMESTAMP_NTZ), TIMESTAMP_NTZ '1970-01-01 00:00:00') AS fallback
+      FROM try_cast_timestamp_ntz_range
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | is_null | value               | fallback            |
+      | 0  | false   | 1970-01-01 05:30:00 | 1970-01-01 05:30:00 |
+      | 1  | true    | NULL                | 1970-01-01 00:00:00 |
+
+  # TRY_CAST with non-nullable input. JVM Spark 4.2 returns is_null = false and drops the COALESCE fallback here although
+  # the value is NULL: Cast.nullable treats TIMESTAMP -> TIMESTAMP_NTZ TRY_CAST as non-nullable (Cast.scala:630-640,
+  # UpCastRule.scala:42) and NullPropagation folds IS NULL to false (optimizer/expressions.scala:920). Sail intentionally
+  # follows the value.
+  @sail-only
+  Scenario: TRY_CAST of the largest TIMESTAMP to TIMESTAMP_NTZ is NULL for non-nullable input (+05:30)
+    Given config spark.sql.session.timeZone = +05:30
+    When query
+      """
+      SELECT
+        TRY_CAST(timestamp_micros(9223372036854775807) AS TIMESTAMP_NTZ) IS NULL AS literal_is_null,
+        coalesce(TRY_CAST(timestamp_micros(9223372036854775807) AS TIMESTAMP_NTZ), TIMESTAMP_NTZ '1970-01-01 00:00:00') AS literal_fallback,
+        TRY_CAST(timestamp_micros(id + 9223372036854775807) AS TIMESTAMP_NTZ) IS NULL AS column_is_null,
+        coalesce(TRY_CAST(timestamp_micros(id + 9223372036854775807) AS TIMESTAMP_NTZ), TIMESTAMP_NTZ '1970-01-01 00:00:00') AS column_fallback
+      FROM range(1)
+      """
+    Then query result
+      | literal_is_null | literal_fallback    | column_is_null | column_fallback     |
+      | true            | 1970-01-01 00:00:00 | true           | 1970-01-01 00:00:00 |
+
+  # A struct field that mixes TIMESTAMP_NTZ with a Parquet TIMESTAMP converts in the session time zone even when a sibling
+  # field widens too.
+  Scenario: Struct fields mixing TIMESTAMP_NTZ and Parquet TIMESTAMP values convert next to widening siblings (Asia/Shanghai)
+    Given config spark.sql.session.timeZone = Asia/Shanghai
+    When query
+      """
+      SELECT
+        id,
+        unix_micros(array(named_struct('t', ntz, 'n', 1), named_struct('t', ltz, 'n', 1L))[0].t) AS array_ntz,
+        unix_micros(coalesce(named_struct('t', ntz, 'n', 1), named_struct('t', ltz, 'n', 1L)).t) AS coalesce_ntz,
+        unix_micros(map(1, named_struct('t', ntz, 'n', 1), 2, named_struct('t', ltz, 'n', 1L))[1].t) AS map_ntz,
+        array_contains(array(named_struct('t', ntz, 'n', 1)), named_struct('t', ltz, 'n', 1L)) AS contains_ltz
+      FROM timestamp_ntz_nested
+      WHERE id IN (0, 5)
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | array_ntz        | coalesce_ntz     | map_ntz          | contains_ltz |
+      | 0  | 1592107200000000 | 1592107200000000 | 1592107200000000 | false        |
+      | 5  | 1592161200000000 | 1592161200000000 | 1592161200000000 | true         |
+
+  # A TIMESTAMP_NTZ struct field that is TIMESTAMP_NTZ on both sides stays TIMESTAMP_NTZ next to a mixed field and a
+  # widening sibling.
+  Scenario: Unchanged TIMESTAMP_NTZ struct fields stay TIMESTAMP_NTZ next to mixed fields and widening siblings (America/Los_Angeles)
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT
+        CAST(coalesce(
+          named_struct('a', TIMESTAMP_NTZ '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'n', 1),
+          named_struct('a', TIMESTAMP '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'n', 1L)) AS STRING) AS coalesce_value,
+        CAST(array(
+          named_struct('a', TIMESTAMP_NTZ '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'n', 1),
+          named_struct('a', TIMESTAMP '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'n', 1L)) AS STRING) AS array_value,
+        array_contains(
+          array(named_struct('a', TIMESTAMP_NTZ '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 02:30:00', 'n', 1)),
+          named_struct('a', TIMESTAMP '2020-06-14 12:00:00', 'b', TIMESTAMP_NTZ '2020-03-08 03:30:00', 'n', 1L)) AS contains_other
+      """
+    Then query result
+      | coalesce_value                                 | array_value                                                                                        | contains_other |
+      | {2020-06-14 12:00:00, 2020-03-08 02:30:00, 1}  | [{2020-06-14 12:00:00, 2020-03-08 02:30:00, 1}, {2020-06-14 12:00:00, 2020-03-08 02:30:00, 1}]     | false          |

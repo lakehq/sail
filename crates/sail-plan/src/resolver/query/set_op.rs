@@ -12,7 +12,7 @@ use datafusion_expr::{
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::datetime_utils::{cast_to_common_timestamp_type, common_timestamp_ntz_type};
+use crate::function::datetime_utils::{cast_to_common_timestamp_type, session_timestamp_targets};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -242,7 +242,7 @@ impl PlanResolver<'_> {
         let right_schema = Arc::clone(right.schema());
         let timezone = &self.config.session_timezone;
         let is_mix = |left: &DataType, right: &DataType| {
-            common_timestamp_ntz_type(left, right, timezone).is_some()
+            session_timestamp_targets(left, right, timezone).is_some()
         };
         if left_schema.fields().len() != right_schema.fields().len()
             || !left_schema
@@ -259,9 +259,9 @@ impl PlanResolver<'_> {
                 .zip(other.fields())
                 .map(|((qualifier, field), other)| {
                     let column = Expr::Column(Column::from((qualifier, field.as_ref())));
-                    match common_timestamp_ntz_type(field.data_type(), other.data_type(), timezone)
+                    match session_timestamp_targets(field.data_type(), other.data_type(), timezone)
                     {
-                        Some(target) => cast_to_common_timestamp_type(
+                        Some((target, _)) => cast_to_common_timestamp_type(
                             column,
                             field.data_type(),
                             &target,

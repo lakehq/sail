@@ -403,7 +403,8 @@ struct NestedSessionCastTypes {
     timestamp_is_target: bool,
 }
 
-/// Returns `None` when a TIMESTAMP_NTZ value stays TIMESTAMP_NTZ, which `ConvertTz` would convert.
+/// Returns `None` when a value becomes TIMESTAMP_NTZ, which `ConvertTz` would convert, unless it is
+/// a TIMESTAMP_NTZ value of the same unit, which passes the conversion as its integer.
 fn nested_session_cast_types(
     from: &DataType,
     to: &DataType,
@@ -430,6 +431,17 @@ fn nested_session_cast_types(
                 timestamp: DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(label))),
                 converted: true,
                 timestamp_is_target: *unit == TimeUnit::Microsecond,
+            })
+        }
+        // A TIMESTAMP_NTZ value that stays TIMESTAMP_NTZ passes the conversion as its integer.
+        (DataType::Timestamp(from_unit, None), DataType::Timestamp(to_unit, None))
+            if from_unit == to_unit =>
+        {
+            Some(NestedSessionCastTypes {
+                timestamp_ntz: DataType::Int64,
+                timestamp: DataType::Int64,
+                converted: false,
+                timestamp_is_target: false,
             })
         }
         (DataType::List(from), DataType::List(to)) => nested(from, to, &DataType::List),
