@@ -109,6 +109,38 @@ Feature: Persistent views
       | customer_id   | int       | NULL    |
       | customer_name | string    | NULL    |
 
+  Scenario: Persistent views preserve quoted references and aliases
+    Given final statement
+      """
+      DROP VIEW IF EXISTS quoted_customers
+      """
+    Given statement
+      """
+      CREATE VIEW quoted_customers AS
+      SELECT `customer rows`.`sp ace` AS `a.b`,
+             `customer rows`.`a-b` AS `tick``name`,
+             'it\'s a string' AS `select`
+      FROM (SELECT id AS `sp ace`, name AS `a-b` FROM view_customers) AS `customer rows`
+      WHERE `customer rows`.`sp ace` > 1
+      """
+    When query
+      """
+      SELECT `a.b`, `tick``name`, `select` FROM quoted_customers ORDER BY `a.b`
+      """
+    Then query result ordered
+      | a.b | tick`name | select        |
+      | 2   | Bob       | it's a string |
+      | 3   | Carol     | it's a string |
+    When query
+      """
+      DESCRIBE TABLE quoted_customers
+      """
+    Then query result ordered
+      | col_name  | data_type | comment |
+      | a.b       | int       | NULL    |
+      | tick`name | string    | NULL    |
+      | select    | string    | NULL    |
+
   Scenario: Filters do not recover renamed persistent view columns
     Given final statement
       """
