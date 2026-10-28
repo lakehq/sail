@@ -266,6 +266,7 @@ message ExtendedScalarUdf {
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
     SparkToStringUdf spark_to_string = 40;
+    SparkArrayItemUdf spark_array_item = 41;
   }
 }
 
@@ -435,6 +436,10 @@ message SparkParseJsonUdf {
 }
 
 message SparkPmodUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkArrayItemUdf {
   bool ansi_mode = 1;
 }
 

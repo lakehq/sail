@@ -5,17 +5,16 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions::expr_fn as datafusion_fn;
-use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
+use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array_item::SparkArrayItem;
 use sail_function::scalar::drop_struct_field::DropStructField;
-use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -343,16 +342,9 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 
-        if let Some(element_type) = list_element_type(&data_type) {
+        if is_list_type(&data_type) {
             return self
-                .resolve_expression_array_item(
-                    name.one()?,
-                    expr,
-                    element_type,
-                    extraction,
-                    schema,
-                    state,
-                )
+                .resolve_expression_array_item(name.one()?, expr, extraction, schema, state)
                 .await;
         }
 
@@ -421,12 +413,11 @@ impl PlanResolver<'_> {
 
     /// Resolves `array[index]` as Spark's `GetArrayItem`: a zero-based integral index,
     /// which may be any expression. A `BIGINT` index is narrowed to `INT` by wrapping.
-    /// An out-of-range index raises `INVALID_ARRAY_INDEX` in ANSI mode and is NULL otherwise.
+    /// `SparkArrayItem` evaluates the array and the index once per row.
     async fn resolve_expression_array_item(
         &self,
         array_name: String,
         array: expr::Expr,
-        element_type: DataType,
         extraction: spec::Expr,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
@@ -456,31 +447,8 @@ impl PlanResolver<'_> {
             )));
         }
         let index = narrow_array_index(cast(index, DataType::Int64), &index_type);
-        let element = array_element(array.clone(), index.clone() + lit(1_i64));
-        let length = cast(array_length(array.clone()), DataType::Int64);
-        let out_of_range = index
-            .clone()
-            .lt(lit(0_i64))
-            .or(length.clone().lt_eq(index.clone()));
-        let expr = if self.config.ansi_mode {
-            let message = datafusion_fn::concat(vec![
-                lit("[INVALID_ARRAY_INDEX] The index "),
-                cast(index.clone(), DataType::Utf8),
-                lit(" is out of bounds. The array has "),
-                cast(length.clone(), DataType::Utf8),
-                lit(
-                    " elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead.",
-                ),
-            ]);
-            let error = cast(
-                ScalarUDF::from(RaiseError::new()).call(vec![message]),
-                element_type,
-            );
-            when(array.is_not_null().and(out_of_range), error).otherwise(element)?
-        } else {
-            let null = lit(ScalarValue::try_from(&element_type)?);
-            when(out_of_range, null).otherwise(element)?
-        };
+        let expr =
+            ScalarUDF::from(SparkArrayItem::new(self.config.ansi_mode)).call(vec![array, index]);
         Ok(NamedExpr::new(vec![name], expr))
     }
 
@@ -567,15 +535,11 @@ impl PlanResolver<'_> {
     }
 }
 
-fn list_element_type(data_type: &DataType) -> Option<DataType> {
-    match data_type {
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field) => Some(field.data_type().clone()),
-        _ => None,
-    }
+fn is_list_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+    )
 }
 
 /// Spark narrows a `BIGINT` array index to `INT` by keeping its low 32 bits.
