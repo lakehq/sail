@@ -96,3 +96,24 @@ def test_sql_set_of_the_datafusion_time_zone_rejects_a_zone_spark_cannot_resolve
     with pytest.raises(Exception, match=r"INVALID_CONF_VALUE\.TIME_ZONE"):
         spark.sql("SET datafusion.execution.time_zone = 'Mars/Olympus'").collect()
     assert spark.conf.get(KEY) == original
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="the DataFusion time zone is specific to Sail")
+@pytest.mark.usefixtures("restore_time_zone")
+def test_sql_set_of_the_datafusion_time_zone_returns_the_key_and_the_value(spark):
+    result = spark.sql(f"SET datafusion.execution.time_zone = '{ZONE}'").collect()
+    assert result == [Row(key="datafusion.execution.time_zone", value=ZONE)]
+    assert spark.conf.get(KEY) == ZONE
+    assert_time_zones_agree(spark)
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="the DataFusion time zone is specific to Sail")
+@pytest.mark.usefixtures("restore_time_zone")
+def test_sql_reset_of_the_datafusion_time_zone_is_the_reset_of_the_session_time_zone(spark):
+    zones = []
+    for statement in [f"RESET {KEY}", "RESET datafusion.execution.time_zone"]:
+        spark.conf.set(KEY, "Pacific/Kiritimati")
+        spark.sql(statement).collect()
+        zones.append((spark.conf.get(KEY), current_time_zone(spark)))
+        assert_time_zones_agree(spark)
+    assert zones[0] == zones[1]
