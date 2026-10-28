@@ -9,7 +9,7 @@ mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
 mod scalar_subquery_keys;
 mod session_timestamp;
-mod type_coercion;
+pub mod type_coercion;
 
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
