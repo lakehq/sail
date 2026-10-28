@@ -955,7 +955,7 @@ impl PlanResolver<'_> {
                             .filter(|f| f.name().eq_ignore_ascii_case(name))
                             .map(|f| {
                                 let expr = self.cast_to_column(
-                                    col(f.name()),
+                                    col(Column::from_name(f.name())),
                                     field.data_type(),
                                     input.schema(),
                                 )?;
