@@ -386,6 +386,24 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config
+            .get_option(
+                SparkConfigKey::SPARK_SQL_ANALYZER_ALLOW_SUBQUERY_EXPRESSIONS_IN_LAMBDAS_OR_HIGHER_ORDER_FUNCTIONS,
+            )
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.allow_subquery_in_higher_order_functions = value;
+        }
+
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_LEGACY_FOLLOW_THREE_VALUED_LOGIC_IN_ARRAY_EXISTS)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.legacy_follow_three_valued_logic_in_array_exists = value;
+        }
+
+        if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_LEGACY_ALLOW_PARAMETERLESS_COUNT)
             .map(|x| x.trim().to_lowercase().parse::<bool>())
             .transpose()?

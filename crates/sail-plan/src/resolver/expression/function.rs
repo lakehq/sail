@@ -16,7 +16,8 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
 use crate::function::{
-    get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
+    check_higher_order_arity, get_built_in_aggregate_function, get_built_in_function,
+    is_higher_order_function, lambda_argument_positions,
 };
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
@@ -78,8 +79,20 @@ impl PlanResolver<'_> {
         }
 
         let canonical_function_name = function_name.to_ascii_lowercase();
+        let is_higher_order = is_higher_order_function(&canonical_function_name);
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        if let Some(udf) = catalog_manager.get_function(&canonical_function_name)?
+        // Spark 4.2 searches built-ins before session functions, so a user function
+        // never shadows a higher-order name.
+        //
+        // FIXME: `is_user_defined_function` is always false, so UDFs are looked up
+        //   first; the general fix is to invert the order for every built-in,
+        //   honoring `spark.sql.functionResolution.sessionOrder`.
+        let catalog_function = if is_higher_order {
+            None
+        } else {
+            catalog_manager.get_function(&canonical_function_name)?
+        };
+        if let Some(udf) = &catalog_function
             && udf.inner().is::<PySparkUnresolvedUDF>()
         {
             state.config_mut().arrow_allow_large_var_types = true;
@@ -97,12 +110,32 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
-        let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
+        if is_higher_order
+            && let Err(arity_error) =
+                check_higher_order_arity(&canonical_function_name, arguments.len())
+        {
+            // Spark waits for the arguments to resolve, so an unresolved column wins over the count.
+            let value_arguments = arguments
+                .iter()
+                .filter(|argument| !is_spec_lambda_argument(argument))
+                .cloned()
+                .collect();
+            self.resolve_expressions_and_names(value_arguments, schema, state)
+                .await?;
+            return Err(arity_error);
+        }
+
+        // Also taken when no argument is a lambda syntactically: Spark accepts a
+        // plain expression in a lambda position and wraps it.
+        let has_lambda_argument_position = is_higher_order
+            && (arguments.iter().any(is_spec_lambda_argument)
+                || !lambda_argument_positions(&canonical_function_name, arguments.len())
+                    .is_empty());
 
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
-        } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
+        } else if has_lambda_argument_position {
             self.resolve_higher_order_function_arguments(
                 &canonical_function_name,
                 arguments,
@@ -115,11 +148,26 @@ impl PlanResolver<'_> {
                 .await?
         };
 
+        // Spark validates subqueries and Python UDFs only once the array or map argument type-checks.
+        if is_higher_order
+            && match arguments.first() {
+                Some(first) => matches!(
+                    first.get_type(schema)?,
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(..)
+                        | DataType::Map(..)
+                        | DataType::Null
+                ),
+                None => true,
+            }
+        {
+            self.reject_disallowed_higher_order_arguments(&canonical_function_name, &arguments)?;
+        }
+
         let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
 
-        // FIXME: `is_user_defined_function` is always false,
-        //   so we need to check UDFs before built-in functions.
-        let func = match catalog_manager.get_function(&canonical_function_name)? {
+        let func = match catalog_function {
             Some(udf) => {
                 if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                     return Err(PlanError::invalid("invalid scalar function clause"));

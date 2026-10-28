@@ -176,3 +176,21 @@ Feature: transform_values with lambda
         | one lambda parameter     | map(1, 2), k -> k         |
         | three lambda parameters  | map(1, 2), (k, v, i) -> v |
         | missing function         | map(1, 2)                 |
+
+  Rule: Subquery expressions are rejected
+
+    @spark-4
+    Scenario: a subquery inside a lambda body is rejected
+      When query
+        """
+        SELECT transform_values(map(1, 2), (k, v) -> (SELECT 1)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions
+
+    @spark-4
+    Scenario: a subquery in place of the lambda is rejected
+      When query
+        """
+        SELECT transform_values(map(1, 2), (SELECT 1)) AS result
+        """
+      Then query error Subquery expressions are not supported within higher-order functions

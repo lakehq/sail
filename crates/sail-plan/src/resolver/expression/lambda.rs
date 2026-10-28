@@ -1,16 +1,74 @@
-use datafusion_common::DFSchemaRef;
-use datafusion_common::arrow::datatypes::FieldRef;
+use std::sync::Arc;
+
+use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{Lambda, LambdaVariable};
-use datafusion_expr::{ExprSchemable, ValueOrLambda, expr};
+use datafusion_expr::{ExprSchemable, ValueOrLambda, expr, lit};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_python_udf::get_udf_display_name;
+use sail_python_udf::udf::pyspark_udf::PySparkUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::get_lambda_parameters;
+use crate::function::{
+    get_lambda_parameters, lambda_argument_positions, lambda_slot_positions,
+    wrapped_lambda_param_count,
+};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
+
+/// Returns whether an expression contains a subquery anywhere in its tree
+/// (scalar subquery, `IN (subquery)`, or `EXISTS (subquery)`).
+fn expr_contains_subquery(expr: &expr::Expr) -> PlanResult<bool> {
+    let mut found = false;
+    expr.apply(|e| {
+        Ok(match e {
+            expr::Expr::ScalarSubquery(_) | expr::Expr::InSubquery(_) | expr::Expr::Exists(_) => {
+                found = true;
+                TreeNodeRecursion::Stop
+            }
+            _ => TreeNodeRecursion::Continue,
+        })
+    })?;
+    Ok(found)
+}
+
+/// Returns the name of the first Python UDF found anywhere in an expression's
+/// tree, if any. Spark rejects Python UDFs inside a higher-order function's
+/// lambda because its evaluators cannot drive the Python worker per element.
+fn expr_python_udf_name(expr: &expr::Expr) -> PlanResult<Option<String>> {
+    let mut found = None;
+    expr.apply(|e| {
+        Ok(match e {
+            // Only Python UDFs are detectable here: a SQL UDF resolves to a plain
+            // `ScalarFunction` indistinguishable from a built-in.
+            expr::Expr::ScalarFunction(function)
+                if function.func.inner().downcast_ref::<PySparkUDF>().is_some() =>
+            {
+                found = Some(get_udf_display_name(function.func.name()).to_string());
+                TreeNodeRecursion::Stop
+            }
+            _ => TreeNodeRecursion::Continue,
+        })
+    })?;
+    Ok(found)
+}
+
+/// Collects the names of every lambda variable referenced anywhere in an
+/// expression's tree.
+fn referenced_lambda_variables(expr: &expr::Expr) -> PlanResult<std::collections::HashSet<String>> {
+    let mut names = std::collections::HashSet::new();
+    expr.apply(|e| {
+        if let expr::Expr::LambdaVariable(variable) = e {
+            names.insert(variable.name.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(names)
+}
 
 pub(super) fn is_spec_lambda_argument(argument: &spec::Expr) -> bool {
     match argument {
@@ -52,10 +110,15 @@ impl PlanResolver<'_> {
         enum Slot {
             Resolved(NamedExpr),
             Lambda(spec::Expr, Vec<spec::UnresolvedNamedLambdaVariable>),
+            /// A plain expression in a lambda position, wrapped in a lambda whose
+            /// parameters go unreferenced.
+            WrappedLambda(spec::Expr),
         }
 
+        let lambda_positions = lambda_argument_positions(function_name, arguments.len());
+
         let mut slots: Vec<Slot> = Vec::with_capacity(arguments.len());
-        for argument in arguments {
+        for (position, argument) in arguments.into_iter().enumerate() {
             if is_spec_lambda_argument(&argument) {
                 let Some((function, arguments)) = take_spec_lambda_argument(argument) else {
                     return Err(PlanError::internal(
@@ -63,6 +126,8 @@ impl PlanResolver<'_> {
                     ));
                 };
                 slots.push(Slot::Lambda(function, arguments));
+            } else if lambda_positions.contains(&position) {
+                slots.push(Slot::WrappedLambda(argument));
             } else {
                 slots.push(Slot::Resolved(
                     self.resolve_named_expression(argument, schema, state)
@@ -71,12 +136,26 @@ impl PlanResolver<'_> {
             }
         }
 
+        // Spark coerces an untyped NULL array argument only when the whole call is already
+        // resolved, which an explicit lambda prevents (as for the map functions' builders).
+        if !slots.iter().any(|slot| matches!(slot, Slot::Lambda(..)))
+            && matches!(
+                function_name.trim().to_lowercase().as_str(),
+                "transform" | "filter" | "exists" | "forall" | "array_sort"
+            )
+            && let Some(Slot::Resolved(array)) = slots.first_mut()
+            && array.expr.get_type(schema)? == DataType::Null
+        {
+            let null_array = DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)));
+            array.expr = lit(ScalarValue::try_new_null(&null_array)?);
+        }
+
         let fields = slots
             .iter()
             .map(|slot| {
                 Ok(match slot {
                     Slot::Resolved(named) => ValueOrLambda::Value(named.expr.to_field(schema)?.1),
-                    Slot::Lambda(..) => ValueOrLambda::Lambda(None),
+                    Slot::Lambda(..) | Slot::WrappedLambda(..) => ValueOrLambda::Lambda(None),
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
@@ -102,11 +181,92 @@ impl PlanResolver<'_> {
                     )
                     .await?
                 }
+                Slot::WrappedLambda(expression) => {
+                    let param_fields = lambda_params.next().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "missing lambda parameters for a lambda argument of {function_name}"
+                        ))
+                    })?;
+                    // Resolved outside any lambda scope, so nothing in the body can
+                    // bind to the parameters declared below.
+                    let body = self
+                        .resolve_named_expression(expression, schema, state)
+                        .await?;
+                    let param_count = wrapped_lambda_param_count(function_name, param_fields.len());
+                    // DataFusion binds lambda variables by name, so a placeholder
+                    // must avoid every variable the body captures or evaluation
+                    // would rebind it.
+                    let captured = referenced_lambda_variables(&body.expr)?;
+                    let mut params: Vec<String> = Vec::with_capacity(param_count);
+                    let mut n = 0;
+                    while params.len() < param_count {
+                        let candidate = format!("__wrapped_lambda_param_{n}");
+                        n += 1;
+                        if !captured.contains(&candidate) {
+                            params.push(candidate);
+                        }
+                    }
+                    // Spark renders a hidden parameter as `namedlambdavariable()`;
+                    // the placeholder's internal name never surfaces.
+                    let placeholders = vec!["namedlambdavariable()"; params.len()].join(", ");
+                    let name = format!(
+                        "lambdafunction({}, {placeholders})",
+                        body.name.clone().one()?
+                    );
+                    NamedExpr::new(
+                        vec![name],
+                        expr::Expr::Lambda(Lambda::new(params, body.expr)),
+                    )
+                }
             };
             names.push(name.one()?);
             exprs.push(expr);
         }
         Ok((names, exprs))
+    }
+
+    /// Rejects what Spark forbids anywhere in a higher-order call: subquery
+    /// expressions (SPARK-47509) and Python UDFs inside a lambda body. Spark
+    /// applies both to the whole node, so every argument is checked.
+    pub(super) fn reject_disallowed_higher_order_arguments(
+        &self,
+        function_name: &str,
+        exprs: &[expr::Expr],
+    ) -> PlanResult<()> {
+        // Spark validates subqueries over the whole call before it looks for Python UDFs.
+        if !self.config.allow_subquery_in_higher_order_functions {
+            for expr in exprs {
+                if expr_contains_subquery(expr)? {
+                    return Err(PlanError::AnalysisError(
+                        "Subquery expressions are not supported within higher-order functions. \
+                         Please remove all subquery expressions from higher-order functions \
+                         and then try the query again."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        // `UNSUPPORTED_FEATURE.LAMBDA_FUNCTION_WITH_PYTHON_UDF`: the evaluator cannot drive the
+        // Python worker per element. A plain expression in a lambda slot that the builder wraps
+        // later (`map_filter`) is the lambda body.
+        let lambda_slots = lambda_slot_positions(function_name, exprs.len());
+        for (position, expr) in exprs.iter().enumerate() {
+            let body = match expr {
+                expr::Expr::Lambda(lambda) => Some(lambda.body.as_ref()),
+                expr if lambda_slots.contains(&position) => Some(expr),
+                _ => None,
+            };
+            if let Some(body) = body
+                && let Some(name) = expr_python_udf_name(body)?
+            {
+                // Spark quotes the call's full SQL (`"plus_one(lambda x#11)"`),
+                // which embeds an expression id we cannot reproduce.
+                return Err(PlanError::AnalysisError(format!(
+                    "Lambda function with Python UDF \"{name}\" in a higher order function."
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn resolve_expression_lambda_function(
