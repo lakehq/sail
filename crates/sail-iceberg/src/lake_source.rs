@@ -52,7 +52,9 @@ use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::scan::IcebergScan;
-use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
+use crate::datasource::type_converter::{
+    ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg, iceberg_schema_to_arrow,
+};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::metadata_relation::{IcebergMetadataRelationType, metadata_relation_provider};
@@ -624,8 +626,13 @@ fn describe_sort_order(order: &SortOrder, schema: &Schema) -> Result<String> {
 }
 
 /// Iceberg accepts only UTC timestamp labels, while Sail labels TIMESTAMP values with the session
-/// time zone. Relabeling keeps the stored instants.
-fn relabel_timestamps_as_utc(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+/// time zone. Relabeling keeps the stored instants. The fields of an existing TIMESTAMP_NTZ column
+/// of `table` keep a non-UTC zone, so that the write fails as before instead of storing the UTC
+/// wall-clock time.
+fn relabel_timestamps_as_utc(
+    input: Arc<dyn ExecutionPlan>,
+    table: Option<&ArrowSchema>,
+) -> Result<Arc<dyn ExecutionPlan>> {
     use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_expr::expressions::{CastExpr, Column};
     use datafusion::physical_plan::projection::ProjectionExec;
@@ -634,7 +641,10 @@ fn relabel_timestamps_as_utc(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Ex
     let relabeled = schema
         .fields()
         .iter()
-        .map(|field| relabel_timestamp_field(field.as_ref()))
+        .map(|field| {
+            let target = table.and_then(|table| table.field_with_name(field.name()).ok());
+            relabel_timestamp_field(field.as_ref(), target.map(|target| target.data_type()))
+        })
         .collect::<Vec<_>>();
     if schema
         .fields()
@@ -662,36 +672,56 @@ fn relabel_timestamps_as_utc(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Ex
     Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
 }
 
-/// Relabels TIMESTAMP values with UTC, including in nested fields, like Delta's schema normalization.
-fn relabel_timestamp_field(field: &ArrowField) -> ArrowField {
-    let data_type = match field.data_type() {
-        DataType::Timestamp(unit, Some(tz)) if !matches!(tz.as_ref(), "UTC" | "+00:00") => {
+/// Relabels TIMESTAMP values with UTC, including in nested fields, like Delta's schema
+/// normalization, except where `target`, the type of the existing column, is TIMESTAMP_NTZ.
+fn relabel_timestamp_field(field: &ArrowField, target: Option<&DataType>) -> ArrowField {
+    let data_type = match (field.data_type(), target) {
+        (DataType::Timestamp(_, Some(_)), Some(DataType::Timestamp(_, None))) => {
+            field.data_type().clone()
+        }
+        (DataType::Timestamp(unit, Some(tz)), _) if !matches!(tz.as_ref(), "UTC" | "+00:00") => {
             DataType::Timestamp(*unit, Some("UTC".into()))
         }
-        data_type => transform_nested_fields(data_type, relabel_timestamp_field),
+        (data_type, target) => relabel_nested_timestamp_fields(data_type, target),
     };
     field.clone().with_data_type(data_type)
 }
 
-// Copied from the Delta Lake schema normalization, where it is private.
-fn transform_nested_fields(
-    data_type: &DataType,
-    transform: fn(&ArrowField) -> ArrowField,
-) -> DataType {
+// Adapted from the Delta Lake schema normalization, where it is private.
+fn relabel_nested_timestamp_fields(data_type: &DataType, target: Option<&DataType>) -> DataType {
+    let element = match target {
+        Some(
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::Map(field, _),
+        ) => Some(field.data_type()),
+        _ => None,
+    };
+    let transform_element = |field: &ArrowField| Arc::new(relabel_timestamp_field(field, element));
     match data_type {
         DataType::Struct(fields) => {
+            let targets = match target {
+                Some(DataType::Struct(targets)) => Some(targets),
+                _ => None,
+            };
             let transformed_fields = fields
                 .iter()
-                .map(|field| Arc::new(transform(field.as_ref())))
+                .map(|field| {
+                    let target = targets
+                        .and_then(|targets| targets.find(field.name()))
+                        .map(|(_, target)| target.data_type());
+                    Arc::new(relabel_timestamp_field(field.as_ref(), target))
+                })
                 .collect::<Fields>();
             DataType::Struct(transformed_fields)
         }
-        DataType::List(field) => DataType::List(Arc::new(transform(field.as_ref()))),
-        DataType::LargeList(field) => DataType::LargeList(Arc::new(transform(field.as_ref()))),
+        DataType::List(field) => DataType::List(transform_element(field)),
+        DataType::LargeList(field) => DataType::LargeList(transform_element(field)),
         DataType::FixedSizeList(field, size) => {
-            DataType::FixedSizeList(Arc::new(transform(field.as_ref())), *size)
+            DataType::FixedSizeList(transform_element(field), *size)
         }
-        DataType::Map(field, sorted) => DataType::Map(Arc::new(transform(field.as_ref())), *sorted),
+        DataType::Map(field, sorted) => DataType::Map(transform_element(field), *sorted),
         _ => data_type.clone(),
     }
 }
@@ -710,8 +740,6 @@ pub(crate) async fn plan_iceberg_write(
     node: &IcebergWriteNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     use datafusion::physical_plan::empty::EmptyExec;
-
-    let physical_input = relabel_timestamps_as_utc(physical_input)?;
 
     let IcebergWriteNodeOptions {
         path,
@@ -871,6 +899,10 @@ pub(crate) async fn plan_iceberg_write(
         existing_partition_columns.unwrap_or_default()
     };
 
+    // An overwrite that replaces the schema has no existing columns to keep, like the schema mode
+    // that `get_schema_mode` gives it.
+    let replaces_schema =
+        matches!(mode, PhysicalSinkMode::Overwrite) && iceberg_options.overwrite_schema;
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
@@ -880,6 +912,13 @@ pub(crate) async fn plan_iceberg_write(
     if let Some(target_file_size) = target_file_size {
         options.target_file_size_bytes = Some(target_file_size);
     }
+    let table_schema = table
+        .as_ref()
+        .filter(|_| !replaces_schema)
+        .and_then(|table| table.metadata().current_schema())
+        .map(iceberg_schema_to_arrow)
+        .transpose()?;
+    let physical_input = relabel_timestamps_as_utc(physical_input, table_schema.as_ref())?;
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
