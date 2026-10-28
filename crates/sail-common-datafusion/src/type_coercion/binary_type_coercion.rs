@@ -34,9 +34,6 @@ use itertools::Itertools;
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
-///
-/// Note this is different than [`crate::signature::Signature`] which
-/// describes the type signature of a function.
 struct Signature {
     /// The type to coerce the left argument to
     lhs: DataType,

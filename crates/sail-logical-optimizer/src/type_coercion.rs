@@ -72,7 +72,8 @@ use datafusion_expr::{
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
-    BinaryTypeCoercer, like_coercion, regex_coercion, type_union_coercion,
+    BinaryTypeCoercer, comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
+    type_union_coercion,
 };
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
@@ -1945,29 +1946,6 @@ fn in_subquery_tuple_values<'a>(
         );
     }
     Ok(Some(values))
-}
-
-// [CREDIT]: https://github.com/apache/datafusion/blob/c18e5d974c49382ba892fa9f89ce71d3aa0ab8ae/datafusion/expr-common/src/type_coercion/binary.rs#L1071-L1090
-// TODO: Remove after DataFusion 56
-/// Returns the common type for the non-binary comparison expressions
-/// (`IN`, `BETWEEN`, `CASE x WHEN`, `IN (<subquery>)`, `= ANY/ALL`), using the
-/// same rules as `=` itself so they cannot disagree with it.
-///
-/// `session_time_zone` is the label of the Spark session time zone; see
-/// [`BinaryTypeCoercer::with_session_time_zone`].
-///
-/// The session timezone is applied recursively to timestamps inside dictionary,
-/// run-end encoded, list, struct, and map types.
-pub fn comparison_coercion_with_session_timezone(
-    lhs_type: &DataType,
-    rhs_type: &DataType,
-    session_time_zone: Option<&str>,
-) -> Option<DataType> {
-    BinaryTypeCoercer::new(lhs_type, &Operator::Eq, rhs_type)
-        .with_session_time_zone(session_time_zone)
-        .get_input_types()
-        .ok()
-        .map(|(lhs_type, _)| lhs_type)
 }
 
 #[cfg(test)]
