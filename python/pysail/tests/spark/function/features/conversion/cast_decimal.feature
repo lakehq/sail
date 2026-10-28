@@ -162,3 +162,49 @@ Feature: Numeric casts to Decimal handle precision overflow
         | ansi  |
         | true  |
         | false |
+
+  Rule: String casts to Decimal follow ANSI mode
+
+    Scenario Outline: ANSI off: <case>
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(<value> AS <target>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case               | value                | target        | result |
+        | valid string       | '1.25'               | DECIMAL(10,2) | 1.25   |
+        | malformed string   | 'abc'                | DECIMAL(10,2) | NULL   |
+        | empty string       | ''                   | DECIMAL(10,2) | NULL   |
+        | overflowing string | '12345.6'            | DECIMAL(4,1)  | NULL   |
+        | NULL string        | CAST(NULL AS STRING) | DECIMAL(10,2) | NULL   |
+
+    Scenario Outline: ANSI on: <case>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(<value> AS <target>) AS result
+        """
+      Then query error .*
+
+      Examples:
+        | case               | value     | target        |
+        | malformed string   | 'abc'     | DECIMAL(10,2) |
+        | empty string       | ''        | DECIMAL(10,2) |
+        | overflowing string | '12345.6' | DECIMAL(4,1)  |
+
+    Scenario: A string column with malformed values casts to NULL with ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(v AS DECIMAL(10,2)) AS result FROM VALUES ('1.5'), ('abc'), ('2') AS t(v)
+        """
+      Then query result ordered
+        | result |
+        | 1.50   |
+        | NULL   |
+        | 2.00   |

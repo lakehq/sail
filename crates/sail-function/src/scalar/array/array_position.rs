@@ -14,8 +14,8 @@ use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValu
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_expr::type_coercion::binary::comparison_coercion;
 use num::Float;
+use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 pub struct SparkArrayPosition {

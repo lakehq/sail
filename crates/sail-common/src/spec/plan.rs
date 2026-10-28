@@ -284,6 +284,13 @@ pub enum QueryNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LakehouseCommandTarget {
+    Table(ObjectName),
+    Path(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CommandNode {
     ShowString(ShowString),
@@ -297,6 +304,18 @@ pub enum CommandNode {
         root: Box<CommandPlan>,
         references: Vec<QueryPlan>,
     },
+    CallProcedure {
+        procedure: ObjectName,
+        arguments: Vec<Expr>,
+        named_arguments: Vec<(Identifier, Expr)>,
+    },
+    /// A native SQL statement lowered to a format-owned procedure with a table target.
+    CallTableProcedure {
+        format: String,
+        procedure: String,
+        target: LakehouseCommandTarget,
+        arguments: Vec<(Identifier, Expr)>,
+    },
     // catalog operations
     CurrentDatabase,
     SetCurrentDatabase {
@@ -308,6 +327,10 @@ pub enum CommandNode {
     },
     ListCatalogs {
         pattern: Option<String>,
+    },
+    ShowTableProperties {
+        table: ObjectName,
+        property: Option<String>,
     },
     ShowTables {
         database: Option<ObjectName>,
@@ -426,6 +449,9 @@ pub enum CommandNode {
         if_exists: bool,
         purge: bool,
     },
+    TruncateTable {
+        table: ObjectName,
+    },
     CreateView {
         view: ObjectName,
         #[serde(flatten)]
@@ -478,6 +504,10 @@ pub enum CommandNode {
     SetVariable {
         variable: String,
         value: String,
+    },
+    /// `RESET <variable>`, or `RESET` for all variables when `variable` is `None`.
+    ResetVariable {
+        variable: Option<String>,
     },
     Update {
         table: ObjectName,
@@ -1371,7 +1401,34 @@ pub enum ExplainMode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
+    AlterSnapshotReference {
+        operation: super::SnapshotReferenceOperation,
+    },
+    AlterIdentifierFields {
+        names: Vec<ObjectName>,
+        drop: bool,
+    },
+    AlterPartitionSpec {
+        add: Option<(Expr, Option<String>)>,
+        drop: Option<Expr>,
+    },
+    SetWriteOrder {
+        order: Vec<SortOrder>,
+        distribution: Option<String>,
+    },
+    SetLocation {
+        location: String,
+    },
+    RenameTable {
+        name: ObjectName,
+    },
     Unknown,
+    ReplaceColumns {
+        columns: Vec<super::ColumnChange>,
+    },
+    AlterColumns {
+        changes: Vec<super::ColumnChange>,
+    },
     SetTableProperties {
         properties: Vec<(String, String)>,
     },
@@ -1386,6 +1443,10 @@ pub enum AlterTableOperation {
     AlterColumnDefault {
         name: ObjectName,
         default: Option<String>,
+    },
+    DropCheckConstraint {
+        name: Identifier,
+        if_exists: bool,
     },
     AddCheckConstraint {
         name: Identifier,
@@ -1418,4 +1479,34 @@ pub struct ExprWithSource {
     /// may not be an exact representation of the expression
     /// if the expression is not created from SQL.
     pub source: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lakehouse_target_serialization_preserves_path_intent() -> serde_json::Result<()> {
+        for (target, expected) in [
+            (
+                LakehouseCommandTarget::Path("relative-table".to_string()),
+                serde_json::json!({"path": "relative-table"}),
+            ),
+            (
+                LakehouseCommandTarget::Table(ObjectName::from(["delta", "relative-table"])),
+                serde_json::json!({"table": ["delta", "relative-table"]}),
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&target)?, expected);
+            let plan = Plan::Command(CommandPlan::new(CommandNode::CallTableProcedure {
+                format: "delta".to_string(),
+                procedure: "describe_detail".to_string(),
+                target,
+                arguments: vec![],
+            }));
+            let encoded = serde_json::to_string(&plan)?;
+            assert_eq!(serde_json::from_str::<Plan>(&encoded)?, plan);
+        }
+        Ok(())
+    }
 }

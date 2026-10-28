@@ -231,6 +231,18 @@ impl IcebergRestCatalogProvider {
         Ok(result)
     }
 
+    fn commit_state_is_unknown<E>(error: &ApiError<E>) -> bool {
+        match error.status() {
+            Some(status) => matches!(status.as_u16(), 500 | 502 | 503 | 504) || status.is_success(),
+            // A malformed success response or a lost response may follow a successful commit.
+            // Builder and connection failures happen before the request reaches the server.
+            None => match error {
+                ApiError::Request(error) => !error.is_builder() && !error.is_connect(),
+                _ => false,
+            },
+        }
+    }
+
     // Merge the local catalog config with the [`crate::r#gen::CatalogConfig`] fetched from the REST server.
     // This only happens once, then the result is cached.
     async fn resolved_catalog_config(&self) -> CatalogResult<&CatalogConfig<'static>> {
@@ -458,6 +470,36 @@ impl IcebergRestCatalogProvider {
             );
         }
 
+        Ok(())
+    }
+
+    fn validate_create_table_write_schema(
+        expected: &crate::r#gen::Schema,
+        result: &crate::r#gen::LoadTableResult,
+    ) -> CatalogResult<()> {
+        let schema = find_by_id_or_last(
+            result.metadata.schemas.as_ref(),
+            result.metadata.current_schema_id,
+            |schema| schema.schema_id,
+        )
+        .ok_or_else(|| CatalogError::External("Created Iceberg table has no schema".to_string()))?;
+        let parse_schema =
+            |schema: &crate::r#gen::Schema| -> CatalogResult<sail_iceberg::spec::Schema> {
+                serde_json::to_value(schema)
+                    .and_then(serde_json::from_value)
+                    .map_err(|error| {
+                        CatalogError::External(format!("Invalid Iceberg write schema: {error}"))
+                    })
+            };
+        let actual = parse_schema(schema)?;
+        let expected = parse_schema(expected)?;
+        // CTAS writers are planned before the catalog creates the table.
+        // Parse both REST schemas to normalize collection element names and type spellings.
+        if actual.fields() != expected.fields() {
+            return Err(CatalogError::UnsupportedCapability(
+                "Iceberg REST catalog changed the schema or field IDs for create+write; create the table first and then insert into it".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -835,6 +877,31 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         ]
     }
 
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<sail_catalog::provider::CreateTableMetadataRequirement> {
+        use sail_catalog::provider::{
+            CreateTableMetadataRequirement, LakeSourceCreateMetadataMode,
+        };
+        if !options.format.eq_ignore_ascii_case("iceberg") {
+            return Err(CatalogError::NotSupported(format!(
+                "Iceberg REST catalog cannot create '{}' tables",
+                options.format
+            )));
+        }
+        if options.columns.is_empty()
+            && options.location.is_some()
+            && !options.is_write_precondition
+        {
+            Ok(CreateTableMetadataRequirement::LakeSource {
+                mode: LakeSourceCreateMetadataMode::CatalogCoordinated,
+            })
+        } else {
+            Ok(CreateTableMetadataRequirement::None)
+        }
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -1157,6 +1224,34 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             ));
         }
 
+        if let Some(metadata_location) =
+            sail_common_datafusion::catalog::managed::metadata_location_value(
+                properties
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+            )
+        {
+            let request = crate::r#gen::RegisterTableRequest {
+                name: table.to_string(),
+                metadata_location: metadata_location.to_string(),
+                overwrite: Some(false),
+            };
+            let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+            let namespace = catalog_config.namespace_string(database)?;
+            let result = self
+                .with_auth_retry(|client| {
+                    let prefix = prefix.clone();
+                    let namespace = namespace.clone();
+                    let request = request.clone();
+                    async move { client.register_table(prefix, namespace, request).await }
+                })
+                .await?
+                .map_err(|error| {
+                    CatalogError::External(format!("Failed to register Iceberg table: {error}"))
+                })?;
+            return Self::load_table_result_to_status(&self.name, database, table, result.inner);
+        }
+
         let format_version = requested_iceberg_format_version(&properties)?;
         let fields = columns_to_nested_fields(&columns, format_version)?;
 
@@ -1184,8 +1279,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .with_identifier_field_ids(identifier_field_ids.clone())
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
-        let schema = crate::r#gen::Schema::try_from(schema)?;
-
         let partition_spec = build_partition_spec(&partition_by, bucket_by.as_ref(), &name_to_id)?;
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
@@ -1200,7 +1293,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let request = crate::r#gen::CreateTableRequest {
             name: table.to_string(),
             location,
-            schema: Box::new(schema),
+            schema: Box::new(crate::r#gen::Schema::try_from(schema)?),
             partition_spec,
             write_order,
             stage_create: Some(false),
@@ -1221,6 +1314,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
         if is_write_precondition {
+            Self::validate_create_table_write_schema(&request.schema, &result)?;
             Self::validate_create_table_access_session_requirements(
                 &self.name,
                 database,
@@ -1306,15 +1400,98 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
     }
 
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let config = self.resolved_catalog_config().await?;
+        let prefix = config.prefix().map(ToOwned::to_owned);
+        let body = crate::r#gen::RenameTableRequest {
+            source: Box::new(crate::r#gen::TableIdentifier {
+                name: table.into(),
+                namespace: Box::new(crate::r#gen::Namespace(database.clone().into())),
+            }),
+            destination: Box::new(crate::r#gen::TableIdentifier {
+                name: destination_table.into(),
+                namespace: Box::new(crate::r#gen::Namespace(destination_database.clone().into())),
+            }),
+        };
+        self.with_auth_retry(|client| {
+            let prefix = prefix.clone();
+            let body = body.clone();
+            async move { client.rename_table(prefix, body).await }
+        })
+        .await?
+        .map(|_| ())
+        .map_err(|e| CatalogError::External(format!("Failed to rename Iceberg table: {e}")))
+    }
+
     async fn alter_table(
         &self,
-        _database: &Namespace,
-        _table: &str,
-        _options: AlterTableOptions,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
     ) -> CatalogResult<()> {
-        Err(CatalogError::NotSupported(
-            "alter table in Iceberg catalog".to_string(),
-        ))
+        let result = self.load_table_result(database, table, None).await?;
+        let metadata = serde_json::to_vec(result.metadata.as_ref())
+            .map_err(|error| CatalogError::External(error.to_string()))?;
+        let metadata = sail_iceberg::spec::TableMetadata::from_json(&metadata)
+            .map_err(|error| CatalogError::External(error.to_string()))?;
+        let (requirements, updates) =
+            sail_iceberg::ddl::catalog_alter_updates(&metadata, &(&options).into())
+                .map_err(|error| CatalogError::InvalidArgument(error.to_string()))?;
+        if updates.is_empty() {
+            return Ok(());
+        }
+        let status = Self::load_table_result_to_status(&self.name, database, table, result)?;
+        let mut catalog_table = vec![self.name.clone()];
+        catalog_table.extend(Vec::<String>::from(database.clone()));
+        catalog_table.push(table.to_string());
+        let context = sail_catalog::lakehouse::resolve_lakehouse_table_status(
+            self.name.clone(),
+            catalog_table,
+            &status,
+            sail_common_datafusion::catalog::LakehouseOperation::Alter,
+            &self.lakehouse_capabilities(),
+        )
+        .execution;
+        self.commit_lakehouse_table(
+            database,
+            table,
+            LakehouseCommitRequest {
+                context,
+                format: "iceberg".to_string(),
+                requirements: requirements
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<Result<_, _>>()
+                    .map_err(|error| CatalogError::External(error.to_string()))?,
+                updates: updates
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<Result<_, _>>()
+                    .map_err(|error| CatalogError::External(error.to_string()))?,
+                payload: None,
+            },
+        )
+        .await
+        .and_then(|outcome| match outcome {
+            LakehouseCommitOutcome::Committed { .. } | LakehouseCommitOutcome::Noop { .. } => {
+                Ok(())
+            }
+            LakehouseCommitOutcome::StateUnknown { message } => {
+                Err(CatalogError::CommitStateUnknown(message.into()))
+            }
+            LakehouseCommitOutcome::RetryableConflict { message } => {
+                Err(CatalogError::Conflict(message))
+            }
+            LakehouseCommitOutcome::Rejected { message } => {
+                Err(CatalogError::CommitRejected(message))
+            }
+        })
     }
 
     async fn commit_lakehouse_table(
@@ -1376,7 +1553,19 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         .await
                 }
             })
-            .await?
+            .await?;
+        if let Err(error) = &response
+            && Self::commit_state_is_unknown(error)
+        {
+            return Ok(LakehouseCommitOutcome::StateUnknown {
+                message: format!(
+                    "Iceberg REST catalog commit for {}.{} may have succeeded: {error}. Check the table state before retrying",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(table)
+                ),
+            });
+        }
+        let response = response
             .map(|response| response.inner)
             .map_err(|e| match e {
                 e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
@@ -2087,7 +2276,7 @@ fn parse_unary_sort_transform(
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field};
     use sail_catalog::credentials::{EmptyCatalogCredentials, FileCatalogCredentials};
     use sail_catalog::lakehouse::TableAccessPurpose;
     use sail_common::spec;
@@ -2175,6 +2364,39 @@ mod tests {
                 })))
                 .mount(&self.server)
                 .await;
+        }
+
+        async fn commit_table(&self) -> CatalogResult<LakehouseCommitOutcome> {
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let context = LakehouseExecutionContext::catalog_table_context(
+                CatalogProviderId(self.name.clone()),
+                vec![self.name.clone(), "db1".to_string(), "table1".to_string()],
+                CatalogTableIdentity {
+                    table_id: None,
+                    table_uri: Some("s3://bucket/table".to_string()),
+                },
+                LakehouseOperation::Write,
+                LakehouseFormat::Iceberg,
+                LakehouseAuthority::CatalogAuthoritative {
+                    lifecycle: TableLifecycle::Managed,
+                    pointer: MetadataPointerAuthority::IcebergRest,
+                    commit: CommitAuthority::IcebergRestCommit,
+                },
+                ScanAuthority::ClientLakeSource,
+            );
+            self.catalog
+                .commit_lakehouse_table(
+                    &namespace,
+                    "table1",
+                    LakehouseCommitRequest {
+                        context,
+                        format: "iceberg".to_string(),
+                        requirements: vec![],
+                        updates: vec![],
+                        payload: None,
+                    },
+                )
+                .await
         }
     }
 
@@ -3533,6 +3755,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_table_validates_nested_field_ids_before_writing() {
+        for is_write_precondition in [false, true] {
+            let ctx = TestContext::new(Some("test")).await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let mut response = create_table_response_with_access_session_hints();
+            response["metadata"]["schemas"][0]["fields"][0]["type"] = serde_json::json!({
+                "type": "list",
+                "element-id": 99,
+                "element": "string",
+                "element-required": true
+            });
+            ctx.mock_post_json(&ctx.path("/namespaces/db1/tables"), response)
+                .await;
+            let mut options = simple_create_table_options();
+            options.is_write_precondition = is_write_precondition;
+            options.columns[0].data_type =
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, false)));
+
+            let result = ctx
+                .catalog
+                .create_table(&namespace, "table1", options)
+                .await;
+            if is_write_precondition {
+                let error = result.unwrap_err();
+                assert!(matches!(error, CatalogError::UnsupportedCapability(_)));
+                assert!(
+                    error
+                        .to_string()
+                        .contains("changed the schema or field IDs")
+                );
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn create_table_rejects_server_side_scan_planning() {
         let ctx = TestContext::new(Some("test")).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
@@ -4046,6 +4305,121 @@ mod tests {
     async fn test_get_database() {
         test_get_database_impl(None).await;
         test_get_database_impl(Some("test")).await;
+    }
+
+    #[tokio::test]
+    async fn commit_reports_unknown_state_without_retrying() {
+        for status in [200, 500, 502, 503, 504] {
+            for json_body in [false, true] {
+                let ctx = TestContext::new(Some("test")).await;
+                let response = ResponseTemplate::new(status);
+                let response = if json_body {
+                    response.set_body_json(serde_json::json!({
+                        "error": {"code": status, "type": "ServerError", "message": "uncertain"}
+                    }))
+                } else {
+                    response.set_body_string("invalid response body")
+                };
+                Mock::given(method("POST"))
+                    .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                    .respond_with(response)
+                    .expect(1)
+                    .mount(&ctx.server)
+                    .await;
+
+                assert!(
+                    matches!(
+                        ctx.commit_table().await.unwrap(),
+                        LakehouseCommitOutcome::StateUnknown { .. }
+                    ),
+                    "status {status}, JSON body {json_body}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_preserves_definite_failures() {
+        for status in [400, 401, 403, 404, 409, 422, 429, 501] {
+            let ctx = TestContext::new(Some("test")).await;
+            Mock::given(method("POST"))
+                .and(path(ctx.path("/namespaces/db1/tables/table1")))
+                .respond_with(ResponseTemplate::new(status).set_body_string("rejected"))
+                .expect(if status == 401 { 2 } else { 1 })
+                .mount(&ctx.server)
+                .await;
+
+            let error = ctx.commit_table().await.unwrap_err();
+            assert!(matches!(
+                (status, error),
+                (401, CatalogError::Unauthorized(_))
+                    | (403, CatalogError::Forbidden(_))
+                    | (404, CatalogError::NotFound(CatalogObject::Table, _))
+                    | (409, CatalogError::Conflict(_))
+                    | (429, CatalogError::RateLimited(_))
+                    | (400 | 422 | 501, CatalogError::External(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_response_timeout_is_unknown() {
+        let mut ctx = TestContext::new(Some("test")).await;
+        ctx.catalog.resolved_catalog_config().await.unwrap();
+        ctx.catalog.http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(100))
+            .build()
+            .unwrap();
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(create_table_response_with_access_session_hints())
+                    .set_delay(std::time::Duration::from_secs(1)),
+            )
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        assert!(matches!(
+            ctx.commit_table().await.unwrap(),
+            LakehouseCommitOutcome::StateUnknown { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn commit_connection_failure_is_definite() {
+        let mut ctx = TestContext::new(Some("test")).await;
+        ctx.catalog.resolved_catalog_config().await.unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        ctx.catalog.http_client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all(format!("http://{address}")).unwrap())
+            .build()
+            .unwrap();
+
+        assert!(matches!(
+            ctx.commit_table().await,
+            Err(CatalogError::External(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn commit_valid_response_is_committed() {
+        let ctx = TestContext::new(Some("test")).await;
+        ctx.mock_post_json(
+            &ctx.path("/namespaces/db1/tables/table1"),
+            create_table_response_with_access_session_hints(),
+        )
+        .await;
+        assert!(matches!(
+            ctx.commit_table().await.unwrap(),
+            LakehouseCommitOutcome::Committed {
+                payload: Some(_),
+                ..
+            }
+        ));
     }
 
     fn error_with_status(status: reqwest::StatusCode) -> ApiError<()> {

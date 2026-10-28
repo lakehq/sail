@@ -46,6 +46,27 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         | 4  | Diana | 400   |
         | 5  | Eve   | 500   |
 
+    Scenario: Input file metadata survives deletion-vector filtering
+      Given statement
+        """
+        DELETE FROM delta_dv_delete WHERE id = 3
+        """
+      When query
+        """
+        SELECT id,
+               length(input_file_name()) > 0 AS has_file,
+               input_file_block_start() AS block_start,
+               input_file_block_length() > 0 AS has_block
+        FROM delta_dv_delete
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | has_file | block_start | has_block |
+        | 1  | true     | 0           | true      |
+        | 2  | true     | 0           | true      |
+        | 4  | true     | 0           | true      |
+        | 5  | true     | 0           | true      |
+
     Scenario: Multiple DV deletes accumulate correctly
       Given statement
         """

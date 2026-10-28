@@ -10,12 +10,14 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp_cast::{
+    cast_timestamp_ltz_to_ntz, cast_timestamp_ntz_to_ltz,
+};
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -24,7 +26,6 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::is_spark_compatible_arrow_fixed_offset;
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::spark_interval_metadata_for_expression;
@@ -40,6 +41,39 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        if let spec::DataType::UserDefined {
+            jvm_class,
+            python_class,
+            ..
+        } = &cast_to_type
+        {
+            let resolved = self
+                .resolve_named_expression(expr.clone(), schema, state)
+                .await?;
+            let field = resolved.expr.to_field(schema)?.1;
+            if let Some(metadata) = field.metadata().get(spec::SAIL_SPARK_UDT_METADATA_KEY) {
+                let source: spec::SparkUdtMetadata = serde_json::from_str(metadata)
+                    .map_err(|e| PlanError::internal(format!("invalid UDT metadata: {e}")))?;
+                let same_type = match (&source.jvm_class, jvm_class) {
+                    (Some(source), Some(target)) => source == target,
+                    (None, None) => {
+                        source.python_class.is_some() && source.python_class == *python_class
+                    }
+                    _ => false,
+                };
+                if same_type {
+                    return Ok(resolved);
+                }
+                // Different JVM UDTs can accept each other's user classes through
+                // inheritance. Without that hierarchy, leave them unsupported.
+                if source.jvm_class.is_none() || jvm_class.is_none() {
+                    return Err(PlanError::analysis(
+                        "cannot cast between incompatible user-defined types",
+                    ));
+                }
+            }
+        }
+
         // CAST(expr AS VARIANT) → rewrite to SparkCastToVariant UDF
         // Must intercept before resolve_data_type converts Variant to Struct.
         if matches!(cast_to_type, spec::DataType::Variant) {
@@ -115,29 +149,32 @@ impl PlanResolver<'_> {
                 | DataType::Struct(_)
                 | DataType::Map(_, _)
         );
+        // Spark renders TIMESTAMP in the session time zone, whatever zone labels the values.
+        let session_timezone = self.config.session_timezone_label();
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (
                 DataType::Timestamp(_, None),
                 DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
                 is_try,
-            ) => {
-                if is_spark_compatible_arrow_fixed_offset(timezone.as_ref()) {
-                    if is_try {
-                        try_cast(expr, cast_to_type)
-                    } else {
-                        cast(expr, cast_to_type)
-                    }
+            ) => cast_timestamp_ntz_to_ltz(expr, &timezone, is_try),
+            (DataType::Timestamp(_, Some(_)), DataType::Timestamp(unit, None), is_try) => {
+                let local = cast_timestamp_ltz_to_ntz(expr, &session_timezone, is_try);
+                if unit == TimeUnit::Microsecond {
+                    local
                 } else {
-                    let timestamp_ntz =
-                        cast(expr, DataType::Timestamp(TimeUnit::Microsecond, None));
-                    let instant = ScalarUDF::from(ConvertTz::new(false)).call(vec![
-                        lit(timezone.to_string()),
-                        lit("UTC"),
-                        timestamp_ntz,
-                    ]);
-                    cast(cast(instant, DataType::Int64), cast_to_type)
+                    cast(local, cast_to_type)
                 }
             }
+            // Spark takes the date in the session time zone, whatever zone labels the values. The
+            // analyzer converts a cast, and unwraps it in a comparison with a DATE constant, but
+            // not a `try_cast`.
+            (DataType::Timestamp(unit, Some(_)), DataType::Date32, true) => try_cast(
+                cast(
+                    expr,
+                    DataType::Timestamp(unit, Some(Arc::clone(&session_timezone))),
+                ),
+                DataType::Date32,
+            ),
             (_, DataType::Utf8, _) if expr_is_variant => cast(
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
                 DataType::Utf8,
@@ -238,17 +275,17 @@ impl PlanResolver<'_> {
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new())
+                ScalarUDF::new_from_impl(SparkToUtf8::new().with_timezone(Some(session_timezone)))
                     .call(spark_string_cast_arguments(expr, schema)?)
             }
-            (_, DataType::LargeUtf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToLargeUtf8::new())
-                    .call(spark_string_cast_arguments(expr, schema)?)
-            }
-            (_, DataType::Utf8View, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8View::new())
-                    .call(spark_string_cast_arguments(expr, schema)?)
-            }
+            (_, DataType::LargeUtf8, _) if override_string_cast => ScalarUDF::new_from_impl(
+                SparkToLargeUtf8::new().with_timezone(Some(session_timezone)),
+            )
+            .call(spark_string_cast_arguments(expr, schema)?),
+            (_, DataType::Utf8View, _) if override_string_cast => ScalarUDF::new_from_impl(
+                SparkToUtf8View::new().with_timezone(Some(session_timezone)),
+            )
+            .call(spark_string_cast_arguments(expr, schema)?),
             (DataType::Date32 | DataType::Date64, to, _)
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
             {
@@ -283,6 +320,11 @@ impl PlanResolver<'_> {
             {
                 try_cast(expr, cast_to_type)
             }
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Decimal128(..) | DataType::Decimal256(..),
+                _,
+            ) if !self.config.ansi_mode => try_cast(expr, cast_to_type),
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };

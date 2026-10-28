@@ -60,7 +60,11 @@ pub(crate) fn iceberg_field_id(field: &ArrowField) -> Result<Option<i32>> {
 }
 
 fn get_field_doc(field: &ArrowField) -> Option<String> {
-    if let Some(value) = field.metadata().get(ICEBERG_ARROW_FIELD_DOC_KEY) {
+    if let Some(value) = field
+        .metadata()
+        .get("comment")
+        .or_else(|| field.metadata().get(ICEBERG_ARROW_FIELD_DOC_KEY))
+    {
         return Some(value.clone());
     }
     None

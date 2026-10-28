@@ -1,5 +1,75 @@
 Feature: Delta Lake Overwrite
 
+  Rule: Conditional overwrite resolves mapped data columns
+
+    Scenario Outline: REPLACE WHERE preserves rows across mapped scan modes
+      Given variable location for temporary directory delta_mapped_replace_where
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_mapped_replace_where
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_mapped_replace_where (day INT, id BIGINT, value BIGINT)
+        USING DELTA PARTITIONED BY (day) LOCATION {{ location.sql }}
+        OPTIONS (metadataAsDataRead '<metadata_scan>')
+        TBLPROPERTIES (
+          'delta.columnMapping.mode' = '<mapping_mode>',
+          'delta.dataSkippingNumIndexedCols' = '<indexed_columns>'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_mapped_replace_where VALUES (0, 1, 10), (0, 100, 1000)
+        """
+      Given statement
+        """
+        INSERT INTO delta_mapped_replace_where VALUES (NULL, 2, 20), (NULL, 200, 2000)
+        """
+      Given statement
+        """
+        INSERT INTO delta_mapped_replace_where VALUES (2, 300, 3000)
+        """
+      Given statement
+        """
+        INSERT INTO delta_mapped_replace_where REPLACE WHERE id < 50
+        SELECT * FROM VALUES (2, 10, -10), (2, 20, -20) AS s(day, id, value)
+        """
+      Then delta log latest commit info contains
+        | path                     | value       |
+        | operation                | "WRITE"     |
+        | operationParameters.mode | "Overwrite" |
+      When query template
+        """
+        SELECT id, day, value FROM delta.`{{ location.string }}` ORDER BY id
+        """
+      Then query result collected ordered
+        | id  | day  | value |
+        | 10  | 2    | -10   |
+        | 20  | 2    | -20   |
+        | 100 | 0    | 1000  |
+        | 200 | NULL | 2000  |
+        | 300 | 2    | 3000  |
+      When query
+        """
+        SELECT id, day, value FROM delta_mapped_replace_where ORDER BY id
+        """
+      Then query result collected ordered
+        | id  | day  | value |
+        | 10  | 2    | -10   |
+        | 20  | 2    | -20   |
+        | 100 | 0    | 1000  |
+        | 200 | NULL | 2000  |
+        | 300 | 2    | 3000  |
+
+      Examples:
+        | mapping_mode | indexed_columns | metadata_scan |
+        | name         | 32              | false         |
+        | name         | 0               | false         |
+        | name         | 32              | true          |
+        | id           | 32              | false         |
+        | id           | 32              | true          |
+
   Rule: Overwrite and conditional overwrite (REPLACE WHERE)
     Background:
       Given variable location for temporary directory delta_overwrite

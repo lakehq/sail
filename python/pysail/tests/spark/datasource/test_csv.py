@@ -1,6 +1,7 @@
 import glob
 import gzip
 from collections.abc import Mapping
+from datetime import datetime
 
 import pytest
 from pyspark.errors.exceptions.connect import SparkConnectGrpcException
@@ -40,6 +41,53 @@ def test_csv_read_write_basic(spark, sample_df, tmp_path, infer_schema):
             Row(col1=None, col2="4"),
         ]
     assert sorted(read_df.collect(), key=safe_sort_key) == sorted(expected, key=safe_sort_key)
+
+
+@pytest.mark.parametrize(
+    ("fraction", "expected_microsecond"),
+    [
+        ("", 0),
+        (".584", 584000),
+        (".584000", 584000),
+        # Seven to nine fractional digits make arrow-csv infer `Timestamp(Nanosecond, _)`. Spark's
+        # CSV reader infers a timestamp and truncates to microseconds, so we do too: on Spark
+        # 4.0.1, `2018-05-01 00:00:05.123456789` reads back as `2018-05-01 00:00:05.123456`.
+        (".5840000", 584000),
+        (".584000789", 584000),
+        (".123456789", 123456),
+        # Truncation, not rounding: the half-way value goes down, as it does on Spark.
+        (".123456500", 123456),
+    ],
+)
+def test_csv_infer_schema_timestamp_fractional_digits(spark, tmp_path, fraction, expected_microsecond):
+    # The inferred Arrow timestamp unit follows the number of fractional digits, but every one of
+    # them has to reach Spark as a single microsecond timestamp type.
+    path = tmp_path / "csv_timestamp"
+    path.mkdir()
+    (path / "data.csv").write_text(f"t\n2018-05-01 00:00:05{fraction}\n")
+
+    df = spark.read.option("header", True).option("inferSchema", True).csv(str(path))
+
+    assert df.schema.simpleString() == "struct<t:timestamp_ntz>"
+    assert df.collect() == [Row(t=datetime(2018, 5, 1, 0, 0, 5, expected_microsecond))]  # noqa: DTZ001
+
+
+def test_csv_infer_schema_merges_mixed_timestamp_precisions(spark, tmp_path):
+    # A directory whose files disagree only on fractional digits merges: without normalizing the
+    # nanosecond file first, `Schema::try_merge` rejects `timestamp[ns]` against `timestamp[us]`.
+    path = tmp_path / "csv_timestamp_mixed_precision"
+    path.mkdir()
+    (path / "a_nanosecond.csv").write_text("t\n2018-05-01 00:00:05.123456789\n")
+    (path / "b_microsecond.csv").write_text("t\n2018-05-01 00:00:06.123456\n")
+
+    df = spark.read.option("header", True).option("inferSchema", True).csv(str(path))
+    rows = df.selectExpr("CAST(t AS STRING) AS value").orderBy("value").collect()
+
+    assert df.schema.simpleString() == "struct<t:timestamp_ntz>"
+    assert rows == [
+        Row(value="2018-05-01 00:00:05.123456"),
+        Row(value="2018-05-01 00:00:06.123456"),
+    ]
 
 
 def test_csv_path_glob_filter(spark, tmp_path):

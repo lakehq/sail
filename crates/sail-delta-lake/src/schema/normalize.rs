@@ -43,6 +43,27 @@ pub fn strip_column_mapping_metadata(schema: &SchemaRef) -> SchemaRef {
     }
 }
 
+/// Logical schema used when changing a catalog table's Delta location.
+pub(crate) fn strip_internal_delta_metadata(schema: &Schema) -> SchemaRef {
+    fn strip(field: &Field) -> Field {
+        let mut field = field
+            .clone()
+            .with_data_type(transform_nested_fields(field.data_type(), strip));
+        field
+            .metadata_mut()
+            .remove(ColumnMetadataKey::TypeChanges.as_ref());
+        field
+    }
+    let schema = strip_column_mapping_metadata(&Arc::new(schema.clone()));
+    Arc::new(Schema::new(
+        schema
+            .fields()
+            .iter()
+            .map(|field| strip(field))
+            .collect::<Vec<_>>(),
+    ))
+}
+
 fn fields_differ(schema: &Schema, fields: &[Field]) -> bool {
     !schema
         .fields()
@@ -82,9 +103,13 @@ fn transform_nested_fields(data_type: &DataType, transform: fn(&Field) -> Field)
             DataType::Struct(transformed_fields)
         }
         DataType::List(field) => DataType::List(Arc::new(transform(field.as_ref()))),
-        DataType::LargeList(field) => DataType::LargeList(Arc::new(transform(field.as_ref()))),
+        DataType::ListView(field) => DataType::ListView(Arc::new(transform(field.as_ref()))),
         DataType::FixedSizeList(field, size) => {
             DataType::FixedSizeList(Arc::new(transform(field.as_ref())), *size)
+        }
+        DataType::LargeList(field) => DataType::LargeList(Arc::new(transform(field.as_ref()))),
+        DataType::LargeListView(field) => {
+            DataType::LargeListView(Arc::new(transform(field.as_ref())))
         }
         DataType::Map(field, sorted) => DataType::Map(Arc::new(transform(field.as_ref())), *sorted),
         _ => data_type.clone(),

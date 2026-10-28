@@ -3,14 +3,19 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{
+    cast_to_session_timestamp, coerce_timestamp_ntz_values, is_timestamp_ntz_mix,
+};
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -70,6 +75,94 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::coalesce(arguments))
 }
 
+/// Spark defines `nvl2` as `if` on whether the first argument is not null.
+fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (value, then_value, else_value) = arguments.three()?;
+    let schema = function_context.schema;
+    let then_type = then_value.get_type(schema)?;
+    let else_type = else_value.get_type(schema)?;
+    let is_timestamp = |data_type: &DataType| matches!(data_type, DataType::Timestamp(_, Some(_)));
+    let date_timestamp_mix = (is_date_type(&then_type) && is_timestamp(&else_type))
+        || (is_timestamp(&then_type) && is_date_type(&else_type));
+    // TODO: Use `if` for all types once it returns the common type of its branches.
+    if !date_timestamp_mix && !is_timestamp_ntz_mix(&[then_type.clone(), else_type.clone()]) {
+        return Ok(expr_fn::nvl2(value, then_value, else_value));
+    }
+    // Spark casts a DATE to TIMESTAMP at the start of its day in the session time zone, whatever
+    // zone labels the other value.
+    let timezone = &function_context.plan_config.session_timezone_label();
+    // The cast of midnight converts like Spark in a DST gap or overlap, where Arrow's cast fails.
+    let session_date = |value: expr::Expr, data_type: &DataType| {
+        if is_date_type(data_type) {
+            cast_timestamp_ntz_to_ltz(
+                cast(value, DataType::Timestamp(TimeUnit::Microsecond, None)),
+                timezone,
+                false,
+            )
+        } else {
+            value
+        }
+    };
+    let then_value = session_date(then_value, &then_type);
+    let else_value = session_date(else_value, &else_type);
+    if_expr(ScalarFunctionInput {
+        arguments: vec![value.is_not_null(), then_value, else_value],
+        function_context,
+    })
+}
+
+/// Spark's `nullif` returns its first argument's type, comparing the arguments in their common type.
+fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    let schema = function_context.schema;
+    let left_type = left.get_type(schema)?;
+    let right_type = right.get_type(schema)?;
+    // The first argument is evaluated twice, so a volatile one keeps the native function.
+    // TODO: The native function returns the common type rather than the first argument's type.
+    if left.is_volatile() || !is_timestamp_ntz_mix(&[left_type.clone(), right_type.clone()]) {
+        return Ok(expr_fn::nullif(left, right));
+    }
+    let timezone = &function_context.plan_config.session_timezone_label();
+    // TODO: `date_trunc` returns TIMESTAMP_NTZ for a TIMESTAMP_NTZ value, where Spark returns
+    //  TIMESTAMP. Remove this once it does. A value in other units than microseconds is still
+    //  cast after `date_trunc`, which this misses.
+    let (left, left_type) = match &left {
+        expr::Expr::ScalarFunction(function)
+            if function.name() == "date_trunc"
+                && matches!(left_type, DataType::Timestamp(_, None)) =>
+        {
+            let left = cast_to_session_timestamp(left, &left_type, timezone);
+            let left_type = left.get_type(schema)?;
+            (left, left_type)
+        }
+        _ => (left, left_type),
+    };
+    let condition = cast_to_session_timestamp(left.clone(), &left_type, timezone)
+        .eq(cast_to_session_timestamp(right, &right_type, timezone));
+    Ok(when(condition, lit(ScalarValue::try_from(&left_type)?)).otherwise(left)?)
+}
+
+/// Spark defines `nvl` (and its alias `ifnull`) as `coalesce` with two arguments.
+fn nvl(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let (left, right) = arguments.two()?;
+    coalesce(ScalarFunctionInput {
+        arguments: vec![left, right],
+        function_context,
+    })
+}
+
 fn coerce_string_temporal_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
@@ -106,7 +199,11 @@ fn coerce_string_temporal_values(
             arguments
         }
     } else {
-        arguments
+        coerce_timestamp_ntz_values(
+            arguments,
+            function_context.schema,
+            &function_context.plan_config.session_timezone_label(),
+        )?
     };
     Ok(arguments)
 }
@@ -181,74 +278,81 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
     vec![
         ("coalesce", F::custom(coalesce)),
         ("if", F::custom(if_expr)),
-        ("ifnull", F::binary(expr_fn::nvl)),
+        ("ifnull", F::custom(nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),
-        ("nullif", F::binary(expr_fn::nullif)),
+        ("nullif", F::custom(nullif)),
         ("nullifzero", F::custom(nullifzero)),
-        ("nvl", F::binary(expr_fn::nvl)),
-        ("nvl2", F::ternary(expr_fn::nvl2)),
+        ("nvl", F::custom(nvl)),
+        ("nvl2", F::custom(nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
         ("when", F::custom(case)),
         ("case", F::custom(case)),
     ]
 }
 
-/// Create a zero literal with the same type as the input expression
-fn create_zero_literal(data_type: &DataType) -> ScalarValue {
-    match data_type {
-        DataType::Int8 => ScalarValue::Int8(Some(0)),
-        DataType::Int16 => ScalarValue::Int16(Some(0)),
-        DataType::Int32 => ScalarValue::Int32(Some(0)),
-        DataType::Int64 => ScalarValue::Int64(Some(0)),
-        DataType::UInt8 => ScalarValue::UInt8(Some(0)),
-        DataType::UInt16 => ScalarValue::UInt16(Some(0)),
-        DataType::UInt32 => ScalarValue::UInt32(Some(0)),
-        DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-        DataType::Float32 => ScalarValue::Float32(Some(0.0)),
-        DataType::Float64 => ScalarValue::Float64(Some(0.0)),
-        DataType::Decimal128(precision, scale) => {
-            ScalarValue::Decimal128(Some(0), *precision, *scale)
-        }
-        DataType::Decimal256(precision, scale) => {
-            ScalarValue::Decimal256(Some(0.into()), *precision, *scale)
-        }
-        // For non-numeric types, default to Int32
-        _ => ScalarValue::Int32(Some(0)),
-    }
-}
-
-/// Implementation of nullifzero function with type-aware casting
 fn nullifzero(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
         function_context,
     } = input;
     let arg = arguments.one()?;
-
-    // Get the data type of the input argument
-    let data_type = arg.to_field(function_context.schema)?.1.data_type().clone();
-
-    // Create a zero literal with the same type as the input
-    let zero_literal = lit(create_zero_literal(&data_type));
-
-    // Return nullif(arg, zero_literal)
-    Ok(expr_fn::nullif(arg, zero_literal))
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let condition = match arg.get_type(function_context.schema)? {
+        data_type if is_string_type(&data_type) => {
+            let value = if ansi_mode {
+                cast(arg.clone(), DataType::Int64)
+            } else {
+                ScalarUDF::from(SparkCastStringToInt32::new()).call(vec![arg.clone()])
+            };
+            value.eq(lit(0_i32))
+        }
+        DataType::Boolean if !ansi_mode => arg.clone().eq(lit(false)),
+        data_type if data_type.is_numeric() || data_type == DataType::Null => {
+            arg.clone().eq(lit(0_i32))
+        }
+        data_type => {
+            return Err(PlanError::invalid(format!(
+                "nullifzero cannot compare data type {data_type} with an integer zero"
+            )));
+        }
+    };
+    Ok(when(condition, lit(ScalarValue::Null)).otherwise(arg)?)
 }
 
-/// Implementation of zeroifnull function with type-aware casting
 fn zeroifnull(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
         function_context,
     } = input;
     let arg = arguments.one()?;
-
-    // Get the data type of the input argument
-    let data_type = arg.to_field(function_context.schema)?.1.data_type().clone();
-
-    // Create a zero literal with the same type as the input
-    let zero_literal = lit(create_zero_literal(&data_type));
-
-    // Return nvl(arg, zero_literal)
-    Ok(expr_fn::nvl(arg, zero_literal))
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let (arg, zero) = match arg.get_type(function_context.schema)? {
+        DataType::Float32 if ansi_mode => (cast(arg, DataType::Float64), lit(0_i32)),
+        data_type if is_string_type(&data_type) && ansi_mode => {
+            (cast(arg, DataType::Int64), lit(0_i32))
+        }
+        data_type if is_string_type(&data_type) => (arg, lit("0")),
+        DataType::Decimal128(precision, scale) => {
+            // The INT zero contributes ten integer digits. Keep integer digits when
+            // the common decimal type exceeds Spark's 38-digit precision limit.
+            let integer_digits = (i16::from(precision) - i16::from(scale)).max(10);
+            let scale = i16::from(scale).max(0);
+            let precision = (integer_digits + scale).min(38) as u8;
+            let scale = scale.min((38 - integer_digits).max(0)) as i8;
+            let data_type = DataType::Decimal128(precision, scale);
+            let arg = if ansi_mode {
+                cast(arg, data_type)
+            } else {
+                try_cast(arg, data_type)
+            };
+            (arg, lit(0_i32))
+        }
+        data_type if data_type.is_numeric() || data_type == DataType::Null => (arg, lit(0_i32)),
+        data_type => {
+            return Err(PlanError::invalid(format!(
+                "zeroifnull cannot combine data type {data_type} with an integer zero"
+            )));
+        }
+    };
+    Ok(expr_fn::coalesce(vec![arg, zero]))
 }

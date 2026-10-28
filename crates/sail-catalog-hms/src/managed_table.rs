@@ -10,7 +10,7 @@ use sail_common_hms::hms::{
     LockType, Table, ThriftHiveMetastoreCheckLockException, ThriftHiveMetastoreClient,
     ThriftHiveMetastoreLockException, ThriftHiveMetastoreUnlockException, UnlockRequest,
 };
-use volo_thrift::MaybeException;
+use sail_thrift::MaybeException;
 
 use crate::provider::{HmsCatalogProvider, apply_alter_table_options};
 
@@ -59,7 +59,7 @@ pub(crate) async fn alter_table_with_lock(
     provider: &HmsCatalogProvider,
     db_name: &str,
     table_name: &str,
-    options: AlterTableOptions,
+    options: Vec<AlterTableOptions>,
 ) -> CatalogResult<()> {
     let (_, client) = provider.current_client().await?;
     let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
@@ -73,7 +73,9 @@ pub(crate) async fn alter_table_with_lock(
             "Failed to fetch HMS table for locked alter",
         )
         .await?;
-        apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
+        for options in options {
+            apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
+        }
         HmsCatalogProvider::alter_table_with_client(&client, db_name, table_name, hms_table).await
     }
     .await;
@@ -95,8 +97,8 @@ async fn acquire_table_lock(
             component: vec![LockComponent {
                 r#type: LockType::EXCLUSIVE,
                 level: LockLevel::TABLE,
-                dbname: db_name.to_string().into(),
-                tablename: Some(table_name.to_string().into()),
+                dbname: db_name.to_string(),
+                tablename: Some(table_name.to_string()),
                 partitionname: None,
                 operation_type: Some(DataOperationType::NO_TXN),
                 is_acid: Some(false),
@@ -106,13 +108,11 @@ async fn acquire_table_lock(
             user: std::env::var("USER")
                 .ok()
                 .filter(|user| !user.is_empty())
-                .unwrap_or_else(|| "sail".to_string())
-                .into(),
+                .unwrap_or_else(|| "sail".to_string()),
             hostname: std::env::var("HOSTNAME")
                 .ok()
                 .filter(|host| !host.is_empty())
-                .unwrap_or_else(|| "localhost".to_string())
-                .into(),
+                .unwrap_or_else(|| "localhost".to_string()),
             agent_info: Some("sail".into()),
         })
         .await
@@ -179,14 +179,14 @@ async fn acquire_table_lock(
                 let _ = release_table_lock(client, db_name, table_name, response.lockid).await;
                 return Err(CatalogError::Conflict(format!(
                     "Failed to acquire HMS lock on '{db_name}.{table_name}': {}",
-                    state.to_string()
+                    state
                 )));
             }
             state => {
                 let _ = release_table_lock(client, db_name, table_name, response.lockid).await;
                 return Err(CatalogError::External(format!(
                     "Failed to acquire HMS lock on '{db_name}.{table_name}': unexpected state {}",
-                    state.to_string()
+                    state
                 )));
             }
         }

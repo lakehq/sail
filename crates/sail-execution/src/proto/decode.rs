@@ -25,6 +25,8 @@ use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 use sail_function::scalar::array::spark_sequence::{SparkSequence, SparkSequenceLazy};
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
 use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
+use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
+use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::string::spark_regexp_instr::SparkRegexpInstr;
 
 use crate::plan::r#gen;
@@ -184,6 +186,14 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::MapFilter(r#gen::SparkMapFilterUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkMapFilter::new()))
         }
+        HigherOrderUdfKind::TransformValues(r#gen::SparkTransformValuesUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformValues::new()))
+        }
+        HigherOrderUdfKind::TransformKeys(r#gen::SparkTransformKeysUdf { last_value_wins }) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkTransformKeys::new(
+                last_value_wins,
+            )))
+        }
         HigherOrderUdfKind::Filter(r#gen::SparkArrayFilterUdf { index_first }) => {
             if index_first {
                 Arc::new(HigherOrderUDF::new_from_impl(
@@ -236,6 +246,7 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
             classic,
             null_short_circuit,
+            ..
         }) => {
             let convert_tz = ConvertTz::new(classic);
             let convert_tz = if null_short_circuit {

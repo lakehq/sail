@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, TableReference};
+use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::sql::{Ident, ObjectName, ObjectNamePart};
 use datafusion_expr::{ScalarUDF, col, expr, lit};
@@ -60,20 +60,50 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         for (q, remaining) in Self::generate_qualified_wildcard_candidates(name.parts()) {
             if remaining.is_empty() {
-                let in_input = schema
-                    .iter()
-                    .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier, false));
-                let in_outer = state.get_outer_query_schema().is_some_and(|outer_schema| {
-                    outer_schema
-                        .iter()
-                        .any(|(qualifier, _)| qualifier_matches(q.as_ref(), qualifier, false))
+                let in_input = schema.iter().any(|(qualifier, _)| {
+                    qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive, state)
                 });
+                let in_outer = state.get_outer_query_schema().is_some_and(|outer_schema| {
+                    outer_schema.iter().any(|(qualifier, _)| {
+                        qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive, state)
+                    })
+                });
+                if in_input
+                    && schema.iter().any(|(qualifier, _)| {
+                        qualifier.is_some_and(|qualifier| state.is_multipart_relation(qualifier))
+                            && qualifier_matches(
+                                q.as_ref(),
+                                qualifier,
+                                self.config.case_sensitive,
+                                state,
+                            )
+                    })
+                {
+                    let (names, expressions) = schema
+                        .iter()
+                        .filter_map(|(qualifier, field)| {
+                            let info = state.get_field_info(field.name()).ok()?;
+                            (!info.is_hidden()
+                                && qualifier_matches(
+                                    q.as_ref(),
+                                    qualifier,
+                                    self.config.case_sensitive,
+                                    state,
+                                ))
+                            .then(|| (info.name().to_string(), col((qualifier, field))))
+                        })
+                        .unzip();
+                    return Ok(NamedExpr::new(
+                        names,
+                        ScalarUDF::from(MultiExpr::new()).call(expressions),
+                    ));
+                }
                 if in_input || in_outer {
                     return Ok(NamedExpr::new(
                         vec!["*".to_string()],
                         #[expect(deprecated)]
                         expr::Expr::Wildcard {
-                            qualifier: q,
+                            qualifier: Some(self.resolve_table_reference(name)?),
                             options: Default::default(),
                         },
                     ));
@@ -91,11 +121,15 @@ impl PlanResolver<'_> {
                         let Ok(info) = state.get_field_info(field.name()) else {
                             return None;
                         };
-                        if qualifier_matches(q.as_ref(), qualifier, false)
-                            && info.matches(column.as_ref(), None)
+                        if qualifier_matches(
+                            q.as_ref(),
+                            qualifier,
+                            self.config.case_sensitive,
+                            state,
+                        ) && info.matches(column.as_ref(), None)
                         {
                             Self::resolve_nested_field_wildcard(
-                                col((q.as_ref(), field)),
+                                col((qualifier, field)),
                                 field.data_type(),
                                 inner,
                             )
@@ -274,20 +308,17 @@ impl PlanResolver<'_> {
 
     fn generate_qualified_wildcard_candidates<T: AsRef<str>>(
         name: &[T],
-    ) -> Vec<(Option<TableReference>, &[T])> {
-        let mut out = vec![(None, name)];
-        if let [n1, x @ ..] = name {
-            out.push((Some(TableReference::bare(n1.as_ref())), x));
-        }
-        if let [n1, n2, x @ ..] = name {
-            out.push((Some(TableReference::partial(n1.as_ref(), n2.as_ref())), x));
-        }
-        if let [n1, n2, n3, x @ ..] = name {
-            out.push((
-                Some(TableReference::full(n1.as_ref(), n2.as_ref(), n3.as_ref())),
-                x,
-            ));
-        }
-        out
+    ) -> Vec<(Option<Vec<String>>, &[T])> {
+        (0..=name.len())
+            .map(|index| {
+                let qualifier = (index > 0).then(|| {
+                    name[..index]
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect()
+                });
+                (qualifier, &name[index..])
+            })
+            .collect()
     }
 }

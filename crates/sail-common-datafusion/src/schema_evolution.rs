@@ -725,18 +725,17 @@ fn find_matching_struct_field<'a>(
                 .find(|(_, source)| source.name() == physical_name)
         }
         StructFieldMatching::FieldId => {
-            let Some(target_id) = struct_field_id(target_field) else {
-                return Ok(None);
-            };
-            let mut identified = source_fields
-                .iter()
-                .enumerate()
-                .filter(|(_, source)| struct_field_id(source) == Some(target_id));
-            if let Some(found) = identified.next() {
-                if identified.next().is_some() {
-                    return exec_err!("Multiple physical fields match field ID {target_id}");
+            if let Some(target_id) = struct_field_id(target_field) {
+                let mut identified = source_fields
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, source)| struct_field_id(source) == Some(target_id));
+                if let Some(found) = identified.next() {
+                    if identified.next().is_some() {
+                        return exec_err!("Multiple physical fields match field ID {target_id}");
+                    }
+                    return Ok(Some(found));
                 }
-                return Ok(Some(found));
             }
             let aliases: Vec<String> = target_field
                 .metadata()
@@ -753,7 +752,10 @@ fn find_matching_struct_field<'a>(
             });
             let found = matches.next();
             if matches.next().is_some() {
-                return exec_err!("Multiple physical fields match field ID {target_id}");
+                return exec_err!(
+                    "Multiple physical fields match aliases of {}",
+                    target_field.name()
+                );
             }
             found
         }
@@ -1353,6 +1355,37 @@ mod tests {
     use parquet_variant_compute::{VariantType, json_to_variant, shred_variant, variant_to_json};
 
     use super::*;
+
+    #[test]
+    fn explicit_aliases_match_unidentified_fields_only() -> Result<()> {
+        let field = Field::new("reserved", DataType::Utf8, true).with_metadata(
+            std::collections::HashMap::from([(
+                FIELD_ALIASES_METADATA_KEY.to_string(),
+                "[\"reserved\"]".to_string(),
+            )]),
+        );
+        let plain = vec![Arc::new(Field::new("reserved", DataType::Utf8, true))];
+        assert!(
+            find_matching_struct_field(&plain, &field, StructFieldMatching::FieldId)?.is_some()
+        );
+        let reused = vec![field_with_id("reserved", PARQUET_FIELD_ID_META_KEY, 1)];
+        assert!(
+            find_matching_struct_field(&reused, &field, StructFieldMatching::FieldId)?.is_none()
+        );
+        let unaliased = Field::new("reserved", DataType::Utf8, true);
+        assert!(
+            find_matching_struct_field(&plain, &unaliased, StructFieldMatching::FieldId)?.is_none()
+        );
+        assert!(
+            find_matching_struct_field(
+                &[plain[0].clone(), plain[0].clone()],
+                &field,
+                StructFieldMatching::FieldId
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn missing_defaults_and_aliases_preserve_field_identity() -> Result<()> {

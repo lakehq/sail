@@ -146,6 +146,20 @@ impl SparkRuntimeConfig {
         // TODO: Investigate how spark.wap.branch and spark.wap.id should reach
         // Iceberg write planning for validation at the format boundary.
         self.validate_removed_key(key.as_str(), value.as_str())?;
+        // Spark limits this setting to Int32; Sail accepts positive Int64 counts,
+        // matching its partitioning hints. Plan conversion checks the usize limit.
+        if key == SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS {
+            let partitions = value.trim().parse::<i64>().map_err(|_| {
+                SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be a positive 64-bit integer",
+                )
+            })?;
+            if partitions <= 0 {
+                return Err(SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be positive",
+                ));
+            }
+        }
         self.config.insert(key, value);
         Ok(())
     }
@@ -222,6 +236,41 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
+        for key in [
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_RETENTION_DURATION_CHECK_ENABLED,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_VACUUM_RETENTION_WINDOW_IGNORE_ENABLED,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MIN_FILE_SIZE,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_FILE_SIZE,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_DELETED_ROWS_RATIO,
+        ] {
+            if let Some(value) = config.get_option(key) {
+                output
+                    .lakehouse_options
+                    .push((key.to_string(), value.to_string()));
+            }
+        }
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_REDACTION_OPTIONS_REGEX) {
+            output.redaction_options_regex = value.to_string();
+        }
+        if let Some(value) = config.get_option("spark.redaction.regex") {
+            output.redaction_regex = value.to_string();
+        }
+
+        if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS) {
+            let partitions = value.trim().parse::<i64>().map_err(|_| {
+                SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be a positive 64-bit integer",
+                )
+            })?;
+            if partitions <= 0 {
+                return Err(SparkError::invalid(
+                    "spark.sql.shuffle.partitions must be positive",
+                ));
+            }
+            output.shuffle_partitions = usize::try_from(partitions).map_err(|_| {
+                SparkError::invalid("spark.sql.shuffle.partitions exceeds the platform limit")
+            })?;
+        }
 
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE)
@@ -286,6 +335,20 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
                 _ => {
                     return Err(SparkError::invalid(format!(
                         "invalid store assignment policy: {value}"
+                    )));
+                }
+            };
+        }
+
+        if let Some(value) =
+            config.get_option(SparkConfigKey::SPARK_SQL_SOURCES_PARTITION_OVERWRITE_MODE)
+        {
+            output.dynamic_partition_overwrite = match value.trim().to_ascii_uppercase().as_str() {
+                "STATIC" => false,
+                "DYNAMIC" => true,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid partition overwrite mode: {value}"
                     )));
                 }
             };

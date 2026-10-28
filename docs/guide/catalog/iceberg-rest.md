@@ -64,3 +64,11 @@ This example configures a client-side namespace separator fallback.
 ```bash
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", namespace_separator="::"}]'
 ```
+
+## Table DDL
+
+See the [Iceberg DDL support matrix](./index.md#iceberg) for supported operations.
+
+- Registering an existing table requires the server's register-table endpoint and access to the table's metadata file.
+- Format upgrades require server support for the target version. Column defaults require Iceberg format version 3 and typed literals.
+- `DROP TABLE ... PURGE` requests deletion of the table's data. Support and deletion behavior depend on the catalog server.

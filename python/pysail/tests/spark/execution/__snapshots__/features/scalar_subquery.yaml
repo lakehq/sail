@@ -36,6 +36,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -61,6 +64,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -240,6 +246,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -330,6 +339,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -485,6 +497,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC]
@@ -553,6 +571,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -686,6 +707,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -711,6 +735,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -843,6 +870,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -998,6 +1028,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc), (#10@1, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC, #10@1 ASC]
@@ -1079,6 +1115,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -1212,6 +1251,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -1237,6 +1279,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -1369,6 +1414,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -1524,6 +1572,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[(#9@0, asc)], dist_by=SinglePartition
       SortPreservingMergeExec: [#9@0 ASC]
@@ -1605,6 +1659,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -1746,6 +1803,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -1771,6 +1831,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -1997,6 +2060,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -2093,6 +2159,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2284,6 +2353,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc)], dist_by=SinglePartition
@@ -2381,6 +2456,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -2544,6 +2622,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -2569,6 +2650,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2728,6 +2812,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2919,6 +3006,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#12@0, asc), (#13@1, asc)], dist_by=SinglePartition
@@ -3034,6 +3127,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -3186,6 +3282,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -3211,6 +3310,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3301,6 +3403,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3395,9 +3500,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64;N]
-      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64;N]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64;N]
+    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64]
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64]
           ProjectionExec: expr=[id@0 as #0], schema=[#0:Int64]
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
       ProjectionExec: expr=[#1@0 as #2], schema=[#2:Int64]
@@ -3433,6 +3538,12 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -3499,6 +3610,9 @@ data:
 
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -3596,6 +3710,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -3621,6 +3738,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3726,6 +3846,9 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -3821,9 +3944,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64;N]
-      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64;N]
-        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64;N]
+    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64]
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64]
           ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4], schema=[#4:Int64]
@@ -3861,6 +3984,12 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after EnsureRequirements:
@@ -3936,6 +4065,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -4050,6 +4182,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -4075,6 +4210,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4172,6 +4310,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4345,6 +4486,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -4415,6 +4562,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -4561,6 +4711,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -4586,6 +4739,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4683,6 +4839,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4856,6 +5015,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -4941,6 +5106,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -5061,6 +5229,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -5098,6 +5269,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5189,6 +5363,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5332,6 +5509,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -5402,6 +5585,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -5499,6 +5685,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -5524,6 +5713,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5615,6 +5807,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5762,6 +5957,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -5841,6 +6042,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -5968,6 +6172,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -6005,6 +6212,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6110,6 +6320,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6262,6 +6475,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -6342,6 +6561,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -6462,6 +6684,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -6487,6 +6712,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6592,6 +6820,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6744,6 +6975,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -6829,6 +7066,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -6955,6 +7195,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -6980,6 +7223,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7071,6 +7317,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7218,6 +7467,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7297,6 +7552,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -7410,6 +7668,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -7435,6 +7696,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7526,6 +7790,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7673,6 +7940,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -7752,6 +8025,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -7881,6 +8157,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -7906,6 +8185,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7998,6 +8280,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8150,6 +8435,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -8232,6 +8523,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -8353,6 +8647,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -8378,6 +8675,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8490,6 +8790,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8678,6 +8981,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc)], dist_by=SinglePartition
@@ -8779,6 +9088,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -8893,6 +9205,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -8918,6 +9233,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9032,6 +9350,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9196,6 +9517,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@0, asc), (#8@1, asc)], dist_by=SinglePartition
@@ -9281,6 +9608,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -9395,6 +9725,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -9420,6 +9753,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9513,6 +9849,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9666,6 +10005,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
@@ -9759,6 +10104,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -9872,6 +10220,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -9909,6 +10260,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10000,6 +10354,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10143,6 +10500,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -10213,6 +10576,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -10310,6 +10676,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -10335,6 +10704,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10426,6 +10798,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10573,6 +10948,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     SAME TEXT AS ABOVE
 
@@ -10635,6 +11016,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -10736,6 +11120,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -10761,6 +11148,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10853,6 +11243,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11001,6 +11394,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
@@ -11077,6 +11476,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -11181,6 +11583,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -11219,6 +11624,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11311,6 +11719,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11459,6 +11870,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@1, asc)], dist_by=SinglePartition
@@ -11535,6 +11952,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:
@@ -11652,6 +12072,9 @@ data:
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
 
+    logical_plan after resolve_input_file_metadata:
+    SAME TEXT AS ABOVE
+
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
 
@@ -11690,6 +12113,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11782,6 +12208,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11930,6 +12359,12 @@ data:
     physical_plan after WindowTopN:
     SAME TEXT AS ABOVE
 
+    physical_plan after WrapInputFileMetadataSource:
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
@@ -12009,6 +12444,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteExplicitRepartition:

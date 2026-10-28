@@ -4,6 +4,7 @@ pub mod checkpoint;
 pub mod checksum;
 pub mod error;
 pub mod fields;
+pub mod inspection;
 pub mod log;
 pub mod metadata;
 pub mod operation;
@@ -18,8 +19,9 @@ pub use action_schema::{
     sidecar_struct_type, transaction_struct_type,
 };
 pub use actions::{
-    Action, Add, CheckpointMetadata, CommitAction, CommitInfo, DeletionVectorDescriptor,
-    DomainMetadata, Remove, RemoveOptions, Sidecar, StorageType, Transaction,
+    Action, Add, AddCDCFile, CheckpointMetadata, CommitAction, CommitInfo,
+    DeletionVectorDescriptor, DomainMetadata, Remove, RemoveOptions, Sidecar, StorageType,
+    Transaction,
 };
 pub(crate) use actions::{LogicalFileKey, logical_file_key};
 pub use checkpoint::{CheckpointActionRow, LastCheckpointHint, LastCheckpointV2};

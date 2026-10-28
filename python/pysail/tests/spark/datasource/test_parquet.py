@@ -1,6 +1,7 @@
 import base64
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pyarrow as pa
@@ -8,6 +9,8 @@ import pyarrow.parquet as pq
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
+from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.types import TimestampNTZType, TimestampType
 
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
@@ -42,6 +45,23 @@ def test_parquet_merges_mixed_timestamp_units_with_different_arrow_timezones(spa
         Row(value="2024-01-01 19:04:05.123"),
         Row(value="2024-01-01 19:04:06.123456"),
     ]
+
+
+def test_parquet_nanosecond_timestamp_is_reported_not_truncated(spark, tmp_path):
+    # The counterpart of `test_csv_infer_schema_timestamp_fractional_digits`: a nanosecond
+    # timestamp is widened for CSV, where Spark's reader truncates, but not for Parquet, where
+    # Spark rejects `NANOS` rather than losing precision silently (SPARK-40819). Pinned here so
+    # the two formats stay deliberately different rather than accidentally so.
+    path = str(tmp_path / "parquet_nanosecond_timestamp.parquet")
+    value = datetime(2018, 5, 1, 0, 0, 5, 123456, tzinfo=UTC)
+    pq.write_table(
+        pa.table({"t": pa.array([value], type=pa.timestamp("ns", tz="UTC"))}),
+        path,
+        version="2.6",
+    )
+
+    with pytest.raises(Exception, match="Nanosecond"):
+        _ = spark.read.parquet(path).schema
 
 
 def test_parquet_binary_column_collects_as_binary(spark, tmp_path):
@@ -281,6 +301,57 @@ def test_parquet_explicit_schema_determines_int96_timestamp_family(spark, tmp_pa
     )
 
     assert rows == [Row(value="2024-01-02 03:04:05")]
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai"], indirect=True)
+def test_parquet_int96_with_arrow_schema_hint_reads_as_timestamp(spark, tmp_path):
+    # pyarrow stores an `ARROW:schema` hint with the unit of the values, which Spark ignores.
+    path = tmp_path / "int96_with_arrow_schema_hint.parquet"
+    values = [datetime(2020, 6, 14), datetime(2020, 6, 14, 8), datetime(2020, 6, 13, 16)]  # noqa: DTZ001
+    table = pa.table({"id": [1, 3, 4], "value": pa.array(values, type=pa.timestamp("us"))})
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    spark.read.parquet(str(path)).createOrReplaceTempView("int96_with_arrow_schema_hint")
+    rows = spark.sql(
+        """
+        SELECT id, typeof(value) AS type, CAST(value AS STRING) AS value,
+          value >= TIMESTAMP '2020-06-14 05:30:00' AS ge
+        FROM int96_with_arrow_schema_hint
+        ORDER BY id
+        """
+    ).collect()
+
+    assert rows == [
+        Row(id=1, type="timestamp", value="2020-06-14 08:00:00", ge=True),
+        Row(id=3, type="timestamp", value="2020-06-14 16:00:00", ge=True),
+        Row(id=4, type="timestamp", value="2020-06-14 00:00:00", ge=False),
+    ]
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_parquet_int96_with_arrow_schema_hint_before_1677(spark, tmp_path):
+    path = tmp_path / "int96_before_1677.parquet"
+    values = [datetime(1582, 10, 15), datetime(1, 1, 1), datetime(2020, 6, 14)]  # noqa: DTZ001
+    table = pa.table({"id": [0, 1, 2], "value": pa.array(values, type=pa.timestamp("us"))})
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    spark.read.parquet(str(path)).createOrReplaceTempView("int96_before_1677")
+    rows = spark.sql(
+        """
+        SELECT id, weekofyear(value) AS week, dayname(value) AS day, monthname(value) AS month,
+          CAST(date_trunc('MONTH', value) AS STRING) AS month_start
+        FROM int96_before_1677
+        ORDER BY id
+        """
+    ).collect()
+
+    assert rows == [
+        Row(id=0, week=41, day="Fri", month="Oct", month_start="1582-10-01 00:00:00"),
+        Row(id=1, week=1, day="Mon", month="Jan", month_start="0001-01-01 00:00:00"),
+        Row(id=2, week=24, day="Sun", month="Jun", month_start="2020-06-01 00:00:00"),
+    ]
 
 
 def test_parquet_write_with_bloom_filter(spark, tmpdir):
@@ -800,3 +871,257 @@ def test_parquet_read_uppercase_single_file_with_schema(spark, sample_df, tmp_pa
     df = spark.read.schema(sample_df.schema).parquet(str(upper))
     assert df.count() == sample_df.count()
     assert sorted(df.collect(), key=safe_sort_key) == sorted(sample_df.collect(), key=safe_sort_key)
+
+
+@pytest.mark.parametrize("session_timezone", ["America/Los_Angeles"], indirect=True)
+def test_parquet_int96_timestamp_is_instant(spark, tmp_path, session_timezone):
+    # Spark reads INT96 as TIMESTAMP, which compares with other TIMESTAMP values as instants.
+    _ = session_timezone
+    path = tmp_path / "int96.parquet"
+    value = datetime(2020, 6, 14, 4, tzinfo=UTC)
+    pq.write_table(
+        pa.table({"ts": pa.array([value], type=pa.timestamp("us", tz="UTC"))}),
+        path,
+        use_deprecated_int96_timestamps=True,
+        store_schema=False,
+    )
+    df = spark.read.parquet(str(path))
+    assert isinstance(df.schema["ts"].dataType, TimestampType)
+    assert df.selectExpr("unix_micros(ts)").collect() == [(1592107200000000,)]
+    assert df.filter("ts = TIMESTAMP '2020-06-13 21:00:00'").count() == 1
+
+
+@pytest.mark.parametrize(
+    ("session_timezone", "expected"),
+    [("Asia/Shanghai", "2020-06-14 12:00:00"), ("America/Los_Angeles", "2020-06-13 21:00:00")],
+    indirect=["session_timezone"],
+)
+def test_parquet_timestamp_show_uses_session_timezone(spark, tmp_path, session_timezone, expected):
+    _ = session_timezone
+    path = tmp_path / "instants.parquet"
+    pq.write_table(
+        pa.table({"ts": pa.array([datetime(2020, 6, 14, 4, tzinfo=UTC)], type=pa.timestamp("us", tz="UTC"))}),
+        path,
+        store_schema=False,
+    )
+    shown = spark.read.parquet(str(path))._show_string()  # noqa: SLF001
+    assert expected in shown
+
+
+_INT96_DISPLAY_INSTANTS = [
+    datetime(2020, 6, 14, 6, 59, 59, tzinfo=UTC),
+    datetime(2020, 6, 14, 7, 0, tzinfo=UTC),
+    datetime(2020, 6, 13, 16, 0, tzinfo=UTC),
+    datetime(2020, 3, 8, 10, 0, tzinfo=UTC),
+    datetime(2020, 11, 1, 8, 30, tzinfo=UTC),
+    datetime(2020, 11, 1, 9, 30, tzinfo=UTC),
+    None,
+]
+
+
+@pytest.mark.parametrize(
+    ("session_timezone", "expected"),
+    [
+        (
+            "America/Los_Angeles",
+            [
+                (0, "2020-06-13 23:59:59", "2020-06-13", "2020-06-13"),
+                (1, "2020-06-14 00:00:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-13 09:00:00", "2020-06-13", "2020-06-13"),
+                (3, "2020-03-08 03:00:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 01:30:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 01:30:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+        (
+            "Asia/Shanghai",
+            [
+                (0, "2020-06-14 14:59:59", "2020-06-14", "2020-06-14"),
+                (1, "2020-06-14 15:00:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-14 00:00:00", "2020-06-14", "2020-06-14"),
+                (3, "2020-03-08 18:00:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 16:30:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 17:30:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+        (
+            "+05:30",
+            [
+                (0, "2020-06-14 12:29:59", "2020-06-14", "2020-06-14"),
+                (1, "2020-06-14 12:30:00", "2020-06-14", "2020-06-14"),
+                (2, "2020-06-13 21:30:00", "2020-06-13", "2020-06-13"),
+                (3, "2020-03-08 15:30:00", "2020-03-08", "2020-03-08"),
+                (4, "2020-11-01 14:00:00", "2020-11-01", "2020-11-01"),
+                (5, "2020-11-01 15:00:00", "2020-11-01", "2020-11-01"),
+                (6, None, None, None),
+            ],
+        ),
+    ],
+    indirect=["session_timezone"],
+)
+def test_parquet_int96_timestamp_display_uses_session_timezone(spark, tmp_path, session_timezone, expected):
+    _ = session_timezone
+    path = tmp_path / "int96_display.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": list(range(len(_INT96_DISPLAY_INSTANTS))),
+                "ts": pa.array(_INT96_DISPLAY_INSTANTS, type=pa.timestamp("us", tz="UTC")),
+            }
+        ),
+        path,
+        use_deprecated_int96_timestamps=True,
+        store_schema=False,
+    )
+    df = spark.read.parquet(str(path))
+    actual = (
+        df.selectExpr(
+            "id",
+            "CAST(ts AS STRING)",
+            "CAST(CAST(ts AS DATE) AS STRING)",
+            "CAST(to_date(ts) AS STRING)",
+        )
+        .orderBy("id")
+        .collect()
+    )
+    assert [tuple(r) for r in actual] == expected
+    shown = df.orderBy("id")._show_string(n=100, truncate=False)  # noqa: SLF001
+    assert expected[0][1] in shown
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("adjusted_to_utc", [False, True])
+def test_external_parquet_timestamp_logical_type_roundtrip(spark, tmp_path, adjusted_to_utc):
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    values = [datetime(2020, 6, 14, 12) + timedelta(minutes=30 * i) for i in range(24)]  # noqa: DTZ001
+    if adjusted_to_utc:
+        values = [value.replace(tzinfo=ZoneInfo(session_timezone)) for value in values]
+    data_type = pa.timestamp("us", tz=session_timezone if adjusted_to_utc else None)
+    path = tmp_path / "external.parquet"
+    # Exercise the Parquet logical type without an Arrow schema metadata override.
+    pq.write_table(pa.table({"ts": pa.array(values, type=data_type)}), path, store_schema=False)
+    logical_type = str(pq.ParquetFile(path).schema.column(0).logical_type)
+    assert f"isAdjustedToUTC={str(adjusted_to_utc).lower()}" in logical_type
+
+    source = spark.read.parquet(str(path))
+    destination = tmp_path / "rewritten"
+    source.write.parquet(str(destination))
+    expected_type = TimestampType if adjusted_to_utc else TimestampNTZType
+    for frame in (source, spark.read.parquet(str(destination))):
+        assert isinstance(frame.schema["ts"].dataType, expected_type)
+        row = (
+            frame.filter("ts >= TIMESTAMP '2020-06-14 00:00:00' AND ts < TIMESTAMP '2020-06-15 00:00:00'")
+            .selectExpr("count(*) AS n", "CAST(min(ts) AS STRING) AS lo", "CAST(max(ts) AS STRING) AS hi")
+            .collect()[0]
+        )
+        assert (row.n, row.lo, row.hi) == (24, "2020-06-14 12:00:00", "2020-06-14 23:30:00")
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+def test_external_parquet_timestamp_instant_roundtrip(spark, tmp_path):
+    # Check stored instants separately from the logical-type test's string rendering.
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    first = datetime(2020, 6, 14, 12, tzinfo=ZoneInfo(session_timezone))
+    values = [first + timedelta(minutes=30 * i) for i in range(24)]
+    path = tmp_path / "external_instants.parquet"
+    pq.write_table(
+        pa.table({"ts": pa.array(values, type=pa.timestamp("us", tz=session_timezone))}),
+        path,
+        store_schema=False,
+    )
+
+    source = spark.read.parquet(str(path))
+    destination = tmp_path / "rewritten_instants"
+    source.write.parquet(str(destination))
+    for frame in (source, spark.read.parquet(str(destination))):
+        assert isinstance(frame.schema["ts"].dataType, TimestampType)
+        row = (
+            frame.filter("ts >= TIMESTAMP '2020-06-14 00:00:00' AND ts < TIMESTAMP '2020-06-15 00:00:00'")
+            .selectExpr("count(*) AS n", "unix_micros(min(ts)) AS lo", "unix_micros(max(ts)) AS hi")
+            .collect()[0]
+        )
+        assert (row.n, row.lo, row.hi) == (
+            24,
+            int(values[0].timestamp() * 1_000_000),
+            int(values[-1].timestamp() * 1_000_000),
+        )
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai", "America/Los_Angeles"], indirect=True)
+@pytest.mark.parametrize("adjusted_to_utc", [False, True])
+@pytest.mark.parametrize(
+    ("lower", "upper"), [("2020-06-14", "2020-06-15"), ("2020-06-14 00:00:00", "2020-06-15 00:00:00")]
+)
+def test_external_parquet_timestamp_string_window(spark, tmp_path, adjusted_to_utc, lower, upper):
+    # String bounds cast to the column type, so the window is the day in the session time zone.
+    session_timezone = spark.conf.get("spark.sql.session.timeZone")
+    values = [datetime(2020, 6, 14, 12) + timedelta(minutes=30 * i) for i in range(24)]  # noqa: DTZ001
+    if adjusted_to_utc:
+        values = [value.replace(tzinfo=ZoneInfo(session_timezone)) for value in values]
+    data_type = pa.timestamp("us", tz=session_timezone if adjusted_to_utc else None)
+    path = tmp_path / "external.parquet"
+    pq.write_table(pa.table({"ts": pa.array(values, type=data_type)}), path, store_schema=False)
+
+    row = (
+        spark.read.parquet(str(path))
+        .filter(f"ts >= '{lower}' AND ts < '{upper}'")
+        .selectExpr("count(*) AS n", "CAST(min(ts) AS STRING) AS lo", "CAST(max(ts) AS STRING) AS hi")
+        .collect()[0]
+    )
+    assert (row.n, row.lo, row.hi) == (24, "2020-06-14 12:00:00", "2020-06-14 23:30:00")
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("unit", ["ms", "us"])
+@pytest.mark.parametrize("producer_timezone", [None, "UTC", "America/New_York"])
+@pytest.mark.parametrize(
+    ("session_timezone", "first_instant"),
+    [("UTC", 24), ("Asia/Shanghai", 8), ("America/Los_Angeles", 38), ("+05:30", 13)],
+    indirect=["session_timezone"],
+)
+def test_parquet_timestamp_window(spark, tmp_path, first_instant, producer_timezone, unit):
+    # External Parquet preserves the distinction between wall times and instants.
+    values = [datetime(2020, 6, 13, 12) + timedelta(minutes=30 * i) for i in range(120)]  # noqa: DTZ001
+    values.append(None)
+    path = tmp_path / "timestamps.parquet"
+    pq.write_table(
+        pa.table({"id": range(len(values)), "ts": pa.array(values, type=pa.timestamp(unit, tz=producer_timezone))}),
+        path,
+    )
+    df = spark.read.parquet(str(path))
+    expected_type = TimestampNTZType if producer_timezone is None else TimestampType
+    assert isinstance(df.schema["ts"].dataType, expected_type)
+    assert df.count() == len(values)
+
+    rows = (
+        df.filter(
+            (F.col("ts") >= F.expr("TIMESTAMP '2020-06-14 00:00:00'"))
+            & (F.col("ts") < F.expr("TIMESTAMP '2020-06-15 00:00:00'"))
+        )
+        .select("id")
+        .orderBy("id")
+        .collect()
+    )
+    first = 24 if producer_timezone is None else first_instant
+    assert [row.id for row in rows] == list(range(first, first + 48))
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_parquet_int96_timestamp_window_precision(spark, tmp_path):
+    path = tmp_path / "int96.parquet"
+    pq.write_table(
+        pa.table({"id": range(3), "ts": pa.array([-1000, -1, 0], type=pa.timestamp("ns"))}),
+        path,
+        use_deprecated_int96_timestamps=True,
+    )
+    # Spark reads the pre-epoch nanosecond as -1 microsecond. Sail can retain
+    # nanoseconds; neither representation may compare equal to the epoch.
+    frame = spark.read.option("coerce_int96", "ns").parquet(str(path))
+    assert frame.filter("id = 1 AND ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == []
+    assert frame.filter("ts = TIMESTAMP '1970-01-01 00:00:00'").select("id").collect() == [(2,)]

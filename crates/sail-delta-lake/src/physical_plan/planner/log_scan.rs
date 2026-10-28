@@ -108,7 +108,7 @@ fn parse_log_version_prefix(filename: &str) -> Option<u64> {
     parse_version_prefix(filename)?.try_into().ok()
 }
 
-fn log_file_path(table_root_path: &str, filename: &str) -> Path {
+fn log_file_path(table_root_path: &Path, filename: &str) -> Path {
     // Object store paths are absolute for local filesystem stores in our setup (DataFusion uses
     // `ObjectStoreUrl::local_filesystem()`).
     delta_log_file_path(table_root_path, filename)
@@ -116,7 +116,7 @@ fn log_file_path(table_root_path: &str, filename: &str) -> Path {
 
 async fn head_many(
     store: &Arc<dyn ObjectStore>,
-    table_root_path: &str,
+    table_root_path: &Path,
     files: &[String],
 ) -> Result<Vec<ObjectMeta>> {
     if files.is_empty() {
@@ -273,7 +273,8 @@ pub async fn build_delta_log_datasource_scans_with_options(
 
     // Commit/checkpoint lists are expected to be selected by the planner log-segment resolver.
     // This builder only materializes datasource scans from those resolved filenames.
-    let table_root_path = log_store.config().location.path();
+    let table_root = Path::from_url_path(log_store.config().location.path())?;
+    let table_root_path = &table_root;
     let (checkpoint_metas, commit_metas, sidecar_metas) = tokio::try_join!(
         head_many(&store, table_root_path, &checkpoint_files),
         head_many(&store, table_root_path, &commit_files),

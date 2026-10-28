@@ -97,8 +97,7 @@ data:
       ProjectionExec: expr=[id@0 as #0]
         CoalescePartitionsExec: fetch=2
           FilterExec: id@0 > 2, fetch=2
-            RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-              DataSourceExec: file_groups={1 group: [[<tmp>/filtered_limit/part-0.parquet, <tmp>/filtered_limit/part-1.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 2 AND id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2 AND id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+            DataSourceExec: file_groups={1 group: [[<tmp>/filtered_limit/part-0.parquet, <tmp>/filtered_limit/part-1.parquet]]}, projection=[id], file_type=parquet, predicate=id@0 > 2 AND id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2 AND id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
   ordered: |-
     == Physical Plan ==
     ProjectionExec: expr=[#0@0 as id]

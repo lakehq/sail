@@ -1,11 +1,11 @@
 ---
-title: Jev / AI Functions
+title: Jev
 rank: 7
 ---
 
-# Jev / AI Functions
+# Jev
 
-Jev functions use [TypeSafe's System One API](https://docs.typesafe.ai/api) to evaluate text and JSON data.
+Jev functions use the [TypeSafe System One API](https://docs.typesafe.ai/api) to evaluate text and JSON data.
 These functions are built into Sail.
 Apache Spark does not include these functions.
 Sail sends asynchronous HTTP requests from Rust.
@@ -17,19 +17,19 @@ Do not include these brackets in a SQL call.
 Each function returns one result row for each input row.
 This rule also applies to calls with literal arguments and to `jev_models()`.
 
-| Function                                                 | Result fields                                                                                                                     |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `jev_noul(state, instructions [, criteria [, options]])` | `noul DOUBLE`, plus inference metadata.                                                                                           |
-| `jev_choice(state, instructions, criteria [, options])`  | `choice STRING`, `probabilities MAP<STRING, DOUBLE>`, `confidence DOUBLE`, plus inference metadata.                               |
-| `jev_score(state, instructions, criteria [, options])`   | `score DOUBLE`, `probabilities MAP<STRING, DOUBLE>`, `confidence DOUBLE`, `legend MAP<STRING, VARIANT>`, plus inference metadata. |
-| `jev_system_one(state, questions [, options])`           | `answers MAP<STRING, VARIANT>`, plus inference metadata.                                                                          |
-| `jev_models([options])`                                  | `models ARRAY<STRUCT<name: STRING, description: STRING, release_date: STRING>>`, `request_id STRING`.                             |
+| Function                                                 | Result fields                                                                                                                    |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `jev_noul(state, instructions [, criteria [, options]])` | `noul DOUBLE` and inference metadata.                                                                                            |
+| `jev_choice(state, instructions, criteria [, options])`  | `choice STRING`, `probabilities MAP<STRING, DOUBLE>`, `confidence DOUBLE`, and inference metadata.                               |
+| `jev_score(state, instructions, criteria [, options])`   | `score DOUBLE`, `probabilities MAP<STRING, DOUBLE>`, `confidence DOUBLE`, `legend MAP<STRING, VARIANT>`, and inference metadata. |
+| `jev_system_one(state, questions [, options])`           | `answers MAP<STRING, VARIANT>` and inference metadata.                                                                           |
+| `jev_models([options])`                                  | `models ARRAY<STRUCT<name: STRING, description: STRING, release_date: STRING>>` and `request_id STRING`.                         |
 
-Each result is a struct, except when a SQL NULL state produces a SQL NULL result.
+Each result is a `STRUCT`, except when a SQL `NULL` state produces a SQL `NULL` result.
 
 Sail returns values from the [TypeSafe service](https://docs.typesafe.ai/api).
 Noul returns the probability of yes, from 0 to 1.
-Noul does not convert this probability to a Boolean value.
+Noul does not convert this probability to a boolean value.
 Choice returns the selected answer and the probabilities for all choices.
 Score returns a probability-weighted value over rubric positions, with the first position at zero.
 The score can contain a fractional part.
@@ -45,12 +45,12 @@ An explicit inference model can identify a version absent from this list.
 All four inference functions return these other fields.
 The `jev_models` function does not return inference metadata.
 
-| Field        | SQL type                                              | Description                                                                               |
-| ------------ | ----------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `model`      | `STRING`                                              | Model returned by the TypeSafe service. This value can differ from the requested alias.   |
-| `request_id` | `STRING`                                              | Value of the `x-typesafe-request-id` response header. An absent header produces SQL NULL. |
-| `batch_id`   | `STRING`                                              | Sail identifier for the request shared by these rows.                                     |
-| `usage`      | `STRUCT<input_tokens: BIGINT, output_tokens: BIGINT>` | Token counts for the full request. An absent or null count remains SQL NULL.              |
+| Field        | SQL type                                              | Description                                                                                 |
+| ------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `model`      | `STRING`                                              | Model returned by the TypeSafe service. This value can differ from the requested alias.     |
+| `request_id` | `STRING`                                              | Value of the `x-typesafe-request-id` response header. An absent header produces SQL `NULL`. |
+| `batch_id`   | `STRING`                                              | Sail identifier for the request shared by these rows.                                       |
+| `usage`      | `STRUCT<input_tokens: BIGINT, output_tokens: BIGINT>` | Token counts for the full request. An absent or null count remains SQL `NULL`.              |
 
 ## Set Up Jev
 
@@ -99,7 +99,7 @@ Empty `TYPESAFE_JEV_*` values cause an error.
 
 ### API URL
 
-Sail reads `TYPESAFE_BASE_URL` directly when it creates the worker's HTTP client.
+Sail reads `TYPESAFE_BASE_URL` directly when it creates the HTTP client for a worker.
 The default URL is `https://api.typesafe.ai`.
 This URL is sufficient for the public TypeSafe service.
 SQL calls cannot override this address.
@@ -125,7 +125,7 @@ For example, `https://api.example.com/proxy/` becomes `https://api.example.com/p
 The URL must use HTTP or HTTPS and must include a host.
 The URL must not contain credentials, query parameters, or a fragment.
 Sail does not follow HTTP redirects.
-There is no SQL `base_url` option.
+The base URL cannot be set through SQL.
 
 ### API Key and Model Selection
 
@@ -143,27 +143,27 @@ Sail removes the key from Jev HTTP error messages.
 The optional `options` argument has type `MAP<STRING, STRING>`.
 Each value must be a non-null string.
 This rule also applies to numeric settings.
-If `options` is absent or SQL NULL, Sail uses the defaults.
+If `options` is absent or SQL `NULL`, Sail uses the defaults.
 An unknown option name causes an error.
-These value rules do not apply to rows with SQL NULL state.
+These value rules do not apply to rows with SQL `NULL` state.
 
-| Option            | Default                                     | Function                                                                       |
-| ----------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
-| `model`           | `TYPESAFE_DEFAULT_MODEL`, then `jev-latest` | Model or model alias for inference.                                            |
-| `timeout_ms`      | `10000`                                     | Deadline for one HTTP attempt, in milliseconds.                                |
-| `retry_budget_ms` | `30000`                                     | Time budget that controls the start of retries, in milliseconds.               |
-| `max_retries`     | `2`                                         | Maximum retries after the first attempt. A value of `0` disables HTTP retries. |
+| Option            | Default                                                  | Function                                                                       |
+| ----------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `model`           | The value of `TYPESAFE_DEFAULT_MODEL`, then `jev-latest` | Model or model alias for inference.                                            |
+| `timeout_ms`      | `10000`                                                  | Deadline for one HTTP attempt, in milliseconds.                                |
+| `retry_budget_ms` | `30000`                                                  | Time budget that controls the start of retries, in milliseconds.               |
+| `max_retries`     | `2`                                                      | Maximum retries after the first attempt. A value of `0` disables HTTP retries. |
 
 `timeout_ms` and `retry_budget_ms` must be positive integers.
 `max_retries` must be a nonnegative integer.
-SQL NULL and an option value of `0` do not disable the time limits.
-SQL NULL for the full options argument still selects the defaults.
+SQL `NULL` and an option value of `0` do not disable the time limits.
+SQL `NULL` for the full options argument still selects the defaults.
 
-Sail does not accept `api_key`, `base_url`, or resource-limit options.
+Sail does not accept API key, base URL, or resource-limit settings as SQL options.
 Use the environment variables for these settings.
 
 Criteria and options have fixed argument positions.
-For Noul options without criteria, put SQL NULL in the criteria position:
+For Noul options without criteria, put SQL `NULL` in the criteria position:
 
 ```sql
 SELECT jev_noul(
@@ -188,14 +188,14 @@ Sail keeps nested JSON values without a change to their structure.
 The state can be a JSON string, object, or array.
 Instructions can also be JSON null.
 
-| Input                | Accepted values                                                                                                                                                                              |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Noul criteria        | `MAP<STRING, STRING>` or a VARIANT object with optional `true` and `false` descriptions. Each description can be a string, object, array, or null.                                           |
-| Choice criteria      | `MAP<STRING, STRING>` or a VARIANT object. Each choice name maps to a string, object, array, or null description.                                                                            |
-| Score criteria       | `ARRAY<STRING>` or a VARIANT array with one or more descriptions. Each description must be a string, object, or array. Null entries are invalid.                                             |
-| System One questions | A VARIANT object with one or more questions. Each question has an ID and a `type` of `noul`, `choice`, or `score`. Instructions are optional. Choice and Score questions must have criteria. |
+| Input                | Accepted values                                                                                                                                                                                |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Noul criteria        | `MAP<STRING, STRING>` or a `VARIANT` object with optional `true` and `false` descriptions. Each description can be a string, object, array, or null.                                           |
+| Choice criteria      | `MAP<STRING, STRING>` or a `VARIANT` object. Each choice name maps to a string, object, array, or null description.                                                                            |
+| Score criteria       | `ARRAY<STRING>` or a `VARIANT` array with one or more descriptions. Each description must be a string, object, or array. Null entries are invalid.                                             |
+| System One questions | A `VARIANT` object with one or more questions. Each question has an ID and a `type` of `noul`, `choice`, or `score`. Instructions are optional. Choice and Score questions must have criteria. |
 
-[TypeSafe's API reference](https://docs.typesafe.ai/api) describes 2 to 10 Score levels and a maximum of 255 Choice options.
+The [TypeSafe API reference](https://docs.typesafe.ai/api) describes 2 to 10 Score levels and a maximum of 255 Choice options.
 Score criteria must contain one or more levels.
 Sail does not apply these upper limits before it sends a request.
 The TypeSafe service can reject values for a specified model.
@@ -204,19 +204,19 @@ Sail returns these TypeSafe errors as query errors.
 ### Null Values
 
 Sail validates argument types before it evaluates rows.
-For a SQL NULL state, the Jev function does not validate the other argument values.
+For a SQL `NULL` state, the Jev function does not validate the other argument values.
 The other rules in this table apply to rows with a non-null state.
 
-| Input                                                         | Sail behavior                                                                         |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| SQL NULL state                                                | Sail returns SQL NULL for this row. Sail adds no question from this row to a request. |
-| JSON null state, such as `parse_json('null')`                 | Sail returns an error.                                                                |
-| SQL NULL instructions                                         | Sail does not include instructions in the request.                                    |
-| JSON null instructions                                        | Sail sends JSON null instructions.                                                    |
-| SQL NULL or JSON null `jev_noul` criteria argument            | Sail does not include the criteria.                                                   |
-| Null Choice criteria, Score criteria, or System One questions | Sail returns an error.                                                                |
+| Input                                                         | Sail behavior                                                                           |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| SQL `NULL` state                                              | Sail returns SQL `NULL` for this row. Sail adds no question from this row to a request. |
+| JSON null state, such as `parse_json('null')`                 | Sail returns an error.                                                                  |
+| SQL `NULL` instructions                                       | Sail does not include instructions in the request.                                      |
+| JSON null instructions                                        | Sail sends JSON null instructions.                                                      |
+| SQL `NULL` or JSON null `jev_noul` criteria argument          | Sail does not include the criteria.                                                     |
+| Null Choice criteria, Score criteria, or System One questions | Sail returns an error.                                                                  |
 
-A batch with only SQL NULL states sends no requests.
+A batch with only SQL `NULL` states sends no requests.
 A batch with no rows also sends no requests.
 Other rows in a mixed batch can still cause requests.
 The `jev_system_one` function keeps explicit JSON null fields inside question objects when the schema permits null.
@@ -230,12 +230,12 @@ If a check fails, Sail returns a query error.
 Sail does not recalculate probabilities, scores, or confidence.
 Sail does not create replacement probabilities or null answers.
 
-Structured results use exact integer and decimal values when VARIANT can store them.
-VARIANT permits up to 38 digits and a scale from 0 to 38.
+Structured results use exact integer and decimal values when `VARIANT` can store them.
+`VARIANT` permits up to 38 digits and a scale from 0 to 38.
 Other finite JSON numbers use double precision.
-The typed inference functions use DOUBLE for `noul`, `score`, `confidence`, and probabilities.
+The typed inference functions use `DOUBLE` for `noul`, `score`, `confidence`, and probabilities.
 
-Missing or null token counts remain SQL NULL.
+Missing or null token counts remain SQL `NULL`.
 A missing or null usage object causes an error.
 
 ## Batching and Worker Resource Limits
@@ -271,7 +271,7 @@ These functions use the same HTTP client and configured API root URL within each
 Enter byte values as numbers of bytes.
 
 A request group contains the rows assigned to one API request.
-An admitted group has permission to use the worker's request queue.
+An admitted group has permission to use the worker request queue.
 The pending limits include active groups and groups that wait to run.
 The active limit controls the number of HTTP attempts that run at the same time.
 
@@ -353,7 +353,7 @@ The retry budget can prevent a retry with that delay.
 The retry conditions and delay calculation are fixed.
 
 An HTTP date with `GMT` uses UTC.
-An older asctime date without a timezone uses the worker's local timezone.
+An older asctime date without a timezone uses the local timezone on the worker.
 
 ### Cluster Task Retries
 
@@ -380,7 +380,7 @@ Query planning and ordinary `EXPLAIN` do not send requests.
 
 `CASE`, `AND`, and `OR` do not guarantee that Sail skips a Jev call.
 The asynchronous evaluator can evaluate the Jev call before the surrounding expression.
-For a row that must not send a question, supply a SQL NULL state.
+For a row that must not send a question, supply a SQL `NULL` state.
 
 A Jev call cannot contain another asynchronous call.
 Another asynchronous call cannot contain a Jev call.
@@ -475,7 +475,7 @@ SELECT jev_system_one(
 ```
 
 Use `result.answers['billing']` to read the billing answer.
-This VARIANT contains the full Noul answer object.
+This `VARIANT` contains the full Noul answer object.
 
 ### Get the Available Models
 

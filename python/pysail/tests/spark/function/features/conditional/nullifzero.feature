@@ -63,8 +63,6 @@ Feature: nullifzero output schema
         | nullifzero doctest #12 (result) | CAST(5.25 AS DECIMAL(10,2)) | 5.25  | decimal(10,2) |
 
     # An untyped NULL literal keeps the NullType through `nullifzero`, so Spark reports `void`.
-    # Sail resolves the literal to INT first.
-    @sail-bug
     Scenario: nullifzero doctest #14 (result)
       When query
         """
@@ -86,3 +84,129 @@ Feature: nullifzero output schema
       Then query result
         | nullifzero(-1) | typeof(nullifzero(-1)) |
         | -1             | int                    |
+
+  Rule: Decimal columns preserve their type and precision
+
+    Scenario Outline: Preserve <input_type> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT nullifzero(value) AS result
+        FROM VALUES
+          (CAST('<value>' AS <input_type>)),
+          (CAST(NULL AS <input_type>))
+        AS t(value)
+        """
+      Then query schema
+        """
+        root
+         |-- result: <output_type> (nullable = true)
+        """
+      And query result collected
+        | result   |
+        | <value>  |
+        | NULL     |
+
+      Examples:
+        | ansi  | input_type     | output_type    | value                                  |
+        | true  | DECIMAL(20,0)  | decimal(20,0)  | 9007199254740993                        |
+        | false | DECIMAL(20,0)  | decimal(20,0)  | 9007199254740993                        |
+        | true  | DECIMAL(38,38) | decimal(38,38) | 0.12345678901234567890123456789012345678 |
+        | false | DECIMAL(38,38) | decimal(38,38) | 0.12345678901234567890123456789012345678 |
+        | true  | DECIMAL(38,30) | decimal(38,30) | 12345678.123456789012345678901234567890  |
+        | false | DECIMAL(38,30) | decimal(38,30) | 12345678.123456789012345678901234567890  |
+
+  Rule: String comparisons preserve the original string result
+
+    Scenario Outline: Integer string columns with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT nullifzero(value) AS result
+        FROM VALUES ('00'), ('2147483648'), ('9007199254740993'), (NULL) AS t(value)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+      And query result collected
+        | result           |
+        | NULL             |
+        | 2147483648       |
+        | 9007199254740993 |
+        | NULL             |
+
+      Examples:
+        | ansi  |
+        | true  |
+        | false |
+
+    Scenario: Legacy string comparison truncates fractions and tolerates failed casts
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT nullifzero(value) AS result
+        FROM VALUES ('0.5'), ('abc'), ('2147483648'), (CAST(NULL AS STRING)) AS t(value)
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = true)
+        """
+      And query result collected
+        | result     |
+        | NULL       |
+        | abc        |
+        | 2147483648 |
+        | NULL       |
+
+    Scenario Outline: ANSI mode rejects the non-integer string <value>
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT nullifzero(value) AS result FROM VALUES ('<value>') AS t(value)
+        """
+      Then query error (?i)(cast|convert|parse|invalid)
+
+      Examples:
+        | value |
+        | 0.5   |
+        | abc   |
+
+  Rule: Boolean comparison is available only in legacy mode
+
+    Scenario: Legacy Boolean columns preserve TRUE and replace FALSE with NULL
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT nullifzero(value) AS result
+        FROM VALUES (TRUE), (FALSE), (CAST(NULL AS BOOLEAN)) AS t(value)
+        """
+      Then query schema
+        """
+        root
+         |-- result: boolean (nullable = true)
+        """
+      And query result collected
+        | result |
+        | true   |
+        | NULL   |
+        | NULL   |
+
+    Scenario Outline: Reject <input> with ANSI <ansi>
+      Given config spark.sql.ansi.enabled = <ansi>
+      When query
+        """
+        SELECT nullifzero(value) AS result FROM VALUES (<input>) AS t(value)
+        """
+      Then query error (?i)(type|coerc|cast|compar)
+
+      Examples:
+        | ansi  | input             |
+        | true  | TRUE              |
+        | true  | FALSE             |
+        | true  | DATE '2024-01-02' |
+        | false | DATE '2024-01-02' |
+        | true  | array(0, 1)       |
+        | false | array(0, 1)       |

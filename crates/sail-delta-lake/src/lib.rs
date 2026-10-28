@@ -12,17 +12,21 @@
 
 mod catalog;
 mod catalog_managed;
+mod change_data_feed;
 mod checkpoint;
 pub mod conversion;
 pub mod datasource;
+mod ddl;
 pub mod deletion_vector;
 mod delta_log;
 pub mod error;
+mod inspection;
 pub mod lake_source;
 pub mod logical;
 pub mod options;
 pub mod physical;
 pub mod physical_plan;
+mod procedure;
 pub mod schema;
 pub mod session_extension;
 mod snapshot;

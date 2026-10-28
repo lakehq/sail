@@ -24,7 +24,7 @@ mod udf;
 mod wildcard;
 mod window;
 
-pub(super) use predicate::spark_interval_metadata_for_expression;
+pub(super) use predicate::{ansi_float_comparison_types, spark_interval_metadata_for_expression};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct NamedExpr {
@@ -92,12 +92,12 @@ impl NamedExpr {
 }
 
 impl PlanResolver<'_> {
-    #[async_recursion]
     /// Resolves a Sail spec expression into a named expression.
     ///
     /// Dispatches to type-specific resolvers based on the expression variant (e.g., Cast, Literal,
     /// Function). Returns a `NamedExpr` containing the resolved expression and display name(s)
     /// for projection/aliasing.
+    #[async_recursion]
     pub(super) async fn resolve_named_expression(
         &self,
         expr: spec::Expr,

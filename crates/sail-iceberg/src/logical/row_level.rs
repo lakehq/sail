@@ -34,7 +34,7 @@ impl IcebergRowLevelOptions {
     pub(crate) fn mode(&self, command: RowLevelCommand) -> Result<RowLevelWriteMode> {
         crate::properties::validate_write_properties(&self.properties)?;
         let isolation_property = match command {
-            RowLevelCommand::Delete => "write.delete.isolation-level",
+            RowLevelCommand::Truncate | RowLevelCommand::Delete => "write.delete.isolation-level",
             RowLevelCommand::Update => "write.update.isolation-level",
             RowLevelCommand::Merge => "write.merge.isolation-level",
         };
@@ -49,7 +49,7 @@ impl IcebergRowLevelOptions {
         // FIXME: Validate conflicting files and predicates for the selected isolation
         // level. Until then, the expected-snapshot requirement rejects every advance.
         let property = match command {
-            RowLevelCommand::Delete => "write.delete.mode",
+            RowLevelCommand::Truncate | RowLevelCommand::Delete => "write.delete.mode",
             RowLevelCommand::Update => "write.update.mode",
             RowLevelCommand::Merge => "write.merge.mode",
         };
@@ -189,7 +189,7 @@ pub(crate) fn select_copy_on_write_rows(plan: LogicalPlan) -> Result<LogicalPlan
 pub(crate) fn write_effects(
     plan: LogicalPlan,
 ) -> sail_logical_plan::row_level::RowLevelEffectPlans {
-    sail_logical_plan::row_level::RowLevelEffectPlans::new(Some(Arc::new(plan)), None, None)
+    sail_logical_plan::row_level::RowLevelEffectPlans::new(Some(Arc::new(plan)), None, None, None)
 }
 
 pub(crate) fn lineage_columns(plan: &LogicalPlan) -> Result<&'static [&'static str]> {

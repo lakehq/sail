@@ -32,12 +32,13 @@ pub async fn create_row_level_write_physical_plan(
     let target = node.target().clone();
 
     match node.command() {
-        RowLevelCommand::Delete => {
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => {
             let info = RowLevelWriteInfo {
-                command: RowLevelCommand::Delete,
+                command: node.command(),
                 target,
                 condition: node.condition().cloned(),
                 expanded_input: None,
+                change_data_plan: None,
                 touched_file_plan: None,
                 deletion_vector_plan: None,
                 deletion_vector_operation_mode: None,
@@ -56,6 +57,7 @@ pub async fn create_row_level_write_physical_plan(
                 target,
                 condition: None,
                 expanded_input: Some(expanded_input),
+                change_data_plan: effects.change_data,
                 touched_file_plan: effects.touched_files,
                 deletion_vector_plan: effects.row_index_deletes,
                 deletion_vector_operation_mode: merge_deletion_vector_operation_mode(node),
@@ -73,6 +75,7 @@ pub async fn create_row_level_write_physical_plan(
                 target,
                 condition: node.condition().cloned(),
                 expanded_input: Some(expanded_input),
+                change_data_plan: effects.change_data,
                 touched_file_plan: effects.touched_files,
                 deletion_vector_plan: effects.row_index_deletes,
                 deletion_vector_operation_mode: Some(DeletionVectorRowOperationMode::Update),
@@ -93,6 +96,7 @@ struct PhysicalRowLevelEffects {
     write_rows: Option<Arc<dyn ExecutionPlan>>,
     touched_files: Option<Arc<dyn ExecutionPlan>>,
     row_index_deletes: Option<Arc<dyn ExecutionPlan>>,
+    change_data: Option<Arc<dyn ExecutionPlan>>,
 }
 
 fn collect_physical_effects(
@@ -126,6 +130,7 @@ fn collect_physical_effects(
         write_rows: take(logical_effects.write_rows().is_some())?,
         touched_files: take(logical_effects.touched_files().is_some())?,
         row_index_deletes: take(logical_effects.row_index_deletes().is_some())?,
+        change_data: take(logical_effects.change_data().is_some())?,
     })
 }
 
@@ -141,7 +146,7 @@ async fn create_delta_row_level_writer(
         DeltaLakeSource::parse_table_url(ctx, vec![info.target.location.clone()]).await?;
     let delta_options = DeltaWriteOptions::resolve(ctx, target_options)?;
     let partition_columns = match info.command {
-        RowLevelCommand::Delete => Vec::new(),
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => Vec::new(),
         RowLevelCommand::Merge | RowLevelCommand::Update => info.target.partition_by.clone(),
     };
     let config = DeltaPlannerConfig::new(
@@ -157,6 +162,9 @@ async fn create_delta_row_level_writer(
     let planner_ctx = PlannerContext::new(ctx, config);
 
     match (mode, info.command) {
+        (_, RowLevelCommand::Truncate) => {
+            super::op_truncate::build_truncate_plan(&planner_ctx).await
+        }
         (RowLevelWriteMode::MergeOnRead, RowLevelCommand::Delete) => {
             plan_delete_mor(&planner_ctx, delete_condition(&info)).await
         }

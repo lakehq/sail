@@ -1,8 +1,13 @@
+use std::collections::HashSet;
+
 use datafusion_expr::LogicalPlan;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableColumnStatus, TableKind, TemporaryViewSource};
+use sail_common::utils::string::spark_case_insensitive_name_eq;
+use sail_common_datafusion::catalog::{
+    PartitionTransform, TableColumnStatus, TableKind, TemporaryViewSource,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
@@ -78,9 +83,15 @@ impl PlanResolver<'_> {
 
         let input = self.resolve_write_input(input, state).await?;
 
-        if !partition.is_empty() {
-            return Err(PlanError::todo("PARTITION for write"));
+        if partition.iter().any(|(_, value)| value.is_some()) {
+            return Err(PlanError::unsupported(
+                "static or mixed PARTITION clauses for INSERT",
+            ));
         }
+        let partition = partition
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
 
         let (mode, column_match) = match mode {
             InsertMode::InsertByPosition { overwrite } => (
@@ -102,7 +113,10 @@ impl PlanResolver<'_> {
 
         // A temporary view created with `USING` is backed by a data source.
         // `INSERT INTO/OVERWRITE` writes to the same location, as Spark treats it as a table.
-        if let Some((source, columns)) = self.resolve_temporary_view_insert_target(&table).await? {
+        if let Some((source, columns)) = self
+            .resolve_temporary_view_insert_target(&table, !partition.is_empty())
+            .await?
+        {
             return self
                 .resolve_insert_into_temporary_view(
                     input,
@@ -117,11 +131,50 @@ impl PlanResolver<'_> {
 
         let builder = WritePlanBuilder::new()
             .with_mode(mode)
+            .with_insert_partition(partition)
             .with_target(WriteTarget::Table {
                 table,
                 column_match,
             });
         self.resolve_write_with_builder(input, builder, state).await
+    }
+
+    /// An all-dynamic clause only validates identity partition names. It neither
+    /// reorders the input nor overrides the session's partition overwrite mode.
+    pub(super) fn validate_insert_partition(
+        &self,
+        partition: &[spec::Identifier],
+        info: &TableInfo,
+    ) -> PlanResult<()> {
+        if partition.is_empty() {
+            return Ok(());
+        }
+        if !info.format.eq_ignore_ascii_case("delta") {
+            return Err(PlanError::todo("PARTITION for write"));
+        }
+        let mut seen = HashSet::new();
+        for name in partition {
+            let name = name.as_ref();
+            let resolved = info.partition_by.iter().position(|field| {
+                matches!(field.transform, None | Some(PartitionTransform::Identity))
+                    && if self.config.case_sensitive {
+                        field.column == name
+                    } else {
+                        spark_case_insensitive_name_eq(&field.column, name)
+                    }
+            });
+            let Some(index) = resolved else {
+                return Err(PlanError::analysis(format!(
+                    "PARTITION clause cannot contain the non-partition column: {name}"
+                )));
+            };
+            if !seen.insert(index) {
+                return Err(PlanError::analysis(format!(
+                    "duplicate partition column: {name}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Maps the `OVERWRITE` flag of an `INSERT` statement to the write mode for
@@ -142,6 +195,7 @@ impl PlanResolver<'_> {
     async fn resolve_temporary_view_insert_target(
         &self,
         table: &spec::ObjectName,
+        has_partition_clause: bool,
     ) -> PlanResult<Option<(TemporaryViewSource, Vec<TableColumnStatus>)>> {
         let manager = self.ctx.extension::<CatalogManager>()?;
         let status = match manager.get_table_or_view(table.parts()).await {
@@ -155,7 +209,14 @@ impl PlanResolver<'_> {
             }
             | TableKind::GlobalTemporaryView {
                 source, columns, ..
-            } => Ok(source.map(|source| (source, columns))),
+            } => {
+                if has_partition_clause {
+                    return Err(PlanError::unsupported(
+                        "PARTITION for writes to temporary views",
+                    ));
+                }
+                Ok(source.map(|source| (source, columns)))
+            }
             _ => Ok(None),
         }
     }

@@ -21,7 +21,6 @@ use datafusion::arrow::temporal_conversions::{
     duration_us_to_duration, time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
     try_duration_ms_to_duration, try_duration_s_to_duration,
 };
-use lexical_core::FormattedSize;
 use parquet_variant_compute::VariantArray;
 use parquet_variant_json::VariantToJson;
 
@@ -80,6 +79,8 @@ pub struct FormatOptions<'a> {
     time_format: TimeFormat<'a>,
     /// Duration format
     duration_format: DurationFormat,
+    /// Time zone for timestamp with timezone arrays, instead of the array's own time zone
+    timezone: Option<&'a str>,
 }
 
 impl Default for FormatOptions<'_> {
@@ -99,6 +100,7 @@ impl<'a> FormatOptions<'a> {
             timestamp_tz_format: TimeFormat::Spark,
             time_format: TimeFormat::Spark,
             duration_format: DurationFormat::Spark,
+            timezone: None,
         }
     }
 
@@ -160,6 +162,12 @@ impl<'a> FormatOptions<'a> {
             duration_format,
             ..self
         }
+    }
+
+    /// Overrides the time zone used for [`DataType::Timestamp`] columns with a timezone,
+    /// such as Spark's session time zone
+    pub const fn with_timezone(self, timezone: Option<&'a str>) -> Self {
+        Self { timezone, ..self }
     }
 }
 
@@ -481,13 +489,8 @@ macro_rules! primitive_display {
         {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
-                let mut buffer = [0u8; <$t as ArrowPrimitiveType>::Native::FORMATTED_SIZE];
-                // SAFETY:
-                // buffer is T::FORMATTED_SIZE
-                let b = lexical_core::write(value, &mut buffer);
-                // Lexical core produces valid UTF-8
-                let s = unsafe { std::str::from_utf8_unchecked(b) };
-                f.write_str(s)?;
+                let mut buffer = core::fmt::NumBuffer::new();
+                f.write_str(value.format_into(&mut buffer))?;
                 Ok(())
             }
         })+
@@ -565,9 +568,10 @@ macro_rules! timestamp_display {
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 match self.data_type() {
-                    DataType::Timestamp(_, Some(tz)) => {
-                        Ok((Some(tz.parse()?), options.timestamp_tz_format))
-                    }
+                    DataType::Timestamp(_, Some(tz)) => Ok((
+                        Some(options.timezone.unwrap_or(tz).parse()?),
+                        options.timestamp_tz_format,
+                    )),
                     DataType::Timestamp(_, None) => Ok((None, options.timestamp_format)),
                     _ => unreachable!(),
                 }

@@ -22,7 +22,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::SparkDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -39,6 +39,10 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{
+    session_timestamp_interval_arithmetic, session_timestamp_subtraction,
+    with_timestamp_ntz_coercion,
+};
 
 fn add_day_time_interval_to_string(
     string: Expr,
@@ -93,6 +97,18 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && let Some(expr) = session_timestamp_interval_arithmetic(
+                &left,
+                left_type,
+                Operator::Plus,
+                &right,
+                right_type,
+                &function_context.plan_config.session_timezone_label(),
+            )
+        {
+            return Ok(expr);
+        }
         Ok(match (left_type, right_type) {
             (
                 Ok(string_type @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)),
@@ -170,6 +186,29 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && let Some(expr) = session_timestamp_interval_arithmetic(
+                &left,
+                left_type,
+                Operator::Minus,
+                &right,
+                right_type,
+                &function_context.plan_config.session_timezone_label(),
+            )
+        {
+            return Ok(expr);
+        }
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && let Some(expr) = session_timestamp_subtraction(
+                &left,
+                left_type,
+                &right,
+                right_type,
+                &function_context.plan_config.session_timezone_label(),
+            )
+        {
+            return Ok(expr);
+        }
         Ok(match (left_type, right_type) {
             (Ok(DataType::Date32), Ok(DataType::Duration(TimeUnit::Microsecond))) => {
                 left - cast(right, DataType::Interval(IntervalUnit::MonthDayNano))
@@ -429,17 +468,9 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
             // Match duration because we cast Spark's DayTime interval to Duration.
             cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
         }
-        // Handle Interval / Interval division using custom UDF
-        (Ok(DataType::Interval(_)), Ok(DataType::Interval(_))) => {
-            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new()));
-            Expr::ScalarFunction(expr::ScalarFunction {
-                func: interval_div,
-                args: vec![dividend, divisor],
-            })
-        }
-        // TODO: In case getting the type fails, we don't want to fail the query.
-        //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
-        (Ok(_), Ok(_)) | (Err(_), _) | (_, Err(_)) => dividend / divisor,
+        // Keep the original operands intact through grouping and aggregate extraction.
+        // SparkDiv's normal argument coercion handles resolved numeric and interval types.
+        _ => ScalarUDF::from(SparkDiv::new()).call(vec![dividend, divisor]),
     };
 
     Ok(cast(div_expr, DataType::Int64))
@@ -787,10 +818,16 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::var_arg(expr_fn::greatest)),
+        (
+            "greatest",
+            F::custom(with_timestamp_ntz_coercion(expr_fn::greatest)),
+        ),
         ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
-        ("least", F::var_arg(expr_fn::least)),
+        (
+            "least",
+            F::custom(with_timestamp_ntz_coercion(expr_fn::least)),
+        ),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),

@@ -2,6 +2,7 @@
 name = "sail-common-datafusion"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -9,10 +10,14 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 
+arrow = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
+datafusion-datasource = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+object_store = { workspace = true }
+url = { workspace = true }
 arrow-schema = { workspace = true }
 thiserror = { workspace = true }
 either = { workspace = true }
@@ -30,6 +35,7 @@ parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
 tokio = { workspace = true }
 serde_arrow = { workspace = true }
+itertools = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }

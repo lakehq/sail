@@ -2,6 +2,7 @@
 name = "sail-plan"
 version = { workspace = true }
 edition = { workspace = true }
+rust-version = { workspace = true }
 
 [lints]
 workspace = true
@@ -14,6 +15,7 @@ sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-catalog = { path = "../sail-catalog" }
 sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-function = { path = "../sail-function" }
+sail-logical-optimizer = { path = "../sail-logical-optimizer" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-data-source = { path = "../sail-data-source" }
@@ -47,7 +49,9 @@ serde_json = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+fancy-regex = { workspace = true }
 regex-syntax = { workspace = true }
+url = { workspace = true }
 parquet-variant-compute = { workspace = true }
 
 [build-dependencies]

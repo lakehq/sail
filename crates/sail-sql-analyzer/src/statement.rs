@@ -1,7 +1,13 @@
+use std::iter::once;
+
 use either::Either;
 use sail_common::spec;
 use sail_common::spec::QueryPlan;
-use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, OrderDirection};
+use sail_common::utils::datetime::{
+    MAX_TIME_ZONE_OFFSET_MICROS, MICROS_PER_DAY, MICROS_PER_HOUR, MICROS_PER_SECOND,
+    get_system_timezone,
+};
+use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, IntervalExpr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
 use sail_sql_parser::ast::keywords::{Cascade, Overwrite, Restrict};
 use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
@@ -11,26 +17,29 @@ use sail_sql_parser::ast::statement::{
     AlterColumnOperation, AlterTableOperation, AlterViewOperation, AnalyzeTableModifier,
     AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
     ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
-    ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
-    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeFunctionName, DescribeItem,
-    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
-    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
-    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
-    PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SetClause, ShowFunctionScope, ShowFunctionsClause,
-    ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList, Statement,
-    TableColumnIdentityOption, TableColumnIdentityOptions, UpdateTableAlias, ViewColumn,
-    ViewColumnList, ViewUsingClause,
+    ColumnDropList, ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause,
+    CreateTableClause, CreateViewClause, CreateViewDefinition, DeleteTableAlias,
+    DescribeFunctionName, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
+    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
+    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
+    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyList, PropertyKeyValue,
+    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause,
+    SetPropertyKeyValue, ShowFunctionScope, ShowFunctionsClause, ShowFunctionsPattern, SortColumn,
+    SortColumnClause, SortColumnList, Statement, TableColumnIdentityOption,
+    TableColumnIdentityOptions, TimeZoneValue, UpdateTableAlias, ViewColumn, ViewColumnList,
+    ViewUsingClause,
 };
 use sail_sql_parser::tree::TreeText;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{
-    expr_with_default_column_values, from_ast_expression, from_ast_identifier_list,
-    from_ast_object_name,
+    expr_with_default_column_values, from_ast_expression, from_ast_function_arguments,
+    from_ast_identifier_list, from_ast_object_name,
 };
-use crate::query::from_ast_query;
+use crate::literal::interval::{IntervalValue, from_ast_signed_interval, multi_unit_interval_days};
+use crate::literal::utils::Signed;
+use crate::query::{from_ast_query, from_ast_with_clause};
 use crate::value::from_ast_string;
 
 fn from_ast_show_function_scope(scope: Option<ShowFunctionScope>) -> (bool, bool) {
@@ -105,6 +114,78 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::Query(query) => {
             let plan = from_ast_query(query)?;
             Ok(spec::Plan::Query(plan))
+        }
+        Statement::CallProcedure {
+            call: _,
+            name,
+            arguments,
+        } => {
+            if arguments.duplicate_treatment.is_some() || arguments.null_treatment.is_some() {
+                return Err(SqlError::invalid(
+                    "CALL arguments do not support DISTINCT/ALL or null-treatment modifiers",
+                ));
+            }
+            let arguments = arguments
+                .arguments
+                .map(|arguments| arguments.into_items())
+                .into_iter()
+                .flatten();
+            let (arguments, named_arguments) = from_ast_function_arguments(arguments)?;
+            Ok(spec::Plan::Command(spec::CommandPlan::new(
+                spec::CommandNode::CallProcedure {
+                    procedure: from_ast_object_name(name)?,
+                    arguments,
+                    named_arguments,
+                },
+            )))
+        }
+        Statement::Optimize {
+            target,
+            full,
+            predicate,
+            zorder,
+            ..
+        } => {
+            let mut arguments = vec![];
+            if full.is_some() {
+                arguments.push((
+                    "full".into(),
+                    spec::Expr::Literal(spec::Literal::Boolean { value: Some(true) }),
+                ));
+            }
+            if let Some(predicate) = predicate {
+                arguments.push((
+                    "predicate".into(),
+                    lakehouse_string(predicate.condition_sql),
+                ));
+            }
+            if let Some(zorder) = zorder {
+                arguments.push(("zorder".into(), lakehouse_string(zorder.text())));
+            }
+            delta_table_procedure("optimize", target, arguments)
+        }
+        Statement::Vacuum {
+            target, clauses, ..
+        } => {
+            let mut arguments = vec![];
+            for clause in clauses {
+                use sail_sql_parser::ast::statement::VacuumClause;
+                let (key, value) = match clause {
+                    VacuumClause::Retain(_, value, _) => (
+                        "retention_hours",
+                        lakehouse_string(value.text().trim().to_string()),
+                    ),
+                    VacuumClause::DryRun(_, _) => (
+                        "dry_run",
+                        spec::Expr::Literal(spec::Literal::Boolean { value: Some(true) }),
+                    ),
+                    VacuumClause::Mode(mode) => {
+                        ("mode", lakehouse_string(mode.text().trim().to_string()))
+                    }
+                };
+                arguments.push((key.into(), value));
+            }
+            delta_table_procedure("vacuum", target, arguments)
         }
         Statement::SetCatalog {
             set: _,
@@ -321,6 +402,28 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 table: from_ast_object_name(name)?,
                 if_exists: if_exists.is_some(),
                 purge: purge.is_some(),
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::TruncateTable {
+            truncate: _,
+            table: _,
+            name,
+        } => {
+            let node = spec::CommandNode::TruncateTable {
+                table: from_ast_object_name(name)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ShowTableProperties { name, property, .. } => {
+            let property = property
+                .map(|(_, key, _)| {
+                    from_ast_property(PropertyKeyValue { key, value: None }).map(|(key, _)| key)
+                })
+                .transpose()?;
+            let node = spec::CommandNode::ShowTableProperties {
+                table: from_ast_object_name(name)?,
+                property,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -630,6 +733,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertOverwriteDirectory {
+            with,
             insert: _,
             overwrite: _,
             local,
@@ -681,7 +785,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 }
             };
             let node = spec::CommandNode::InsertOverwriteDirectory {
-                input: Box::new(from_ast_query(query)?),
+                input: Box::new(from_ast_with_clause(from_ast_query(query)?, with)?),
                 local: local.is_some(),
                 location,
                 file_format,
@@ -691,6 +795,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertIntoAndReplace {
+            with,
             insert: _,
             into: _,
             table: _,
@@ -699,7 +804,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             r#where,
             query,
         } => {
-            let query = from_ast_query(query)?;
+            let query = from_ast_with_clause(from_ast_query(query)?, with)?;
             let WhereClause {
                 r#where: _,
                 condition,
@@ -720,6 +825,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::InsertInto {
+            with,
             insert: _,
             into_or_overwrite,
             table: _,
@@ -743,7 +849,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 },
                 None => spec::InsertMode::InsertByPosition { overwrite },
             };
-            let query = from_ast_query(query)?;
+            let query = from_ast_with_clause(from_ast_query(query)?, with)?;
             let node = spec::CommandNode::InsertInto {
                 input: Box::new(query),
                 table: from_ast_object_name(name)?,
@@ -1117,16 +1223,38 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let node = spec::CommandNode::ClearCache;
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::SetTimeZone { .. } => Err(SqlError::todo("SET TIME ZONE")),
+        Statement::SetTimeZone { set: _, timezone } => {
+            let node = spec::CommandNode::SetVariable {
+                variable: SESSION_TIME_ZONE_KEY.to_string(),
+                value: from_ast_time_zone(timezone)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::SetProperty { set: _, property } => {
             let Some(property) = property else {
                 return Err(SqlError::todo("list all properties"));
             };
-            let (variable, value) = from_ast_property(property)?;
+            let (variable, value) = from_ast_set_property(property)?;
             let Some(value) = value else {
                 return Err(SqlError::todo("show property"));
             };
             let node = spec::CommandNode::SetVariable { variable, value };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
+        Statement::ResetProperty {
+            reset: _,
+            key,
+            rest,
+        } => {
+            // Spark takes the key as it is written, so a string literal is not a key and the parts of a
+            // dotted key are not separated by spaces.
+            let key_is_plain = key.as_ref().is_none_or(is_plain_config_key);
+            let malformed = rest.is_some() || matches!(key, Some(PropertyKey::Literal(_)));
+            let variable = key.map(from_ast_property_key).transpose()?;
+            if malformed || (!key_is_plain && variable.as_deref() == Some(SESSION_TIME_ZONE_KEY)) {
+                return Err(SqlError::invalid(INVALID_RESET_COMMAND_FORMAT));
+            }
+            let node = spec::CommandNode::ResetVariable { variable };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::AnalyzeTable {
@@ -1175,6 +1303,21 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         }
         Statement::Describe { describe: _, item } => {
             let node = match item {
+                DescribeItem::DeltaDetail { target, .. } => {
+                    return delta_table_procedure("describe_detail", target, vec![]);
+                }
+                DescribeItem::DeltaHistory { target, limit, .. } => {
+                    let arguments = limit
+                        .map(|(_, limit)| {
+                            (
+                                "limit".into(),
+                                lakehouse_string(limit.text().trim().to_string()),
+                            )
+                        })
+                        .into_iter()
+                        .collect();
+                    return delta_table_procedure("describe_history", target, arguments);
+                }
                 DescribeItem::Query { query: _, item } => {
                     let query = from_ast_query(item)?;
                     spec::CommandNode::DescribeQuery {
@@ -1211,6 +1354,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     name,
                     partition,
                     column,
+                    end: _,
                 } => {
                     let partition = partition
                         .map(from_ast_partition)
@@ -1220,24 +1364,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     spec::CommandNode::DescribeTable {
                         table: from_ast_object_name(name)?,
                         extended: extended.is_some(),
-                        partition,
-                        column,
-                    }
-                }
-                DescribeItem::TableExtended {
-                    extended: _,
-                    name,
-                    partition,
-                    column,
-                } => {
-                    let partition = partition
-                        .map(from_ast_partition)
-                        .transpose()?
-                        .unwrap_or_default();
-                    let column = column.map(from_ast_object_name).transpose()?;
-                    spec::CommandNode::DescribeTable {
-                        table: from_ast_object_name(name)?,
-                        extended: true,
                         partition,
                         column,
                     }
@@ -1990,46 +2116,193 @@ impl TryFrom<Vec<CreateViewClause>> for CreateViewClauses {
     }
 }
 
-fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<String>)> {
-    let PropertyKeyValue { key, value } = property;
-    let key = match key {
-        PropertyKey::Name(ObjectName(parts)) => parts
+// The messages of these errors are the templates of Spark (`error-conditions.json`), with its SQLSTATE.
+const INVALID_SET_SYNTAX: &str = "[INVALID_SET_SYNTAX] Expected format is 'SET', 'SET key', or \
+    'SET key=value'. If you want to include special characters in key, or include semicolon in value, \
+    please use backquotes, e.g., SET `key`=`value`. SQLSTATE: 42000";
+
+const INVALID_RESET_COMMAND_FORMAT: &str = "[INVALID_RESET_COMMAND_FORMAT] Expected format is \
+    'RESET' or 'RESET key'. If you want to include special characters in key, please use quotes, \
+    e.g., RESET `key`. SQLSTATE: 42000";
+
+/// The configuration key that `SET TIME ZONE` assigns to.
+/// It must equal `SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE` in `sail-spark-connect`.
+const SESSION_TIME_ZONE_KEY: &str = "spark.sql.session.timeZone";
+
+/// `QueryParsingErrors.intervalValueOutOfRangeError`, where `input` is the part of the interval that
+/// Spark rejects: its months, its days, its whole hours, or its whole seconds.
+fn interval_out_of_range(input: impl std::fmt::Display) -> SqlError {
+    SqlError::invalid(format!(
+        "[INVALID_INTERVAL_FORMAT.TIMEZONE_INTERVAL_OUT_OF_RANGE] Error parsing '{input}' to \
+        interval. Please ensure that the value provided is in a valid format for defining an \
+        interval. You can reference the documentation for the correct format. The interval value \
+        must be in the range of [-18, +18] hours with second precision. SQLSTATE: 22006"
+    ))
+}
+
+/// Resolves the argument of `SET TIME ZONE` to the value of the session time zone,
+/// following `SparkSqlParser.visitSetTimeZone`.
+fn from_ast_time_zone(timezone: TimeZoneValue) -> SqlResult<String> {
+    match timezone {
+        // `LOCAL` is resolved when the statement is analyzed, like `TimeZone.getDefault`
+        // in Spark. The result depends on the host.
+        TimeZoneValue::Local(_) => Ok(get_system_timezone()?),
+        TimeZoneValue::Literal(x) => from_ast_string(x),
+        TimeZoneValue::Interval(_, interval) => {
+            let interval = *interval;
+            // Spark keeps the months, the days and the microseconds of an interval apart
+            // (`SparkSqlParser.scala:379-399`). The days of an interval written with units are the
+            // ones of its `DAY` and `WEEK` parts. An interval written as `FROM ... TO ...` splits
+            // its whole days from the rest.
+            let unit_days = match &interval {
+                IntervalExpr::MultiUnit { head, tail } => {
+                    Some(multi_unit_interval_days(once(head).chain(tail))?)
+                }
+                IntervalExpr::Standard { .. } => None,
+                // Spark requires a unit, so `INTERVAL '1 hour'` is not a time zone displacement.
+                IntervalExpr::Literal(_) => {
+                    return Err(SqlError::invalid(
+                        "[_LEGACY_ERROR_TEMP_0045] Invalid time zone displacement value.",
+                    ));
+                }
+            };
+            let (months, micros) = match from_ast_signed_interval(Signed::Positive(interval))? {
+                IntervalValue::YearMonth { months, .. } => (i64::from(months), 0),
+                IntervalValue::Microsecond { microseconds, .. } => (0, microseconds),
+                IntervalValue::MonthDayNanosecond {
+                    months,
+                    days,
+                    nanoseconds,
+                } => (
+                    i64::from(months),
+                    i64::from(days) * MICROS_PER_DAY + nanoseconds / 1_000,
+                ),
+            };
+            let (days, microseconds) = match unit_days {
+                Some(days) => (days, micros),
+                None => (micros / MICROS_PER_DAY, micros % MICROS_PER_DAY),
+            };
+            if months != 0 {
+                return Err(interval_out_of_range(months));
+            }
+            if days != 0 {
+                return Err(interval_out_of_range(days));
+            }
+            if microseconds.unsigned_abs() > MAX_TIME_ZONE_OFFSET_MICROS {
+                return Err(interval_out_of_range(
+                    microseconds.unsigned_abs() / (MICROS_PER_HOUR as u64),
+                ));
+            }
+            if microseconds % MICROS_PER_SECOND != 0 {
+                return Err(interval_out_of_range(microseconds / MICROS_PER_SECOND));
+            }
+            Ok(format_zone_offset(microseconds / MICROS_PER_SECOND))
+        }
+    }
+}
+
+/// Formats an offset like `java.time.ZoneOffset.toString`: `Z`, `+01:00` or `-08:00:30`.
+fn format_zone_offset(total_seconds: i64) -> String {
+    if total_seconds == 0 {
+        return "Z".to_string();
+    }
+    let sign = if total_seconds < 0 { '-' } else { '+' };
+    let abs = total_seconds.abs();
+    let (hours, minutes, seconds) = (abs / 3_600, abs / 60 % 60, abs % 60);
+    if seconds == 0 {
+        format!("{sign}{hours:02}:{minutes:02}")
+    } else {
+        format!("{sign}{hours:02}:{minutes:02}:{seconds:02}")
+    }
+}
+
+/// Whether a key is written as one word, like Spark requires: a dotted name has no spaces and no quoted part.
+/// A key quoted as a whole, or a single name, is fine.
+fn is_plain_config_key(key: &PropertyKey) -> bool {
+    let PropertyKey::Name(ObjectName(parts)) = key else {
+        return true;
+    };
+    if parts.tail.is_empty() {
+        return true;
+    }
+    let is_unquoted =
+        |ident: &Ident| ident.span.end - ident.span.start == ident.value.chars().count();
+    let mut end = parts.head.span.end;
+    is_unquoted(&parts.head)
+        && parts.tail.iter().all(|(period, ident)| {
+            let adjacent = period.span.start == end && ident.span.start == period.span.end;
+            end = ident.span.end;
+            adjacent && is_unquoted(ident)
+        })
+}
+
+fn from_ast_property_key(key: PropertyKey) -> SqlResult<String> {
+    match key {
+        PropertyKey::Name(ObjectName(parts)) => Ok(parts
             .into_items()
             .map(|x| x.value)
             .collect::<Vec<_>>()
-            .join("."),
-        PropertyKey::Literal(x) => from_ast_string(x)?,
-    };
-    let value = if let Some((_, value)) = value {
-        let value = match value {
-            PropertyValue::String(x) => from_ast_string(x)?,
-            PropertyValue::Number(
-                sign,
-                NumberLiteral {
-                    value,
-                    suffix,
-                    span: _,
-                },
-            ) => {
-                let sign = match sign {
-                    Some(Either::Left(Plus { .. })) => "+",
-                    Some(Either::Right(Minus { .. })) => "-",
-                    None => "",
-                };
-                let suffix = match suffix {
-                    None => "",
-                    Some(x) => x.as_str(),
-                };
-                format!("{sign}{value}{suffix}")
-            }
-            PropertyValue::Boolean(BooleanLiteral::True(_)) => "true".to_string(),
-            PropertyValue::Boolean(BooleanLiteral::False(_)) => "false".to_string(),
-        };
-        Some(value)
-    } else {
-        None
-    };
+            .join(".")),
+        PropertyKey::Literal(x) => from_ast_string(x),
+    }
+}
+
+fn from_ast_property_value(value: PropertyValue) -> SqlResult<String> {
+    match value {
+        PropertyValue::String(x) => from_ast_string(x),
+        PropertyValue::Number(
+            sign,
+            NumberLiteral {
+                value,
+                suffix,
+                span: _,
+            },
+        ) => {
+            let sign = match sign {
+                Some(Either::Left(Plus { .. })) => "+",
+                Some(Either::Right(Minus { .. })) => "-",
+                None => "",
+            };
+            let suffix = match suffix {
+                None => "",
+                Some(x) => x.as_str(),
+            };
+            Ok(format!("{sign}{value}{suffix}"))
+        }
+        PropertyValue::Boolean(BooleanLiteral::True(_)) => Ok("true".to_string()),
+        PropertyValue::Boolean(BooleanLiteral::False(_)) => Ok("false".to_string()),
+    }
+}
+
+fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<String>)> {
+    let PropertyKeyValue { key, value } = property;
+    let key = from_ast_property_key(key)?;
+    let value = value
+        .map(|(_, value)| from_ast_property_value(value))
+        .transpose()?;
     Ok((key, value))
+}
+
+fn from_ast_set_property(property: SetPropertyKeyValue) -> SqlResult<(String, Option<String>)> {
+    let SetPropertyKeyValue { key, value, rest } = property;
+    let key_is_string = matches!(key, PropertyKey::Literal(_));
+    let key_is_plain = is_plain_config_key(&key);
+    let key = from_ast_property_key(key)?;
+    // A missing time zone is not a property named `time`.
+    if value.is_none()
+        && key.eq_ignore_ascii_case("time")
+        && rest
+            .as_ref()
+            .is_some_and(|rest| rest.value.eq_ignore_ascii_case("zone"))
+    {
+        return Err(SqlError::invalid(
+            "[_LEGACY_ERROR_TEMP_0045] Invalid time zone displacement value.",
+        ));
+    }
+    if rest.is_some() || key_is_string || !key_is_plain {
+        return Err(SqlError::invalid(INVALID_SET_SYNTAX));
+    }
+    Ok((key, value.map(|(_, value)| value.value)))
 }
 
 fn from_ast_property_list(properties: PropertyList) -> SqlResult<Vec<(String, String)>> {
@@ -2172,30 +2445,45 @@ impl TryFrom<Vec<ColumnAlterationOption>> for ColumnAlterationOptions {
     }
 }
 
-// TODO: implement the conversion properly for column-level ALTER TABLE operations
-fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()> {
-    // TODO: implement the conversion properly
+fn from_ast_column_position(position: ColumnPosition) -> SqlResult<spec::ColumnPosition> {
+    match position {
+        ColumnPosition::First(_) => Ok(spec::ColumnPosition::First),
+        ColumnPosition::After(_, name) => {
+            let name: Vec<String> = from_ast_object_name(name)?.into();
+            let [name] = name.as_slice() else {
+                return Err(SqlError::invalid("AFTER requires a sibling column name"));
+            };
+            Ok(spec::ColumnPosition::After(name.clone()))
+        }
+    }
+}
+
+fn from_ast_column_alteration_list(
+    items: ColumnAlterationList,
+) -> SqlResult<Vec<spec::ColumnChange>> {
     let columns = match items {
-        ColumnAlterationList::Delimited {
-            left: _,
-            columns,
-            right: _,
-        } => columns,
-        ColumnAlterationList::NotDelimited { columns } => columns,
+        ColumnAlterationList::Delimited { columns, .. }
+        | ColumnAlterationList::NotDelimited { columns } => columns,
     };
-    let _ = columns
+    columns
         .into_items()
-        .map(|x| {
+        .map(|column| {
             let ColumnAlteration {
-                name: _,
-                data_type: _,
+                name,
+                data_type,
                 options,
-            } = x;
-            let _: ColumnAlterationOptions = options.try_into()?;
-            Ok(())
+            } = column;
+            let options: ColumnAlterationOptions = options.try_into()?;
+            Ok(spec::ColumnChange::Add {
+                path: from_ast_object_name(name)?.into(),
+                data_type: from_ast_data_type(data_type)?,
+                nullable: !options.not_null,
+                comment: options.comment.map(from_ast_string).transpose()?,
+                default: options.default.map(|expr| expr.text().trim().to_string()),
+                position: options.position.map(from_ast_column_position).transpose()?,
+            })
         })
-        .collect::<SqlResult<Vec<_>>>()?;
-    Ok(())
+        .collect()
 }
 
 fn from_ast_merge_optional_condition<T>(
@@ -2236,6 +2524,169 @@ fn from_ast_alter_table_operation(
     operation: AlterTableOperation,
 ) -> SqlResult<spec::AlterTableOperation> {
     match operation {
+        AlterTableOperation::CreateSnapshotReference {
+            action,
+            kind,
+            if_not_exists,
+            name,
+            version,
+            retain,
+            retention,
+        } => {
+            use sail_sql_parser::ast::statement::{
+                ReferenceSnapshotRetention, SnapshotReferenceCreateAction,
+            };
+            use spec::SnapshotReferenceCreateMode as Mode;
+            let mode = match (action, if_not_exists.is_some()) {
+                (SnapshotReferenceCreateAction::Create(_, None), false) => Mode::Create,
+                (SnapshotReferenceCreateAction::Create(_, None), true) => Mode::CreateIfNotExists,
+                (SnapshotReferenceCreateAction::Create(_, Some(_)), false) => Mode::CreateOrReplace,
+                (SnapshotReferenceCreateAction::Replace(_), false) => Mode::Replace,
+                _ => {
+                    return Err(SqlError::invalid(
+                        "IF NOT EXISTS cannot be combined with REPLACE",
+                    ));
+                }
+            };
+            let kind = from_ast_snapshot_reference_kind(kind);
+            if kind == spec::SnapshotReferenceType::Tag && retention.is_some() {
+                return Err(SqlError::invalid(
+                    "Snapshot retention is only supported for branches",
+                ));
+            }
+            let (min_snapshots_to_keep, max_snapshot_age_ms) = match retention
+                .map(|(_, _, _, value)| value)
+            {
+                Some(ReferenceSnapshotRetention::Count(value, _, age)) => (
+                    Some(
+                        i32::try_from(value.value)
+                            .map_err(|_| SqlError::invalid("Invalid snapshot retention count"))?,
+                    ),
+                    age.map(from_ast_reference_duration).transpose()?,
+                ),
+                Some(ReferenceSnapshotRetention::Age(age)) => {
+                    (None, Some(from_ast_reference_duration(age)?))
+                }
+                None => (None, None),
+            };
+            Ok(spec::AlterTableOperation::AlterSnapshotReference {
+                operation: spec::SnapshotReferenceOperation::Create {
+                    name: name.value,
+                    kind,
+                    mode,
+                    snapshot_id: version.map(|(_, _, _, value)| value.value),
+                    max_ref_age_ms: retain
+                        .map(|(_, age)| from_ast_reference_duration(age))
+                        .transpose()?,
+                    min_snapshots_to_keep,
+                    max_snapshot_age_ms,
+                },
+            })
+        }
+        AlterTableOperation::DropSnapshotReference {
+            kind,
+            if_exists,
+            name,
+            ..
+        } => Ok(spec::AlterTableOperation::AlterSnapshotReference {
+            operation: spec::SnapshotReferenceOperation::Drop {
+                name: name.value,
+                kind: from_ast_snapshot_reference_kind(kind),
+                if_exists: if_exists.is_some(),
+            },
+        }),
+        AlterTableOperation::SetIdentifierFields { names, .. } => {
+            Ok(spec::AlterTableOperation::AlterIdentifierFields {
+                names: names
+                    .into_items()
+                    .map(from_ast_object_name)
+                    .collect::<SqlResult<_>>()?,
+                drop: false,
+            })
+        }
+        AlterTableOperation::DropIdentifierFields { names, .. } => {
+            Ok(spec::AlterTableOperation::AlterIdentifierFields {
+                names: names
+                    .into_items()
+                    .map(from_ast_object_name)
+                    .collect::<SqlResult<_>>()?,
+                drop: true,
+            })
+        }
+        AlterTableOperation::AddPartitionField {
+            transform, name, ..
+        } => Ok(spec::AlterTableOperation::AlterPartitionSpec {
+            add: Some((
+                from_ast_expression(transform)?,
+                name.map(|(_, name)| name.value),
+            )),
+            drop: None,
+        }),
+        AlterTableOperation::DropPartitionField { transform, .. } => {
+            Ok(spec::AlterTableOperation::AlterPartitionSpec {
+                add: None,
+                drop: Some(from_ast_expression(transform)?),
+            })
+        }
+        AlterTableOperation::ReplacePartitionField { old, new, name, .. } => {
+            Ok(spec::AlterTableOperation::AlterPartitionSpec {
+                add: Some((from_ast_expression(*new)?, name.map(|(_, name)| name.value))),
+                drop: Some(from_ast_expression(old)?),
+            })
+        }
+        AlterTableOperation::Write { specifications, .. } => {
+            use sail_sql_parser::ast::statement::{TableWriteOrderList, TableWriteSpec};
+            let mut distributed = false;
+            let mut order = None;
+            let mut distribution = None;
+            for specification in specifications {
+                match specification {
+                    TableWriteSpec::Distributed { .. } => {
+                        if distributed {
+                            return Err(SqlError::invalid("Duplicate write distribution clause"));
+                        }
+                        distributed = true;
+                    }
+                    TableWriteSpec::Ordered {
+                        locally, columns, ..
+                    } => {
+                        if order.is_some() {
+                            return Err(SqlError::invalid("Duplicate write ordering clause"));
+                        }
+                        let columns = match columns {
+                            TableWriteOrderList::Delimited { columns, .. }
+                            | TableWriteOrderList::NotDelimited { columns } => columns,
+                        };
+                        order = Some(
+                            columns
+                                .into_items()
+                                .map(crate::expression::from_ast_order_by)
+                                .collect::<SqlResult<Vec<_>>>()?,
+                        );
+                        distribution = locally.is_none().then(|| "range".to_string());
+                    }
+                    TableWriteSpec::Unordered(_) => {
+                        if order.is_some() {
+                            return Err(SqlError::invalid("Duplicate write ordering clause"));
+                        }
+                        order = Some(vec![]);
+                        distribution = Some("none".to_string());
+                    }
+                }
+            }
+            if !distributed && order.is_none() {
+                return Err(SqlError::invalid(
+                    "Missing write ordering or distribution clause",
+                ));
+            }
+            if distributed {
+                distribution = Some("hash".into());
+            }
+            Ok(spec::AlterTableOperation::SetWriteOrder {
+                order: order.unwrap_or_default(),
+                distribution,
+            })
+        }
         AlterTableOperation::SetTableProperties { properties, .. } => {
             let properties = from_ast_property_list(properties)?;
             Ok(spec::AlterTableOperation::SetTableProperties { properties })
@@ -2287,28 +2738,158 @@ fn from_ast_alter_table_operation(
                 },
             })
         }
-        AlterTableOperation::RenameTable { .. }
-        | AlterTableOperation::RenamePartition { .. }
-        | AlterTableOperation::DropColumns { .. }
-        | AlterTableOperation::RenameColumn { .. }
+        AlterTableOperation::DropConstraint {
+            name, if_exists, ..
+        } => Ok(spec::AlterTableOperation::DropCheckConstraint {
+            name: name.value.into(),
+            if_exists: if_exists.is_some(),
+        }),
+        AlterTableOperation::RenameTable { name, .. } => {
+            Ok(spec::AlterTableOperation::RenameTable {
+                name: from_ast_object_name(name)?,
+            })
+        }
+        AlterTableOperation::SetLocation {
+            partition, value, ..
+        } => {
+            if partition.is_some() {
+                return Err(SqlError::unsupported("ALTER TABLE PARTITION SET LOCATION"));
+            }
+            Ok(spec::AlterTableOperation::SetLocation {
+                location: from_ast_string(value)?,
+            })
+        }
+        AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
-        | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
-        AlterTableOperation::AlterColumn { .. } => Ok(spec::AlterTableOperation::Unknown),
-        AlterTableOperation::AddColumns { items, .. }
-        | AlterTableOperation::ReplaceColumns { items, .. } => {
-            // Validate column descriptors (e.g. detect duplicate COMMENT/DEFAULT/NOT NULL/POSITION
-            // clauses) even though we do not yet translate these operations.
-            from_ast_column_alteration_list(items)?;
-            Ok(spec::AlterTableOperation::Unknown)
+        AlterTableOperation::RenameColumn { old, new, .. } => {
+            let names: Vec<String> = from_ast_object_name(new)?.into();
+            let [name] = names.as_slice() else {
+                return Err(SqlError::invalid(
+                    "RENAME COLUMN requires a single new name",
+                ));
+            };
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: vec![spec::ColumnChange::Rename {
+                    path: from_ast_object_name(old)?.into(),
+                    name: name.clone(),
+                }],
+            })
+        }
+        AlterTableOperation::DropColumns {
+            names, if_exists, ..
+        } => {
+            let columns = match names {
+                ColumnDropList::Delimited { columns, .. }
+                | ColumnDropList::NotDelimited { columns } => columns,
+            };
+            let changes = columns
+                .into_items()
+                .map(|name| {
+                    Ok(spec::ColumnChange::Drop {
+                        path: from_ast_object_name(name)?.into(),
+                        if_exists: if_exists.is_some(),
+                    })
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+            Ok(spec::AlterTableOperation::AlterColumns { changes })
+        }
+        AlterTableOperation::AlterColumn {
+            name, operation, ..
+        } => {
+            let path = from_ast_object_name(name)?.into();
+            let change = match operation {
+                AlterColumnOperation::Comment(_, value) => spec::ColumnChange::Comment {
+                    path,
+                    comment: Some(from_ast_string(value)?),
+                },
+                AlterColumnOperation::SetNotNull(..) => spec::ColumnChange::Nullability {
+                    path,
+                    nullable: false,
+                },
+                AlterColumnOperation::DropNotNull(..) => spec::ColumnChange::Nullability {
+                    path,
+                    nullable: true,
+                },
+                AlterColumnOperation::Position(position) => spec::ColumnChange::Position {
+                    path,
+                    position: from_ast_column_position(position)?,
+                },
+                _ => return Err(SqlError::invalid("Unexpected ALTER COLUMN operation")),
+            };
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: vec![change],
+            })
+        }
+        AlterTableOperation::AddColumns { items, .. } => {
+            Ok(spec::AlterTableOperation::AlterColumns {
+                changes: from_ast_column_alteration_list(items)?,
+            })
+        }
+        AlterTableOperation::ReplaceColumns { items, .. } => {
+            Ok(spec::AlterTableOperation::ReplaceColumns {
+                columns: from_ast_column_alteration_list(items)?,
+            })
         }
     }
+}
+
+fn from_ast_snapshot_reference_kind(
+    kind: sail_sql_parser::ast::statement::SnapshotReferenceKind,
+) -> spec::SnapshotReferenceType {
+    use sail_sql_parser::ast::statement::SnapshotReferenceKind;
+    match kind {
+        SnapshotReferenceKind::Branch(_) => spec::SnapshotReferenceType::Branch,
+        SnapshotReferenceKind::Tag(_) => spec::SnapshotReferenceType::Tag,
+    }
+}
+
+fn from_ast_reference_duration(
+    duration: sail_sql_parser::ast::statement::ReferenceDuration,
+) -> SqlResult<i64> {
+    use sail_sql_parser::ast::statement::ReferenceTimeUnit;
+    let multiplier = match duration.unit {
+        ReferenceTimeUnit::Days(_) => 86_400_000,
+        ReferenceTimeUnit::Hours(_) => 3_600_000,
+        ReferenceTimeUnit::Minutes(_) => 60_000,
+    };
+    duration
+        .value
+        .value
+        .checked_mul(multiplier)
+        .ok_or_else(|| SqlError::invalid("Snapshot retention duration is out of range"))
 }
 
 fn from_ast_alter_view_operation(
     _operation: AlterViewOperation,
 ) -> SqlResult<spec::AlterViewOperation> {
     Ok(spec::AlterViewOperation::Unknown)
+}
+
+fn lakehouse_string(value: String) -> spec::Expr {
+    spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) })
+}
+
+fn delta_table_procedure(
+    procedure: &str,
+    target: Either<
+        sail_sql_parser::ast::literal::StringLiteral,
+        sail_sql_parser::ast::identifier::ObjectName,
+    >,
+    arguments: Vec<(spec::Identifier, spec::Expr)>,
+) -> SqlResult<spec::Plan> {
+    let target = match target {
+        Either::Left(path) => spec::LakehouseCommandTarget::Path(from_ast_string(path)?),
+        Either::Right(table) => spec::LakehouseCommandTarget::Table(from_ast_object_name(table)?),
+    };
+    Ok(spec::Plan::Command(spec::CommandPlan::new(
+        spec::CommandNode::CallTableProcedure {
+            format: "delta".to_string(),
+            procedure: procedure.to_string(),
+            target,
+            arguments,
+        },
+    )))
 }

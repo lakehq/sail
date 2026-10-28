@@ -1,3 +1,8 @@
+use std::sync::LazyLock;
+
+use icu_casemap::{CaseMapper, CaseMapperBorrowed};
+use regex::Regex;
+
 // The characters Spark strips from both ends of a string before parsing it as an integer,
 // a date, a timestamp, a boolean, or an interval.
 //
@@ -67,4 +72,75 @@ pub fn escape_meta_characters(s: &str) -> String {
         .replace('\x08', "\\b")
         .replace('\x0b', "\\v")
         .replace('\x0c', "\\f")
+}
+
+// OpenJDK 17 uses Unicode 13, so newer characters must keep identity mappings.
+#[expect(clippy::expect_used)]
+static JDK_17_ASSIGNED_CHARACTER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\p{Age:13.0}$").expect("JDK 17 Unicode age pattern should be valid")
+});
+
+/// Compares names using Spark's `String.equalsIgnoreCase` resolver on OpenJDK 17.
+/// Java uses simple upper/lower mappings, not Unicode full case folding.
+pub fn spark_case_insensitive_name_eq(left: &str, right: &str) -> bool {
+    let case_mapper = CaseMapper::new();
+    let mut left_chars = left.chars();
+    let mut right_chars = right.chars();
+
+    loop {
+        match (left_chars.next(), right_chars.next()) {
+            (None, None) => return true,
+            (Some(left), Some(right)) if java_char_eq_ignore_case(&case_mapper, left, right) => {}
+            _ => return false,
+        }
+    }
+}
+
+fn java_char_eq_ignore_case(case_mapper: &CaseMapperBorrowed<'_>, left: char, right: char) -> bool {
+    if left == right {
+        return true;
+    }
+    let mut left_buffer = [0; 4];
+    let mut right_buffer = [0; 4];
+    if !(JDK_17_ASSIGNED_CHARACTER.is_match(left.encode_utf8(&mut left_buffer))
+        && JDK_17_ASSIGNED_CHARACTER.is_match(right.encode_utf8(&mut right_buffer)))
+    {
+        return false;
+    }
+
+    let left_upper = case_mapper.simple_uppercase(left);
+    let right_upper = case_mapper.simple_uppercase(right);
+    left_upper == right_upper
+        || case_mapper.simple_lowercase(left_upper) == case_mapper.simple_lowercase(right_upper)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spark_case_insensitive_name_eq;
+
+    #[test]
+    fn spark_case_insensitive_name_eq_matches_jdk_17_unicode_oracle() {
+        for (left, right, expected) in [
+            ("É", "é", true),
+            ("Σ", "ς", true),
+            ("I", "ı", true),
+            ("İ", "i", true),
+            ("ß", "ẞ", true),
+            ("K", "K", true),
+            ("S", "ſ", true),
+            ("ß", "ss", false),
+            ("\u{10570}", "\u{10597}", false),
+        ] {
+            assert_eq!(
+                spark_case_insensitive_name_eq(left, right),
+                expected,
+                "unexpected JDK 17 case-insensitive comparison for {left:?} and {right:?}"
+            );
+            assert_eq!(
+                spark_case_insensitive_name_eq(right, left),
+                expected,
+                "unexpected JDK 17 case-insensitive comparison for {right:?} and {left:?}"
+            );
+        }
+    }
 }
