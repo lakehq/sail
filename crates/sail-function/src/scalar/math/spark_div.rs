@@ -9,11 +9,11 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_expr::{
     ColumnarValue, Expr, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility, cast,
 };
+use sail_common_datafusion::type_coercion::binary_type_coercion::BinaryTypeCoercer;
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err};
 use crate::functions_nested_utils::make_scalar_function;

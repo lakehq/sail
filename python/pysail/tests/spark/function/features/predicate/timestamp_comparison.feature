@@ -589,3 +589,86 @@ Feature: Timestamp and string predicate coercion
       Then query result
         | time_only | max_year | min_year | short_zone | prefixed_zone | padded_long_fraction | seven_digit_year_rejected | oversized_offset_rejected | lowercase_t_rejected | lowercase_z_rejected |
         | true      | true     | true     | true       | true          | true                 | true                      | true                      | true                 | true                 |
+
+  Rule: TIMESTAMP_NTZ compares with TIMESTAMP in the session time zone
+
+    Scenario: TIMESTAMP_NTZ comparisons with TIMESTAMP use a region time zone
+      Given config spark.sql.session.timeZone = Asia/Shanghai
+      When query
+        """
+        SELECT
+          COUNT_IF(t >= TIMESTAMP '2020-06-14 00:00:00' AND t < TIMESTAMP '2020-06-15 00:00:00') AS day,
+          COUNT_IF(t BETWEEN TIMESTAMP '2020-06-14 20:00:00' AND TIMESTAMP '2020-06-14 21:00:00') AS hour,
+          COUNT_IF(TIMESTAMP '2020-06-14 20:00:00' <= t) AS literal_left,
+          COUNT_IF(t IN (TIMESTAMP '2020-06-14 12:00:00')) AS in_one,
+          COUNT_IF(t IN (TIMESTAMP '2020-06-14 12:00:00', TIMESTAMP '2020-06-14 23:30:00')) AS in_two,
+          COUNT_IF(CAST(t AS TIMESTAMP) >= TIMESTAMP '2020-06-14 20:00:00') AS explicit_cast,
+          COUNT_IF(t = CAST(t AS TIMESTAMP)) AS columns
+        FROM VALUES
+          (TIMESTAMP_NTZ '2020-06-14 12:00:00'),
+          (TIMESTAMP_NTZ '2020-06-14 20:30:00'),
+          (TIMESTAMP_NTZ '2020-06-14 23:30:00') AS v(t)
+        """
+      Then query result
+        | day | hour | literal_left | in_one | in_two | explicit_cast | columns |
+        | 3   | 1    | 2            | 1      | 2      | 2             | 3       |
+
+    Scenario: TIMESTAMP_NTZ comparisons with TIMESTAMP use a fixed-offset time zone
+      Given config spark.sql.session.timeZone = +05:30
+      When query
+        """
+        SELECT
+          COUNT_IF(t >= TIMESTAMP '2020-06-14 00:00:00' AND t < TIMESTAMP '2020-06-15 00:00:00') AS day,
+          COUNT_IF(t BETWEEN TIMESTAMP '2020-06-14 20:00:00' AND TIMESTAMP '2020-06-14 21:00:00') AS hour,
+          COUNT_IF(TIMESTAMP '2020-06-14 20:00:00' <= t) AS literal_left,
+          COUNT_IF(t IN (TIMESTAMP '2020-06-14 12:00:00')) AS in_one,
+          COUNT_IF(t IN (TIMESTAMP '2020-06-14 12:00:00', TIMESTAMP '2020-06-14 23:30:00')) AS in_two,
+          COUNT_IF(CAST(t AS TIMESTAMP) >= TIMESTAMP '2020-06-14 20:00:00') AS explicit_cast,
+          COUNT_IF(t = CAST(t AS TIMESTAMP)) AS columns
+        FROM VALUES
+          (TIMESTAMP_NTZ '2020-06-14 12:00:00'),
+          (TIMESTAMP_NTZ '2020-06-14 20:30:00'),
+          (TIMESTAMP_NTZ '2020-06-14 23:30:00') AS v(t)
+        """
+      Then query result
+        | day | hour | literal_left | in_one | in_two | explicit_cast | columns |
+        | 3   | 1    | 2            | 1      | 2      | 2             | 3       |
+
+    Scenario: TIMESTAMP_NTZ comparisons with TIMESTAMP use a negative-offset time zone
+      Given config spark.sql.session.timeZone = America/Los_Angeles
+      When query
+        """
+        SELECT
+          COUNT_IF(t >= TIMESTAMP '2020-06-14 00:00:00' AND t < TIMESTAMP '2020-06-15 00:00:00') AS day,
+          COUNT_IF(t BETWEEN TIMESTAMP '2020-06-14 20:00:00' AND TIMESTAMP '2020-06-14 21:00:00') AS hour,
+          COUNT_IF(TIMESTAMP '2020-06-14 20:00:00' <= t) AS literal_left,
+          COUNT_IF(t IN (TIMESTAMP '2020-06-14 12:00:00')) AS in_one,
+          COUNT_IF(t IN (TIMESTAMP '2020-06-14 12:00:00', TIMESTAMP '2020-06-14 23:30:00')) AS in_two,
+          COUNT_IF(CAST(t AS TIMESTAMP) >= TIMESTAMP '2020-06-14 20:00:00') AS explicit_cast,
+          COUNT_IF(t = CAST(t AS TIMESTAMP)) AS columns
+        FROM VALUES
+          (TIMESTAMP_NTZ '2020-06-14 12:00:00'),
+          (TIMESTAMP_NTZ '2020-06-14 20:30:00'),
+          (TIMESTAMP_NTZ '2020-06-14 23:30:00') AS v(t)
+        """
+      Then query result
+        | day | hour | literal_left | in_one | in_two | explicit_cast | columns |
+        | 3   | 1    | 2            | 1      | 2      | 2             | 3       |
+
+    Scenario: TIMESTAMP_NTZ comparisons with constant TIMESTAMP expressions use the session time zone
+      Given config spark.sql.session.timeZone = Asia/Shanghai
+      When query
+        """
+        SELECT
+          COUNT_IF(t >= TIMESTAMP '2020-06-13 20:00:00' + INTERVAL 1 DAY) AS plus_interval,
+          COUNT_IF(t < TIMESTAMP '2020-06-15 00:00:00' - INTERVAL 1 HOUR) AS minus_interval,
+          COUNT_IF(t >= to_timestamp('2020-06-14 20:00:00')) AS parsed,
+          COUNT_IF(t >= CAST('2020-06-14 20:00:00' AS TIMESTAMP)) AS cast_string
+        FROM VALUES
+          (TIMESTAMP_NTZ '2020-06-14 12:00:00'),
+          (TIMESTAMP_NTZ '2020-06-14 20:30:00'),
+          (TIMESTAMP_NTZ '2020-06-14 23:30:00') AS v(t)
+        """
+      Then query result
+        | plus_interval | minus_interval | parsed | cast_string |
+        | 2             | 2              | 2      | 2           |

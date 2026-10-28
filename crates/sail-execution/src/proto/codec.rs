@@ -170,7 +170,7 @@ use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzMode};
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
@@ -189,6 +189,7 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timestamp_add_interval::SparkTimestampAddInterval;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -400,6 +401,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 style,
                 truncate,
                 schema,
+                timezone,
             }) => {
                 let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(ShowStringExec::new(
@@ -409,7 +411,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ShowStringFormat::new(
                         self.try_decode_show_string_style(style)?,
                         truncate as usize,
-                    ),
+                    )
+                    .with_timezone(timezone.map(Arc::from)),
                     Arc::new(schema),
                 )))
             }
@@ -2121,6 +2124,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 style: self.try_encode_show_string_style(show_string.format().style())?,
                 truncate: show_string.format().truncate() as u64,
                 schema,
+                timezone: show_string.format().timezone().map(|x| x.to_string()),
             })
         } else if let Some(stage_input) = node.downcast_ref::<StageInputExec<usize>>() {
             let eq_properties = self.try_encode_equivalence_properties(
@@ -3441,6 +3445,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkSequence::new(Arc::from(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkToString(r#gen::SparkToStringUdf { timezone }) => {
+                let timezone = timezone.map(Arc::from);
+                let udf = match name {
+                    "spark_to_utf8" => ScalarUDF::from(SparkToUtf8::new().with_timezone(timezone)),
+                    "spark_to_large_utf8" => {
+                        ScalarUDF::from(SparkToLargeUtf8::new().with_timezone(timezone))
+                    }
+                    "spark_to_utf8_view" => {
+                        ScalarUDF::from(SparkToUtf8View::new().with_timezone(timezone))
+                    }
+                    _ => return plan_err!("unknown string conversion function: {name}"),
+                };
+                return Ok(Arc::new(udf));
+            }
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone }) => {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -3554,8 +3572,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::ConvertTz(r#gen::ConvertTzUdf {
                 classic,
                 null_short_circuit,
+                mode,
+                output_timezone,
             }) => {
-                let func = ConvertTz::new(classic);
+                let func = match r#gen::ConvertTzMode::try_from(mode)
+                    .map_err(|_| plan_datafusion_err!("invalid convert_tz mode: {mode}"))?
+                {
+                    r#gen::ConvertTzMode::Function => ConvertTz::new(classic),
+                    r#gen::ConvertTzMode::Cast => ConvertTz::cast(false),
+                    r#gen::ConvertTzMode::TryCast => ConvertTz::cast(true),
+                }
+                .with_output_timezone(output_timezone.map(Arc::from));
                 let func = if null_short_circuit {
                     func.with_null_short_circuit()
                 } else {
@@ -3717,6 +3744,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
+            "spark_timestamp_add_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTimestampAddInterval::new())))
+            }
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
             }
@@ -3836,6 +3866,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
+            || node_inner.is::<SparkTimestampAddInterval>()
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
@@ -3896,9 +3927,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSplit>()
             || node_inner.is::<SparkToBinary>()
             || node_inner.is::<WithMetadataFunc>()
-            || node_inner.is::<SparkToLargeUtf8>()
-            || node_inner.is::<SparkToUtf8>()
-            || node_inner.is::<SparkToUtf8View>()
             || node_inner.is::<SparkTryAdd>()
             || node_inner.is::<SparkTryAESDecrypt>()
             || node_inner.is::<SparkTryAESEncrypt>()
@@ -4014,6 +4042,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 session_timezone,
                 ansi_mode,
             })
+        } else if let Some(timezone) = node_inner
+            .downcast_ref::<SparkToUtf8>()
+            .map(SparkToUtf8::timezone)
+            .or_else(|| {
+                node_inner
+                    .downcast_ref::<SparkToLargeUtf8>()
+                    .map(SparkToLargeUtf8::timezone)
+            })
+            .or_else(|| {
+                node_inner
+                    .downcast_ref::<SparkToUtf8View>()
+                    .map(SparkToUtf8View::timezone)
+            })
+        {
+            UdfKind::SparkToString(r#gen::SparkToStringUdf {
+                timezone: timezone.map(|x| x.to_string()),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkSequence>() {
             let session_timezone = func.session_timezone().to_string();
             let ansi_mode = func.ansi_mode();
@@ -4110,9 +4155,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<ConvertTz>() {
             let classic = func.classic();
             let null_short_circuit = func.null_short_circuit();
+            let mode = match func.mode() {
+                ConvertTzMode::Function => r#gen::ConvertTzMode::Function,
+                ConvertTzMode::Cast => r#gen::ConvertTzMode::Cast,
+                ConvertTzMode::TryCast => r#gen::ConvertTzMode::TryCast,
+            } as i32;
             UdfKind::ConvertTz(r#gen::ConvertTzUdf {
                 classic,
                 null_short_circuit,
+                mode,
+                output_timezone: func.output_timezone().map(|timezone| timezone.to_string()),
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
@@ -8712,6 +8764,22 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_spark_to_string_preserves_timezone() -> Result<()> {
+        let timezone = Some(Arc::from("Asia/Shanghai"));
+        let decoded = round_trip_udf(ScalarUDF::from(
+            SparkToUtf8View::new().with_timezone(timezone.clone()),
+        ))?;
+        let decoded = downcast_udf::<SparkToUtf8View>(&decoded, "SparkToUtf8View")?;
+        assert_eq!(decoded.timezone(), timezone.as_ref());
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkToUtf8::new()))?;
+        let decoded = downcast_udf::<SparkToUtf8>(&decoded, "SparkToUtf8")?;
+        assert_eq!(decoded.timezone(), None);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_day_time_interval_to_calendar_interval_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(
             SparkDayTimeIntervalToCalendarInterval::new(),
@@ -8744,6 +8812,21 @@ mod tests {
         let decoded = downcast_udf::<ConvertTz>(&decoded, "ConvertTz")?;
         assert!(decoded.classic());
         assert!(decoded.null_short_circuit());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_convert_tz_preserves_cast_mode() -> Result<()> {
+        let udf = ConvertTz::cast(true).with_output_timezone(Some("America/Los_Angeles".into()));
+        let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+
+        let decoded = downcast_udf::<ConvertTz>(&decoded, "ConvertTz")?;
+        assert_eq!(decoded.mode(), ConvertTzMode::TryCast);
+        assert_eq!(
+            decoded.output_timezone().map(|timezone| timezone.as_ref()),
+            Some("America/Los_Angeles")
+        );
 
         Ok(())
     }

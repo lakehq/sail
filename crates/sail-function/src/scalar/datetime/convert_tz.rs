@@ -1,23 +1,48 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, MappedLocalTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, NaiveDateTime, Offset, TimeZone, Utc};
 use chrono_tz::{GapInfo, Tz};
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array, new_null_array};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, FixedSizeListArray, Int64Array, LargeListArray, ListArray, MapArray,
+    StructArray, UInt64Array, new_null_array,
+};
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
+};
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_expr::expr::Cast;
 use datafusion_expr::function::Hint;
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::preimage::PreimageResult;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
-    HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, ValueOrLambda, Volatility,
+    ColumnarValue, Expr, ExprSchemable, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
+    HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDFImpl, ValueOrLambda, Volatility,
 };
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
+use sail_common::utils::datetime::{MICROS_PER_SECOND, is_fixed_zero_offset_timezone};
+use sail_common_datafusion::utils::datetime::SparkZone;
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
+
+/// How [`ConvertTz`] converts values, which differs for Spark's casts between TIMESTAMP_NTZ and
+/// TIMESTAMP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ConvertTzMode {
+    /// The `convert_timezone`, `from_utc_timestamp` and `to_utc_timestamp` functions.
+    #[default]
+    Function,
+    /// A cast, which fails for a value out of range, like Spark.
+    Cast,
+    /// A `try_cast`, which is NULL for a value out of range.
+    TryCast,
+}
 
 /// A helper scalar UDF for converting time zones for timestamps.
 /// The timestamp must be NTZ timestamp, which should have [`None`] time zone
@@ -31,6 +56,9 @@ pub struct ConvertTz {
     classic: bool,
     /// Whether NULL rows short-circuit before parsing their time zones.
     null_short_circuit: bool,
+    mode: ConvertTzMode,
+    /// The time zone that labels the converted values, which makes them TIMESTAMP values.
+    output_timezone: Option<Arc<str>>,
     signature: Signature,
 }
 
@@ -40,7 +68,37 @@ impl ConvertTz {
             signature: Signature::any(3, Volatility::Immutable),
             classic,
             null_short_circuit: false,
+            mode: ConvertTzMode::Function,
+            output_timezone: None,
         }
+    }
+
+    /// A cast between TIMESTAMP_NTZ and TIMESTAMP, which reads the wall-clock times of the values
+    /// in the `to` time zone as wall-clock times in the `from` time zone, like Spark's
+    /// `convertTz`. It takes fixed offsets and the full range of microseconds, and a comparison
+    /// of it with a constant can be unwrapped.
+    pub fn cast(is_try: bool) -> Self {
+        Self {
+            mode: if is_try {
+                ConvertTzMode::TryCast
+            } else {
+                ConvertTzMode::Cast
+            },
+            ..Self::new(false)
+        }
+    }
+
+    pub fn with_output_timezone(mut self, timezone: Option<Arc<str>>) -> Self {
+        self.output_timezone = timezone;
+        self
+    }
+
+    pub fn mode(&self) -> ConvertTzMode {
+        self.mode
+    }
+
+    pub fn output_timezone(&self) -> Option<&Arc<str>> {
+        self.output_timezone.as_ref()
     }
 
     pub fn with_null_short_circuit(mut self) -> Self {
@@ -212,7 +270,13 @@ impl ScalarUDFImpl for ConvertTz {
             return plan_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
         };
         match ts {
-            DataType::Timestamp(unit, None) => Ok(DataType::Timestamp(*unit, None)),
+            DataType::Timestamp(unit, None) => {
+                Ok(DataType::Timestamp(*unit, self.output_timezone.clone()))
+            }
+            // The TIMESTAMP_NTZ values in a nested value are converted.
+            _ if has_timestamp_ntz(ts) => {
+                Ok(label_timestamp_ntz(ts, self.output_timezone.as_ref()))
+            }
             _ => plan_err!("`convert_tz` expects NTZ timestamp but got {ts:?}"),
         }
     }
@@ -224,53 +288,459 @@ impl ScalarUDFImpl for ConvertTz {
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
         let data_type = self.return_type(&arg_types)?;
-        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        // TRY_CAST returns NULL for a value out of range, so its result is nullable even when its
+        // input is not. This is an intentional divergence from Spark: Sail has the right answer and
+        // Spark has the wrong answer. Spark declares this TRY_CAST nullable only when its input is
+        // (`Cast.nullable`, since TIMESTAMP and TIMESTAMP_NTZ cast to each other with `canUpCast`),
+        // so it folds `IS NULL` of the NULL result to false.
+        let nullable = self.mode == ConvertTzMode::TryCast
+            || args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
+    // Like the Arrow cast it replaces, a cast returns NULL for a NULL value, which lets the
+    // optimizer eliminate an outer join under a comparison of the result.
+    fn is_strict(&self) -> bool {
+        self.mode != ConvertTzMode::Function
+    }
+
+    // DataFusion's default bounds have the NULL type, which its ordering analysis fails to compare
+    // with other TIMESTAMP bounds, so a sort by a comparison of the result fails the plan's sanity
+    // check. DataFusion main fixes the default in afe4a63d0.
+    fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        let data_type = match input {
+            // The value has the default bounds of a function without bounds of its own, such as
+            // `date_trunc`. Arrow's cast, which this conversion replaces, has bounds of its type,
+            // and the result of a cast is in microseconds.
+            [_, _, value] if value.data_type().is_null() => {
+                DataType::Timestamp(TimeUnit::Microsecond, self.output_timezone.clone())
+            }
+            _ => {
+                let arg_types = input
+                    .iter()
+                    .map(|interval| interval.data_type())
+                    .collect::<Vec<_>>();
+                self.return_type(&arg_types)?
+            }
+        };
+        Interval::make_unbounded(&data_type)
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if self.mode != ConvertTzMode::Function {
+            return self.invoke_cast(&args.args);
+        }
         make_scalar_function(
             |args| convert_tz_inner(args, self.classic, self.null_short_circuit),
             [Hint::AcceptsSingular].repeat(args.args.len()),
         )(args.args.as_slice())
     }
+
+    /// Spark unwraps a cast in a comparison with a constant when the constant casts back to
+    /// itself (`UnwrapCastInBinaryComparison`), which keeps the comparison prunable. A wall-clock
+    /// constant repeated in a DST overlap is compared per row instead, since it is more than one
+    /// instant.
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        if self.mode == ConvertTzMode::Function {
+            return Ok(PreimageResult::None);
+        }
+        let [from, to, value] = args else {
+            return Ok(PreimageResult::None);
+        };
+        let (Some(Ok(from)), Some(Ok(to))) = (
+            literal_string(from).map(parse_cast_zone),
+            literal_string(to).map(parse_cast_zone),
+        ) else {
+            return Ok(PreimageResult::None);
+        };
+        if !matches!(
+            value.get_type(info.schema())?,
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        ) {
+            return Ok(PreimageResult::None);
+        }
+        let Some(converted) = literal_timestamp_micros(lit_expr) else {
+            return Ok(PreimageResult::None);
+        };
+        let Some(start) = convert_cast_micros(converted, &to, &from) else {
+            return Ok(PreimageResult::None);
+        };
+        // Spark unwraps a constant whose wall-clock time is repeated in a DST overlap too, which
+        // drops the later instants (UnwrapCastInBinaryComparison is not exact there).
+        if convert_cast_micros(start, &from, &to) != Some(converted)
+            || !is_single_local_time(converted, &to)
+        {
+            return Ok(PreimageResult::None);
+        }
+        let Some(end) = start.checked_add(1) else {
+            return Ok(PreimageResult::None);
+        };
+        Ok(PreimageResult::Range {
+            expr: value.clone(),
+            interval: Box::new(Interval::try_new(
+                ScalarValue::TimestampMicrosecond(Some(start), None),
+                ScalarValue::TimestampMicrosecond(Some(end), None),
+            )?),
+        })
+    }
 }
+
+impl ConvertTz {
+    fn invoke_cast(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        let [from, to, value] = args else {
+            return exec_err!("`convert_tz` takes 3 arguments: from, to, timestamp");
+        };
+        let (from, to) = (cast_zone_argument(from)?, cast_zone_argument(to)?);
+        let convert = |array: &ArrayRef| -> Result<ArrayRef> {
+            let DataType::Timestamp(unit, None) = array.data_type() else {
+                return exec_err!(
+                    "invalid timestamp type for `convert_tz`: {:?}",
+                    array.data_type()
+                );
+            };
+            let converted = timestamp_to_microseconds(array)?
+                .iter()
+                .map(|micros| {
+                    let Some(micros) = micros else {
+                        return Ok(None);
+                    };
+                    match convert_cast_micros(micros, &from, &to) {
+                        Some(converted) => Ok(Some(converted)),
+                        None if self.mode == ConvertTzMode::TryCast => Ok(None),
+                        None => exec_err!(
+                            "[DATETIME_OVERFLOW] long overflow: the timestamp {micros} is out of range in the time zone"
+                        ),
+                    }
+                })
+                .collect::<Result<Int64Array>>()?;
+            Ok(label_timestamp_array(
+                microseconds_to_timestamp(converted, *unit)?,
+                self.output_timezone.as_ref(),
+            ))
+        };
+        match value {
+            ColumnarValue::Array(array) => {
+                Ok(ColumnarValue::Array(map_timestamp_ntz(array, &convert)?))
+            }
+            ColumnarValue::Scalar(scalar) => {
+                let array = map_timestamp_ntz(&scalar.to_array()?, &convert)?;
+                Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                    &array, 0,
+                )?))
+            }
+        }
+    }
+}
+
+/// A time zone of a cast, which can be a fixed offset.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CastZone {
+    Named(Tz),
+    /// The UTC offset in microseconds.
+    Fixed(i64),
+}
+
+pub(crate) fn parse_cast_zone(timezone: &str) -> Result<CastZone> {
+    match timezone.parse::<Tz>() {
+        // A zone that is always UTC converts without looking up its offsets.
+        Ok(tz) if is_fixed_zero_offset_timezone(tz.name()) => Ok(CastZone::Fixed(0)),
+        // A zone name, such as `MST`, converts like the time zone label with the same name.
+        Ok(tz) => Ok(CastZone::Named(tz)),
+        // Spark's offsets can have seconds, and spellings such as `Z` or `GMT+8`.
+        Err(_) => match SparkZone::parse(timezone) {
+            Ok(SparkZone::Fixed(offset)) => Ok(CastZone::Fixed(
+                i64::from(offset.local_minus_utc()) * MICROS_PER_SECOND,
+            )),
+            _ => match LEGACY_TIMEZONES
+                .iter()
+                .find(|(legacy, _)| *legacy == timezone)
+                .and_then(|(_, tz)| tz.parse::<Tz>().ok())
+            {
+                Some(tz) => Ok(CastZone::Named(tz)),
+                None => exec_err!("[INVALID_TIMEZONE] The timezone: {timezone:?} is invalid."),
+            },
+        },
+    }
+}
+
+fn cast_zone_argument(value: &ColumnarValue) -> Result<CastZone> {
+    match value {
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str().flatten() {
+            Some(timezone) => parse_cast_zone(timezone),
+            None => exec_err!("`convert_tz` expects a time zone but got {scalar:?}"),
+        },
+        ColumnarValue::Array(_) => exec_err!("`convert_tz` casts expect constant time zones"),
+    }
+}
+
+fn literal_string(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Literal(value, _) => value.try_as_str().flatten(),
+        _ => None,
+    }
+}
+
+fn literal_timestamp_micros(expr: &Expr) -> Option<i64> {
+    let value = match expr {
+        Expr::Literal(value, _) => value.clone(),
+        Expr::Cast(Cast { expr, field }) => match expr.as_ref() {
+            Expr::Literal(value, _) => value.cast_to(field.data_type()).ok()?,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    match value {
+        ScalarValue::TimestampMicrosecond(Some(micros), _) => Some(micros),
+        _ => None,
+    }
+}
+
+/// The UTC offset of the time zone at an instant in microseconds. Chrono's time zones keep their
+/// last offset beyond the dates that chrono represents, so the instant is clamped to them.
+fn cast_zone_offset(zone: &CastZone, utc_micros: i64) -> i64 {
+    match zone {
+        CastZone::Fixed(offset) => *offset,
+        CastZone::Named(tz) => {
+            let micros = utc_micros.clamp(
+                DateTime::<Utc>::MIN_UTC.timestamp_micros(),
+                DateTime::<Utc>::MAX_UTC.timestamp_micros(),
+            );
+            DateTime::<Utc>::from_timestamp_micros(micros).map_or(0, |datetime| {
+                i64::from(
+                    tz.offset_from_utc_datetime(&datetime.naive_utc())
+                        .fix()
+                        .local_minus_utc(),
+                ) * MICROS_PER_SECOND
+            })
+        }
+    }
+}
+
+/// Spark's `convertTz` for casts, which takes the wall-clock time of the instant `micros` in `to`
+/// and returns the instant of that wall-clock time in `from`. Returns `None` out of range.
+fn convert_cast_micros(micros: i64, from: &CastZone, to: &CastZone) -> Option<i64> {
+    let local = micros.checked_add(cast_zone_offset(to, micros))?;
+    match from {
+        CastZone::Fixed(offset) => local.checked_sub(*offset),
+        CastZone::Named(tz) => {
+            if let Some(datetime) = DateTime::<Utc>::from_timestamp_micros(local)
+                && let Some(instant) = disambiguate_local_datetime(datetime.naive_utc(), tz)
+            {
+                return Some(instant.timestamp_micros());
+            }
+            local.checked_sub(cast_zone_offset(from, local))
+        }
+    }
+}
+
+/// Whether the wall-clock time `micros` in the time zone is a single instant.
+fn is_single_local_time(micros: i64, zone: &CastZone) -> bool {
+    match zone {
+        CastZone::Fixed(_) => true,
+        CastZone::Named(tz) => {
+            DateTime::<Utc>::from_timestamp_micros(micros).is_some_and(|datetime| {
+                matches!(
+                    datetime.naive_utc().and_local_timezone(*tz),
+                    MappedLocalTime::Single(_)
+                )
+            })
+        }
+    }
+}
+
+/// Labels the timestamps of an array with `timezone`, which keeps their instants.
+fn label_timestamp_array(array: ArrayRef, timezone: Option<&Arc<str>>) -> ArrayRef {
+    let Some(timezone) = timezone else {
+        return array;
+    };
+    let timezone = Arc::clone(timezone);
+    match array.data_type() {
+        DataType::Timestamp(TimeUnit::Second, _) => Arc::new(
+            array
+                .as_primitive::<TimestampSecondType>()
+                .clone()
+                .with_timezone(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Arc::new(
+            array
+                .as_primitive::<TimestampMillisecondType>()
+                .clone()
+                .with_timezone(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Arc::new(
+            array
+                .as_primitive::<TimestampMicrosecondType>()
+                .clone()
+                .with_timezone(timezone),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Arc::new(
+            array
+                .as_primitive::<TimestampNanosecondType>()
+                .clone()
+                .with_timezone(timezone),
+        ),
+        _ => array,
+    }
+}
+
+/// The type with its TIMESTAMP_NTZ values labelled with `timezone`.
+fn label_timestamp_ntz(data_type: &DataType, timezone: Option<&Arc<str>>) -> DataType {
+    let field = |field: &FieldRef| {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_data_type(label_timestamp_ntz(field.data_type(), timezone)),
+        )
+    };
+    match data_type {
+        DataType::Timestamp(unit, None) => DataType::Timestamp(*unit, timezone.cloned()),
+        DataType::List(value) => DataType::List(field(value)),
+        DataType::LargeList(value) => DataType::LargeList(field(value)),
+        DataType::FixedSizeList(value, size) => DataType::FixedSizeList(field(value), *size),
+        DataType::Struct(fields) => DataType::Struct(fields.iter().map(field).collect()),
+        DataType::Map(entries, sorted) => DataType::Map(field(entries), *sorted),
+        _ => data_type.clone(),
+    }
+}
+
+/// Whether the type is or has TIMESTAMP_NTZ values.
+pub fn has_timestamp_ntz(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Timestamp(_, None) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => has_timestamp_ntz(field.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| has_timestamp_ntz(field.data_type())),
+        _ => false,
+    }
+}
+
+fn with_field_type(field: &FieldRef, array: &ArrayRef) -> FieldRef {
+    Arc::new(
+        field
+            .as_ref()
+            .clone()
+            .with_data_type(array.data_type().clone()),
+    )
+}
+
+/// Applies `f` to the TIMESTAMP_NTZ values in a nested array.
+fn map_timestamp_ntz(
+    array: &ArrayRef,
+    f: &dyn Fn(&ArrayRef) -> Result<ArrayRef>,
+) -> Result<ArrayRef> {
+    Ok(match array.data_type() {
+        DataType::Timestamp(_, None) => f(array)?,
+        DataType::List(field) => {
+            let list = array.as_list::<i32>();
+            let values = map_timestamp_ntz(list.values(), f)?;
+            Arc::new(ListArray::try_new(
+                with_field_type(field, &values),
+                list.offsets().clone(),
+                values,
+                list.nulls().cloned(),
+            )?)
+        }
+        DataType::LargeList(field) => {
+            let list = array.as_list::<i64>();
+            let values = map_timestamp_ntz(list.values(), f)?;
+            Arc::new(LargeListArray::try_new(
+                with_field_type(field, &values),
+                list.offsets().clone(),
+                values,
+                list.nulls().cloned(),
+            )?)
+        }
+        DataType::FixedSizeList(field, size) => {
+            let list = array.as_fixed_size_list();
+            let values = map_timestamp_ntz(list.values(), f)?;
+            Arc::new(FixedSizeListArray::try_new(
+                with_field_type(field, &values),
+                *size,
+                values,
+                list.nulls().cloned(),
+            )?)
+        }
+        DataType::Struct(fields) => {
+            let values = array.as_struct();
+            let columns = values
+                .columns()
+                .iter()
+                .map(|column| map_timestamp_ntz(column, f))
+                .collect::<Result<Vec<_>>>()?;
+            Arc::new(StructArray::try_new(
+                fields
+                    .iter()
+                    .zip(&columns)
+                    .map(|(field, column)| with_field_type(field, column))
+                    .collect(),
+                columns,
+                values.nulls().cloned(),
+            )?)
+        }
+        DataType::Map(field, sorted) => {
+            let map = array.as_map();
+            let entries: ArrayRef = Arc::new(map.entries().clone());
+            let entries = map_timestamp_ntz(&entries, f)?;
+            Arc::new(MapArray::try_new(
+                with_field_type(field, &entries),
+                map.offsets().clone(),
+                entries.as_struct().clone(),
+                map.nulls().cloned(),
+                *sorted,
+            )?)
+        }
+        _ => Arc::clone(array),
+    })
+}
+
+/// Spark's legacy time zone IDs (`java.time.ZoneId.SHORT_IDS`).
+const LEGACY_TIMEZONES: &[(&str, &str)] = &[
+    ("ACT", "Australia/Darwin"),
+    ("AET", "Australia/Sydney"),
+    ("AGT", "America/Argentina/Buenos_Aires"),
+    ("ART", "Africa/Cairo"),
+    ("AST", "America/Anchorage"),
+    ("BET", "America/Sao_Paulo"),
+    ("BST", "Asia/Dhaka"),
+    ("CAT", "Africa/Harare"),
+    ("CNT", "America/St_Johns"),
+    ("CST", "America/Chicago"),
+    ("CTT", "Asia/Shanghai"),
+    ("EAT", "Africa/Addis_Ababa"),
+    ("ECT", "Europe/Paris"),
+    ("EST", "America/New_York"),
+    ("HST", "Pacific/Honolulu"),
+    ("IET", "America/Indianapolis"),
+    ("IST", "Asia/Calcutta"),
+    ("JST", "Asia/Tokyo"),
+    ("MIT", "Pacific/Apia"),
+    ("MST", "America/Denver"),
+    ("NET", "Asia/Yerevan"),
+    ("NST", "Pacific/Auckland"),
+    ("PLT", "Asia/Karachi"),
+    ("PNT", "America/Phoenix"),
+    ("PRT", "America/Puerto_Rico"),
+    ("PST", "America/Los_Angeles"),
+    ("SST", "Pacific/Guadalcanal"),
+    ("VST", "Asia/Saigon"),
+];
 
 fn convert_tz_inner(
     args: &[ArrayRef],
     classic: bool,
     null_short_circuit: bool,
 ) -> Result<ArrayRef> {
-    let legacy_timezones = HashMap::from([
-        ("ACT", "Australia/Darwin"),
-        ("AET", "Australia/Sydney"),
-        ("AGT", "America/Argentina/Buenos_Aires"),
-        ("ART", "Africa/Cairo"),
-        ("AST", "America/Anchorage"),
-        ("BET", "America/Sao_Paulo"),
-        ("BST", "Asia/Dhaka"),
-        ("CAT", "Africa/Harare"),
-        ("CNT", "America/St_Johns"),
-        ("CST", "America/Chicago"),
-        ("CTT", "Asia/Shanghai"),
-        ("EAT", "Africa/Addis_Ababa"),
-        ("ECT", "Europe/Paris"),
-        ("EST", "America/New_York"),
-        ("HST", "Pacific/Honolulu"),
-        ("IET", "America/Indianapolis"),
-        ("IST", "Asia/Calcutta"),
-        ("JST", "Asia/Tokyo"),
-        ("MIT", "Pacific/Apia"),
-        ("MST", "America/Denver"),
-        ("NET", "Asia/Yerevan"),
-        ("NST", "Pacific/Auckland"),
-        ("PLT", "Asia/Karachi"),
-        ("PNT", "America/Phoenix"),
-        ("PRT", "America/Puerto_Rico"),
-        ("PST", "America/Los_Angeles"),
-        ("SST", "Pacific/Guadalcanal"),
-        ("VST", "Asia/Saigon"),
-    ]);
+    let legacy_timezones: HashMap<&str, &str> = LEGACY_TIMEZONES.iter().copied().collect();
 
     let parse_tz = |input: Option<&str>| {
         input
@@ -548,4 +1018,128 @@ fn microseconds_to_timestamp(array: Int64Array, time_unit: TimeUnit) -> Result<A
         TimeUnit::Nanosecond => numeric::mul(&array, &Int64Array::new_scalar(1_000))?,
     };
     Ok(cast::cast(&values, &DataType::Timestamp(time_unit, None))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cast_zone_offset_with_seconds() -> Result<()> {
+        for zone in ["+05:30:45", "+053045"] {
+            assert!(matches!(
+                parse_cast_zone(zone)?,
+                CastZone::Fixed(19_845_000_000)
+            ));
+        }
+        assert!(matches!(
+            parse_cast_zone("+08")?,
+            CastZone::Fixed(28_800_000_000)
+        ));
+        assert!(matches!(
+            parse_cast_zone("-0800")?,
+            CastZone::Fixed(-28_800_000_000)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_cast_zone_spark_spellings() -> Result<()> {
+        for (zone, micros) in [
+            ("Z", 0),
+            ("UT", 0),
+            ("GMT+8", 28_800_000_000),
+            ("UTC+08:00", 28_800_000_000),
+            ("UT-3:30", -12_600_000_000),
+            ("GMT+05:30:45", 19_845_000_000),
+        ] {
+            assert!(
+                matches!(parse_cast_zone(zone)?, CastZone::Fixed(value) if value == micros),
+                "{zone}"
+            );
+        }
+        assert!(matches!(
+            parse_cast_zone("PST")?,
+            CastZone::Named(chrono_tz::America::Los_Angeles)
+        ));
+        assert!(matches!(
+            parse_cast_zone("MST")?,
+            CastZone::Named(chrono_tz::MST)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_cast_result_is_nullable() -> Result<()> {
+        let fields = [
+            Arc::new(Field::new("from", DataType::Utf8, false)),
+            Arc::new(Field::new("to", DataType::Utf8, false)),
+            Arc::new(Field::new(
+                "value",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            )),
+        ];
+        let nullable = |convert_tz: ConvertTz| -> Result<bool> {
+            Ok(convert_tz
+                .return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &fields,
+                    scalar_arguments: &[None, None, None],
+                })?
+                .is_nullable())
+        };
+        assert!(nullable(ConvertTz::cast(true))?);
+        assert!(!nullable(ConvertTz::cast(false))?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_cast_zone_utc_is_fixed() -> Result<()> {
+        for name in ["UTC", "Etc/UTC", "GMT", "Zulu"] {
+            assert!(matches!(parse_cast_zone(name)?, CastZone::Fixed(0)));
+        }
+        assert!(matches!(
+            parse_cast_zone("America/Los_Angeles")?,
+            CastZone::Named(_)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_cast_micros() -> Result<()> {
+        let los_angeles = parse_cast_zone("America/Los_Angeles")?;
+        let utc = parse_cast_zone("UTC")?;
+        let fixed = parse_cast_zone("+05:30")?;
+        // 2020-03-08 02:30:00 is in a DST gap and moves forward to 10:30:00 UTC.
+        assert_eq!(
+            convert_cast_micros(1_583_634_600_000_000, &los_angeles, &utc),
+            Some(1_583_663_400_000_000)
+        );
+        assert_eq!(convert_cast_micros(0, &fixed, &utc), Some(-19_800_000_000));
+        // Chrono does not represent these instants, but the zone offsets still apply.
+        assert!(convert_cast_micros(i64::MAX - 1, &utc, &los_angeles).is_some());
+        assert_eq!(convert_cast_micros(i64::MAX, &utc, &fixed), None);
+        // The offset past Chrono's dates is the last one in the time zone data.
+        let year_2200 = 7_258_118_400_000_000;
+        assert_eq!(
+            cast_zone_offset(&los_angeles, i64::MAX),
+            cast_zone_offset(&los_angeles, year_2200)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_mode_out_of_range() -> Result<()> {
+        let args = [
+            ColumnarValue::Scalar(ScalarValue::from("UTC")),
+            ColumnarValue::Scalar(ScalarValue::from("+05:30")),
+            ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(Some(i64::MAX), None)),
+        ];
+        assert!(ConvertTz::cast(false).invoke_cast(&args).is_err());
+        let ColumnarValue::Scalar(value) = ConvertTz::cast(true).invoke_cast(&args)? else {
+            return exec_err!("expected a scalar");
+        };
+        assert!(value.is_null());
+        Ok(())
+    }
 }
