@@ -5,8 +5,9 @@ data:
   |-
     == Physical Plan ==
     BarrierExec
-      CatalogCommandExec: CreateTable
-      DataSinkExec: sink=ParquetSink(file_groups=[])
+      CooperativeExec
+        CatalogCommandExec: CreateTable
+      ParquetWriterExec: destination=file://<tmp>/explain_ctas/, partition_by=[], max_rows_per_file=50000000
         ProjectionExec: expr=[column1@0 as id, column2@1 as name]
           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -14,6 +15,6 @@ name: "test_explain_insert_into_shows_physical_plan_with_catalog_command"
 data:
   |-
     == Physical Plan ==
-    DataSinkExec: sink=ParquetSink(file_groups=[])
+    ParquetWriterExec: destination=file://<tmp>/explain_insert/, partition_by=[], max_rows_per_file=50000000
       ProjectionExec: expr=[column1@0 as id, column2@1 as name]
         DataSourceExec: partitions=1, partition_sizes=[1]

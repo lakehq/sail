@@ -77,7 +77,16 @@ message ExtendedPhysicalPlanNode {
     IcebergFileTasksExecNode iceberg_file_tasks = 62;
     IcebergRewriteExecNode iceberg_rewrite = 63;
     InputFileMetadataExecNode input_file_metadata = 64;
+    ParquetWriterExecNode parquet_writer = 65;
   }
+}
+
+message ParquetWriterExecNode {
+  bytes input = 1;
+  bytes base_config = 2;
+  bytes options = 3;
+  LexOrdering input_ordering = 4;
+  uint64 max_rows_per_file = 5;
 }
 
 message InputFileMetadataExecNode {

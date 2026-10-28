@@ -16,6 +16,7 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
+use percent_encoding::percent_decode_str;
 
 use crate::listing::source::ListingFileSample;
 use crate::url::PathGlobFilter;
@@ -249,7 +250,11 @@ pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> 
                 .skip(1) // get parents only and skip the file itself
                 .rev()
                 .filter(|s| s.contains('='))
-                .map(|s| s.split('=').next().unwrap_or("").to_string())
+                .map(|s| {
+                    percent_decode_str(s.split('=').next().unwrap_or(""))
+                        .decode_utf8_lossy()
+                        .into_owned()
+                })
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>();
 

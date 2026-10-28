@@ -653,13 +653,10 @@ def test_parquet_read_partitioned_directory_type_inference_string_only(spark, tm
     assert type_by_name["float_part"] == "string"
     assert type_by_name["string_part"] == "string"
     rows = df.collect()
-    # Note: Sail's writer drops trailing zeros when stringifying a DOUBLE
-    # partition value (`3.0` → `"3"`). Spark would write `"3.0"`. Pinned
-    # against Sail's current behavior.
     assert rows == [
         Row(id=1, val="a", int_part="2024", float_part="1.5", string_part="alpha"),
         Row(id=2, val="b", int_part="2024", float_part="2.5", string_part="beta"),
-        Row(id=3, val="c", int_part="2025", float_part="3", string_part="alpha"),
+        Row(id=3, val="c", int_part="2025", float_part="3.0", string_part="alpha"),
     ]
 
 

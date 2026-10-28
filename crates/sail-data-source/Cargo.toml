@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-parquet = { path = "../sail-parquet" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 
@@ -25,6 +26,8 @@ datafusion-datasource-json = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-session = { workspace = true }
 object_store = { workspace = true }
+parquet = { workspace = true }
+uuid = { workspace = true }
 chumsky = { workspace = true }
 glob = { workspace = true }
 url = { workspace = true }
