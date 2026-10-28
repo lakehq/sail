@@ -37,3 +37,5 @@ tonic-health = { workspace = true }
 tower = { workspace = true }
 axum = { workspace = true }
 pin-project-lite = { workspace = true }
+icu_casemap = { workspace = true }
+regex = { workspace = true }

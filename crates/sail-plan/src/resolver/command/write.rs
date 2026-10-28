@@ -118,6 +118,7 @@ pub(super) struct WritePlanBuilder {
     mode: Option<WriteMode>,
     format: Option<String>,
     partition_by: Vec<CatalogPartitionField>,
+    insert_partition: Vec<spec::Identifier>,
     bucket_by: Option<spec::SaveBucketBy>,
     sort_by: Vec<spec::SortOrder>,
     cluster_by: Vec<spec::ObjectName>,
@@ -134,6 +135,7 @@ impl WritePlanBuilder {
             mode: None,
             format: None,
             partition_by: vec![],
+            insert_partition: vec![],
             bucket_by: None,
             sort_by: vec![],
             cluster_by: vec![],
@@ -164,6 +166,12 @@ impl WritePlanBuilder {
     /// Sets the partitioning fields for the builder.
     pub fn with_partition_by(mut self, partition_by: Vec<CatalogPartitionField>) -> Self {
         self.partition_by = partition_by;
+        self
+    }
+
+    /// Sets the all-dynamic INSERT clause to validate against the target metadata.
+    pub fn with_insert_partition(mut self, partition: Vec<spec::Identifier>) -> Self {
+        self.insert_partition = partition;
         self
     }
 
@@ -213,6 +221,7 @@ impl PlanResolver<'_> {
             target,
             format,
             partition_by,
+            insert_partition,
             bucket_by,
             sort_by,
             cluster_by,
@@ -338,6 +347,7 @@ impl PlanResolver<'_> {
                         | WriteMode::TruncatePartitions
                 );
                 if let Some(info) = info.as_ref().filter(|_| use_existing) {
+                    self.validate_insert_partition(&insert_partition, info)?;
                     if !table_properties.is_empty() {
                         return Err(PlanError::invalid(
                             "cannot specify table properties when writing to an existing table",
@@ -635,7 +645,7 @@ impl PlanResolver<'_> {
                 constraints: _,
                 location,
                 format,
-                partition_by,
+                mut partition_by,
                 sort_by,
                 bucket_by,
                 mut properties,
@@ -706,6 +716,11 @@ impl PlanResolver<'_> {
                             });
                             Self::merge_format_columns(&mut columns, metadata.schema.as_ref());
                         }
+                        if format.eq_ignore_ascii_case("delta")
+                            && let Some(fields) = metadata.partition_by
+                        {
+                            partition_by = fields;
+                        }
                         for field in metadata.schema.fields() {
                             if let Some(value) =
                                 ColumnFeatures::from_field(field).current_default_value()?
@@ -756,6 +771,9 @@ impl PlanResolver<'_> {
                     match lake_source.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {
                             Self::merge_format_columns(&mut columns, metadata.schema.as_ref());
+                            if let Some(fields) = metadata.partition_by {
+                                partition_by = fields;
+                            }
                             if !metadata.properties.is_empty() {
                                 let mut merged_properties = metadata.properties;
                                 merged_properties.extend(properties);
