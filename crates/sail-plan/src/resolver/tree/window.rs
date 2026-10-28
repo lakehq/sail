@@ -9,7 +9,8 @@ use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{DFSchemaRef, DataFusionError};
 use datafusion_expr::expr::{WindowFunction, WindowFunctionDefinition};
 use datafusion_expr::{
-    Expr, Extension, LogicalPlan, SortExpr, WindowFrame, WindowFrameUnits, ident,
+    Expr, Extension, LogicalPlan, LogicalPlanBuilder, SortExpr, WindowFrame, WindowFrameUnits,
+    ident,
 };
 use sail_function::window::SparkFirstLastValue;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -55,6 +56,43 @@ impl WindowRewriter<'_> {
                 && function.params.window_frame != WindowFrame::new(None);
         Ok(function_requires_order || frame_requires_order)
     }
+
+    /// Moves computed partition and order keys into hidden columns of a projection below
+    /// the window, as Spark's `ExtractWindowExpressions` does. It runs before the required
+    /// sort is built, so the window and that sort refer to the same plain columns and each
+    /// key, volatile or not, is evaluated once per row.
+    fn project_window_keys(&mut self, function: &mut WindowFunction) -> Result<()> {
+        let mut keys = vec![];
+        for expr in function.params.partition_by.iter_mut() {
+            self.hide_window_key(expr, &mut keys);
+        }
+        for sort in function.params.order_by.iter_mut() {
+            self.hide_window_key(&mut sort.expr, &mut keys);
+        }
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let plan = mem::replace(&mut self.plan, empty_logical_plan());
+        let mut exprs = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        exprs.extend(keys);
+        self.plan = LogicalPlanBuilder::from(plan).project(exprs)?.build()?;
+        Ok(())
+    }
+
+    fn hide_window_key(&mut self, expr: &mut Expr, keys: &mut Vec<Expr>) {
+        let is_computed = !matches!(expr, Expr::Column(_) | Expr::Literal(..));
+        if !is_computed {
+            return;
+        }
+        let column = self.state.next_field_id();
+        let key = mem::replace(expr, ident(column.clone()));
+        keys.push(key.alias(column));
+    }
 }
 
 impl<'s> PlanRewriter<'s> for WindowRewriter<'s> {
@@ -80,6 +118,12 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
         match node {
             Expr::WindowFunction(function) => {
+                let name = Expr::WindowFunction(function.clone())
+                    .schema_name()
+                    .to_string();
+                if let Some(replacement) = self.seen.get(&name) {
+                    return Ok(Transformed::yes(replacement.clone()));
+                }
                 let requires_input_order =
                     Self::requires_input_order(&function, self.plan.schema())
                         .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -110,6 +154,8 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                     }
                 }
 
+                let mut function = function;
+                self.project_window_keys(&mut function)?;
                 let mut required = function
                     .params
                     .partition_by
@@ -155,14 +201,11 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                     self.stable_ordering = Some(desired);
                 }
                 let node = Expr::WindowFunction(function);
-                let name = node.schema_name().to_string();
-                if let Some(replacement) = self.seen.get(&name) {
-                    return Ok(Transformed::yes(replacement.clone()));
-                }
+                let output = node.schema_name().to_string();
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());
                 self.plan = LogicalPlan::Window(Window::try_new(vec![node], Arc::new(plan))?);
                 let alias = self.state.register_field_name(&name);
-                let replacement = ident(name.clone()).alias(alias);
+                let replacement = ident(output).alias(alias);
                 self.seen.insert(name, replacement.clone());
                 Ok(Transformed::yes(replacement))
             }
