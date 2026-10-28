@@ -859,6 +859,14 @@ message DeltaWriterExecNode {
   string lakehouse_table_json = 10;
 }
 
+enum CommandOutput {
+  COMMAND_OUTPUT_UNSPECIFIED = 0;
+  COMMAND_OUTPUT_EMPTY = 1;
+  COMMAND_OUTPUT_COUNT = 2;
+  COMMAND_OUTPUT_AFFECTED_ROWS = 3;
+  COMMAND_OUTPUT_MERGE_ROWS = 4;
+}
+
 message DeltaCommitExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -869,6 +877,7 @@ message DeltaCommitExecNode {
   optional string user_metadata = 7;
   DeltaCommitContext commit_context = 8;
   string lakehouse_table_json = 9;
+  CommandOutput output = 10;
 }
 
 message DeltaScanByAddsExecNode {
@@ -1081,6 +1090,16 @@ message IcebergCommitExecNode {
   IcebergSnapshotUpdateKind snapshot_update_kind = 6;
   bool dynamic_partition_overwrite = 7;
   repeated string removed_data_file_paths = 8;
+  oneof output {
+    CommandOutput command_output = 9;
+    IcebergRewriteDataFilesOutput rewrite_data_files_output = 10;
+  }
+}
+
+message IcebergRewriteDataFilesOutput {
+  bytes schema = 1;
+  int32 rewritten_data_files_count = 2;
+  int64 rewritten_bytes_count = 3;
 }
 
 message IcebergManifestScanExecNode {

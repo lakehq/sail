@@ -18,6 +18,7 @@ use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use sail_common_datafusion::catalog::{CatalogTableColumnIdentity, LakehouseExecutionContext};
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -36,6 +37,7 @@ use crate::table::{
 /// Configuration shared by all Delta planners.
 #[derive(Clone)]
 pub struct DeltaPlannerConfig {
+    pub output: CommandOutput,
     pub table_url: Url,
     pub options: DeltaWriteOptions,
     pub metadata_configuration: HashMap<String, String>,
@@ -72,6 +74,7 @@ impl DeltaPlannerConfig {
         table_exists: bool,
     ) -> Self {
         Self {
+            output: CommandOutput::Count,
             table_url,
             options,
             metadata_configuration,
@@ -86,6 +89,11 @@ impl DeltaPlannerConfig {
             table_snapshot: None,
             lakehouse_table: None,
         }
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = output;
+        self
     }
 
     pub fn with_generation_expressions(

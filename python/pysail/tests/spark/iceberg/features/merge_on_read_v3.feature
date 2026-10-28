@@ -80,19 +80,25 @@ Feature: Iceberg v3 merge-on-read deletion vectors
       | 3  | 30    |
       | 4  | 40    |
       | 5  | 50    |
+    Given remember current iceberg metadata
     Given statement
       """
       UPDATE iceberg_v3_mor SET value = 0 WHERE id = -1
       """
+    Then iceberg commits a no-op update snapshot
+    Then iceberg snapshot count is 5
     Given statement
       """
       DELETE FROM iceberg_v3_mor WHERE id = -1
       """
+    Then iceberg commits a no-op delete snapshot
+    Then iceberg snapshot count is 6
     Given statement
       """
       MERGE INTO iceberg_v3_mor t USING (SELECT -1 AS id) s ON t.id = s.id WHEN MATCHED THEN DELETE
       """
-    Then iceberg snapshot count is 4
+    Then iceberg commits a no-op merge snapshot
+    Then iceberg snapshot count is 7
 
   Scenario: V3 MOR partition moves keep one vector per source file
     Given variable location for temporary directory iceberg_v3_move

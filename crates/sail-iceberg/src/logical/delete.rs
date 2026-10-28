@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan, LogicalPlanBuilder, col, lit, when};
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     DeleteInfo, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, OPERATION_COLUMN, RowLevelCommand,
     RowLevelOperationType, RowLevelWriteMode,
@@ -130,6 +131,7 @@ pub(crate) fn expand_delete_node(info: DeleteInfo) -> Result<LogicalPlan> {
         condition,
         info.target,
     )
+    .with_output(CommandOutput::Empty)
     .with_expected_snapshot_id(Some(snapshot_id));
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(node),

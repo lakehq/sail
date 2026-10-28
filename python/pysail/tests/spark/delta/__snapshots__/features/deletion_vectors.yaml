@@ -553,7 +553,7 @@ data:
     RowLevelWrite: command=Delete, mode=MergeOnRead, target=delta_dv_explain, format=delta, condition=id = 2
 
     == Analyzed Logical Plan ==
-
+    num_affected_rows: Int64
     RowLevelWrite: command=Delete, mode=MergeOnRead, target=delta_dv_explain, format=delta, condition=id = 2
 
     == Optimized Logical Plan ==

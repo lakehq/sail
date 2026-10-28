@@ -15,6 +15,7 @@ use datafusion_expr::{
 };
 use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     DeltaCheckConstraintExpr, MergeIntoOptions, OPERATION_COLUMN, OptionLayer, RowLevelCommand,
     RowLevelOperationType, RowLevelTarget, RowLevelWriteMode, UpdateAssignment, UpdateInfo,
@@ -300,6 +301,7 @@ pub struct RowLevelWriteNode {
     /// `Some` means the target scan must still match at commit time. The inner
     /// value is `None` when the table had no current snapshot when it was read.
     expected_snapshot_id: Option<Option<i64>>,
+    output: CommandOutput,
     #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 1))]
     schema: DFSchemaRef,
 }
@@ -321,6 +323,7 @@ impl RowLevelWriteNode {
             effects: RowLevelEffectPlans::default(),
             commit: RowLevelCommitInfo::Truncate,
             expected_snapshot_id: None,
+            output: CommandOutput::Count,
             schema: Arc::new(DFSchema::from_unqualified_fields(
                 vec![Field::new("count", DataType::Int64, true)].into(),
                 Default::default(),
@@ -344,6 +347,7 @@ impl RowLevelWriteNode {
                 options: Box::new(options),
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema,
         }
     }
@@ -364,6 +368,7 @@ impl RowLevelWriteNode {
                 predicate: condition,
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema: Arc::new(DFSchema::empty()),
         }
     }
@@ -385,8 +390,19 @@ impl RowLevelWriteNode {
                 predicate: condition,
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema,
         }
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = output;
+        self.schema = output.df_schema();
+        self
+    }
+
+    pub fn output(&self) -> CommandOutput {
+        self.output
     }
 
     pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
@@ -510,6 +526,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             effects,
             commit: self.commit.clone(),
             expected_snapshot_id: self.expected_snapshot_id,
+            output: self.output,
             schema: self.schema.clone(),
         })
     }
@@ -1181,6 +1198,20 @@ mod tests {
         let rebuilt = UserDefinedLogicalNodeCore::with_exprs_and_inputs(&node, vec![], vec![])?;
         assert_eq!(rebuilt.expected_snapshot_id(), Some(None));
         assert_eq!(rebuilt.target_format(), "iceberg");
+        for output in [
+            CommandOutput::Empty,
+            CommandOutput::AffectedRows,
+            CommandOutput::MergeRows,
+            CommandOutput::Count,
+        ] {
+            let node = node.clone().with_output(output);
+            let rebuilt = UserDefinedLogicalNodeCore::with_exprs_and_inputs(&node, vec![], vec![])?;
+            assert_eq!(rebuilt.output(), output);
+            assert_eq!(
+                UserDefinedLogicalNodeCore::schema(&rebuilt).as_arrow(),
+                output.schema().as_ref()
+            );
+        }
         Ok(())
     }
 
