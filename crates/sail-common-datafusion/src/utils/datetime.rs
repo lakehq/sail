@@ -197,8 +197,7 @@ pub fn arrow_timezone_label(value: &str) -> Cow<'_, str> {
             Cow::Owned(offset.to_string())
         }
         // TODO: Label values with an offset with seconds, which Arrow does not parse. Until then
-        //  they are labelled with UTC, in which Sail compared them before it used the session
-        //  time zone.
+        //  they are labelled with UTC, in which Sail compared them before it used the session tz.
         Ok(SparkZone::Fixed(_)) => Cow::Borrowed("UTC"),
         Ok(SparkZone::Named(_)) => Cow::Borrowed(timezone_alias_to_timezone(value)),
         Err(_) => Cow::Borrowed(value),
