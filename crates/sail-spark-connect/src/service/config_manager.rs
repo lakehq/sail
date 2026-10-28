@@ -39,7 +39,9 @@ pub(crate) async fn handle_sql_config(
             Ok(Some(RecordBatch::new_empty(Arc::new(Schema::empty()))))
         }
         spec::CommandNode::SetVariable { variable, value } => {
-            let (key, value) = if native_config_key(variable) == Some(DATAFUSION_TIME_ZONE_KEY) {
+            // `datafusion.execution.time_zone` sets the session time zone, so that the DataFusion
+            // time zone cannot differ from it. Spark stores it as an unrelated key.
+            let (key, value) = if variable == DATAFUSION_TIME_ZONE_KEY {
                 // A DataFusion setting decodes a quoted SQL literal.
                 let value = parse_native_config_value(value).unwrap_or_else(|_| value.clone());
                 (SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE, value)
@@ -78,7 +80,9 @@ pub(crate) async fn handle_sql_config(
         }
         spec::CommandNode::ResetVariable { variable } => {
             let spark = ctx.extension::<SparkSession>()?;
-            let variable = match variable.as_deref().and_then(native_config_key) {
+            // `datafusion.execution.time_zone` resets the session time zone. Spark unsets only the
+            // key.
+            let variable = match variable.as_deref() {
                 Some(DATAFUSION_TIME_ZONE_KEY) => {
                     Some(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string())
                 }
@@ -123,9 +127,7 @@ pub(crate) async fn handle_sql_config(
 }
 
 fn native_config_key(variable: &str) -> Option<&str> {
-    if variable.eq_ignore_ascii_case("timezone") || variable.eq_ignore_ascii_case("time.zone") {
-        Some(DATAFUSION_TIME_ZONE_KEY)
-    } else if variable.starts_with("datafusion.") {
+    if variable.starts_with("datafusion.") {
         Some(variable)
     } else {
         None

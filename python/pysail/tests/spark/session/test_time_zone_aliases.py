@@ -3,39 +3,91 @@ from pyspark.sql import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 
-# Spark stores `timezone` and `time.zone` as unrelated keys. Sail names the DataFusion time zone
-# with them, as DataFusion does, and the DataFusion time zone is the session time zone.
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="the time zone aliases are specific to Sail")
-
 KEY = "spark.sql.session.timeZone"
-VARIABLES = ["timezone", "TimeZone", "time.zone", "datafusion.execution.time_zone"]
+ZONE = "Asia/Tokyo"
 
 
-@pytest.mark.parametrize("variable", VARIABLES)
-def test_sql_set_time_zone_alias_sets_the_session_time_zone(spark, variable):
+@pytest.fixture
+def restore_time_zone(spark):
     original = spark.conf.get(KEY)
-    try:
-        spark.sql(f"SET {variable} = 'Asia/Tokyo'").collect()
-        assert spark.conf.get(KEY) == "Asia/Tokyo"
-        assert spark.sql("SELECT current_timezone() AS zone").collect() == [Row(zone="Asia/Tokyo")]
-    finally:
-        spark.conf.set(KEY, original)
+    yield
+    spark.conf.set(KEY, original)
 
 
-@pytest.mark.parametrize("variable", VARIABLES)
-def test_sql_set_time_zone_alias_rejects_a_zone_spark_cannot_resolve(spark, variable):
+def assert_time_zones_agree(spark):
+    # The optimizer reads the DataFusion time zone, and the comparison of a TIMESTAMP_NTZ value
+    # with the same wall-clock time as TIMESTAMP only holds if that is the session time zone.
+    df = spark.sql("SELECT TIMESTAMP_NTZ '2020-06-14 12:00:00' AS ntz, TIMESTAMP '2020-06-14 12:00:00' AS ltz")
+    assert df.selectExpr("ntz = ltz AS equal").collect() == [Row(equal=True)]
+
+
+def current_time_zone(spark):
+    return spark.sql("SELECT current_timezone() AS zone").first().zone
+
+
+@pytest.mark.parametrize("variable", ["timezone", "time.zone"])
+def test_sql_set_of_a_key_named_like_a_time_zone_leaves_the_session_time_zone(spark, restore_time_zone, variable):
+    spark.conf.set(KEY, "UTC")
+    assert spark.sql(f"SET {variable} = '{ZONE}'").collect() == [Row(key=variable, value=f"'{ZONE}'")]
+    assert spark.conf.get(variable) == f"'{ZONE}'"
+    assert current_time_zone(spark) == "UTC"
+    spark.sql(f"RESET {variable}").collect()
+    assert current_time_zone(spark) == "UTC"
+    assert_time_zones_agree(spark)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        f"SET {KEY} = {ZONE}",
+        f"SET TIME ZONE '{ZONE}'",
+        pytest.param(
+            f"SET datafusion.execution.time_zone = '{ZONE}'",
+            marks=pytest.mark.skipif(is_jvm_spark(), reason="the DataFusion time zone is specific to Sail"),
+        ),
+    ],
+)
+def test_sql_set_of_the_session_time_zone_sets_the_datafusion_time_zone(spark, restore_time_zone, statement):
+    spark.conf.set(KEY, "UTC")
+    spark.sql(statement).collect()
+    assert spark.conf.get(KEY) == ZONE
+    assert current_time_zone(spark) == ZONE
+    assert_time_zones_agree(spark)
+
+
+def test_conf_set_of_the_session_time_zone_sets_the_datafusion_time_zone(spark, restore_time_zone):
+    spark.conf.set(KEY, ZONE)
+    assert current_time_zone(spark) == ZONE
+    assert_time_zones_agree(spark)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        f"RESET {KEY}",
+        pytest.param(
+            "RESET datafusion.execution.time_zone",
+            marks=pytest.mark.skipif(is_jvm_spark(), reason="the DataFusion time zone is specific to Sail"),
+        ),
+    ],
+)
+def test_sql_reset_of_the_session_time_zone_resets_the_datafusion_time_zone(spark, restore_time_zone, statement):
+    spark.conf.set(KEY, "Pacific/Kiritimati")
+    spark.sql(statement).collect()
+    assert current_time_zone(spark) != "Pacific/Kiritimati"
+    assert_time_zones_agree(spark)
+
+
+def test_conf_unset_of_the_session_time_zone_resets_the_datafusion_time_zone(spark, restore_time_zone):
+    spark.conf.set(KEY, "Pacific/Kiritimati")
+    spark.conf.unset(KEY)
+    assert current_time_zone(spark) != "Pacific/Kiritimati"
+    assert_time_zones_agree(spark)
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="the DataFusion time zone is specific to Sail")
+def test_sql_set_of_the_datafusion_time_zone_rejects_a_zone_spark_cannot_resolve(spark):
     original = spark.conf.get(KEY)
     with pytest.raises(Exception, match=r"INVALID_CONF_VALUE\.TIME_ZONE"):
-        spark.sql(f"SET {variable} = 'Mars/Olympus'").collect()
+        spark.sql("SET datafusion.execution.time_zone = 'Mars/Olympus'").collect()
     assert spark.conf.get(KEY) == original
-
-
-@pytest.mark.parametrize("variable", VARIABLES)
-def test_sql_reset_time_zone_alias_resets_the_session_time_zone(spark, variable):
-    original = spark.conf.get(KEY)
-    try:
-        spark.sql(f"SET {KEY}=Pacific/Kiritimati").collect()
-        spark.sql(f"RESET {variable}").collect()
-        assert spark.conf.get(KEY) != "Pacific/Kiritimati"
-    finally:
-        spark.conf.set(KEY, original)
