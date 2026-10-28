@@ -1,7 +1,9 @@
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use sail_function::scalar::datetime::spark_timestamp::arrow_timezone_label;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;
@@ -82,6 +84,17 @@ impl PlanConfig {
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             ..Default::default()
         })
+    }
+
+    /// The time zone label of the TIMESTAMP values that Sail creates in the session time zone.
+    /// The session time zone is spelled as Spark accepts it, which Arrow may not parse.
+    pub fn session_timezone_label(&self) -> Arc<str> {
+        match arrow_timezone_label(&self.session_timezone) {
+            Cow::Borrowed(label) if label == self.session_timezone.as_ref() => {
+                Arc::clone(&self.session_timezone)
+            }
+            label => Arc::from(label.as_ref()),
+        }
     }
 }
 

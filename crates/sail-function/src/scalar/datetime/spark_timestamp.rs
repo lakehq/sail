@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt::Debug;
@@ -43,13 +44,13 @@ enum TimestampParser {
 }
 
 #[derive(Debug)]
-enum SparkZone {
+pub(crate) enum SparkZone {
     Fixed(FixedOffset),
     Named(Tz),
 }
 
 impl SparkZone {
-    fn parse(value: &str) -> Result<Self> {
+    pub(crate) fn parse(value: &str) -> Result<Self> {
         let value = value.trim();
         if value.is_empty() {
             return exec_err!("invalid empty time zone");
@@ -196,6 +197,27 @@ pub(crate) fn parse_zone_offset(value: &str) -> Option<FixedOffset> {
     }
     let seconds = i32::try_from(hours * 3600 + minutes * 60 + seconds).ok()?;
     FixedOffset::east_opt(sign * seconds)
+}
+
+/// The Arrow time zone label of a Spark session time zone. Arrow does not parse ids such as
+/// `Z`, `UT`, `GMT+8`, `PST` or `+5:30`, which Spark accepts, so they are spelled as the same
+/// zone, except that an offset with seconds is labelled UTC. An id that Arrow parses, or that
+/// Spark does not accept, stays as it is.
+pub fn arrow_timezone_label(value: &str) -> Cow<'_, str> {
+    if value.parse::<Tz>().is_ok() {
+        return Cow::Borrowed(value);
+    }
+    match SparkZone::parse(value) {
+        Ok(SparkZone::Fixed(offset)) if offset.local_minus_utc() % 60 == 0 => {
+            Cow::Owned(offset.to_string())
+        }
+        // TODO: Label values with an offset with seconds, which Arrow does not parse. Until then
+        //  they are labelled with UTC, in which Sail compared them before it used the session
+        //  time zone.
+        Ok(SparkZone::Fixed(_)) => Cow::Borrowed("UTC"),
+        Ok(SparkZone::Named(_)) => Cow::Borrowed(timezone_alias_to_timezone(value)),
+        Err(_) => Cow::Borrowed(value),
+    }
 }
 
 fn days_in_month(year: i64, month: u32) -> Option<u32> {
@@ -690,5 +712,29 @@ mod tests {
             assert!(parser.string_to_microseconds(value, false).is_err());
         }
         Ok(())
+    }
+
+    #[test]
+    fn arrow_timezone_label_spells_spark_zones_for_arrow() {
+        for (spark, arrow) in [
+            ("Z", "+00:00"),
+            ("UT", "+00:00"),
+            ("GMT+8", "+08:00"),
+            ("UTC+08:00", "+08:00"),
+            ("GMT-03:30", "-03:30"),
+            ("PST", "America/Los_Angeles"),
+            ("+5:30", "+05:30"),
+            ("+05:30:00", "+05:30"),
+            ("+053000", "+05:30"),
+            ("+05:30:45", "UTC"),
+            ("+053045", "UTC"),
+            ("Mars/Olympus", "Mars/Olympus"),
+            ("UTC", "UTC"),
+            ("+0530", "+0530"),
+            ("-08", "-08"),
+            ("Asia/Kolkata", "Asia/Kolkata"),
+        ] {
+            assert_eq!(arrow_timezone_label(spark), arrow, "{spark}");
+        }
     }
 }

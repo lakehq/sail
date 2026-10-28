@@ -1028,7 +1028,7 @@ fn comparison_coercion_with_session_timezone_inner(
 /// (`IN`, `BETWEEN`, `CASE x WHEN`, `IN (<subquery>)`, `= ANY/ALL`), using the
 /// same rules as `=` itself so they cannot disagree with it.
 ///
-/// `session_time_zone` is `datafusion.execution.time_zone`; see
+/// `session_time_zone` is the label of the Spark session time zone; see
 /// [`BinaryTypeCoercer::with_session_time_zone`].
 ///
 /// The session timezone is applied recursively to timestamps inside dictionary,

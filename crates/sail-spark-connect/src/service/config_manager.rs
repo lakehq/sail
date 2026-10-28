@@ -8,6 +8,7 @@ use log::warn;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 use sail_plan::resolver::PlanResolver;
 
 use crate::config::ConfigKeyValue;
@@ -178,12 +179,10 @@ pub(crate) fn handle_config_set(
         // timestamps and to render adjusted timestamps in the session zone; Sail otherwise keeps
         // the session timezone only in `PlanConfig`, leaving `execution.time_zone` unset.
         let session_timezone = spark.plan_config()?.session_timezone.to_string();
-        ctx.state_ref()
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .time_zone = Some(session_timezone);
+        SessionTimeZoneOptions::set_session_time_zone(
+            ctx.state_ref().write().config_mut().options_mut(),
+            &session_timezone,
+        );
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
@@ -258,12 +257,10 @@ pub(crate) fn handle_config_unset(
         // `execution.time_zone` to the now-effective session zone instead of leaving the last
         // explicitly-set value behind. Mirrors the sync in `handle_config_set`.
         let session_timezone = spark.plan_config()?.session_timezone.to_string();
-        ctx.state_ref()
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .time_zone = Some(session_timezone);
+        SessionTimeZoneOptions::set_session_time_zone(
+            ctx.state_ref().write().config_mut().options_mut(),
+            &session_timezone,
+        );
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),

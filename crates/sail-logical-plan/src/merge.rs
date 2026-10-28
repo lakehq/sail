@@ -352,6 +352,7 @@ pub fn expand_merge(
                 target_type,
                 options.case_sensitive,
                 StructFieldAlignment::FillMissingWithNull,
+                &options.session_timezone_label,
             )?
             .alias(desired.clone()))
         })
@@ -1417,7 +1418,7 @@ fn align_merge_value(
     value: Expr,
     target_field: &datafusion_common::arrow::datatypes::Field,
     value_schema: &DFSchemaRef,
-    case_sensitive: bool,
+    options: &MergeIntoOptions,
 ) -> Result<Expr> {
     let source_type = value.get_type(value_schema)?;
     if &source_type == target_field.data_type() {
@@ -1427,8 +1428,9 @@ fn align_merge_value(
         value,
         &source_type,
         target_field.data_type(),
-        case_sensitive,
+        options.case_sensitive,
         StructFieldAlignment::FillMissingWithNull,
+        &options.session_timezone_label,
     )
 }
 
@@ -1479,7 +1481,7 @@ fn build_insert_only_projection(
             };
             branches.push((
                 pred,
-                align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                align_merge_value(value, field, value_schema, options)?,
             ));
         }
 
@@ -1906,7 +1908,7 @@ fn build_merge_projection(
                     if let Some(v) = cases.get_mut(field.name()) {
                         v.push((
                             pred.clone(),
-                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                            align_merge_value(value, field, value_schema, options)?,
                         ));
                     }
                 }
@@ -1926,7 +1928,7 @@ fn build_merge_projection(
                                 assignment.value.clone(),
                                 field,
                                 value_schema,
-                                options.case_sensitive,
+                                options,
                             )?,
                         ));
                     }
@@ -1957,7 +1959,7 @@ fn build_merge_projection(
                                 assignment.value.clone(),
                                 field,
                                 value_schema,
-                                options.case_sensitive,
+                                options,
                             )?,
                         ));
                     }
@@ -1979,7 +1981,7 @@ fn build_merge_projection(
                     if let Some(v) = cases.get_mut(field.name()) {
                         v.push((
                             pred.clone(),
-                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                            align_merge_value(value, field, value_schema, options)?,
                         ));
                     }
                 }
@@ -1997,7 +1999,7 @@ fn build_merge_projection(
                             .unwrap_or_else(|| merge_insert_value(options, field.name()));
                         v.push((
                             pred.clone(),
-                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                            align_merge_value(value, field, value_schema, options)?,
                         ));
                     }
                 }

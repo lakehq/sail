@@ -17,7 +17,9 @@ use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, Volatility, cast, lit,
 };
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
+use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, has_timestamp_ntz};
+use sail_function::scalar::datetime::spark_timestamp::arrow_timezone_label;
 
 /// Converts the casts of TIMESTAMP_NTZ to TIMESTAMP, which type coercion adds, like Spark.
 ///
@@ -35,9 +37,10 @@ pub(crate) fn convert_session_timestamp_casts(
     plan: LogicalPlan,
     config: &ConfigOptions,
 ) -> Result<LogicalPlan> {
-    let Some(timezone) = config.execution.time_zone.as_deref() else {
+    let Some(timezone) = SessionTimeZoneOptions::session_time_zone(config) else {
         return Ok(plan);
     };
+    let timezone = &arrow_timezone_label(timezone);
     let rewriter = Rewriter {
         timezone,
         converts: !is_fixed_zero_offset_timezone(timezone),
@@ -50,30 +53,22 @@ pub(crate) fn convert_session_timestamp_casts(
         }
         let schema = merge_schema(&plan.inputs());
         let name_preserver = NamePreserver::new(&plan);
-        plan.map_expressions(|expr| {
+        let rewrite = |expr: Expr| {
             let name = name_preserver.save(&expr);
             expr.transform_down(|expr| rewriter.rewrite(expr, &schema))
                 .map(|expr| expr.update_data(|expr| name.restore(expr)))
+        };
+        plan.map_expressions(|expr| {
+            // Like type coercion, preserve the names of grouping set members, not of the grouping
+            // set itself, which is no longer recognized as a grouping set once aliased.
+            if let Expr::GroupingSet(_) = &expr {
+                expr.map_children(rewrite)
+            } else {
+                rewrite(expr)
+            }
         })
     })
     .data()
-}
-
-/// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ `data_type`, which takes the wall-clock time of the
-/// value in the session time zone. Arrow's cast takes the wall-clock time in UTC.
-pub(crate) fn session_wall_clock(expr: Expr, data_type: &DataType, timezone: &str) -> Expr {
-    let timestamp_ntz = DataType::Timestamp(TimeUnit::Microsecond, None);
-    let utc = cast(expr, timestamp_ntz.clone());
-    let wall = if is_fixed_zero_offset_timezone(timezone) {
-        utc
-    } else {
-        ScalarUDF::from(ConvertTz::cast(false)).call(vec![lit("UTC"), lit(timezone), utc])
-    };
-    if *data_type == timestamp_ntz {
-        wall
-    } else {
-        cast(wall, data_type.clone())
-    }
 }
 
 struct Rewriter<'a> {

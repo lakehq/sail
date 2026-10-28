@@ -240,7 +240,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
         let left_schema = Arc::clone(left.schema());
         let right_schema = Arc::clone(right.schema());
-        let timezone = &self.config.session_timezone;
+        let timezone = &self.config.session_timezone_label();
         let is_mix = |left: &DataType, right: &DataType| {
             session_timestamp_targets(left, right, timezone).is_some()
         };

@@ -71,9 +71,12 @@ use datafusion_expr::{
     is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 use itertools::{Itertools as _, izip};
+use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
+use sail_function::scalar::datetime::convert_tz::session_wall_clock;
+use sail_function::scalar::datetime::spark_timestamp::arrow_timezone_label;
 
 use crate::binary_type_coercion::BinaryTypeCoercer;
-use crate::session_timestamp::{convert_session_timestamp_casts, session_wall_clock};
+use crate::session_timestamp::convert_session_timestamp_casts;
 
 /// Performs type coercion by determining the schema
 /// and performing the expression rewrites.
@@ -141,7 +144,9 @@ impl AnalyzerRule for TypeCoercion {
 /// Coerce each node of `plan` and of its subqueries, from the leaves up.
 fn coerce_plan_and_subqueries(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
     static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
-    let session_time_zone = config.execution.time_zone.as_deref();
+    let session_time_zone =
+        SessionTimeZoneOptions::session_time_zone(config).map(arrow_timezone_label);
+    let session_time_zone = session_time_zone.as_deref();
 
     // TODO: Uncomment after DataFusion 56, and traverse with `transform_down_up_with_subqueries`
     //  so that the body of a materialized CTE is coerced before its continuation.
@@ -1947,7 +1952,7 @@ fn in_subquery_tuple_values<'a>(
 /// (`IN`, `BETWEEN`, `CASE x WHEN`, `IN (<subquery>)`, `= ANY/ALL`), using the
 /// same rules as `=` itself so they cannot disagree with it.
 ///
-/// `session_time_zone` is `datafusion.execution.time_zone`; see
+/// `session_time_zone` is the label of the Spark session time zone; see
 /// [`BinaryTypeCoercer::with_session_time_zone`].
 ///
 /// The session timezone is applied recursively to timestamps inside dictionary,
@@ -1994,6 +1999,7 @@ mod test {
         create_udaf, grouping_set, is_true, lit, placeholder,
     };
     use insta::assert_snapshot;
+    use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 
     use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter, coerce_case_expression};
 
@@ -3684,7 +3690,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".into());
+        SessionTimeZoneOptions::set_session_time_zone(&mut options, "+08:00");
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3814,7 +3820,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3838,7 +3844,33 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("a").eq(constant), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
+        let rule = Arc::new(TypeCoercion::new());
+        assert_analyzed_plan_with_config_eq_snapshot!(
+            options,
+            rule,
+            plan,
+            @r#"
+        Filter: a = TimestampMicrosecond(1592082000000000, None)
+          EmptyRelation: rows=0
+        "#,
+        )
+    }
+
+    #[test]
+    fn timestamp_comparison_uses_spark_session_time_zone() -> Result<()> {
+        let input = empty_with_type(DataType::Timestamp(TimeUnit::Microsecond, None));
+        // 2020-06-13 21:00:00 in America/Los_Angeles
+        let constant = lit(ScalarValue::TimestampMicrosecond(
+            Some(1_592_107_200_000_000),
+            Some("America/Los_Angeles".into()),
+        ));
+        let plan = LogicalPlan::Filter(Filter::try_new(col("a").eq(constant), input)?);
+
+        let mut options = ConfigOptions::default();
+        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
+        // `SET timezone` changes the DataFusion time zone, not the Spark session time zone.
+        options.execution.time_zone = Some("Asia/Tokyo".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3862,7 +3894,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("a").lt_eq(constant), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+05:30".into());
+        SessionTimeZoneOptions::set_session_time_zone(&mut options, "+05:30");
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3904,7 +3936,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("ntz").eq(col("ltz")), input)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3931,7 +3963,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("America/Los_Angeles".into());
+        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3964,7 +3996,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(set_comparison, outer)?);
 
         let mut options = ConfigOptions::default();
-        options.execution.time_zone = Some("+08:00".into());
+        SessionTimeZoneOptions::set_session_time_zone(&mut options, "+08:00");
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,

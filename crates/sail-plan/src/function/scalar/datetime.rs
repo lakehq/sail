@@ -97,7 +97,7 @@ fn trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let date = with_session_timezone_label(
         date,
         input.function_context.schema,
-        &input.function_context.plan_config.session_timezone,
+        &input.function_context.plan_config.session_timezone_label(),
     )?;
     Ok(cast(
         expr_fn::date_trunc(trunc_part_conversion(part), date),
@@ -111,7 +111,7 @@ fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let timestamp = with_session_timezone_label(
         timestamp,
         input.function_context.schema,
-        &input.function_context.plan_config.session_timezone,
+        &input.function_context.plan_config.session_timezone_label(),
     )?;
     let truncated =
         ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
@@ -447,26 +447,41 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
             match unit_str.as_str() {
                 // Spark counts every unit between the wall-clock times in the session time zone.
                 "DAY" | "MONTH" | "YEAR" | "QUARTER" | "HOUR" | "MINUTE" | "SECOND" | "WEEK" => {
+                    // The session time zone as configured, which `ConvertTz` reads like Spark. The
+                    // label would read an offset with seconds as UTC.
+                    let session_timezone = &function_context.plan_config.session_timezone;
+                    let timezone = session_timezone.as_ref();
+                    let is_fixed_offset =
+                        timezone.starts_with(['+', '-']) || is_fixed_zero_offset_timezone(timezone);
+                    let is_ltz = |value: &Expr| {
+                        matches!(
+                            value.get_type(function_context.schema),
+                            Ok(DataType::Timestamp(_, Some(_)))
+                        )
+                    };
+                    let has_ltz = is_ltz(&start) || is_ltz(&end);
                     let local = |value: Expr| -> PlanResult<Expr> {
                         Ok(match value.get_type(function_context.schema)? {
-                            DataType::Timestamp(_, Some(_)) => cast_timestamp_ltz_to_ntz(
-                                value,
-                                &function_context.plan_config.session_timezone,
-                                false,
-                            ),
+                            DataType::Timestamp(_, Some(_)) => {
+                                cast_timestamp_ltz_to_ntz(value, session_timezone, false)
+                            }
+                            // Spark casts TIMESTAMP_NTZ to TIMESTAMP when the other value is one,
+                            // which moves a wall-clock time in a DST gap forward, and fails with
+                            // long overflow near the ends of the range, also at a fixed offset.
+                            DataType::Timestamp(_, None)
+                                if has_ltz && !is_fixed_zero_offset_timezone(timezone) =>
+                            {
+                                cast_timestamp_ltz_to_ntz(
+                                    cast_timestamp_ntz_to_ltz(value, session_timezone, false),
+                                    session_timezone,
+                                    false,
+                                )
+                            }
                             _ => value,
                         })
                     };
-                    let timezone = function_context.plan_config.session_timezone.as_ref();
                     // A fixed offset moves both wall-clock times of TIMESTAMP values alike.
-                    let same_offset = (timezone.starts_with(['+', '-'])
-                        || is_fixed_zero_offset_timezone(timezone))
-                        && [&start, &end].into_iter().all(|value| {
-                            matches!(
-                                value.get_type(function_context.schema),
-                                Ok(DataType::Timestamp(_, Some(_)))
-                            )
-                        });
+                    let same_offset = is_fixed_offset && is_ltz(&start) && is_ltz(&end);
                     match unit_str.as_str() {
                         "DAY" => Ok(timestamp_day_diff(local(start)?, local(end)?)),
                         "HOUR" | "MINUTE" | "SECOND" | "WEEK" if same_offset => {
@@ -495,6 +510,18 @@ fn session_timezone(input: &ScalarFunctionInput) -> Expr {
         .plan_config
         .session_timezone
         .to_string())
+}
+
+/// Formats the date of a value. `to_char` formats TIMESTAMP values in nanoseconds, which fail
+/// before 1677, so they are cast to the date in the time zone of their label, which `to_char`
+/// would read.
+fn date_to_char(input: ScalarFunctionInput, format: &str) -> PlanResult<Expr> {
+    let value = input.arguments.one()?;
+    let value = match value.get_type(input.function_context.schema)? {
+        DataType::Timestamp(_, Some(_)) => cast(value, DataType::Date32),
+        _ => value,
+    };
+    Ok(expr_fn::to_char(value, lit(format)))
 }
 
 fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1106,6 +1133,8 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
     // Spark reads TIMESTAMP values in the session time zone, and counts the seconds of a day
     // since its start, which is not the wall-clock time on a DST day.
+    // The session time zone as configured, which `ConvertTz` reads like Spark. The label would read
+    // an offset with seconds as UTC.
     let session_timezone = &function_context.plan_config.session_timezone;
     let ensure_timestamp = |dt: Expr| match dt.get_type(function_context.schema) {
         Ok(DataType::Timestamp(_, Some(_))) => {
@@ -1405,7 +1434,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("datediff", F::custom(datediff)),
         ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
-        ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),
+        ("dayname", F::custom(|input| date_to_char(input, "%a"))),
         ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
         (
             "dayofweek",
@@ -1446,10 +1475,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("make_ym_interval", F::udf(SparkMakeYmInterval::new())),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
-        (
-            "monthname",
-            F::unary(|arg| expr_fn::to_char(arg, lit("%b"))),
-        ),
+        ("monthname", F::custom(|input| date_to_char(input, "%b"))),
         ("months_between", F::custom(months_between)),
         ("next_day", F::custom(next_day)),
         ("now", F::custom(current_timestamp_microseconds)),
@@ -1571,7 +1597,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("weekday", F::unary(|arg| integer_part(arg, "DOW") - lit(1))),
         (
             "weekofyear",
-            F::unary(|arg| cast(expr_fn::to_char(arg, lit("%V")), DataType::Int32)),
+            F::custom(|input| Ok(cast(date_to_char(input, "%V")?, DataType::Int32))),
         ),
         ("window", F::custom(window)),
         ("window_time", F::custom(window_time)),

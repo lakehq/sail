@@ -141,7 +141,7 @@ fn array_append(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         array,
         element,
         schema,
-        &input.function_context.plan_config.session_timezone,
+        &input.function_context.plan_config.session_timezone_label(),
     )?;
     let array_input = cast_list_value_nullability(array.clone(), schema, true)?;
     let appended = expr_fn::array_append(array_input, element);
@@ -157,7 +157,7 @@ fn array_prepend(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         array,
         element,
         schema,
-        &input.function_context.plan_config.session_timezone,
+        &input.function_context.plan_config.session_timezone_label(),
     )?;
     let array = cast_list_value_nullability(array, schema, true)?;
     Ok(when(
@@ -189,7 +189,7 @@ fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         array,
         value,
         schema,
-        &input.function_context.plan_config.session_timezone,
+        &input.function_context.plan_config.session_timezone_label(),
     )?;
     let array_input = cast_list_value_nullability(array.clone(), schema, true)?;
     let output_type = array_update_output_type(&array_input, &value, schema)?;
@@ -275,7 +275,7 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         left,
         right,
         function_context.schema,
-        &function_context.plan_config.session_timezone,
+        &function_context.plan_config.session_timezone_label(),
     )?;
 
     let nullable_array_type =
@@ -540,7 +540,7 @@ where
             array,
             element,
             input.function_context.schema,
-            &input.function_context.plan_config.session_timezone,
+            &input.function_context.plan_config.session_timezone_label(),
         )?;
         f(array, element)
     }
@@ -560,7 +560,7 @@ where
             left,
             right,
             input.function_context.schema,
-            &input.function_context.plan_config.session_timezone,
+            &input.function_context.plan_config.session_timezone_label(),
         )?;
         f(left, right)
     }

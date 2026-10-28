@@ -271,6 +271,57 @@ def test_parquet_explicit_schema_determines_int96_timestamp_family(spark, tmp_pa
     assert rows == [Row(value="2024-01-02 03:04:05")]
 
 
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["Asia/Shanghai"], indirect=True)
+def test_parquet_int96_with_arrow_schema_hint_reads_as_timestamp(spark, tmp_path):
+    # pyarrow stores an `ARROW:schema` hint with the unit of the values, which Spark ignores.
+    path = tmp_path / "int96_with_arrow_schema_hint.parquet"
+    values = [datetime(2020, 6, 14), datetime(2020, 6, 14, 8), datetime(2020, 6, 13, 16)]  # noqa: DTZ001
+    table = pa.table({"id": [1, 3, 4], "value": pa.array(values, type=pa.timestamp("us"))})
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    spark.read.parquet(str(path)).createOrReplaceTempView("int96_with_arrow_schema_hint")
+    rows = spark.sql(
+        """
+        SELECT id, typeof(value) AS type, CAST(value AS STRING) AS value,
+          value >= TIMESTAMP '2020-06-14 05:30:00' AS ge
+        FROM int96_with_arrow_schema_hint
+        ORDER BY id
+        """
+    ).collect()
+
+    assert rows == [
+        Row(id=1, type="timestamp", value="2020-06-14 08:00:00", ge=True),
+        Row(id=3, type="timestamp", value="2020-06-14 16:00:00", ge=True),
+        Row(id=4, type="timestamp", value="2020-06-14 00:00:00", ge=False),
+    ]
+
+
+@pytest.mark.usefixtures("session_timezone")
+@pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+def test_parquet_int96_with_arrow_schema_hint_before_1677(spark, tmp_path):
+    path = tmp_path / "int96_before_1677.parquet"
+    values = [datetime(1582, 10, 15), datetime(1, 1, 1), datetime(2020, 6, 14)]  # noqa: DTZ001
+    table = pa.table({"id": [0, 1, 2], "value": pa.array(values, type=pa.timestamp("us"))})
+    pq.write_table(table, path, use_deprecated_int96_timestamps=True)
+
+    spark.read.parquet(str(path)).createOrReplaceTempView("int96_before_1677")
+    rows = spark.sql(
+        """
+        SELECT id, weekofyear(value) AS week, dayname(value) AS day, monthname(value) AS month,
+          CAST(date_trunc('MONTH', value) AS STRING) AS month_start
+        FROM int96_before_1677
+        ORDER BY id
+        """
+    ).collect()
+
+    assert rows == [
+        Row(id=0, week=41, day="Fri", month="Oct", month_start="1582-10-01 00:00:00"),
+        Row(id=1, week=1, day="Mon", month="Jan", month_start="0001-01-01 00:00:00"),
+        Row(id=2, week=24, day="Sun", month="Jun", month_start="2020-06-01 00:00:00"),
+    ]
+
+
 def test_parquet_write_with_bloom_filter(spark, tmpdir):
     def size(p):
         return get_data_directory_size(p, extension=".parquet")

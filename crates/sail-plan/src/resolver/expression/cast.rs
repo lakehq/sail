@@ -148,7 +148,7 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         // Spark renders TIMESTAMP in the session time zone, whatever zone labels the values.
-        let session_timezone = Some(Arc::clone(&self.config.session_timezone));
+        let session_timezone = self.config.session_timezone_label();
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (
                 DataType::Timestamp(_, None),
@@ -156,7 +156,7 @@ impl PlanResolver<'_> {
                 is_try,
             ) => cast_timestamp_ntz_to_ltz(expr, &timezone, is_try),
             (DataType::Timestamp(_, Some(_)), DataType::Timestamp(unit, None), is_try) => {
-                let local = cast_timestamp_ltz_to_ntz(expr, &self.config.session_timezone, is_try);
+                let local = cast_timestamp_ltz_to_ntz(expr, &session_timezone, is_try);
                 if unit == TimeUnit::Microsecond {
                     local
                 } else {
@@ -169,7 +169,7 @@ impl PlanResolver<'_> {
             (DataType::Timestamp(unit, Some(_)), DataType::Date32, true) => try_cast(
                 cast(
                     expr,
-                    DataType::Timestamp(unit, Some(Arc::clone(&self.config.session_timezone))),
+                    DataType::Timestamp(unit, Some(Arc::clone(&session_timezone))),
                 ),
                 DataType::Date32,
             ),
@@ -273,17 +273,17 @@ impl PlanResolver<'_> {
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8::new().with_timezone(session_timezone))
+                ScalarUDF::new_from_impl(SparkToUtf8::new().with_timezone(Some(session_timezone)))
                     .call(spark_string_cast_arguments(expr, schema)?)
             }
-            (_, DataType::LargeUtf8, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToLargeUtf8::new().with_timezone(session_timezone))
-                    .call(spark_string_cast_arguments(expr, schema)?)
-            }
-            (_, DataType::Utf8View, _) if override_string_cast => {
-                ScalarUDF::new_from_impl(SparkToUtf8View::new().with_timezone(session_timezone))
-                    .call(spark_string_cast_arguments(expr, schema)?)
-            }
+            (_, DataType::LargeUtf8, _) if override_string_cast => ScalarUDF::new_from_impl(
+                SparkToLargeUtf8::new().with_timezone(Some(session_timezone)),
+            )
+            .call(spark_string_cast_arguments(expr, schema)?),
+            (_, DataType::Utf8View, _) if override_string_cast => ScalarUDF::new_from_impl(
+                SparkToUtf8View::new().with_timezone(Some(session_timezone)),
+            )
+            .call(spark_string_cast_arguments(expr, schema)?),
             (DataType::Date32 | DataType::Date64, to, _)
                 if to.is_numeric() || matches!(to, DataType::Boolean) =>
             {

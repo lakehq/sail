@@ -13,7 +13,8 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 use crate::function::datetime_utils::{
-    cast_to_session_timestamp, coerce_timestamp_ntz_values, is_timestamp_ntz_mix,
+    cast_timestamp_ntz_to_ltz, cast_to_session_timestamp, coerce_timestamp_ntz_values,
+    is_timestamp_ntz_mix,
 };
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -82,10 +83,32 @@ fn nvl2(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let (value, then_value, else_value) = arguments.three()?;
     let schema = function_context.schema;
+    let then_type = then_value.get_type(schema)?;
+    let else_type = else_value.get_type(schema)?;
+    let is_timestamp = |data_type: &DataType| matches!(data_type, DataType::Timestamp(_, Some(_)));
+    let date_timestamp_mix = (is_date_type(&then_type) && is_timestamp(&else_type))
+        || (is_timestamp(&then_type) && is_date_type(&else_type));
     // TODO: Use `if` for all types once it returns the common type of its branches.
-    if !is_timestamp_ntz_mix(&[then_value.get_type(schema)?, else_value.get_type(schema)?]) {
+    if !date_timestamp_mix && !is_timestamp_ntz_mix(&[then_type.clone(), else_type.clone()]) {
         return Ok(expr_fn::nvl2(value, then_value, else_value));
     }
+    // Spark casts a DATE to TIMESTAMP at the start of its day in the session time zone, whatever
+    // zone labels the other value.
+    let timezone = &function_context.plan_config.session_timezone_label();
+    // The cast of midnight converts like Spark in a DST gap or overlap, where Arrow's cast fails.
+    let session_date = |value: expr::Expr, data_type: &DataType| {
+        if is_date_type(data_type) {
+            cast_timestamp_ntz_to_ltz(
+                cast(value, DataType::Timestamp(TimeUnit::Microsecond, None)),
+                timezone,
+                false,
+            )
+        } else {
+            value
+        }
+    };
+    let then_value = session_date(then_value, &then_type);
+    let else_value = session_date(else_value, &else_type);
     if_expr(ScalarFunctionInput {
         arguments: vec![value.is_not_null(), then_value, else_value],
         function_context,
@@ -107,7 +130,21 @@ fn nullif(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     if left.is_volatile() || !is_timestamp_ntz_mix(&[left_type.clone(), right_type.clone()]) {
         return Ok(expr_fn::nullif(left, right));
     }
-    let timezone = &function_context.plan_config.session_timezone;
+    let timezone = &function_context.plan_config.session_timezone_label();
+    // TODO: `date_trunc` returns TIMESTAMP_NTZ for a TIMESTAMP_NTZ value, where Spark returns
+    //  TIMESTAMP. Remove this once it does. A value in other units than microseconds is still
+    //  cast after `date_trunc`, which this misses.
+    let (left, left_type) = match &left {
+        expr::Expr::ScalarFunction(function)
+            if function.name() == "date_trunc"
+                && matches!(left_type, DataType::Timestamp(_, None)) =>
+        {
+            let left = cast_to_session_timestamp(left, &left_type, timezone);
+            let left_type = left.get_type(schema)?;
+            (left, left_type)
+        }
+        _ => (left, left_type),
+    };
     let condition = cast_to_session_timestamp(left.clone(), &left_type, timezone)
         .eq(cast_to_session_timestamp(right, &right_type, timezone));
     Ok(when(condition, lit(ScalarValue::try_from(&left_type)?)).otherwise(left)?)
@@ -165,7 +202,7 @@ fn coerce_string_temporal_values(
         coerce_timestamp_ntz_values(
             arguments,
             function_context.schema,
-            &function_context.plan_config.session_timezone,
+            &function_context.plan_config.session_timezone_label(),
         )?
     };
     Ok(arguments)

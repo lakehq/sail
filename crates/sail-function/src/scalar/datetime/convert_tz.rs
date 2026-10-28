@@ -22,14 +22,14 @@ use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
     HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs,
-    ScalarFunctionArgs, ScalarUDFImpl, ValueOrLambda, Volatility,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, ValueOrLambda, Volatility, lit,
 };
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
-use crate::scalar::datetime::spark_timestamp::parse_zone_offset;
+use crate::scalar::datetime::spark_timestamp::SparkZone;
 
 /// How [`ConvertTz`] converts values, which differs for Spark's casts between TIMESTAMP_NTZ and
 /// TIMESTAMP.
@@ -298,6 +298,34 @@ impl ScalarUDFImpl for ConvertTz {
         Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
     }
 
+    // Like the Arrow cast it replaces, a cast returns NULL for a NULL value, which lets the
+    // optimizer eliminate an outer join under a comparison of the result.
+    fn is_strict(&self) -> bool {
+        self.mode != ConvertTzMode::Function
+    }
+
+    // DataFusion's default bounds have the NULL type, which its ordering analysis fails to compare
+    // with other TIMESTAMP bounds, so a sort by a comparison of the result fails the plan's sanity
+    // check. DataFusion main fixes the default in afe4a63d0.
+    fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        let data_type = match input {
+            // The value has the default bounds of a function without bounds of its own, such as
+            // `date_trunc`. Arrow's cast, which this conversion replaces, has bounds of its type,
+            // and the result of a cast is in microseconds.
+            [_, _, value] if value.data_type().is_null() => {
+                DataType::Timestamp(TimeUnit::Microsecond, self.output_timezone.clone())
+            }
+            _ => {
+                let arg_types = input
+                    .iter()
+                    .map(|interval| interval.data_type())
+                    .collect::<Vec<_>>();
+                self.return_type(&arg_types)?
+            }
+        };
+        Interval::make_unbounded(&data_type)
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if self.mode != ConvertTzMode::Function {
             return self.invoke_cast(&args.args);
@@ -411,6 +439,27 @@ impl ConvertTz {
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
 
+/// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ, which takes the wall-clock time of the value in
+/// `timezone`. Arrow would take the wall-clock time in UTC.
+pub fn cast_timestamp_ltz_to_ntz(expression: Expr, timezone: &str, is_try: bool) -> Expr {
+    let utc = datafusion_expr::cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None));
+    if is_fixed_zero_offset_timezone(timezone) {
+        return utc;
+    }
+    ScalarUDF::from(ConvertTz::cast(is_try)).call(vec![lit("UTC"), lit(timezone), utc])
+}
+
+/// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ `data_type`, which takes the wall-clock time of the
+/// value in the session time zone. Arrow's cast takes the wall-clock time in UTC.
+pub fn session_wall_clock(expr: Expr, data_type: &DataType, timezone: &str) -> Expr {
+    let wall = cast_timestamp_ltz_to_ntz(expr, timezone, false);
+    if *data_type == DataType::Timestamp(TimeUnit::Microsecond, None) {
+        wall
+    } else {
+        datafusion_expr::cast(wall, data_type.clone())
+    }
+}
+
 /// A time zone of a cast, which can be a fixed offset.
 #[derive(Debug, Clone, Copy)]
 enum CastZone {
@@ -420,23 +469,24 @@ enum CastZone {
 }
 
 fn parse_cast_zone(timezone: &str) -> Result<CastZone> {
-    // Spark's offsets can have seconds, which Chrono's parser ignores.
-    if let Some(offset) = parse_zone_offset(timezone) {
-        return Ok(CastZone::Fixed(
-            i64::from(offset.local_minus_utc()) * MICROS_PER_SECOND,
-        ));
-    }
     match timezone.parse::<Tz>() {
         // A zone that is always UTC converts without looking up its offsets.
         Ok(tz) if is_fixed_zero_offset_timezone(tz.name()) => Ok(CastZone::Fixed(0)),
+        // A zone name, such as `MST`, converts like the time zone label with the same name.
         Ok(tz) => Ok(CastZone::Named(tz)),
-        Err(_) => match LEGACY_TIMEZONES
-            .iter()
-            .find(|(legacy, _)| *legacy == timezone)
-            .and_then(|(_, tz)| tz.parse::<Tz>().ok())
-        {
-            Some(tz) => Ok(CastZone::Named(tz)),
-            None => exec_err!("[INVALID_TIMEZONE] The timezone: {timezone:?} is invalid."),
+        // Spark's offsets can have seconds, and spellings such as `Z` or `GMT+8`.
+        Err(_) => match SparkZone::parse(timezone) {
+            Ok(SparkZone::Fixed(offset)) => Ok(CastZone::Fixed(
+                i64::from(offset.local_minus_utc()) * MICROS_PER_SECOND,
+            )),
+            _ => match LEGACY_TIMEZONES
+                .iter()
+                .find(|(legacy, _)| *legacy == timezone)
+                .and_then(|(_, tz)| tz.parse::<Tz>().ok())
+            {
+                Some(tz) => Ok(CastZone::Named(tz)),
+                None => exec_err!("[INVALID_TIMEZONE] The timezone: {timezone:?} is invalid."),
+            },
         },
     }
 }
@@ -1012,6 +1062,32 @@ mod tests {
         assert!(matches!(
             parse_cast_zone("-0800")?,
             CastZone::Fixed(-28_800_000_000)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_cast_zone_spark_spellings() -> Result<()> {
+        for (zone, micros) in [
+            ("Z", 0),
+            ("UT", 0),
+            ("GMT+8", 28_800_000_000),
+            ("UTC+08:00", 28_800_000_000),
+            ("UT-3:30", -12_600_000_000),
+            ("GMT+05:30:45", 19_845_000_000),
+        ] {
+            assert!(
+                matches!(parse_cast_zone(zone)?, CastZone::Fixed(value) if value == micros),
+                "{zone}"
+            );
+        }
+        assert!(matches!(
+            parse_cast_zone("PST")?,
+            CastZone::Named(chrono_tz::America::Los_Angeles)
+        ));
+        assert!(matches!(
+            parse_cast_zone("MST")?,
+            CastZone::Named(chrono_tz::MST)
         ));
         Ok(())
     }

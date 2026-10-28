@@ -186,6 +186,7 @@ impl PlanResolver<'_> {
             target: target_metadata,
             with_schema_evolution,
             case_sensitive: self.config.case_sensitive,
+            session_timezone_label: self.config.session_timezone_label(),
             resolved_target_schema: target_schema.clone(),
             resolved_source_schema: source_schema.clone(),
             resolved_target_field_names,
@@ -856,6 +857,7 @@ impl PlanResolver<'_> {
             target_field.data_type(),
             self.config.case_sensitive,
             StructFieldAlignment::Exact,
+            &self.config.session_timezone_label(),
         )?;
         Ok(())
     }

@@ -5,6 +5,7 @@ use datafusion_common::DFSchema;
 use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+pub(crate) use sail_function::scalar::datetime::convert_tz::cast_timestamp_ltz_to_ntz;
 
 use crate::error::PlanResult;
 use crate::function::common::ScalarFunctionInput;
@@ -35,20 +36,6 @@ pub(crate) fn cast_timestamp_ntz_to_ltz(
             cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None)),
         ],
     )
-}
-
-/// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ, which takes the wall-clock time of the value in
-/// `timezone`. Arrow would take the wall-clock time in UTC.
-pub(crate) fn cast_timestamp_ltz_to_ntz(
-    expression: expr::Expr,
-    timezone: &Arc<str>,
-    is_try: bool,
-) -> expr::Expr {
-    let utc = cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None));
-    if is_fixed_zero_offset_timezone(timezone) {
-        return utc;
-    }
-    ScalarUDF::from(ConvertTz::cast(is_try)).call(vec![lit("UTC"), lit(timezone.to_string()), utc])
 }
 
 /// Spark's common type for TIMESTAMP_NTZ and TIMESTAMP values is TIMESTAMP, which Sail labels with
@@ -138,7 +125,7 @@ where
         Ok(f(coerce_timestamp_ntz_values(
             arguments,
             function_context.schema,
-            &function_context.plan_config.session_timezone,
+            &function_context.plan_config.session_timezone_label(),
         )?))
     }
 }
