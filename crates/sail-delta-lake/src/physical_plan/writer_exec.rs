@@ -798,7 +798,7 @@ impl DeltaWriterExec {
                 variant_shredding,
             );
 
-            let writer_path = object_store::path::Path::from(table_url.path());
+            let writer_path = object_store::path::Path::from_url_path(table_url.path())?;
             let writer_path = if options.change_data {
                 writer_path.join("_change_data")
             } else {

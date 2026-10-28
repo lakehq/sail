@@ -32,6 +32,8 @@ pub enum MapKeyDedupPolicy {
 pub struct PlanConfig {
     /// The time zone of the session.
     pub session_timezone: Arc<str>,
+    /// Format-specific runtime settings forwarded to lakehouse procedure planning.
+    pub lakehouse_options: Vec<(String, String)>,
     /// The locale of the session.
     pub session_locale: Arc<str>,
     /// The default timestamp type.
@@ -102,6 +104,7 @@ impl Default for PlanConfig {
     fn default() -> Self {
         Self {
             session_timezone: Arc::from("UTC"),
+            lakehouse_options: vec![],
             session_locale: Arc::from("en-US"),
             default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,

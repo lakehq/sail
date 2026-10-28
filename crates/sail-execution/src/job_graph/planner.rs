@@ -50,7 +50,7 @@ impl JobGraph {
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
         let plan = materialize_shared_file_scan_builds(plan)?;
-        let plan = ensure_worker_input_for_iceberg_procedure(plan)?;
+        let plan = ensure_worker_input_for_lake_procedure(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -70,7 +70,7 @@ impl JobGraph {
     }
 }
 
-fn ensure_worker_input_for_iceberg_procedure(
+fn ensure_worker_input_for_lake_procedure(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     fn has_exchange(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -82,10 +82,16 @@ fn ensure_worker_input_for_iceberg_procedure(
 
     Ok(plan
         .transform_up(|plan| {
-            let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() else {
-                return Ok(Transformed::no(plan));
+            let input = if let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() {
+                procedure.input()
+            } else if let Some(procedure) =
+                plan.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
+            {
+                procedure.input()
+            } else {
+                None
             };
-            let Some(input) = procedure.input() else {
+            let Some(input) = input else {
                 return Ok(Transformed::no(plan));
             };
             if has_exchange(input) {

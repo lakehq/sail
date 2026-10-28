@@ -1103,6 +1103,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 lakehouse_table_json,
                 catalog_managed_commits_json,
                 input_file_projection,
+                preserve_file_groups,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1163,23 +1164,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         "Delta catalog-managed commit set",
                     )?)
                 };
-                Ok(Arc::new(
-                    DeltaScanByAddsExec::new(
-                        input,
-                        table_url,
-                        version,
-                        table_schema,
-                        output_schema,
-                        scan_config,
-                        projection,
-                        limit,
-                        pushdown_filter,
-                        lakehouse_table,
-                        catalog_managed_commits,
-                    )
-                    .with_input_file_projection(input_file_projection)?
-                    .with_output_statistics(statistics),
-                ))
+                let scan = DeltaScanByAddsExec::new(
+                    input,
+                    table_url,
+                    version,
+                    table_schema,
+                    output_schema,
+                    scan_config,
+                    projection,
+                    limit,
+                    pushdown_filter,
+                    lakehouse_table,
+                    catalog_managed_commits,
+                )
+                .with_input_file_projection(input_file_projection)?
+                .with_output_statistics(statistics);
+                Ok(Arc::new(if preserve_file_groups {
+                    scan.preserve_file_groups()
+                } else {
+                    scan
+                }))
             }
             NodeKind::DeltaDiscovery(r#gen::DeltaDiscoveryExecNode {
                 table_url,
@@ -1750,6 +1754,35 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergFileTasks(r#gen::IcebergFileTasksExecNode { groups }) => Ok(Arc::new(
                 IcebergFileTasksExec::try_from_serialized(&groups)?,
             )),
+            NodeKind::DeltaOptimizeRewrite(r#gen::DeltaOptimizeRewriteExecNode {
+                input,
+                assignments,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let assignments = assignments
+                    .into_iter()
+                    .map(|assignment| {
+                        assignment
+                            .groups
+                            .into_iter()
+                            .map(|group| {
+                                usize::try_from(group).map_err(|error| {
+                                    plan_datafusion_err!(
+                                        "Invalid Delta OPTIMIZE rewrite group: {error}"
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(
+                    sail_delta_lake::physical_plan::DeltaOptimizeRewriteExec::try_new(
+                        input,
+                        assignments,
+                    )?,
+                ))
+            }
             NodeKind::IcebergRewrite(r#gen::IcebergRewriteExecNode { input, assignments }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1997,6 +2030,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sail_iceberg::physical_plan::validate_iceberg_procedure_call_identity(
                     &input, &call,
                 )?;
+                let mut pending = vec![&input];
+                while let Some(node) = pending.pop() {
+                    if let Some(exec) =
+                        node.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
+                        && exec.call() != &call
+                    {
+                        return plan_err!(
+                            "Delta maintenance call does not match its procedure boundary"
+                        );
+                    }
+                    pending.extend(node.children());
+                }
                 let procedure = LakeProcedureExec::try_new(call, input, root_placement)?;
                 if procedure.schema_ref().as_ref() != schema.as_ref() {
                     return plan_err!(
@@ -2004,6 +2049,58 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     );
                 }
                 Ok(Arc::new(procedure))
+            }
+            NodeKind::DeltaMaintenance(r#gen::DeltaMaintenanceExecNode {
+                call,
+                options,
+                predicate,
+                predicate_schema,
+                input,
+                optimize_plan,
+            }) => {
+                let call = serde_json::from_str(&call).map_err(|e| {
+                    plan_datafusion_err!("failed to decode Delta maintenance call: {e}")
+                })?;
+                let predicate = match (predicate, predicate_schema) {
+                    (None, None) => None,
+                    (Some(predicate), Some(schema)) => {
+                        let schema = Arc::new(try_decode_schema(&schema)?);
+                        let expr = try_decode_physical_expr_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &predicate,
+                            &schema,
+                        )?;
+                        Some(sail_delta_lake::physical_plan::DeltaMaintenancePredicate {
+                            schema,
+                            expr,
+                        })
+                    }
+                    _ => return plan_err!("Delta maintenance predicate is missing its schema"),
+                };
+                let mut exec = sail_delta_lake::physical_plan::DeltaMaintenanceExec::try_new(
+                    call,
+                    options.into_iter().collect(),
+                    predicate,
+                )?;
+                match (input.is_empty(), optimize_plan.is_empty()) {
+                    (true, true) => {}
+                    (false, false) => {
+                        let input = try_decode_physical_plan_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &input,
+                        )?;
+                        let plan = serde_json::from_str(&optimize_plan).map_err(|e| {
+                            plan_datafusion_err!("failed to decode Delta OPTIMIZE plan: {e}")
+                        })?;
+                        exec = exec.with_optimize(input, plan)?;
+                    }
+                    _ => return plan_err!("Delta OPTIMIZE input and plan must appear together"),
+                }
+                Ok(Arc::new(exec))
             }
             NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode {
                 call,
@@ -2621,6 +2718,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 limit,
                 pushdown_filter,
                 version: delta_scan_by_adds_exec.version(),
+                preserve_file_groups: delta_scan_by_adds_exec.preserves_file_groups(),
                 statistics,
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(delta_scan_by_adds_exec.lakehouse_table())?,
@@ -3060,6 +3158,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergFileTasks(r#gen::IcebergFileTasksExecNode {
                 groups: tasks.serialized_groups()?,
             })
+        } else if let Some(rewrite) =
+            node.downcast_ref::<sail_delta_lake::physical_plan::DeltaOptimizeRewriteExec>()
+        {
+            NodeKind::DeltaOptimizeRewrite(r#gen::DeltaOptimizeRewriteExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    rewrite.input().clone(),
+                )?,
+                assignments: rewrite
+                    .assignments()
+                    .iter()
+                    .map(|groups| r#gen::DeltaOptimizeGroupAssignment {
+                        groups: groups.iter().map(|group| *group as u64).collect(),
+                    })
+                    .collect(),
+            })
         } else if let Some(rewrite) = node.downcast_ref::<IcebergRewriteExec>() {
             NodeKind::IcebergRewrite(r#gen::IcebergRewriteExecNode {
                 input: try_encode_physical_plan_with_converter(
@@ -3250,6 +3365,50 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 call,
                 input,
                 root_placement,
+            })
+        } else if let Some(exec) =
+            node.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
+        {
+            NodeKind::DeltaMaintenance(r#gen::DeltaMaintenanceExecNode {
+                input: exec
+                    .input()
+                    .map(|input| {
+                        try_encode_physical_plan_with_converter(
+                            self,
+                            proto_converter,
+                            input.clone(),
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or_default(),
+                optimize_plan: exec
+                    .optimize_plan()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("failed to encode Delta OPTIMIZE plan: {e}"))?
+                    .unwrap_or_default(),
+                call: serde_json::to_string(exec.call()).map_err(|e| {
+                    plan_datafusion_err!("failed to encode Delta maintenance call: {e}")
+                })?,
+                options: exec
+                    .options()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                predicate: exec
+                    .predicate()
+                    .map(|predicate| {
+                        try_encode_physical_expr_with_converter(
+                            self,
+                            proto_converter,
+                            &predicate.expr,
+                        )
+                    })
+                    .transpose()?,
+                predicate_schema: exec
+                    .predicate()
+                    .map(|predicate| try_encode_schema(&predicate.schema))
+                    .transpose()?,
             })
         } else if let Some(procedure_exec) = node.downcast_ref::<IcebergProcedureExec>() {
             procedure_exec.validate()?;
@@ -6288,6 +6447,105 @@ mod tests {
             Ok(_) => return plan_err!("mismatched procedure calls should not encode"),
         };
         assert!(error.contains("implementation call does not match its engine boundary"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_delta_optimize_preserves_groups_and_snapshot() -> Result<()> {
+        use sail_common_datafusion::lakeprocedure::{
+            LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
+            LakeProcedureInvocationId, LakeProcedureTarget,
+        };
+        use sail_delta_lake::physical_plan::{
+            DeltaMaintenanceExec, DeltaOptimizePlan, DeltaOptimizeRewriteExec, delta_action_schema,
+        };
+
+        let schema = delta_action_schema()?;
+        let files = DataSourceExec::from_data_source(MemorySourceConfig::try_new(
+            &[vec![], vec![], vec![], vec![]],
+            schema.clone(),
+            None,
+        )?);
+        let scan = Arc::new(
+            DeltaScanByAddsExec::new(
+                files,
+                Url::parse("file:///tmp/optimize").map_err(|e| plan_datafusion_err!("{e}"))?,
+                42,
+                schema.clone(),
+                schema,
+                Default::default(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .preserve_file_groups(),
+        );
+        let assignments = vec![vec![0, 2], vec![1, 3]];
+        let rewrite = Arc::new(DeltaOptimizeRewriteExec::try_new(
+            scan,
+            assignments.clone(),
+        )?);
+        let call = LakeProcedureCall {
+            invocation_id: LakeProcedureInvocationId("optimize-1".to_string()),
+            catalog: "sail".to_string(),
+            namespace: vec!["delta".to_string()],
+            lake_source: "delta".to_string(),
+            target: None,
+            invocation: LakeProcedureInvocation {
+                procedure: LakeProcedure {
+                    name: "optimize".to_string(),
+                    parameters: vec![],
+                    output: vec![],
+                    access: LakeProcedureAccess::MetadataCommit,
+                    target: LakeProcedureTarget::Catalog,
+                },
+                arguments: vec![],
+            },
+        };
+        let plan = DeltaOptimizePlan {
+            table_url: "file:///tmp/optimize".to_string(),
+            table_id: "table-1".to_string(),
+            version: 42,
+            removed: vec![],
+            considered: 0,
+            optimized_partitions: 0,
+            num_bins: 4,
+            parallelism: 2,
+        };
+        let maintenance = DeltaMaintenanceExec::try_new(call.clone(), Default::default(), None)?
+            .with_optimize(rewrite, plan)?;
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(maintenance))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let maintenance = decoded
+            .downcast_ref::<DeltaMaintenanceExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected maintenance"))?;
+        assert_eq!(maintenance.call(), &call);
+        let plan = maintenance
+            .optimize_plan()
+            .ok_or_else(|| plan_datafusion_err!("missing optimize plan"))?;
+        assert_eq!(plan.version, 42);
+        assert_eq!(plan.table_id, "table-1");
+        assert_eq!(plan.parallelism, 2);
+        let rewrite = maintenance
+            .input()
+            .and_then(|input| input.downcast_ref::<DeltaOptimizeRewriteExec>())
+            .ok_or_else(|| plan_datafusion_err!("expected rewrite"))?;
+        assert_eq!(rewrite.assignments(), assignments);
+        assert_eq!(
+            rewrite.properties().output_partitioning().partition_count(),
+            2
+        );
+        let scan = rewrite
+            .input()
+            .downcast_ref::<DeltaScanByAddsExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected scan"))?;
+        assert!(scan.preserves_file_groups());
+        assert_eq!(scan.version(), 42);
+        assert_eq!(scan.properties().output_partitioning().partition_count(), 4);
+        assert_eq!(scan.benefits_from_input_partitioning(), vec![false]);
         Ok(())
     }
 
