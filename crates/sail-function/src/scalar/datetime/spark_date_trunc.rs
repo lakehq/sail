@@ -10,6 +10,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion_functions::datetime::date_trunc::DateTruncFunc;
+use sail_common::utils::datetime::{MICROS_PER_DAY, MICROS_PER_HOUR};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDateTrunc {
@@ -154,8 +155,6 @@ impl CoarseUnit {
 
     /// Truncates `micros` in `tz`, whose offset is constant around it.
     fn truncate(self, micros: i64, tz: &Tz) -> Option<i64> {
-        const MICROS_PER_HOUR: i64 = 3_600_000_000;
-        const MICROS_PER_DAY: i64 = 24 * MICROS_PER_HOUR;
         let utc = chrono::DateTime::from_timestamp_micros(micros)?.naive_utc();
         let offset =
             i64::from(tz.offset_from_utc_datetime(&utc).fix().local_minus_utc()) * 1_000_000;

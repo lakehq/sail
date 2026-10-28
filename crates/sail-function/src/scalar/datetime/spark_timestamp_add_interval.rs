@@ -13,10 +13,9 @@ use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common::utils::datetime::MICROS_PER_DAY;
 
 use crate::scalar::datetime::convert_tz::{CastZone, parse_cast_zone};
-
-const MICROS_PER_DAY: i64 = 86_400_000_000;
 
 /// Spark's addition of an interval to a TIMESTAMP, which adds the months and then the days of the
 /// interval to the wall-clock time in the session time zone, and then adds the rest of the

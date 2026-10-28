@@ -26,7 +26,7 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
-use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
+use sail_common::utils::datetime::{MICROS_PER_SECOND, is_fixed_zero_offset_timezone};
 use sail_common_datafusion::utils::datetime::SparkZone;
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
@@ -436,8 +436,6 @@ impl ConvertTz {
         }
     }
 }
-
-const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// A time zone of a cast, which can be a fixed offset.
 #[derive(Debug, Clone, Copy)]
