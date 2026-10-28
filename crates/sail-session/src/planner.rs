@@ -46,6 +46,7 @@ use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::partition_filter::PartitionFilterNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::remote_checkpoint::{
     RemoteCheckpointCommandNode, RemoteCheckpointRelationNode,
@@ -65,6 +66,7 @@ use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::partition_filter::PartitionFilterExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
@@ -402,6 +404,11 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.column_name().to_string(),
                 UserDefinedLogicalNode::schema(node).inner().clone(),
             )?)
+        } else if node.as_any().is::<PartitionFilterNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("PartitionFilterExec requires exactly one physical input");
+            };
+            PartitionFilterExec::rewrite(input.clone())?
         } else if let Some(node) = node.as_any().downcast_ref::<SparkPartitionIdNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("SparkPartitionIdExec requires exactly one physical input");

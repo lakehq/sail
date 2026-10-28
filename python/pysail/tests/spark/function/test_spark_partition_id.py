@@ -113,6 +113,34 @@ def test_spark_partition_id_grouping_reuses_value_in_having(spark):
     assert sorted(tuple(row) for row in result.collect()) == [(2, 10), (3, 10)]
 
 
+@pytest.mark.parametrize("project_aggregate", [False, True])
+@pytest.mark.parametrize(
+    ("function", "grouping", "threshold", "expected"),
+    [
+        ("spark_partition_id", "spark_partition_id() + 10", 2, [(12, 10), (13, 10)]),
+        ("monotonically_increasing_id", "monotonically_increasing_id() % 2", (3 << 33) + 9, [(1, 20)]),
+    ],
+)
+def test_partition_grouping_reused_inside_having_aggregate(
+    spark, function, grouping, threshold, expected, project_aggregate
+):
+    projection = f", max({function}()) AS m" if project_aggregate else ""
+    result = spark.sql(
+        f"SELECT {grouping} AS k, count(*) AS n {projection} "  # noqa: S608
+        f"FROM range(0, 40, 1, 4) GROUP BY {grouping} HAVING max({function}()) >= {threshold}"
+    )
+    assert sorted((row.k, row.n) for row in result.collect()) == expected
+
+
+@pytest.mark.parametrize("function", ["spark_partition_id", "monotonically_increasing_id"])
+def test_partition_function_rejected_inside_having_aggregate_without_grouping(spark, function):
+    with pytest.raises(Exception, match=r"(?i)non.?deterministic"):
+        spark.sql(
+            f"SELECT id % 2, count(*) FROM range(0, 40, 1, 4) "  # noqa: S608
+            f"GROUP BY id % 2 HAVING max({function}()) > 0"
+        ).collect()
+
+
 @pytest.mark.parametrize("function", ["spark_partition_id", "monotonically_increasing_id"])
 def test_partition_function_in_having(spark, function):
     result = spark.sql(f"SELECT count(*) FROM range(40) HAVING {function}() = 0")  # noqa: S608

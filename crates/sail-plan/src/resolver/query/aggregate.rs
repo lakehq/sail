@@ -44,6 +44,13 @@ type ResolvedProjections = (Vec<Option<NamedExpr>>, Vec<usize>);
 /// A map from a grouping expression to the column that materializes it.
 type GroupingReplacements = Vec<(Expr, Expr)>;
 
+struct PreparedAggregateInput {
+    input: LogicalPlan,
+    projections: Vec<NamedExpr>,
+    grouping: Vec<NamedExpr>,
+    replacements: GroupingReplacements,
+}
+
 /// Returns the name of a volatile (non-deterministic) scalar expression found
 /// in an aggregate context. Catches two Spark CheckAnalysis violations:
 /// 1. Volatile scalar UDF used directly in aggregate projections (outside any aggregate fn)
@@ -115,8 +122,12 @@ impl PlanResolver<'_> {
             )
             .await?;
 
-        let (input, projections, grouping) =
-            self.prepare_aggregate_input(input, projections, grouping, state)?;
+        let PreparedAggregateInput {
+            input,
+            projections,
+            grouping,
+            replacements,
+        } = self.prepare_aggregate_input(input, projections, grouping, state)?;
         let schema = input.schema();
 
         // Spark CheckAnalysis: GroupedAgg Pandas/Arrow UDFs cannot be mixed with regular
@@ -137,6 +148,9 @@ impl PlanResolver<'_> {
                 None => None,
             }
         };
+        let having = having
+            .map(|expr| Self::replace_having_aggregate_inputs(expr, &replacements))
+            .transpose()?;
 
         let (input, replacements) =
             Self::materialize_grouping_input_file_metadata(input, &grouping, state)?;
@@ -217,8 +231,15 @@ impl PlanResolver<'_> {
         with_grouping_expressions: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let (input, projections, grouping) =
-            self.prepare_aggregate_input(input, projections, grouping, state)?;
+        let PreparedAggregateInput {
+            input,
+            projections,
+            grouping,
+            replacements,
+        } = self.prepare_aggregate_input(input, projections, grouping, state)?;
+        let having = having
+            .map(|expr| Self::replace_having_aggregate_inputs(expr, &replacements))
+            .transpose()?;
         self.rewrite_prepared_aggregate(
             input,
             projections,
@@ -235,7 +256,7 @@ impl PlanResolver<'_> {
         projections: Vec<NamedExpr>,
         grouping: Vec<NamedExpr>,
         state: &mut PlanResolverState,
-    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, Vec<NamedExpr>)> {
+    ) -> PlanResult<PreparedAggregateInput> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
         // Spark materializes non-deterministic grouping keys before CheckAnalysis,
         // and reuses those values wherever the grouping expressions occur.
@@ -272,7 +293,31 @@ impl PlanResolver<'_> {
             .into_iter()
             .map(replace)
             .collect::<PlanResult<Vec<_>>>()?;
-        Ok((input, projections, grouping))
+        Ok(PreparedAggregateInput {
+            input,
+            projections,
+            grouping,
+            replacements,
+        })
+    }
+
+    fn replace_having_aggregate_inputs(
+        having: Expr,
+        replacements: &GroupingReplacements,
+    ) -> PlanResult<Expr> {
+        // Calls inside aggregates read the materialized grouping input. Calls
+        // outside aggregates still evaluate against the aggregate's output.
+        Ok(having
+            .transform_down(|expr| {
+                if matches!(expr, Expr::AggregateFunction(_)) {
+                    let expr = Self::replace_grouping_expressions(expr, replacements)
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                    Ok(Transformed::yes(expr))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })
+            .data()?)
     }
 
     fn rewrite_prepared_aggregate(
@@ -325,6 +370,13 @@ impl PlanResolver<'_> {
             aggregate_candidates.push(having.clone());
         }
         let aggregate_exprs = find_aggregate_exprs(&aggregate_candidates);
+        for expr in &aggregate_exprs {
+            if let Some(name) = find_volatile_in_aggregate_context(expr) {
+                return Err(PlanError::AnalysisError(format!(
+                    "Non-deterministic expression {name} should not appear in an aggregate query",
+                )));
+            }
+        }
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
@@ -378,11 +430,8 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         let plan = match having {
             Some(having) => {
-                let (plan, having) =
-                    self.rewrite_partition_expressions(plan, vec![having], state)?;
-                let having =
-                    Self::rebase_expression(having.one()?, &aggregate_or_grouping_exprs, &plan)?;
-                LogicalPlanBuilder::from(plan).having(having)?.build()?
+                let having = Self::rebase_expression(having, &aggregate_or_grouping_exprs, &plan)?;
+                self.rewrite_filter(plan, having, true, state)?
             }
             None => plan,
         };

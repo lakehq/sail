@@ -4,12 +4,14 @@ use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
+mod partition_filter;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
 mod scalar_subquery_keys;
 
 use lateral_join::DecorrelateLateralProjection;
+use partition_filter::PartitionAwareFilterPushDown;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
 use scalar_iterator_udf::ExtractScalarIteratorUDF;
@@ -44,7 +46,11 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
         if rule.name() == ScalarSubqueryToJoin::new().name() {
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
         }
-        custom.push(rule);
+        if rule.name() == "push_down_filter" {
+            custom.push(Arc::new(PartitionAwareFilterPushDown));
+        } else {
+            custom.push(rule);
+        }
     }
     custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
