@@ -10,7 +10,6 @@ use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
 use sail_common_datafusion::session::plan::PlanService;
-use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
 use sail_session::session_factory::{
@@ -71,7 +70,7 @@ impl ServerSessionMutator for SparkSessionMutator {
             .session_timezone
             .to_string();
         let mut config = config;
-        SessionTimeZoneOptions::set_session_time_zone(config.options_mut(), &session_timezone);
+        config.options_mut().execution.time_zone = Some(session_timezone);
         Ok(config
             .with_extension(Arc::new(plan_service))
             .with_extension(Arc::new(spark)))

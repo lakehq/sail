@@ -17,7 +17,6 @@ use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF, Volatility, cast, lit,
 };
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
-use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, has_timestamp_ntz};
 
@@ -37,7 +36,7 @@ pub(crate) fn convert_session_timestamp_casts(
     plan: LogicalPlan,
     config: &ConfigOptions,
 ) -> Result<LogicalPlan> {
-    let Some(timezone) = SessionTimeZoneOptions::session_time_zone(config) else {
+    let Some(timezone) = config.execution.time_zone.as_deref() else {
         return Ok(plan);
     };
     let timezone = &arrow_timezone_label(timezone);

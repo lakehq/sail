@@ -70,7 +70,6 @@ use datafusion_expr::{
     is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 use itertools::{Itertools as _, izip};
-use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
     BinaryTypeCoercer, comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
     type_union_coercion,
@@ -146,8 +145,11 @@ impl AnalyzerRule for TypeCoercion {
 /// Coerce each node of `plan` and of its subqueries, from the leaves up.
 fn coerce_plan_and_subqueries(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
     static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
-    let session_time_zone =
-        SessionTimeZoneOptions::session_time_zone(config).map(arrow_timezone_label);
+    let session_time_zone = config
+        .execution
+        .time_zone
+        .as_deref()
+        .map(arrow_timezone_label);
     let session_time_zone = session_time_zone.as_deref();
 
     // TODO: Uncomment after DataFusion 56, and traverse with `transform_down_up_with_subqueries`
@@ -1656,10 +1658,10 @@ fn coerce_case_expression(
 /// - **Datatypes**: Determined by `type_union_coercion()` rules, not input order
 /// - **Nullability**: Later inputs can add nullability but cannot remove it (logical OR)
 /// - **Metadata**: Later inputs take precedence for same keys (HashMap::extend semantics)
-#[expect(dead_code, reason = "DataFusion's logical plan builder uses it")]
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
     coerce_union_schema_with_schema(&inputs[1..], inputs[0].schema())
 }
+
 fn coerce_union_schema_with_schema(
     inputs: &[Arc<LogicalPlan>],
     base_schema: &DFSchemaRef,
@@ -1978,7 +1980,6 @@ mod test {
         create_udaf, grouping_set, is_true, lit, placeholder,
     };
     use insta::assert_snapshot;
-    use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 
     use crate::type_coercion::{TypeCoercion, TypeCoercionRewriter, coerce_case_expression};
 
@@ -3669,7 +3670,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        SessionTimeZoneOptions::set_session_time_zone(&mut options, "+08:00");
+        options.execution.time_zone = Some("+08:00".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3799,7 +3800,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
+        options.execution.time_zone = Some("America/Los_Angeles".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3823,33 +3824,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("a").eq(constant), input)?);
 
         let mut options = ConfigOptions::default();
-        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
-        let rule = Arc::new(TypeCoercion::new());
-        assert_analyzed_plan_with_config_eq_snapshot!(
-            options,
-            rule,
-            plan,
-            @r#"
-        Filter: a = TimestampMicrosecond(1592082000000000, None)
-          EmptyRelation: rows=0
-        "#,
-        )
-    }
-
-    #[test]
-    fn timestamp_comparison_uses_spark_session_time_zone() -> Result<()> {
-        let input = empty_with_type(DataType::Timestamp(TimeUnit::Microsecond, None));
-        // 2020-06-13 21:00:00 in America/Los_Angeles
-        let constant = lit(ScalarValue::TimestampMicrosecond(
-            Some(1_592_107_200_000_000),
-            Some("America/Los_Angeles".into()),
-        ));
-        let plan = LogicalPlan::Filter(Filter::try_new(col("a").eq(constant), input)?);
-
-        let mut options = ConfigOptions::default();
-        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
-        // `SET timezone` changes the DataFusion time zone, not the Spark session time zone.
-        options.execution.time_zone = Some("Asia/Tokyo".into());
+        options.execution.time_zone = Some("America/Los_Angeles".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3873,7 +3848,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("a").lt_eq(constant), input)?);
 
         let mut options = ConfigOptions::default();
-        SessionTimeZoneOptions::set_session_time_zone(&mut options, "+05:30");
+        options.execution.time_zone = Some("+05:30".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3915,7 +3890,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(col("ntz").eq(col("ltz")), input)?);
 
         let mut options = ConfigOptions::default();
-        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
+        options.execution.time_zone = Some("America/Los_Angeles".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3942,7 +3917,7 @@ mod test {
         )?);
 
         let mut options = ConfigOptions::default();
-        SessionTimeZoneOptions::set_session_time_zone(&mut options, "America/Los_Angeles");
+        options.execution.time_zone = Some("America/Los_Angeles".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,
@@ -3975,7 +3950,7 @@ mod test {
         let plan = LogicalPlan::Filter(Filter::try_new(set_comparison, outer)?);
 
         let mut options = ConfigOptions::default();
-        SessionTimeZoneOptions::set_session_time_zone(&mut options, "+08:00");
+        options.execution.time_zone = Some("+08:00".into());
         let rule = Arc::new(TypeCoercion::new());
         assert_analyzed_plan_with_config_eq_snapshot!(
             options,

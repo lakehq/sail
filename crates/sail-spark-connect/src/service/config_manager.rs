@@ -8,8 +8,8 @@ use log::warn;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 use sail_plan::resolver::PlanResolver;
+use sail_sql_analyzer::parser::parse_native_config_value;
 
 use crate::config::ConfigKeyValue;
 use crate::error::{SparkError, SparkResult};
@@ -17,6 +17,8 @@ use crate::service::time_zone::is_valid_time_zone;
 use crate::session::SparkSession;
 use crate::spark::config::SparkConfigKey;
 use crate::spark::connect::{ConfigResponse, KeyValue};
+
+const DATAFUSION_TIME_ZONE_KEY: &str = "datafusion.execution.time_zone";
 
 pub(crate) async fn handle_sql_config(
     ctx: &SessionContext,
@@ -27,7 +29,7 @@ pub(crate) async fn handle_sql_config(
     };
     match &command.node {
         spec::CommandNode::SetVariable { variable, .. }
-            if native_config_key(variable).is_some() =>
+            if native_config_key(variable).is_some_and(|key| key != DATAFUSION_TIME_ZONE_KEY) =>
         {
             let spark = ctx.extension::<SparkSession>()?;
             execute_native_config(ctx, command.node.clone()).await?;
@@ -37,8 +39,14 @@ pub(crate) async fn handle_sql_config(
             Ok(Some(RecordBatch::new_empty(Arc::new(Schema::empty()))))
         }
         spec::CommandNode::SetVariable { variable, value } => {
-            if variable == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE && !is_valid_time_zone(value)
-            {
+            let (key, value) = if native_config_key(variable) == Some(DATAFUSION_TIME_ZONE_KEY) {
+                // A DataFusion setting decodes a quoted SQL literal.
+                let value = parse_native_config_value(value).unwrap_or_else(|_| value.clone());
+                (SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE, value)
+            } else {
+                (variable.as_str(), value.clone())
+            };
+            if key == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE && !is_valid_time_zone(&value) {
                 warn!(
                     "invalid time zone {:?} for {variable}: the statement is rejected and the \
                     session keeps its time zone, as Spark does",
@@ -52,7 +60,7 @@ pub(crate) async fn handle_sql_config(
             handle_config_set(
                 ctx,
                 vec![KeyValue {
-                    key: variable.clone(),
+                    key: key.to_string(),
                     value: Some(value.clone()),
                 }],
             )?;
@@ -70,6 +78,12 @@ pub(crate) async fn handle_sql_config(
         }
         spec::CommandNode::ResetVariable { variable } => {
             let spark = ctx.extension::<SparkSession>()?;
+            let variable = match variable.as_deref().and_then(native_config_key) {
+                Some(DATAFUSION_TIME_ZONE_KEY) => {
+                    Some(SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string())
+                }
+                _ => variable.clone(),
+            };
             if let Some(key) = variable.as_deref().and_then(native_config_key) {
                 reset_native_config(ctx, &spark, key).await?;
                 return Ok(Some(RecordBatch::new_empty(Arc::new(Schema::empty()))));
@@ -80,7 +94,7 @@ pub(crate) async fn handle_sql_config(
                     reset_native_config(ctx, &spark, &key).await?;
                 }
             }
-            let keys = match variable {
+            let keys = match &variable {
                 Some(key) => vec![key.clone()],
                 None => spark
                     .get_all_config(None)?
@@ -110,7 +124,7 @@ pub(crate) async fn handle_sql_config(
 
 fn native_config_key(variable: &str) -> Option<&str> {
     if variable.eq_ignore_ascii_case("timezone") || variable.eq_ignore_ascii_case("time.zone") {
-        Some("datafusion.execution.time_zone")
+        Some(DATAFUSION_TIME_ZONE_KEY)
     } else if variable.starts_with("datafusion.") {
         Some(variable)
     } else {
@@ -177,12 +191,15 @@ pub(crate) fn handle_config_set(
         // Mirror `spark.sql.session.timeZone` onto the DataFusion session configuration. Parquet
         // listing-table schema inference reads `execution.time_zone` to reconcile mixed-timezone
         // timestamps and to render adjusted timestamps in the session zone; Sail otherwise keeps
-        // the session timezone only in `PlanConfig`, leaving `execution.time_zone` unset.
+        // the session timezone only in `PlanConfig`, leaving `execution.time_zone` unset. The
+        // optimizer rules read it as the session time zone.
         let session_timezone = spark.plan_config()?.session_timezone.to_string();
-        SessionTimeZoneOptions::set_session_time_zone(
-            ctx.state_ref().write().config_mut().options_mut(),
-            &session_timezone,
-        );
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .time_zone = Some(session_timezone);
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
@@ -257,10 +274,12 @@ pub(crate) fn handle_config_unset(
         // `execution.time_zone` to the now-effective session zone instead of leaving the last
         // explicitly-set value behind. Mirrors the sync in `handle_config_set`.
         let session_timezone = spark.plan_config()?.session_timezone.to_string();
-        SessionTimeZoneOptions::set_session_time_zone(
-            ctx.state_ref().write().config_mut().options_mut(),
-            &session_timezone,
-        );
+        ctx.state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .time_zone = Some(session_timezone);
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
