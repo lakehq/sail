@@ -110,9 +110,19 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
-        // Spark fails on the argument count before it looks at any argument.
-        if is_higher_order {
-            check_higher_order_arity(&canonical_function_name, arguments.len())?;
+        if is_higher_order
+            && let Err(arity_error) =
+                check_higher_order_arity(&canonical_function_name, arguments.len())
+        {
+            // Spark waits for the arguments to resolve, so an unresolved column wins over the count.
+            let value_arguments = arguments
+                .iter()
+                .filter(|argument| !is_spec_lambda_argument(argument))
+                .cloned()
+                .collect();
+            self.resolve_expressions_and_names(value_arguments, schema, state)
+                .await?;
+            return Err(arity_error);
         }
 
         // Also taken when no argument is a lambda syntactically: Spark accepts a
@@ -138,7 +148,20 @@ impl PlanResolver<'_> {
                 .await?
         };
 
-        if is_higher_order {
+        // Spark validates subqueries and Python UDFs only once the array or map argument type-checks.
+        if is_higher_order
+            && match arguments.first() {
+                Some(first) => matches!(
+                    first.get_type(schema)?,
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(..)
+                        | DataType::Map(..)
+                        | DataType::Null
+                ),
+                None => true,
+            }
+        {
             self.reject_disallowed_higher_order_arguments(&canonical_function_name, &arguments)?;
         }
 

@@ -300,6 +300,43 @@ Feature: aggregate higher-order function
         | result |
         | NULL   |
 
+  Rule: A NULL-typed zero keeps the merge body
+
+    # Spark erases a NULL-typed merge body only when the zero's type rejects NULL
+    # (`TypeCoercionHelper`); a NULL zero accepts it, so the body still runs.
+    Scenario: a side-effecting merge over a NULL zero is evaluated
+      When query
+        """
+        SELECT aggregate(array(1), NULL, (acc, x) -> assert_true(false)) AS result
+        """
+      Then query error is not true
+
+    Scenario: a side-effecting merge over a NULL zero is evaluated for every row
+      When query
+        """
+        SELECT aggregate(c, NULL, (acc, x) -> assert_true(x < 0)) AS result
+        FROM VALUES (array(1, 2)), (array(3)) AS t(c)
+        """
+      Then query error is not true
+
+    Scenario: a NULL zero over an empty array never runs the merge body
+      When query
+        """
+        SELECT aggregate(array(), NULL, (acc, x) -> assert_true(false)) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: a NULL zero with a NULL merge body stays NULL
+      When query
+        """
+        SELECT aggregate(array(1), NULL, (acc, x) -> NULL) AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
   Rule: Subquery expressions are rejected in a value argument
 
     @spark-4

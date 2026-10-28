@@ -546,6 +546,24 @@ Feature: exists higher-order function
         | a NULL element and no match | array(1, CAST(NULL AS INT), 3) | x -> x > 5            | NULL   |
         | a NULL bare predicate   | array(1, 2)                    | CAST(NULL AS BOOLEAN) | NULL   |
 
+    Scenario Outline: a non-boolean predicate is still a type error with the config off: <predicate>
+      Given config spark.sql.legacy.followThreeValuedLogicInArrayExists = false
+      When query
+        """
+        SELECT <query> AS result
+        """
+      Then query error (The second parameter|Parameter 2) requires the "BOOLEAN" type
+
+      Examples:
+        | predicate | query                                                |
+        | struct    | exists(array(1), x -> named_struct('a', x))          |
+        | string    | exists(array(1), x -> 'true')                        |
+        | integer   | exists(array(1, 0), x -> x)                          |
+        | array     | exists(array(1), x -> array(x))                      |
+        | decimal   | exists(array(1), x -> 1.5)                           |
+        | constant  | exists(array(1), 1)                                  |
+        | dead IF   | IF(false, exists(array(1), x -> x), false)           |
+
   Rule: A stateful predicate is evaluated per element in order
 
     # Measured: main gives the same rows for the explicit lambda `x -> rand(42) > 0.6`

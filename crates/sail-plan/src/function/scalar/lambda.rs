@@ -339,7 +339,8 @@ fn erase_null_typed_body(
     let Some(expr::Expr::Lambda(lambda)) = lambda else {
         return Ok(());
     };
-    if lambda.body.get_type(schema)? != DataType::Null {
+    // A NULL expected type accepts a NULL body, so Spark leaves it to run.
+    if expected == &DataType::Null || lambda.body.get_type(schema)? != DataType::Null {
         return Ok(());
     }
     // Preserve validation of lambdas outside higher-order function arguments.
@@ -480,11 +481,13 @@ fn exists(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         input.function_context.schema,
     )?;
     // Two-valued logic: a NULL predicate counts as non-matching.
+    // Only a Boolean body is wrapped; any other type keeps the predicate type error.
     if !input
         .function_context
         .plan_config
         .legacy_follow_three_valued_logic_in_array_exists
         && let expr::Expr::Lambda(lambda) = &mut lambda
+        && lambda.body.get_type(input.function_context.schema)? == DataType::Boolean
     {
         let body = std::mem::replace(lambda.body.as_mut(), lit(false));
         *lambda.body = coalesce(vec![body, lit(false)]);

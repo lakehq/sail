@@ -159,3 +159,42 @@ Feature: higher-order functions reject a wrong number of arguments
         | Reduce(array(1), 1, 2, 3, 4, 5)     | reduce           | .3, 4.   | 6      |
         | TRANSFORM_KEYS(map(1, 2), 1, 1)     | transform_keys   | 2        | 3      |
         | TRANSFORM_VALUES(map(1, 2), 1, 1)   | transform_values | 2        | 3      |
+
+  Rule: An unresolved column is reported before the count
+
+    Scenario Outline: unresolved column before the count: <call>
+      When query
+        """
+        SELECT <call> AS result
+        """
+      Then query error no_such_col
+
+      Examples:
+        | call                                |
+        | transform(no_such_col)              |
+        | filter(no_such_col, 1, 1)           |
+        | transform(no_such_col, x -> x, 3)   |
+        | aggregate(no_such_col)              |
+        | array_sort(no_such_col, 1, 2)       |
+        | exists(no_such_col)                 |
+        | map_filter(no_such_col)             |
+        | transform_keys(no_such_col)         |
+        | reduce(no_such_col, 0)              |
+        | transform(array(1), 1, no_such_col) |
+
+  Rule: A wrong map argument type is reported before a subquery
+
+    # The subquery check only runs once the arguments type-check, so the type error wins.
+    Scenario Outline: wrong map type before the subquery: <call>
+      When query
+        """
+        SELECT <call> AS result
+        """
+      Then query error (?s)^(?!.*Subquery expressions).+
+
+      Examples:
+        | call                                        |
+        | map_filter(42, (SELECT true))               |
+        | transform_keys(42, (SELECT 1))              |
+        | transform_values(42, (SELECT 1))            |
+

@@ -1,9 +1,11 @@
-use datafusion_common::DFSchemaRef;
-use datafusion_common::arrow::datatypes::FieldRef;
+use std::sync::Arc;
+
+use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{Lambda, LambdaVariable};
-use datafusion_expr::{ExprSchemable, ValueOrLambda, expr};
+use datafusion_expr::{ExprSchemable, ValueOrLambda, expr, lit};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::get_udf_display_name;
@@ -134,6 +136,20 @@ impl PlanResolver<'_> {
             }
         }
 
+        // Spark coerces an untyped NULL array argument only when the whole call is already
+        // resolved, which an explicit lambda prevents (as for the map functions' builders).
+        if !slots.iter().any(|slot| matches!(slot, Slot::Lambda(..)))
+            && matches!(
+                function_name.trim().to_lowercase().as_str(),
+                "transform" | "filter" | "exists" | "forall" | "array_sort"
+            )
+            && let Some(Slot::Resolved(array)) = slots.first_mut()
+            && array.expr.get_type(schema)? == DataType::Null
+        {
+            let null_array = DataType::List(Arc::new(Field::new_list_field(DataType::Null, true)));
+            array.expr = lit(ScalarValue::try_new_null(&null_array)?);
+        }
+
         let fields = slots
             .iter()
             .map(|slot| {
@@ -217,21 +233,24 @@ impl PlanResolver<'_> {
         function_name: &str,
         exprs: &[expr::Expr],
     ) -> PlanResult<()> {
-        let reject_subquery = !self.config.allow_subquery_in_higher_order_functions;
+        // Spark validates subqueries over the whole call before it looks for Python UDFs.
+        if !self.config.allow_subquery_in_higher_order_functions {
+            for expr in exprs {
+                if expr_contains_subquery(expr)? {
+                    return Err(PlanError::AnalysisError(
+                        "Subquery expressions are not supported within higher-order functions. \
+                         Please remove all subquery expressions from higher-order functions \
+                         and then try the query again."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        // `UNSUPPORTED_FEATURE.LAMBDA_FUNCTION_WITH_PYTHON_UDF`: the evaluator cannot drive the
+        // Python worker per element. A plain expression in a lambda slot that the builder wraps
+        // later (`map_filter`) is the lambda body.
         let lambda_slots = lambda_slot_positions(function_name, exprs.len());
         for (position, expr) in exprs.iter().enumerate() {
-            if reject_subquery && expr_contains_subquery(expr)? {
-                return Err(PlanError::AnalysisError(
-                    "Subquery expressions are not supported within higher-order functions. \
-                     Please remove all subquery expressions from higher-order functions \
-                     and then try the query again."
-                        .to_string(),
-                ));
-            }
-            // `UNSUPPORTED_FEATURE.LAMBDA_FUNCTION_WITH_PYTHON_UDF`: the evaluator
-            // cannot drive the Python worker per element.
-            // A plain expression in a lambda slot that the builder wraps later
-            // (`map_filter`) is the lambda body.
             let body = match expr {
                 expr::Expr::Lambda(lambda) => Some(lambda.body.as_ref()),
                 expr if lambda_slots.contains(&position) => Some(expr),

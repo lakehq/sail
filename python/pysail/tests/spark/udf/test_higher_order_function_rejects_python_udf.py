@@ -93,3 +93,26 @@ def test_wrong_argument_count_is_reported_before_the_python_udf(spark, query, na
     )
     with pytest.raises(AnalysisException, match=expected):
         spark.sql(query).collect()
+
+
+# Spark reports a wrongly typed value argument before it inspects the lambda for a Python UDF.
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT map_filter(42, is_even(1)) AS r",
+        "SELECT transform_keys(42, plus_one(1)) AS r",
+        "SELECT transform_values(42, plus_one(1)) AS r",
+    ],
+)
+def test_wrong_value_argument_type_is_reported_before_the_python_udf(spark, query):
+    with pytest.raises(AnalysisException) as error:
+        spark.sql(query).collect()
+    assert "Python UDF" not in str(error.value)
+
+
+# Spark validates subqueries over the whole call before it looks for Python UDFs.
+@pytest.mark.skipif(pyspark_version() < (4,), reason="Subquery rejection in higher-order functions needs Spark 4+")
+def test_subquery_is_reported_before_a_python_udf_in_another_argument(spark):
+    query = "SELECT aggregate(array(1), 0, (a, x) -> plus_one(a), a -> (SELECT 1)) AS r"
+    with pytest.raises(AnalysisException, match="Subquery expressions are not supported"):
+        spark.sql(query).collect()
