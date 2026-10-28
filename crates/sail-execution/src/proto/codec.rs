@@ -6736,6 +6736,7 @@ mod tests {
     #[test]
     fn test_commit_output_round_trip_and_reconstruction() -> Result<()> {
         use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
         use sail_delta_lake::physical_plan::DeltaCommitContext;
         use sail_iceberg::physical_plan::commit::commit_exec::CommitOutput;
 
@@ -6763,7 +6764,10 @@ mod tests {
                 )
                 .with_output(output),
             );
-            let rebuilt = delta.with_new_children(vec![input.clone()])?;
+            let rebuilt = delta.replace_children(
+                vec![input.clone()],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
             let bytes = try_encode_physical_plan(&codec, rebuilt)?;
             let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
             assert_eq!(decoded.schema(), output.schema());
@@ -6785,7 +6789,10 @@ mod tests {
                 )
                 .with_output(output),
             );
-            let rebuilt = iceberg.with_new_children(vec![input.clone()])?;
+            let rebuilt = iceberg.replace_children(
+                vec![input.clone()],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
             let bytes = try_encode_physical_plan(&codec, rebuilt)?;
             let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
             assert_eq!(decoded.schema(), output.schema());
@@ -6806,7 +6813,10 @@ mod tests {
             )
             .with_rewrite_data_files_output(input.schema(), 3, 42),
         );
-        let rebuilt = rewrite.with_new_children(vec![input])?;
+        let rebuilt = rewrite.replace_children(
+            vec![input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
         let bytes = try_encode_physical_plan(&codec, rebuilt)?;
         let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
         assert_eq!(

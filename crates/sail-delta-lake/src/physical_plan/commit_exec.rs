@@ -1441,22 +1441,37 @@ fn stat_value_i64(value: &StatValue) -> Option<i64> {
     }
 }
 
+impl DisplayAs for DeltaCommitExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "DeltaCommitExec(table_path={})", self.table_url)
+            }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "format: delta")?;
+                write!(f, "table_path={}", self.table_url)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod result_tests {
     use datafusion::arrow::array::Int64Array;
+    use datafusion_common::internal_datafusion_err;
 
     use super::*;
 
-    fn values(batch: RecordBatch) -> Vec<i64> {
+    fn values(batch: RecordBatch) -> Result<Vec<i64>> {
         batch
             .columns()
             .iter()
             .map(|column| {
-                column
+                let column = column
                     .as_any()
                     .downcast_ref::<Int64Array>()
-                    .expect("result long column")
-                    .value(0)
+                    .ok_or_else(|| internal_datafusion_err!("expected Int64 result column"))?;
+                Ok(column.value(0))
             })
             .collect()
     }
@@ -1477,7 +1492,7 @@ mod result_tests {
                 10,
                 &update,
                 &metrics
-            )?),
+            )?)?,
             vec![2]
         );
         let delete = DeltaOperation::Delete { predicate: None };
@@ -1493,7 +1508,7 @@ mod result_tests {
                 0,
                 &delete,
                 &metrics
-            )?),
+            )?)?,
             vec![-1]
         );
         metrics.num_deleted_rows = Some(0);
@@ -1503,7 +1518,7 @@ mod result_tests {
                 0,
                 &delete,
                 &metrics
-            )?),
+            )?)?,
             vec![0]
         );
         Ok(())
@@ -1531,7 +1546,7 @@ mod result_tests {
                 106,
                 &operation,
                 &metrics
-            )?),
+            )?)?,
             vec![9, 2, 3, 4]
         );
         let overflow = OperationMetrics {
@@ -1540,19 +1555,5 @@ mod result_tests {
         };
         assert!(commit_output_batch(CommandOutput::MergeRows, 0, &operation, &overflow).is_err());
         Ok(())
-    }
-}
-
-impl DisplayAs for DeltaCommitExec {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "DeltaCommitExec(table_path={})", self.table_url)
-            }
-            DisplayFormatType::TreeRender => {
-                writeln!(f, "format: delta")?;
-                write!(f, "table_path={}", self.table_url)
-            }
-        }
     }
 }
