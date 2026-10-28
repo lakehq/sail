@@ -56,7 +56,6 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::{NamePreserver, coerce_plan_expr_for_schema};
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::binary::{like_coercion, regex_coercion, type_union_coercion};
 use datafusion_expr::type_coercion::functions::{
     UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
 };
@@ -75,7 +74,9 @@ use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 
-use crate::binary_type_coercion::BinaryTypeCoercer;
+use crate::binary_type_coercion::{
+    BinaryTypeCoercer, like_coercion, regex_coercion, type_union_coercion,
+};
 use crate::session_timestamp::convert_session_timestamp_casts;
 
 /// Performs type coercion by determining the schema
