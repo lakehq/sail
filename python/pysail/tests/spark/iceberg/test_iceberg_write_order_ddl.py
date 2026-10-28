@@ -1,5 +1,6 @@
 # ruff: noqa: S608
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pyarrow.parquet as pq
 import pytest
@@ -7,6 +8,7 @@ from pyiceberg.table import StaticTable
 
 from pysail.testing.spark.ddl import exercise_iceberg_write_order
 from pysail.testing.spark.steps.iceberg import _find_latest_metadata, _latest_metadata_path
+from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
 
 
 def current_order(metadata):
@@ -27,10 +29,10 @@ def test_write_order_metadata_and_data_files(spark, tmp_path):
         assert metadata["properties"]["write.distribution-mode"] == "range"
         # Inspect current data files, not removed files left behind by UPDATE.
         pointer = max((tmp_path / "metadata").glob("*.metadata.json"), key=lambda p: p.stat().st_mtime_ns)
-        reference = StaticTable.from_metadata(str(pointer))
+        reference = StaticTable.from_metadata(pointer.as_uri(), properties=pyiceberg_file_io_properties())
         for task in reference.scan().plan_files():
             assert task.file.sort_order_id == order["order-id"]
-            rows = pq.ParquetFile(unquote(urlparse(task.file.file_path).path)).read().to_pylist()
+            rows = pq.ParquetFile(url2pathname(urlparse(task.file.file_path).path)).read().to_pylist()
             assert rows == sorted(rows, key=lambda r: (r["id"] is None, -(r["id"] or 0), r["value"]))
         spark.sql(f"ALTER TABLE {table} WRITE UNORDERED")
         assert current_order(_find_latest_metadata(tmp_path))["order-id"] == 0
@@ -122,7 +124,9 @@ def test_sorted_partitioned_table_row_level_operations(spark, tmp_path, mode, ve
         spark.sql(f"UPDATE {table} SET value=30 WHERE id=3")
         assert [tuple(row) for row in spark.table(table).orderBy("id").collect()] == [(1, 10), (3, 30), (4, 40)]
         if version == 2 and mode == "merge-on-read":  # noqa: PLR2004
-            reference = StaticTable.from_metadata(str(_latest_metadata_path(tmp_path)))
+            reference = StaticTable.from_metadata(
+                _latest_metadata_path(tmp_path).as_uri(), properties=pyiceberg_file_io_properties()
+            )
             assert sorted(reference.scan().to_arrow().to_pylist(), key=lambda row: row["id"]) == [
                 {"id": 1, "value": 10},
                 {"id": 3, "value": 30},

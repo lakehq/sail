@@ -286,6 +286,7 @@ impl MergeRowMetrics {
 #[derive(Debug)]
 pub struct DeltaWriterExec {
     input: Arc<dyn ExecutionPlan>,
+    input_ordering: Option<LexOrdering>,
     table_url: Url,
     options: DeltaWriterExecOptions,
     metadata_configuration: HashMap<String, String>,
@@ -377,8 +378,10 @@ impl DeltaWriterExec {
         let schema = delta_action_schema()?;
         let output_partitions = input.output_partitioning().partition_count().max(1);
         let cache = Self::compute_properties(schema, output_partitions);
+        let input_ordering = input.output_ordering().cloned();
         Ok(Self {
             input,
+            input_ordering,
             table_url,
             options,
             metadata_configuration,
@@ -556,6 +559,11 @@ impl ExecutionPlan for DeltaWriterExec {
         vec![Distribution::UnspecifiedDistribution]
     }
 
+    fn maintains_input_order(&self) -> Vec<bool> {
+        // As with DataSinkExec, the files retain the order of the incoming rows.
+        vec![true]
+    }
+
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
         // Writer parallelism follows the input plan. Letting `EnforceDistribution` add a
         // round-robin repartition just for the writer would make the file layout and the
@@ -566,7 +574,7 @@ impl ExecutionPlan for DeltaWriterExec {
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         if self.partition_columns.is_empty() {
-            return vec![None];
+            return vec![self.input_ordering.clone().map(Into::into)];
         }
 
         // TODO(optimizer): Reduce the cost of meeting this ordering requirement.
@@ -586,6 +594,19 @@ impl ExecutionPlan for DeltaWriterExec {
                     nulls_first: false,
                 },
             });
+        }
+
+        // Retain the requested order within each table partition as well as grouping
+        // rows by partition. The commit operator does not require ordered input.
+        if let Some(ordering) = &self.input_ordering {
+            for sort in ordering {
+                if !sort_exprs
+                    .iter()
+                    .any(|existing| existing.expr.eq(&sort.expr))
+                {
+                    sort_exprs.push(sort.clone());
+                }
+            }
         }
 
         let Some(ordering) = LexOrdering::new(sort_exprs) else {
@@ -622,7 +643,7 @@ impl ExecutionPlan for DeltaWriterExec {
             return internal_err!("DeltaWriterExec requires exactly one child");
         }
 
-        Ok(Arc::new(Self::new(
+        let mut writer = Self::new(
             Arc::clone(&children[0]),
             self.table_url.clone(),
             self.options.clone(),
@@ -633,7 +654,9 @@ impl ExecutionPlan for DeltaWriterExec {
             self.sink_schema.clone(),
             self.write_context.clone(),
             self.lakehouse_table.clone(),
-        )?))
+        )?;
+        writer.input_ordering = self.input_ordering.clone();
+        Ok(Arc::new(writer))
     }
 
     fn execute(

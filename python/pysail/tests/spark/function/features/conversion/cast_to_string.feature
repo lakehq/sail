@@ -99,12 +99,10 @@ Feature: CAST(x AS STRING) renders each type the way Spark does
   Rule: A NULL nested in a container renders lowercase under CAST and uppercase under show
     # This is the sharpest CAST-vs-show split. Cast overrides nullString to "null" and
     # ToPrettyString to "NULL", so the SAME value has two spellings depending on the path.
-    # Sail emits the show() spelling from the CAST path.
     #
     # Note the position asymmetry Spark keeps in both modes: the element at index 0 gets no
     # leading space, later ones get one from the separator — hence "[null, null]".
 
-    @sail-bug
     Scenario Outline: NULL inside a container cast to string: <case>
       When query
         """

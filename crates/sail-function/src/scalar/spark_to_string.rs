@@ -23,6 +23,7 @@ macro_rules! define_to_string_udf {
         pub struct $udf {
             signature: Signature,
             options: FormatOptions<'static>,
+            timezone: Option<Arc<str>>,
         }
 
         impl Default for $udf {
@@ -38,8 +39,19 @@ macro_rules! define_to_string_udf {
                         vec![TypeSignature::Any(1), TypeSignature::Any(2)],
                         Volatility::Immutable,
                     ),
-                    options: FormatOptions::default(),
+                    // Spark's CAST renders NULL values in arrays, maps and structs as `null`.
+                    options: FormatOptions::default().with_null("null"),
+                    timezone: None,
                 }
+            }
+
+            /// Renders timestamps with a timezone in `timezone`, such as Spark's session time zone.
+            pub fn with_timezone(self, timezone: Option<Arc<str>>) -> Self {
+                Self { timezone, ..self }
+            }
+
+            pub fn timezone(&self) -> Option<&Arc<str>> {
+                self.timezone.as_ref()
             }
         }
 
@@ -96,7 +108,8 @@ macro_rules! define_to_string_udf {
                 }
                 let args = ColumnarValue::values_to_arrays(&args)?;
                 let arg = args.one()?;
-                let array = $func(&arg, &self.options, &arg_field)?;
+                let options = self.options.clone().with_timezone(self.timezone.as_deref());
+                let array = $func(&arg, &options, &arg_field)?;
                 Ok(ColumnarValue::Array(array))
             }
         }
@@ -128,7 +141,7 @@ define_to_string_udf!(
 
 fn value_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
-    options: &FormatOptions<'static>,
+    options: &FormatOptions<'_>,
     field: &Field,
 ) -> Result<ArrayRef> {
     if let Some(interval) = spark_interval_metadata(field)? {
@@ -152,7 +165,7 @@ fn value_to_string<O: OffsetSizeTrait>(
 
 fn value_to_string_view(
     array: &dyn Array,
-    options: &FormatOptions<'static>,
+    options: &FormatOptions<'_>,
     field: &Field,
 ) -> Result<ArrayRef> {
     if let Some(interval) = spark_interval_metadata(field)? {

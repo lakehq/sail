@@ -21,6 +21,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
@@ -45,6 +46,7 @@ pub fn align_row_level_value(
     target_type: &DataType,
     case_sensitive: bool,
     alignment: StructFieldAlignment,
+    session_timezone_label: &str,
 ) -> Result<Expr> {
     if source_type == target_type {
         return Ok(value);
@@ -53,6 +55,17 @@ pub fn align_row_level_value(
     let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
         (source_type, target_type)
     else {
+        // Spark takes the wall-clock time of a TIMESTAMP value in the session time zone for a
+        // TIMESTAMP_NTZ target, and Arrow in UTC.
+        if let (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) =
+            (source_type, target_type)
+        {
+            return Ok(session_wall_clock(
+                value,
+                target_type,
+                session_timezone_label,
+            ));
+        }
         return Ok(cast(value, target_type.clone()));
     };
 
@@ -82,6 +95,7 @@ pub fn align_row_level_value(
                 target_field.data_type(),
                 case_sensitive,
                 alignment,
+                session_timezone_label,
             )?,
             None if alignment == StructFieldAlignment::FillMissingWithNull => {
                 lit(ScalarValue::try_new_null(target_field.data_type())?)
@@ -256,6 +270,7 @@ impl RowLevelEffectPlans {
 /// Information retained until the format-specific commit is planned.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RowLevelCommitInfo {
+    Truncate,
     Delete { predicate: Option<ExprWithSource> },
     Update { predicate: Option<ExprWithSource> },
     Merge { options: Box<MergeIntoOptions> },
@@ -264,6 +279,7 @@ pub enum RowLevelCommitInfo {
 impl RowLevelCommitInfo {
     pub fn command(&self) -> RowLevelCommand {
         match self {
+            Self::Truncate => RowLevelCommand::Truncate,
             Self::Delete { .. } => RowLevelCommand::Delete,
             Self::Update { .. } => RowLevelCommand::Update,
             Self::Merge { .. } => RowLevelCommand::Merge,
@@ -273,14 +289,14 @@ impl RowLevelCommitInfo {
     pub fn predicate(&self) -> Option<&ExprWithSource> {
         match self {
             Self::Delete { predicate } | Self::Update { predicate } => predicate.as_ref(),
-            Self::Merge { .. } => None,
+            Self::Truncate | Self::Merge { .. } => None,
         }
     }
 
     pub fn merge_options(&self) -> Option<&MergeIntoOptions> {
         match self {
             Self::Merge { options } => Some(options),
-            Self::Delete { .. } | Self::Update { .. } => None,
+            Self::Truncate | Self::Delete { .. } | Self::Update { .. } => None,
         }
     }
 }
@@ -307,6 +323,25 @@ fn partial_cmp_by_equality<T: PartialEq>(left: &T, right: &T) -> Option<Ordering
 }
 
 impl RowLevelWriteNode {
+    pub fn new_truncate(
+        raw_target: Arc<LogicalPlan>,
+        mode: RowLevelWriteMode,
+        target: RowLevelTarget,
+    ) -> Result<Self> {
+        Ok(Self {
+            target,
+            raw_target,
+            mode,
+            effects: RowLevelEffectPlans::default(),
+            commit: RowLevelCommitInfo::Truncate,
+            expected_snapshot_id: None,
+            schema: Arc::new(DFSchema::from_unqualified_fields(
+                vec![Field::new("count", DataType::Int64, true)].into(),
+                Default::default(),
+            )?),
+        })
+    }
+
     pub fn new_merge(
         raw_target: Arc<LogicalPlan>,
         mode: RowLevelWriteMode,
@@ -460,6 +495,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             self.target.format
         )?;
         match &self.commit {
+            RowLevelCommitInfo::Truncate => {}
             RowLevelCommitInfo::Delete { predicate } | RowLevelCommitInfo::Update { predicate } => {
                 if let Some(source) = predicate.as_ref().and_then(|value| value.source.as_deref()) {
                     write!(f, ", condition={}", source.trim())?;
