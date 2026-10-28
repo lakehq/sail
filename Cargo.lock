@@ -7261,6 +7261,7 @@ dependencies = [
 name = "sail-common-datafusion"
 version = "0.7.2"
 dependencies = [
+ "arrow",
  "arrow-schema",
  "async-trait",
  "chrono",
@@ -7270,6 +7271,7 @@ dependencies = [
  "datafusion-expr",
  "either",
  "futures",
+ "itertools 0.15.0",
  "lexical-core",
  "num-bigint 0.5.1",
  "object_store",

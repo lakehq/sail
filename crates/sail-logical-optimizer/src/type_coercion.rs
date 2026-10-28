@@ -71,12 +71,12 @@ use datafusion_expr::{
 };
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
+use sail_common_datafusion::type_coercion::binary_type_coercion::{
+    BinaryTypeCoercer, like_coercion, regex_coercion, type_union_coercion,
+};
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 
-use crate::binary_type_coercion::{
-    BinaryTypeCoercer, like_coercion, regex_coercion, type_union_coercion,
-};
 use crate::session_timestamp::convert_session_timestamp_casts;
 
 /// Performs type coercion by determining the schema

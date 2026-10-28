@@ -3,7 +3,6 @@ use std::sync::Arc;
 use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
-mod binary_type_coercion;
 mod lateral_join;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
