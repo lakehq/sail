@@ -23,7 +23,8 @@ def ntz_extremes(spark, tmp_path_factory):
 
 
 def timestampdiff_days(spark, view):
-    return spark.sql(f"SELECT timestampdiff(DAY, ntz, TIMESTAMP '2020-06-14 00:00:00') AS days FROM {view}").collect()
+    query = f"SELECT timestampdiff(DAY, ntz, TIMESTAMP '2020-06-14 00:00:00') AS days FROM {view}"  # noqa: S608
+    return spark.sql(query).collect()
 
 
 @pytest.mark.parametrize(

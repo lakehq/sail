@@ -26,7 +26,8 @@ def current_time_zone(spark):
 
 
 @pytest.mark.parametrize("variable", ["timezone", "time.zone"])
-def test_sql_set_of_a_key_named_like_a_time_zone_leaves_the_session_time_zone(spark, restore_time_zone, variable):
+@pytest.mark.usefixtures("restore_time_zone")
+def test_sql_set_of_a_key_named_like_a_time_zone_leaves_the_session_time_zone(spark, variable):
     spark.conf.set(KEY, "UTC")
     assert spark.sql(f"SET {variable} = '{ZONE}'").collect() == [Row(key=variable, value=f"'{ZONE}'")]
     assert spark.conf.get(variable) == f"'{ZONE}'"
@@ -47,7 +48,8 @@ def test_sql_set_of_a_key_named_like_a_time_zone_leaves_the_session_time_zone(sp
         ),
     ],
 )
-def test_sql_set_of_the_session_time_zone_sets_the_datafusion_time_zone(spark, restore_time_zone, statement):
+@pytest.mark.usefixtures("restore_time_zone")
+def test_sql_set_of_the_session_time_zone_sets_the_datafusion_time_zone(spark, statement):
     spark.conf.set(KEY, "UTC")
     spark.sql(statement).collect()
     assert spark.conf.get(KEY) == ZONE
@@ -55,7 +57,8 @@ def test_sql_set_of_the_session_time_zone_sets_the_datafusion_time_zone(spark, r
     assert_time_zones_agree(spark)
 
 
-def test_conf_set_of_the_session_time_zone_sets_the_datafusion_time_zone(spark, restore_time_zone):
+@pytest.mark.usefixtures("restore_time_zone")
+def test_conf_set_of_the_session_time_zone_sets_the_datafusion_time_zone(spark):
     spark.conf.set(KEY, ZONE)
     assert current_time_zone(spark) == ZONE
     assert_time_zones_agree(spark)
@@ -71,14 +74,16 @@ def test_conf_set_of_the_session_time_zone_sets_the_datafusion_time_zone(spark, 
         ),
     ],
 )
-def test_sql_reset_of_the_session_time_zone_resets_the_datafusion_time_zone(spark, restore_time_zone, statement):
+@pytest.mark.usefixtures("restore_time_zone")
+def test_sql_reset_of_the_session_time_zone_resets_the_datafusion_time_zone(spark, statement):
     spark.conf.set(KEY, "Pacific/Kiritimati")
     spark.sql(statement).collect()
     assert current_time_zone(spark) != "Pacific/Kiritimati"
     assert_time_zones_agree(spark)
 
 
-def test_conf_unset_of_the_session_time_zone_resets_the_datafusion_time_zone(spark, restore_time_zone):
+@pytest.mark.usefixtures("restore_time_zone")
+def test_conf_unset_of_the_session_time_zone_resets_the_datafusion_time_zone(spark):
     spark.conf.set(KEY, "Pacific/Kiritimati")
     spark.conf.unset(KEY)
     assert current_time_zone(spark) != "Pacific/Kiritimati"
