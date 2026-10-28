@@ -105,10 +105,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -121,10 +122,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -152,10 +154,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -180,10 +183,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -214,10 +218,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -236,9 +241,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -335,18 +341,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -354,9 +362,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(600), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(600), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(300), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(299)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(300), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(299)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -364,9 +373,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -375,9 +385,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -388,15 +399,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -592,10 +616,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -608,10 +633,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -639,10 +665,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -667,10 +694,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -701,10 +729,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -723,9 +752,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -822,18 +852,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -841,9 +873,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(40000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(40000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(20000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(19999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(20000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(19999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -851,9 +884,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -862,9 +896,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -875,15 +910,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -1080,10 +1128,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -1096,10 +1145,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -1127,10 +1177,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -1155,10 +1206,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -1189,10 +1241,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -1211,9 +1264,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -1310,18 +1364,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -1329,9 +1385,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(82000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(82000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(41000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(40999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(41000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(40999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -1339,9 +1396,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -1350,9 +1408,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -1363,15 +1422,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -1568,10 +1640,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -1584,10 +1657,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -1615,10 +1689,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -1643,10 +1718,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -1677,10 +1753,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -1699,9 +1776,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -1798,18 +1876,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -1817,9 +1897,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(600), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(600), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(300), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(299)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(300), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(299)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -1827,9 +1908,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -1838,9 +1920,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -1851,15 +1934,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -2055,10 +2151,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -2071,10 +2168,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -2102,10 +2200,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -2130,10 +2229,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -2164,10 +2264,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -2186,9 +2287,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -2285,18 +2387,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -2304,9 +2408,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(40000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(40000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(20000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(19999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(20000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(19999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -2314,9 +2419,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -2325,9 +2431,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -2338,15 +2445,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -2543,10 +2663,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -2559,10 +2680,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -2590,10 +2712,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -2618,10 +2741,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -2652,10 +2776,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -2674,9 +2799,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -2773,18 +2899,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -2792,9 +2920,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(82000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(82000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(41000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(40999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(41000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(40999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -2802,9 +2931,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -2813,9 +2943,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -2826,15 +2957,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -3031,10 +3175,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -3047,10 +3192,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -3078,10 +3224,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -3106,10 +3253,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -3140,10 +3288,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -3162,9 +3311,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -3261,18 +3411,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=600, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -3280,9 +3432,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(60), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(600), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(600), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(300), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(299)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(60), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(299)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(300), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(299)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -3290,9 +3443,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -3301,9 +3455,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -3314,15 +3469,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=600, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -3518,10 +3686,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -3534,10 +3703,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -3565,10 +3735,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -3593,10 +3764,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -3627,10 +3799,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -3649,9 +3822,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -3748,18 +3922,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=40000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -3767,9 +3943,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(4000), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(40000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(40000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(20000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(19999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(4000), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(19999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(20000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(19999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -3777,9 +3954,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -3788,9 +3966,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -3801,15 +3980,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=40000, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
@@ -4006,10 +4198,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END = Int32(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
@@ -4022,10 +4215,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % CAST(CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END AS Int64) = CAST(Int32(0) AS Int64)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after extract_scalar_iterator_udf:
     SAME TEXT AS ABOVE
@@ -4053,10 +4247,11 @@ data:
       Inner Join:  Filter: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -4081,10 +4276,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Filter: ?table?.#2 % Int64(2) = Int64(0)
-            Projection: ?table?.id AS #2, ?table?.payload AS #3
-              TableScan: ?table?
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Filter: ?table?.#2 % Int64(2) = Int64(0)
+              Projection: ?table?.id AS #2, ?table?.payload AS #3
+                TableScan: ?table?
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -4115,10 +4311,11 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.#2 AS #4
-          Projection: ?table?.id AS #2, ?table?.payload AS #3
-            Filter: ?table?.id % Int64(2) = Int64(0)
-              TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.#2 AS #4
+            Projection: ?table?.id AS #2, ?table?.payload AS #3
+              Filter: ?table?.id % Int64(2) = Int64(0)
+                TableScan: ?table?, partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
@@ -4137,9 +4334,10 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -4236,18 +4434,20 @@ data:
       Inner Join: #1 = #4
         Projection: #0 AS #1
           Range: start=0, end=82000, step=1, num_partitions=8
-        Projection: ?table?.id AS #4
-          Filter: ?table?.id % Int64(2) = Int64(0)
-            TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
+        JoinHint: Broadcast
+          Projection: ?table?.id AS #4
+            Filter: ?table?.id % Int64(2) = Int64(0)
+              TableScan: ?table? projection=[id], partial_filters=[?table?.id % Int64(2) = Int64(0)]
 
     initial_physical_plan:
     ProjectionExec: expr=[#1@0 as #5]
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
         ProjectionExec: expr=[#0@0 as #1]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
-        ProjectionExec: expr=[id@0 as #4]
-          FilterExec: id@0 % 2 = 0
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+        JoinHintExec: Broadcast
+          ProjectionExec: expr=[id@0 as #4]
+            FilterExec: id@0 % 2 = 0
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     initial_physical_plan_with_stats:
@@ -4255,9 +4455,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], statistics=[Rows=Inexact(8200), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
         ProjectionExec: expr=[#0@0 as #1], statistics=[Rows=Exact(82000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], statistics=[Rows=Exact(82000), Bytes=Absent, [(Col[0]: Null=Exact(0))]]
-        ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-          FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(41000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(40999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
+        JoinHintExec: Broadcast, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+          ProjectionExec: expr=[id@0 as #4], statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+            FilterExec: id@0 % 2 = 0, statistics=[Rows=Inexact(8200), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(40999)) Null=Inexact(0) ScanBytes=Inexact(<bytes>))]]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, statistics=[Rows=Exact(41000), Bytes=Exact(<bytes>), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(40999)) Null=Exact(0) ScanBytes=Exact(<bytes>))]]
 
 
     initial_physical_plan_with_schema:
@@ -4265,9 +4466,10 @@ data:
       HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)], schema=[#1:Int64, #4:Int64;N]
         ProjectionExec: expr=[#0@0 as #1], schema=[#1:Int64]
           RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0], schema=[#0:Int64]
-        ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
-          FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
-            DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
+        JoinHintExec: Broadcast, schema=[#4:Int64;N]
+          ProjectionExec: expr=[id@0 as #4], schema=[#4:Int64;N]
+            FilterExec: id@0 % 2 = 0, schema=[id:Int64;N]
+              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet, schema=[id:Int64;N]
 
 
     physical_plan after OutputRequirements:
@@ -4276,9 +4478,10 @@ data:
         HashJoinExec: mode=Auto, join_type=Inner, on=[(#1@0, #4@0)]
           ProjectionExec: expr=[#0@0 as #1]
             RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
-          ProjectionExec: expr=[id@0 as #4]
-            FilterExec: id@0 % 2 = 0
-              DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+          JoinHintExec: Broadcast
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
 
 
     physical_plan after aggregate_statistics:
@@ -4289,15 +4492,28 @@ data:
       ProjectionExec: expr=[#1@0 as #5]
         ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
           HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
-            ProjectionExec: expr=[id@0 as #4]
-              FilterExec: id@0 % 2 = 0
-                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            JoinHintExec: Broadcast
+              ProjectionExec: expr=[id@0 as #4]
+                FilterExec: id@0 % 2 = 0
+                  DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
             ProjectionExec: expr=[#0@0 as #1]
               RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
 
 
     physical_plan after SelectSemiJoinBuildSide:
     SAME TEXT AS ABOVE
+
+    physical_plan after ApplyJoinHints:
+    OutputRequirementExec: order_by=[], dist_by=Unspecified
+      ProjectionExec: expr=[#1@0 as #5]
+        ProjectionExec: expr=[#1@1 as #1, #4@0 as #4]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#4@0, #1@0)]
+            ProjectionExec: expr=[id@0 as #4]
+              FilterExec: id@0 % 2 = 0
+                DataSourceExec: file_groups={1 group: [[<tmp>/build.parquet]]}, projection=[id], file_type=parquet
+            ProjectionExec: expr=[#0@0 as #1]
+              RangeExec: start=0, end=82000, step=1, num_partitions=8, projection=[0]
+
 
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE

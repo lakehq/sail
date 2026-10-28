@@ -18,6 +18,7 @@ mod column_op;
 mod cte;
 mod dedup;
 mod filter;
+mod hint;
 mod join;
 mod lateral;
 mod lateral_join;
