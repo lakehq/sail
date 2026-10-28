@@ -29,7 +29,8 @@ pub(crate) async fn handle_sql_config(
     };
     match &command.node {
         spec::CommandNode::SetVariable { variable, .. }
-            if native_config_key(variable).is_some_and(|key| key != DATAFUSION_TIME_ZONE_KEY) =>
+            if native_config_key(variable)
+                .is_some_and(|key| !key.starts_with(DATAFUSION_TIME_ZONE_KEY)) =>
         {
             let spark = ctx.extension::<SparkSession>()?;
             execute_native_config(ctx, command.node.clone()).await?;
