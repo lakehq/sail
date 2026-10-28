@@ -733,6 +733,18 @@ def test_jev_window_keys(spark, jev, query, expected):
     assert jev.request_count > 0
 
 
+def test_jev_window_key_over_sorted_input_is_evaluated_once(spark, jev):
+    rows = 3
+    query = (
+        "SELECT id, collect_list(id) OVER (ORDER BY jev_noul(CAST(id AS STRING),'q').noul DESC) AS ids "
+        f"FROM (SELECT id FROM range(0,{rows},1,1) ORDER BY id) ORDER BY id"
+    )
+    result = [row.asDict(recursive=True) for row in spark.sql(query).collect()]
+    assert result == [{"id": 0, "ids": [2, 1, 0]}, {"id": 1, "ids": [2, 1]}, {"id": 2, "ids": [2]}]
+    questions = sum(len(request["body"]["questions"]) for request in jev.requests)
+    assert questions == rows
+
+
 @pytest.mark.parametrize("order", ["ORDER BY", "SORT BY"])
 def test_jev_required_sort_for_order_sensitive_aggregate(spark, jev, order):
     query = (

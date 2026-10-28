@@ -66,3 +66,33 @@ Feature: Window partition and order keys computed from expressions
         | b  | 1 |
         | c  | 2 |
         | d  | 4 |
+
+  Rule: An outer ORDER BY on grouping() still sees the aggregate below computed keys
+
+    Scenario: row_number over a computed aggregate key with ROLLUP and ORDER BY grouping
+      When query
+        """
+        SELECT name, row_number() OVER (ORDER BY sum(age) + 1) AS rn
+        FROM VALUES (2, 'Alice'), (5, 'Bob') AS t(age, name)
+        GROUP BY ROLLUP(name)
+        ORDER BY grouping(name), name
+        """
+      Then query result ordered
+        | name  | rn |
+        | Alice | 1  |
+        | Bob   | 2  |
+        | NULL  | 3  |
+
+    Scenario: rank partitioned by grouping and ordered by a computed aggregate key
+      When query
+        """
+        SELECT name, rank() OVER (PARTITION BY grouping(name) ORDER BY sum(age) * -1) AS r
+        FROM VALUES (2, 'Alice'), (5, 'Bob'), (4, 'Bob') AS t(age, name)
+        GROUP BY ROLLUP(name)
+        ORDER BY grouping(name), name
+        """
+      Then query result ordered
+        | name  | r |
+        | Alice | 2 |
+        | Bob   | 1 |
+        | NULL  | 1 |
