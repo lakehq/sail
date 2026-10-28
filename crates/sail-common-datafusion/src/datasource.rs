@@ -318,6 +318,8 @@ pub struct MergeIntoOptions {
     pub target: RowLevelTarget,
     pub with_schema_evolution: bool,
     pub case_sensitive: bool,
+    /// The time zone of the session, in which TIMESTAMP values cast to TIMESTAMP_NTZ.
+    pub session_timezone: Arc<str>,
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,
@@ -451,6 +453,7 @@ pub fn find_path_in_options(options: &[OptionLayer]) -> Option<String> {
 /// The kind of row-level DML command being executed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RowLevelCommand {
+    Truncate,
     Delete,
     Update,
     Merge,

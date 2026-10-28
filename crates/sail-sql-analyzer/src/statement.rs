@@ -357,6 +357,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::TruncateTable {
+            truncate: _,
+            table: _,
+            name,
+        } => {
+            let node = spec::CommandNode::TruncateTable {
+                table: from_ast_object_name(name)?,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::ShowTableProperties { name, property, .. } => {
             let property = property
                 .map(|(_, key, _)| {
@@ -2730,7 +2740,7 @@ fn from_ast_alter_table_operation(
             let change = match operation {
                 AlterColumnOperation::Comment(_, value) => spec::ColumnChange::Comment {
                     path,
-                    comment: from_ast_string(value)?,
+                    comment: Some(from_ast_string(value)?),
                 },
                 AlterColumnOperation::SetNotNull(..) => spec::ColumnChange::Nullability {
                     path,

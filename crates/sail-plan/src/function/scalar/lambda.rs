@@ -1,6 +1,5 @@
 use std::sync::{Arc, LazyLock};
 
-use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_common::arrow::compute::can_cast_types;
 use datafusion_common::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter};
@@ -21,6 +20,7 @@ use sail_function::scalar::map::spark_map_filter::SparkMapFilter;
 use sail_function::scalar::map::spark_transform_keys::SparkTransformKeys;
 use sail_function::scalar::map::spark_transform_values::SparkTransformValues;
 use sail_function::scalar::map::utils::map_type_from_key_value_types;
+use sail_logical_optimizer::type_coercion::TypeCoercionRewriter;
 
 use crate::config::MapKeyDedupPolicy;
 use crate::error::{PlanError, PlanResult};

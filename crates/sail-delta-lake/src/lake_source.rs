@@ -202,9 +202,7 @@ impl LakeSource for DeltaLakeSource {
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
-        let (schema, properties) =
-            infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
-        Ok(LakeSourceMetadata { schema, properties })
+        infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await
     }
 
     async fn create_table_metadata(
@@ -395,7 +393,7 @@ impl LakeSource for DeltaLakeSource {
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if let Some(comment) = comment {
-            metadata = metadata.with_description(comment);
+            metadata = metadata.with_description(Some(comment));
         }
         let mut protocol =
             protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -467,6 +465,21 @@ impl LakeSource for DeltaLakeSource {
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
         match operation {
+            RowLevelOperation::Truncate {
+                target_plan,
+                target,
+            } => {
+                let mode = sail_common_datafusion::datasource::RowLevelWriteMode::CopyOnWrite;
+                Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+                    node: Arc::new(
+                        sail_logical_plan::row_level::RowLevelWriteNode::new_truncate(
+                            target_plan,
+                            mode,
+                            *target,
+                        )?,
+                    ),
+                }))
+            }
             RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
             RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
             RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),
@@ -1018,7 +1031,9 @@ impl DeltaLakeSource {
         // Enforce existence of UNSET keys unless `IF EXISTS` was specified.
         if !if_exists {
             for key in &canonical_unsets {
-                if !existing_config.contains_key(key) {
+                if !existing_config.contains_key(key)
+                    && !(key == "comment" && snapshot.metadata().description().is_some())
+                {
                     return plan_err!(
                         "cannot remove property '{key}' because it is not set on the table"
                     );
@@ -1029,9 +1044,18 @@ impl DeltaLakeSource {
         // Build new metadata by applying changes.
         let mut new_metadata = snapshot.metadata().clone();
         for (key, value) in &validated_sets {
-            new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+            if key == "comment" {
+                new_metadata = new_metadata
+                    .with_description(Some(value.clone()))
+                    .remove_config_key(key);
+            } else {
+                new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+            }
         }
         for key in &canonical_unsets {
+            if key == "comment" {
+                new_metadata = new_metadata.with_description(None);
+            }
             new_metadata = new_metadata.remove_config_key(key);
         }
 

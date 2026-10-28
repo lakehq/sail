@@ -35,9 +35,10 @@ use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
 use sail_common_datafusion::catalog::{
-    CommitAuthority, LakehouseExecutionContext, TableColumnStatus,
+    CommitAuthority, LakehouseExecutionContext, TableColumnStatus, identity_partition_fields,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::lakesource::LakeSourceMetadata;
 use url::Url;
 
 use crate::catalog::coordinator::DeltaCatalogCommitCoordinator;
@@ -307,19 +308,19 @@ pub async fn infer_delta_logical_schema(
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<SchemaRef> {
-    let (schema, _) =
+    let metadata =
         infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
-    Ok(schema)
+    Ok(metadata.schema)
 }
 
-/// Infers the Delta logical schema and table configuration for planning.
+/// Infers the Delta logical schema, partitioning, and table configuration for planning.
 pub async fn infer_delta_logical_metadata(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
-) -> Result<(SchemaRef, Vec<(String, String)>)> {
+) -> Result<LakeSourceMetadata> {
     let read_options = options.clone();
     let (snapshot, log_store, scan_config) =
         load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table).await?;
@@ -349,7 +350,13 @@ pub async fn infer_delta_logical_metadata(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    Ok((schema, properties))
+    Ok(LakeSourceMetadata {
+        schema,
+        properties,
+        partition_by: Some(identity_partition_fields(
+            snapshot.metadata().partition_columns(),
+        )),
+    })
 }
 
 pub(crate) async fn delta_table_properties(
@@ -543,7 +550,7 @@ fn catalog_managed_bootstrap_actions(
     )
     .map_err(|e| DataFusionError::External(Box::new(e)))?;
     if let Some(comment) = comment {
-        metadata = metadata.with_description(comment);
+        metadata = metadata.with_description(Some(comment));
     }
     let metadata = metadata_with_catalog_managed(metadata, &table_id);
     let operation = DeltaOperation::Create {
