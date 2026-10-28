@@ -50,7 +50,9 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     ScalarFunction, ScalarFunctionInput, expr_contains_spark_cast_to_variant,
 };
-use crate::function::datetime_utils::with_session_timezone_label;
+use crate::function::datetime_utils::{
+    add_interval_in_session_timezone, has_constant_offset, with_session_timezone_label,
+};
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(
@@ -260,13 +262,27 @@ fn timestampadd_with_name(input: ScalarFunctionInput, function_name: &str) -> Pl
         }
     };
     let interval = timestampadd_interval(function_name, &unit, quantity)?;
-    Ok(cast(
+    // Spark adds to a TIMESTAMP_NTZ value as a wall-clock time, and keeps its type.
+    if let DataType::Timestamp(_, None) = timestamp.get_type(input.function_context.schema)? {
+        return Ok(timestamp + interval);
+    }
+    let timezone = input.function_context.plan_config.session_timezone_label();
+    let timestamp = cast(
         timestamp,
-        DataType::Timestamp(
-            TimeUnit::Microsecond,
-            Some(input.function_context.plan_config.session_timezone.clone()),
-        ),
-    ) + interval)
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(&timezone))),
+    );
+    // Spark adds days, weeks, months, quarters and years to the wall-clock time in the session
+    // time zone, and shorter units to the instant (`DateTimeUtils.timestampAdd`).
+    let calendar_unit = matches!(
+        unit.trim().to_uppercase().as_str(),
+        "DAY" | "DAYOFYEAR" | "WEEK" | "MONTH" | "QUARTER" | "YEAR"
+    );
+    if calendar_unit && !has_constant_offset(&timezone) {
+        return Ok(add_interval_in_session_timezone(
+            timestamp, interval, false, &timezone,
+        ));
+    }
+    Ok(timestamp + interval)
 }
 
 fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {

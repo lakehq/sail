@@ -441,13 +441,13 @@ const MICROS_PER_SECOND: i64 = 1_000_000;
 
 /// A time zone of a cast, which can be a fixed offset.
 #[derive(Debug, Clone, Copy)]
-enum CastZone {
+pub(crate) enum CastZone {
     Named(Tz),
     /// The UTC offset in microseconds.
     Fixed(i64),
 }
 
-fn parse_cast_zone(timezone: &str) -> Result<CastZone> {
+pub(crate) fn parse_cast_zone(timezone: &str) -> Result<CastZone> {
     match timezone.parse::<Tz>() {
         // A zone that is always UTC converts without looking up its offsets.
         Ok(tz) if is_fixed_zero_offset_timezone(tz.name()) => Ok(CastZone::Fixed(0)),

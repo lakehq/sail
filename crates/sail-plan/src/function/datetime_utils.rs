@@ -1,12 +1,134 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, FieldRef, Fields, TimeUnit};
-use datafusion_common::DFSchema;
-use datafusion_expr::{ExprSchemable, cast, expr};
-use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
+use datafusion::arrow::datatypes::{DataType, FieldRef, Fields, IntervalUnit, TimeUnit};
+use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::{ExprSchemable, Operator, ScalarUDF, cast, expr, lit};
+use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
+use sail_function::scalar::datetime::spark_timestamp_add_interval::SparkTimestampAddInterval;
+use sail_function::scalar::datetime::timestamp_cast::{
+    cast_timestamp_ntz_to_ltz, session_wall_clock,
+};
 
 use crate::error::PlanResult;
 use crate::function::common::ScalarFunctionInput;
+
+/// Spark's TIMESTAMP +/- INTERVAL, which adds the months and days of the interval to the
+/// wall-clock time in the session time zone (`DateTimeUtils.timestampAddInterval`). Arrow adds a
+/// day-time interval as a duration, and the months and days of other intervals in the time zone of
+/// the label. Returns `None` when they agree, or when the operands are not a TIMESTAMP and an
+/// interval.
+pub(crate) fn session_timestamp_interval_arithmetic(
+    left: &expr::Expr,
+    left_type: &DataType,
+    op: Operator,
+    right: &expr::Expr,
+    right_type: &DataType,
+    session_timezone: &Arc<str>,
+) -> Option<expr::Expr> {
+    let (timestamp, label, interval, interval_type) = match (op, left_type, right_type) {
+        (
+            Operator::Plus | Operator::Minus,
+            DataType::Timestamp(TimeUnit::Microsecond, Some(label)),
+            _,
+        ) if is_interval(right_type) => (left, label, right, right_type),
+        (Operator::Plus, _, DataType::Timestamp(TimeUnit::Microsecond, Some(label)))
+            if is_interval(left_type) =>
+        {
+            (right, label, left, left_type)
+        }
+        _ => return None,
+    };
+    // Without DST changes, days are 24 hours, and months agree in the same time zone.
+    if has_constant_offset(session_timezone)
+        && (matches!(interval_type, DataType::Duration(_)) || label == session_timezone)
+    {
+        return None;
+    }
+    // The result is labelled with the session time zone, which functions such as `hour` read it in.
+    let timestamp = if label == session_timezone {
+        timestamp.clone()
+    } else {
+        cast(
+            timestamp.clone(),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(session_timezone))),
+        )
+    };
+    // A day-time interval shorter than a day only adds to the instant.
+    if let expr::Expr::Literal(ScalarValue::DurationMicrosecond(Some(micros)), _) = interval
+        && micros.unsigned_abs() < 86_400_000_000
+    {
+        return Some(if op == Operator::Minus {
+            timestamp - interval.clone()
+        } else {
+            timestamp + interval.clone()
+        });
+    }
+    Some(add_interval_in_session_timezone(
+        timestamp,
+        interval.clone(),
+        op == Operator::Minus,
+        session_timezone,
+    ))
+}
+
+/// Adds an interval to a TIMESTAMP like Spark: the months and then the days on the wall-clock time
+/// in the session time zone, and the rest on the instant. A day-time interval adds its whole days
+/// as days. The result keeps the zone label of the TIMESTAMP.
+pub(crate) fn add_interval_in_session_timezone(
+    timestamp: expr::Expr,
+    interval: expr::Expr,
+    negated: bool,
+    session_timezone: &Arc<str>,
+) -> expr::Expr {
+    ScalarUDF::from(SparkTimestampAddInterval::new()).call(vec![
+        timestamp,
+        interval,
+        lit(session_timezone.as_ref()),
+        lit(negated),
+    ])
+}
+
+/// Spark's TIMESTAMP - TIMESTAMP, which subtracts the wall-clock times in the session time zone
+/// (`DateTimeUtils.subtractTimestamps`). Arrow subtracts the instants. Returns `None` when they
+/// agree, or when the operands are not both TIMESTAMP.
+pub(crate) fn session_timestamp_subtraction(
+    left: &expr::Expr,
+    left_type: &DataType,
+    right: &expr::Expr,
+    right_type: &DataType,
+    session_timezone: &Arc<str>,
+) -> Option<expr::Expr> {
+    match (left_type, right_type) {
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
+        ) if !has_constant_offset(session_timezone) => {
+            let timestamp_ntz = DataType::Timestamp(TimeUnit::Microsecond, None);
+            Some(
+                session_wall_clock(left.clone(), &timestamp_ntz, session_timezone)
+                    - session_wall_clock(right.clone(), &timestamp_ntz, session_timezone),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// Whether a time zone label is UTC or a fixed offset, in which days are 24 hours. Spark's short IDs
+/// EST, MST and HST are fixed offsets (`java.time.ZoneId.SHORT_IDS`), unlike the zones of the same
+/// names in the time zone database.
+pub(crate) fn has_constant_offset(timezone: &str) -> bool {
+    is_fixed_zero_offset_timezone(timezone)
+        || timezone.starts_with(['+', '-'])
+        || matches!(timezone, "EST" | "MST" | "HST")
+}
+
+fn is_interval(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Duration(TimeUnit::Microsecond)
+            | DataType::Interval(IntervalUnit::YearMonth | IntervalUnit::MonthDayNano)
+    )
+}
 
 /// Spark's common type for TIMESTAMP_NTZ and TIMESTAMP values is TIMESTAMP, which Sail labels with
 /// the session time zone. DataFusion would read TIMESTAMP_NTZ values as UTC and keep the TIMESTAMP
