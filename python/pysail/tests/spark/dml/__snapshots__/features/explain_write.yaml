@@ -5,15 +5,20 @@ data:
   |-
     == Physical Plan ==
     BarrierExec
-      CatalogCommandExec: CreateTable
-      DataSinkExec: sink=ParquetSink(file_groups=[])
-        ProjectionExec: expr=[column1@0 as id, column2@1 as name]
-          DataSourceExec: partitions=1, partition_sizes=[1]
+      CooperativeExec
+        CatalogCommandExec: CreateTable
+      ProjectionExec: expr=[CASE WHEN count@0 IS NOT NULL THEN count@0 ELSE 0 END as count]
+        AggregateExec: mode=Single, gby=[], aggr=[count]
+          PartitionedFileWriteExec: sink=ParquetSink(file_groups=[])
+            ProjectionExec: expr=[column1@0 as id, column2@1 as name]
+              DataSourceExec: partitions=1, partition_sizes=[1]
 ---
 name: "test_explain_insert_into_shows_physical_plan_with_catalog_command"
 data:
   |-
     == Physical Plan ==
-    DataSinkExec: sink=ParquetSink(file_groups=[])
-      ProjectionExec: expr=[column1@0 as id, column2@1 as name]
-        DataSourceExec: partitions=1, partition_sizes=[1]
+    ProjectionExec: expr=[CASE WHEN count@0 IS NOT NULL THEN count@0 ELSE 0 END as count]
+      AggregateExec: mode=Single, gby=[], aggr=[count]
+        PartitionedFileWriteExec: sink=ParquetSink(file_groups=[])
+          ProjectionExec: expr=[column1@0 as id, column2@1 as name]
+            DataSourceExec: partitions=1, partition_sizes=[1]

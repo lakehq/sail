@@ -10,7 +10,7 @@ data:
           CoalescePartitionsExec
             ProjectionExec: expr=[k@0 as #0]
               FilterExec: marker@1 = 1, projection=[k@0]
-                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_1.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_2.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_3.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
+                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
           ProjectionExec: expr=[#2@0 as #8, sum(a.#4)@1 as #9]
             FilterExec: sum(a.#4)@1 > 5
               AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(a.#4)]
@@ -24,9 +24,9 @@ data:
                               CoalescePartitionsExec
                                 ProjectionExec: expr=[k@0 as __early_join_key_0]
                                   FilterExec: marker@1 = 1, projection=[k@0]
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_1.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_2.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_3.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
-                            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k, ticket, amount], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #5, ticket@1 as #6], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                                    DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>]]}, projection=[k, ticket, amount], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>]]}, projection=[k@0 as #5, ticket@1 as #6], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_a_selective_filter_does_not_make_an_expensive_dimension_scan_cheap_to_duplicate[131073]"
 data:
@@ -38,7 +38,7 @@ data:
           CoalescePartitionsExec
             ProjectionExec: expr=[k@0 as #0]
               FilterExec: marker@1 = 1, projection=[k@0]
-                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_1.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_2.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_3.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
+                DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>, <tmp>/early_filter_large_dimension/<id>_0.zst.parquet:<range>]]}, projection=[k, marker], file_type=parquet, predicate=marker@1 = 1, pruning_predicate=marker_null_count@2 != row_count@3 AND marker_min@0 <= 1 AND 1 <= marker_max@1, required_guarantees=[marker in (1)]
           ProjectionExec: expr=[#2@0 as #8, sum(a.#4)@1 as #9]
             FilterExec: sum(a.#4)@1 > 5
               AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(a.#4)]
@@ -46,8 +46,8 @@ data:
                   AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(a.#4)]
                     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#5@0, #2@0), (#6@1, #3@1)], projection=[#2@2, #4@4]
                       CoalescePartitionsExec
-                        DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #5, ticket@1 as #6], file_type=parquet
-                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_1.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_2.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_3.zst.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3, amount@2 as #4], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+                        DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>]]}, projection=[k@0 as #5, ticket@1 as #6], file_type=parquet
+                      DataSourceExec: file_groups={1 group: [[<tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>, <tmp>/early_filter_facts/<id>_0.zst.parquet:<range>]]}, projection=[k@0 as #2, ticket@1 as #3, amount@2 as #4], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 ---
 name: "test_a_semi_join_that_only_filters_by_a_scan_is_not_a_reduction_boundary[k + 0]"
 data:

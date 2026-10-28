@@ -11,14 +11,21 @@ use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::cache::{SchemaFingerprint, TableScopedPath};
+use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
-use datafusion::physical_expr::create_lex_ordering;
+use datafusion::logical_expr::{
+    Expr, LogicalPlan, TableScan, UserDefinedLogicalNode, col, lit, when,
+};
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{create_lex_ordering, create_physical_expr};
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
@@ -35,6 +42,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
 
 use crate::listing::delete::FileDeleteExec;
+use crate::listing::partitioned_write::PartitionedFileWriteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::{
@@ -250,15 +258,59 @@ async fn plan_file_write(
             },
         )
         .await?;
-    if *overwrite {
+    let partitioned = PartitionedFileWriteExec::supports(&plan);
+    let plan = if partitioned {
+        Arc::new(PartitionedFileWriteExec::try_new(plan)?) as Arc<dyn ExecutionPlan>
+    } else {
+        plan
+    };
+    let plan = if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
             table_path.prefix().clone(),
         ));
-        Ok(Arc::new(BarrierExec::new(vec![delete], plan)))
+        // Keep the barrier directly above the writer, below the count aggregation's
+        // exchange, so distributed writers cannot run before deletion finishes.
+        Arc::new(BarrierExec::new(vec![delete], plan)) as Arc<dyn ExecutionPlan>
+    } else {
+        plan
+    };
+    if partitioned {
+        aggregate_write_counts(session, plan)
     } else {
         Ok(plan)
     }
+}
+
+fn aggregate_write_counts(
+    session: &dyn Session,
+    input: Arc<dyn ExecutionPlan>,
+) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    let schema = input.schema();
+    let sum = Arc::new(
+        AggregateExprBuilder::new(sum_udaf(), vec![Arc::new(Column::new("count", 0))])
+            .schema(Arc::clone(&schema))
+            .alias("count")
+            .build()?,
+    );
+    let aggregate = Arc::new(AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new_single(vec![]),
+        vec![sum],
+        vec![None],
+        input,
+        schema,
+    )?);
+    let count = create_physical_expr(
+        &when(col("count").is_not_null(), col("count")).otherwise(lit(0_u64))?,
+        &datafusion_common::DFSchema::try_from(aggregate.schema())?,
+        session.execution_props(),
+        &PhysicalPlanningContext::default(),
+    )?;
+    Ok(Arc::new(ProjectionExec::try_new(
+        [ProjectionExpr::new(count, "count")],
+        aggregate,
+    )?))
 }
 
 fn try_create_output_ordering(
@@ -564,4 +616,56 @@ async fn get_files_with_limit(
 
     let inexact_stats = all_files.next().await.is_some();
     Ok((file_group, inexact_stats))
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{ArrayRef, UInt64Array};
+    use arrow::datatypes::{Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::execution::context::SessionContext;
+    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use datafusion::physical_plan::collect;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn write_counts_are_summed_with_non_nullable_schema() -> datafusion_common::Result<()> {
+        let context = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "count",
+            DataType::UInt64,
+            false,
+        )]));
+        for counts in [[3, 5], [0, 0]] {
+            let partitions = counts
+                .iter()
+                .map(|count| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(UInt64Array::from(vec![*count])) as ArrayRef],
+                    )
+                    .map(|batch| vec![batch])
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let input = DataSourceExec::from_data_source(MemorySourceConfig::try_new(
+                &partitions,
+                Arc::clone(&schema),
+                None,
+            )?);
+            let input = Arc::new(CoalescePartitionsExec::new(input));
+            let plan = aggregate_write_counts(&context.state(), input)?;
+            assert_eq!(plan.schema(), schema);
+            let batches = collect(plan, context.task_ctx()).await?;
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].num_rows(), 1);
+            let expected = UInt64Array::from(vec![counts.iter().sum::<u64>()]);
+            assert_eq!(
+                batches[0].column(0).as_ref(),
+                &expected as &dyn arrow::array::Array
+            );
+        }
+        Ok(())
+    }
 }

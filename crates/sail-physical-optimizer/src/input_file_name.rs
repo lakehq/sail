@@ -11,10 +11,13 @@ use datafusion::physical_expr::expressions::{Column, LambdaVariable};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
+use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::unnest::UnnestExec;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning, PhysicalExpr};
+use datafusion::physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, Partitioning, PhysicalExpr, ReplaceChildrenOptions,
+};
 use sail_common_datafusion::input_file::{
     InputFileMetadata, InputFileMetadataSource, expression_references_input_file_metadata,
     is_input_file_metadata_function, projection_references_input_file_metadata,
@@ -243,6 +246,29 @@ fn push_metadata_through_file_context(
     if !projection_references_input_file_metadata(projection.projection_expr()) {
         return Ok(Transformed::no(plan));
     }
+    if projection.input().is::<GlobalLimitExec>() || projection.input().is::<LocalLimitExec>() {
+        let limit = projection.input();
+        let input = Arc::clone(limit.children()[0]);
+        let schema = input.schema();
+        let (expressions, metadata) = extract_metadata_expressions(projection, &schema)?;
+        let identity =
+            ProjectionExprs::from_indices(&(0..schema.fields().len()).collect::<Vec<_>>(), &schema);
+        // Only source metadata crosses the limit, not surrounding UDFs or computations.
+        let input = Arc::new(ProjectionExec::try_new(
+            identity.iter().cloned().chain(metadata),
+            input,
+        )?) as Arc<dyn ExecutionPlan>;
+        let limit = Arc::clone(limit).replace_children(
+            vec![input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let rewritten = ProjectionExec::try_new_with_schema_metadata(
+            expressions.iter().cloned(),
+            limit,
+            projection.schema().as_ref(),
+        )?;
+        return Ok(Transformed::yes(Arc::new(rewritten)));
+    }
     if let Some(filter) = projection.input().downcast_ref::<FilterExec>() {
         let schema = filter.input().schema();
         let (expressions, metadata) = extract_metadata_expressions(projection, &schema)?;
@@ -444,6 +470,73 @@ mod tests {
     use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
 
     use super::*;
+
+    #[test]
+    fn extracts_only_metadata_below_limits() {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "id", 0,
+        )))]);
+        for global in [false, true] {
+            let input: Arc<dyn ExecutionPlan> =
+                Arc::new(PlaceholderRowExec::new(Arc::clone(&schema)));
+            let limit: Arc<dyn ExecutionPlan> = if global {
+                let mut limit = GlobalLimitExec::new(input, 3, Some(2));
+                limit.set_required_ordering(ordering.clone());
+                Arc::new(limit)
+            } else {
+                let mut limit = LocalLimitExec::new(input, 5);
+                limit.set_required_ordering(ordering.clone());
+                Arc::new(limit)
+            };
+            let expressions = create_physical_exprs(
+                &[expr_fn::coalesce(vec![expr_fn::input_file_name(), lit("")])],
+                &DFSchema::try_from(Arc::clone(&schema)).unwrap(),
+                &ExecutionProps::default(),
+                &PhysicalPlanningContext::default(),
+            )
+            .unwrap();
+            let projection: Arc<dyn ExecutionPlan> = Arc::new(
+                ProjectionExec::try_new(
+                    [ProjectionExpr::new(Arc::clone(&expressions[0]), "name")],
+                    limit,
+                )
+                .unwrap(),
+            );
+            let expected_schema = projection.schema();
+            let result = push_metadata_through_file_context(projection).unwrap();
+            assert!(result.transformed);
+            assert_eq!(result.data.schema(), expected_schema);
+            let projection = result.data.downcast_ref::<ProjectionExec>().unwrap();
+            assert!(!projection_references_input_file_metadata(
+                projection.projection_expr()
+            ));
+            let computation = projection.expr()[0]
+                .expr
+                .downcast_ref::<ScalarFunctionExpr>()
+                .unwrap();
+            assert!(computation.fun().inner().is::<CoalesceFunc>());
+            assert!(computation.args()[0].is::<Column>());
+            let limit = projection.input();
+            if global {
+                let limit = limit.downcast_ref::<GlobalLimitExec>().unwrap();
+                assert_eq!((limit.skip(), limit.fetch()), (3, Some(2)));
+                assert_eq!(limit.required_ordering(), &ordering);
+            } else {
+                let limit = limit.downcast_ref::<LocalLimitExec>().unwrap();
+                assert_eq!(limit.fetch(), 5);
+                assert_eq!(limit.required_ordering(), &ordering);
+            }
+            let children = limit.children();
+            let extracted = children[0].downcast_ref::<ProjectionExec>().unwrap();
+            assert_eq!(extracted.expr().len(), 2);
+            assert!(extracted.expr()[0].expr.is::<Column>());
+            assert!(is_metadata_expression(&extracted.expr()[1].expr));
+        }
+    }
 
     #[test]
     fn rewrites_unresolved_input_file_metadata_to_spark_defaults() {
