@@ -186,7 +186,7 @@ impl PlanResolver<'_> {
             target: target_metadata,
             with_schema_evolution,
             case_sensitive: self.config.case_sensitive,
-            session_timezone_label: self.config.session_timezone_label(),
+            session_timezone: Arc::clone(&self.config.session_timezone),
             resolved_target_schema: target_schema.clone(),
             resolved_source_schema: source_schema.clone(),
             resolved_target_field_names,

@@ -15,6 +15,9 @@ use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval, YearMonthIntervalMonths,
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp_cast::{
+    cast_timestamp_ltz_to_ntz, cast_timestamp_ntz_to_ltz,
+};
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
@@ -23,7 +26,6 @@ use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
-use crate::function::datetime_utils::{cast_timestamp_ltz_to_ntz, cast_timestamp_ntz_to_ltz};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::predicate::spark_interval_metadata_for_expression;

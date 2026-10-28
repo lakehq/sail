@@ -22,14 +22,14 @@ use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs,
     HigherOrderSignature, HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, ValueOrLambda, Volatility, lit,
+    ScalarFunctionArgs, ScalarUDFImpl, ValueOrLambda, Volatility,
 };
 use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
+use sail_common_datafusion::utils::datetime::SparkZone;
 
 use crate::functions_nested_utils::{evaluate_lambdas_until_null, scatter_active_rows};
-use crate::scalar::datetime::spark_timestamp::SparkZone;
 
 /// How [`ConvertTz`] converts values, which differs for Spark's casts between TIMESTAMP_NTZ and
 /// TIMESTAMP.
@@ -438,27 +438,6 @@ impl ConvertTz {
 }
 
 const MICROS_PER_SECOND: i64 = 1_000_000;
-
-/// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ, which takes the wall-clock time of the value in
-/// `timezone`. Arrow would take the wall-clock time in UTC.
-pub fn cast_timestamp_ltz_to_ntz(expression: Expr, timezone: &str, is_try: bool) -> Expr {
-    let utc = datafusion_expr::cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None));
-    if is_fixed_zero_offset_timezone(timezone) {
-        return utc;
-    }
-    ScalarUDF::from(ConvertTz::cast(is_try)).call(vec![lit("UTC"), lit(timezone), utc])
-}
-
-/// Spark's cast of TIMESTAMP to TIMESTAMP_NTZ `data_type`, which takes the wall-clock time of the
-/// value in the session time zone. Arrow's cast takes the wall-clock time in UTC.
-pub fn session_wall_clock(expr: Expr, data_type: &DataType, timezone: &str) -> Expr {
-    let wall = cast_timestamp_ltz_to_ntz(expr, timezone, false);
-    if *data_type == DataType::Timestamp(TimeUnit::Microsecond, None) {
-        wall
-    } else {
-        datafusion_expr::cast(wall, data_type.clone())
-    }
-}
 
 /// A time zone of a cast, which can be a fixed offset.
 #[derive(Debug, Clone, Copy)]

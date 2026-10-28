@@ -23,6 +23,7 @@ use datafusion_expr::{
 use educe::Educe;
 use log::trace;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
@@ -352,7 +353,7 @@ pub fn expand_merge(
                 target_type,
                 options.case_sensitive,
                 StructFieldAlignment::FillMissingWithNull,
-                &options.session_timezone_label,
+                &arrow_timezone_label(&options.session_timezone),
             )?
             .alias(desired.clone()))
         })
@@ -1430,7 +1431,7 @@ fn align_merge_value(
         target_field.data_type(),
         options.case_sensitive,
         StructFieldAlignment::FillMissingWithNull,
-        &options.session_timezone_label,
+        &arrow_timezone_label(&options.session_timezone),
     )
 }
 

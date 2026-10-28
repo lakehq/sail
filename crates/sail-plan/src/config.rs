@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use sail_function::scalar::datetime::spark_timestamp::arrow_timezone_label;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;

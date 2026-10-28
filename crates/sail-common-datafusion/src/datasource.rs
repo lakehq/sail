@@ -318,8 +318,8 @@ pub struct MergeIntoOptions {
     pub target: RowLevelTarget,
     pub with_schema_evolution: bool,
     pub case_sensitive: bool,
-    /// The time zone label of the session, in which TIMESTAMP values cast to TIMESTAMP_NTZ.
-    pub session_timezone_label: Arc<str>,
+    /// The time zone of the session, in which TIMESTAMP values cast to TIMESTAMP_NTZ.
+    pub session_timezone: Arc<str>,
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,

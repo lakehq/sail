@@ -21,7 +21,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::datetime::convert_tz::session_wall_clock;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;

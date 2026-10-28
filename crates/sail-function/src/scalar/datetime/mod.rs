@@ -18,6 +18,7 @@ pub mod spark_timestamp;
 pub mod spark_unix_timestamp;
 pub mod spark_window_buckets;
 pub mod spark_year;
+pub mod timestamp_cast;
 pub mod timestamp_now;
 pub(crate) mod timestamp_parser;
 pub(crate) mod utils;

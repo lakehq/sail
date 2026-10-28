@@ -2,41 +2,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, FieldRef, Fields, TimeUnit};
 use datafusion_common::DFSchema;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
-use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
-pub(crate) use sail_function::scalar::datetime::convert_tz::cast_timestamp_ltz_to_ntz;
+use datafusion_expr::{ExprSchemable, cast, expr};
+use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
 
 use crate::error::PlanResult;
 use crate::function::common::ScalarFunctionInput;
-
-/// Spark's cast of TIMESTAMP_NTZ to TIMESTAMP, which reads the value as a wall-clock time in
-/// `timezone` and resolves DST gaps and overlaps like Spark.
-pub(crate) fn cast_timestamp_ntz_to_ltz(
-    expression: expr::Expr,
-    timezone: &Arc<str>,
-    is_try: bool,
-) -> expr::Expr {
-    if is_fixed_zero_offset_timezone(timezone) {
-        // The wall-clock time is the instant. Arrow's cast would compute it with Chrono, which
-        // does not represent Spark's full range.
-        let micros = cast(
-            cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None)),
-            DataType::Int64,
-        );
-        return cast(
-            micros,
-            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(timezone))),
-        );
-    }
-    ScalarUDF::from(ConvertTz::cast(is_try).with_output_timezone(Some(Arc::clone(timezone)))).call(
-        vec![
-            lit(timezone.to_string()),
-            lit("UTC"),
-            cast(expression, DataType::Timestamp(TimeUnit::Microsecond, None)),
-        ],
-    )
-}
 
 /// Spark's common type for TIMESTAMP_NTZ and TIMESTAMP values is TIMESTAMP, which Sail labels with
 /// the session time zone. DataFusion would read TIMESTAMP_NTZ values as UTC and keep the TIMESTAMP

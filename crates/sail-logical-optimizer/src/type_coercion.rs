@@ -72,8 +72,8 @@ use datafusion_expr::{
 };
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
-use sail_function::scalar::datetime::convert_tz::session_wall_clock;
-use sail_function::scalar::datetime::spark_timestamp::arrow_timezone_label;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 
 use crate::binary_type_coercion::BinaryTypeCoercer;
 use crate::session_timestamp::convert_session_timestamp_casts;

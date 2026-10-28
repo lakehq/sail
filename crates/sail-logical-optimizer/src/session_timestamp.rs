@@ -18,8 +18,8 @@ use datafusion_expr::{
 };
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
 use sail_common_datafusion::session::time_zone::SessionTimeZoneOptions;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, has_timestamp_ntz};
-use sail_function::scalar::datetime::spark_timestamp::arrow_timezone_label;
 
 /// Converts the casts of TIMESTAMP_NTZ to TIMESTAMP, which type coercion adds, like Spark.
 ///

@@ -35,6 +35,9 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
+use sail_function::scalar::datetime::timestamp_cast::{
+    cast_timestamp_ltz_to_ntz, cast_timestamp_ntz_to_ltz,
+};
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_python_udf::udf::expr_contains_python_udf;
@@ -47,9 +50,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     ScalarFunction, ScalarFunctionInput, expr_contains_spark_cast_to_variant,
 };
-use crate::function::datetime_utils::{
-    cast_timestamp_ltz_to_ntz, cast_timestamp_ntz_to_ltz, with_session_timezone_label,
-};
+use crate::function::datetime_utils::with_session_timezone_label;
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(

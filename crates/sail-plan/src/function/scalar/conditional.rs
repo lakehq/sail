@@ -7,14 +7,14 @@ use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when}
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFunctionInput};
 use crate::function::datetime_utils::{
-    cast_timestamp_ntz_to_ltz, cast_to_session_timestamp, coerce_timestamp_ntz_values,
-    is_timestamp_ntz_mix,
+    cast_to_session_timestamp, coerce_timestamp_ntz_values, is_timestamp_ntz_mix,
 };
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

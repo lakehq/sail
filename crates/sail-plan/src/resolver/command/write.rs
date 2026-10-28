@@ -35,7 +35,7 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::datetime::convert_tz::session_wall_clock;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::misc::raise_error::RaiseError;
