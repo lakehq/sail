@@ -692,8 +692,10 @@ fn relabel_nested_timestamp_fields(data_type: &DataType, target: Option<&DataTyp
     let element = match target {
         Some(
             DataType::List(field)
-            | DataType::LargeList(field)
+            | DataType::ListView(field)
             | DataType::FixedSizeList(field, _)
+            | DataType::LargeList(field)
+            | DataType::LargeListView(field)
             | DataType::Map(field, _),
         ) => Some(field.data_type()),
         _ => None,
@@ -717,10 +719,12 @@ fn relabel_nested_timestamp_fields(data_type: &DataType, target: Option<&DataTyp
             DataType::Struct(transformed_fields)
         }
         DataType::List(field) => DataType::List(transform_element(field)),
-        DataType::LargeList(field) => DataType::LargeList(transform_element(field)),
+        DataType::ListView(field) => DataType::ListView(transform_element(field)),
         DataType::FixedSizeList(field, size) => {
             DataType::FixedSizeList(transform_element(field), *size)
         }
+        DataType::LargeList(field) => DataType::LargeList(transform_element(field)),
+        DataType::LargeListView(field) => DataType::LargeListView(transform_element(field)),
         DataType::Map(field, sorted) => DataType::Map(transform_element(field), *sorted),
         _ => data_type.clone(),
     }
