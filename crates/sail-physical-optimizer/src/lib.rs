@@ -13,7 +13,6 @@ use datafusion::physical_optimizer::limit_pushdown_past_window::LimitPushPastWin
 use datafusion::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
-use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::topk_repartition::TopKRepartition;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
@@ -40,6 +39,7 @@ mod join_reorder;
 mod projection_pushdown;
 mod scan_partitions;
 mod select_semi_join_build_side;
+mod streaming_sanity;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -69,6 +69,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(WindowTopN::new()));
     rules.push(Arc::new(WrapInputFileMetadataSource::new()));
     rules.push(Arc::new(PushDownInputFileMetadata::new()));
+    rules.push(Arc::new(streaming_sanity::PreserveStreamProjectionOrder));
     rules.push(Arc::new(EnsureRequirements::new()));
     rules.push(Arc::new(scan_partitions::OptimizeScanPartitions));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
@@ -88,7 +89,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
-    rules.push(Arc::new(SanityCheckPlan::new()));
+    rules.push(Arc::new(streaming_sanity::StreamingSanityCheck));
 
     rules
 }

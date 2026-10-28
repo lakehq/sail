@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -9,10 +10,12 @@ use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{Result, internal_err, plan_err};
-use futures::StreamExt;
+use futures::TryStreamExt;
 use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::event::encoding::DecodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;
+
+use super::state::{RowMultiset, row_at, rows_to_batch};
 
 /// A physical plan node that collects a stream of retractable data batches
 /// into final data batches.
@@ -69,7 +72,7 @@ impl ExecutionPlan for StreamCollectorExec {
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
-        vec![true]
+        vec![false]
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
@@ -118,25 +121,43 @@ impl ExecutionPlan for StreamCollectorExec {
         if self.input.output_partitioning().partition_count() != 1 {
             return internal_err!("{} requires a single input partition", self.name());
         }
-        let stream = self.input.execute(partition, context)?;
-        // TODO: collect data batches and handle retractions
-        let stream = DecodedFlowEventStream::try_new(stream)?.filter_map(|event| async move {
-            match event {
-                Ok(FlowEvent::Marker(_)) => None,
-                Ok(FlowEvent::Data {
-                    batch,
-                    retracted: _,
-                }) => Some(Ok(batch)),
-                Err(e) => Some(Err(e)),
+        let stream = self.input.execute(partition, context.clone())?;
+        let schema = self.schema();
+        let output_schema = schema.clone();
+        let output = futures::stream::once(async move {
+            let mut stream = DecodedFlowEventStream::try_new(stream)?;
+            let mut state = RowMultiset::default();
+            let mut memory =
+                MemoryConsumer::new("StreamCollectorExec").register(context.memory_pool());
+            while let Some(event) = stream.try_next().await? {
+                if let FlowEvent::Data { batch, retracted } = event {
+                    for i in 0..batch.num_rows() {
+                        state.apply(row_at(&batch, i)?, retracted.value(i), &mut memory)?;
+                    }
+                }
             }
-        });
+            Ok::<_, datafusion_common::DataFusionError>(futures::stream::try_unfold(
+                (state.into_rows(), memory),
+                move |(mut rows, memory)| {
+                    let chunk = rows.by_ref().take(1024).collect::<Vec<_>>();
+                    let result = if chunk.is_empty() {
+                        Ok(None)
+                    } else {
+                        rows_to_batch(schema.clone(), &chunk)
+                            .map(|batch| Some((batch, (rows, memory))))
+                    };
+                    futures::future::ready(result)
+                },
+            ))
+        })
+        .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
-            stream,
+            output_schema,
+            output,
         )))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
-        true
+        false
     }
 }

@@ -10,7 +10,7 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{Result, plan_err};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 #[derive(Debug)]
 pub struct ConsoleSinkExec {
@@ -95,26 +95,18 @@ impl ExecutionPlan for ConsoleSinkExec {
         let output = futures::stream::once(async move {
             stream
                 .enumerate()
-                .for_each(|(i, batch)| async move {
-                    let text = match batch {
-                        Ok(batch) => match pretty_format_batches(&[batch]) {
-                            Ok(batch) => format!("{batch}"),
-                            Err(e) => {
-                                format!("error formatting batch: {e}")
-                            }
-                        },
-                        Err(e) => {
-                            format!("error: {e}")
-                        }
-                    };
+                .map(|(i, batch)| batch.map(|batch| (i, batch)))
+                .try_for_each(|(i, batch)| async move {
+                    let text = pretty_format_batches(&[batch])?;
                     let mut stdout = std::io::stdout().lock();
                     let _ = writeln!(stdout, "partition {partition} batch {i}");
                     let _ = writeln!(stdout, "{text}");
+                    Ok::<_, datafusion_common::DataFusionError>(())
                 })
-                .await;
-            futures::stream::empty()
+                .await?;
+            Ok::<_, datafusion_common::DataFusionError>(futures::stream::empty())
         })
-        .flatten();
+        .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             output,

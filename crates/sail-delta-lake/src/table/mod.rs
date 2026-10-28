@@ -279,6 +279,9 @@ pub async fn create_delta_source(
     options: DeltaReadOptions,
     lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
+    if options.apply_changes {
+        return datafusion_common::plan_err!("applyChanges requires a streaming Delta CDF read");
+    }
     let read_options = options.clone();
     let (snapshot, log_store, scan_config) =
         load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
@@ -813,7 +816,7 @@ where
     }
 }
 
-async fn load_delta_read_state(
+pub(crate) async fn load_delta_read_state(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,

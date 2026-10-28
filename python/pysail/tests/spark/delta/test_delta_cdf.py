@@ -317,6 +317,34 @@ def test_cdf_rejects_nested_incompatible_schema(spark, tmp_path, column_mapping,
         _feed(spark, path).collect()
 
 
+@pytest.mark.parametrize("deletion_vectors", [False, True])
+@pytest.mark.parametrize("column_mapping", ["none", "name", "id"])
+def test_cdf_whole_file_deletes(spark, tmp_path, deletion_vectors, column_mapping):
+    path = tmp_path / "cdf_whole_file_deletes"
+    (
+        spark.createDataFrame([(1, "a"), (2, "a"), (3, "b")], "id LONG, p STRING")
+        .write.format("delta")
+        .partitionBy("p")
+        .option("delta.enableChangeDataFeed", "true")
+        .option("delta.enableDeletionVectors", str(deletion_vectors).lower())
+        .option("delta.columnMapping.mode", column_mapping)
+        .save(str(path))
+    )
+    spark.sql(f"DELETE FROM delta.`{path}` WHERE p = 'a'")  # noqa: S608
+    spark.sql(f"DELETE FROM delta.`{path}`")  # noqa: S608
+    for version, expected in [(1, [(1, "a", "delete"), (2, "a", "delete")]), (2, [(3, "b", "delete")])]:
+        assert (
+            sorted(
+                tuple(row) for row in _feed(spark, path, version, version).select("id", "p", "_change_type").collect()
+            )
+            == expected
+        )
+        actions = _actions(path, version)
+        assert any("remove" in action for action in actions)
+        assert not any("cdc" in action for action in actions)
+    assert spark.read.format("delta").load(str(path)).count() == 0
+
+
 def test_cdf_inferred_deletion_vectors(spark, tmp_path):
     path = tmp_path / "cdf_inferred_dv"
     spark.range(8, numPartitions=1).write.format("delta").option("delta.enableChangeDataFeed", "true").option(

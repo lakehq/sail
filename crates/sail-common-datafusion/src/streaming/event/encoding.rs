@@ -3,7 +3,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::array::{
-    Array, ArrayData, ArrayRef, BinaryArray, BooleanArray, RecordBatch, new_null_array,
+    Array, ArrayData, ArrayRef, BinaryArray, BooleanArray, RecordBatch, RecordBatchOptions,
+    new_null_array,
 };
 use datafusion::arrow::buffer::Buffer;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
@@ -134,7 +135,11 @@ impl DecodedMultiFlowEventStream {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or_else(|| exec_datafusion_err!("invalid retracted array type"))?;
-        let data = RecordBatch::try_new(self.schema.clone(), columns.cloned().collect())?;
+        let data = RecordBatch::try_new_with_options(
+            self.schema.clone(),
+            columns.cloned().collect(),
+            &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+        )?;
         Ok((marker, retracted, data))
     }
 

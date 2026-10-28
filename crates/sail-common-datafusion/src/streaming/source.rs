@@ -17,6 +17,10 @@ pub trait StreamSource: Send + Sync + fmt::Debug {
     /// This is the schema without flow event fields.
     fn data_schema(&self) -> SchemaRef;
 
+    fn produces_retractions(&self) -> bool {
+        false
+    }
+
     fn constraints(&self) -> Option<&Constraints> {
         None
     }

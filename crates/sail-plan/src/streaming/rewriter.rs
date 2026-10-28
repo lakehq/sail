@@ -20,6 +20,7 @@ use sail_data_source::listing::write::FileWriteNode;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::show_string::ShowStringNode;
+use sail_logical_plan::streaming::aggregate::StreamAggregateNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
 use sail_logical_plan::streaming::filter::StreamFilterNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
@@ -72,6 +73,11 @@ impl TreeNodeRewriter for StreamingRewriter {
                 let Projection {
                     mut expr, input, ..
                 } = projection;
+                if produces_retractions(&input)? && expr.iter().any(|expr| expr.is_volatile()) {
+                    return plan_err!(
+                        "volatile projections are not supported on retractable streams"
+                    );
+                }
                 expr.insert(0, col(MARKER_FIELD_NAME));
                 expr.insert(1, col(RETRACTED_FIELD_NAME));
                 Ok(Transformed::yes(LogicalPlan::Projection(
@@ -82,6 +88,9 @@ impl TreeNodeRewriter for StreamingRewriter {
                 let Filter {
                     predicate, input, ..
                 } = filter;
+                if produces_retractions(&input)? && predicate.is_volatile() {
+                    return plan_err!("volatile filters are not supported on retractable streams");
+                }
                 let predicate = or(predicate, col(MARKER_FIELD_NAME).is_not_null());
                 Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                     node: Arc::new(StreamFilterNode::new(input, predicate)),
@@ -90,8 +99,14 @@ impl TreeNodeRewriter for StreamingRewriter {
             LogicalPlan::Window(_) => {
                 not_impl_err!("streaming window: {plan:?}")
             }
-            LogicalPlan::Aggregate(_) => {
-                not_impl_err!("streaming aggregate: {plan:?}")
+            LogicalPlan::Aggregate(aggregate) => {
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(StreamAggregateNode::try_new(
+                        aggregate.input,
+                        aggregate.group_expr,
+                        aggregate.aggr_expr,
+                    )?),
+                })))
             }
             LogicalPlan::Sort(_) => {
                 plan_err!("sort is not supported for streaming: {plan:?}")
@@ -141,6 +156,9 @@ impl TreeNodeRewriter for StreamingRewriter {
                 SubqueryAlias::try_new(alias.input, alias.alias)?,
             ))),
             LogicalPlan::Limit(ref limit) => {
+                if produces_retractions(&limit.input)? {
+                    return plan_err!("LIMIT is not supported on retractable streams");
+                }
                 let SkipType::Literal(skip) = limit.get_skip_type()? else {
                     return plan_err!("streaming limit requires literal skip: {plan:?}");
                 };
@@ -187,6 +205,22 @@ impl TreeNodeRewriter for StreamingRewriter {
             }
         }
     }
+}
+
+fn produces_retractions(plan: &LogicalPlan) -> Result<bool> {
+    plan.exists(|plan| {
+        Ok(match plan {
+            LogicalPlan::Extension(extension) => {
+                extension.node.as_any().is::<StreamAggregateNode>()
+                    || extension
+                        .node
+                        .as_any()
+                        .downcast_ref::<StreamSourceWrapperNode>()
+                        .is_some_and(|node| node.source().produces_retractions())
+            }
+            _ => false,
+        })
+    })
 }
 
 fn is_streaming_table_provider(provider: &dyn TableProvider) -> bool {

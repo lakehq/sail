@@ -244,6 +244,9 @@ data:
     physical_plan after PushDownInputFileMetadata:
     SAME TEXT AS ABOVE
 
+    physical_plan after PreserveStreamProjectionOrder:
+    SAME TEXT AS ABOVE
+
     physical_plan after EnsureRequirements:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
