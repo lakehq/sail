@@ -58,8 +58,9 @@ impl WindowRewriter<'_> {
     }
 
     /// Moves computed partition and order keys into hidden columns of a projection below
-    /// the window, as Spark's `ExtractWindowExpressions` does, so that the window and the
-    /// sort it requires refer to plain columns rather than to two copies of an expression.
+    /// the window, as Spark's `ExtractWindowExpressions` does. It runs before the required
+    /// sort is built, so the window and that sort refer to the same plain columns and each
+    /// key, volatile or not, is evaluated once per row.
     fn project_window_keys(&mut self, function: &mut WindowFunction) -> Result<()> {
         let mut keys = vec![];
         for expr in function.params.partition_by.iter_mut() {
@@ -117,6 +118,12 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
         match node {
             Expr::WindowFunction(function) => {
+                let name = Expr::WindowFunction(function.clone())
+                    .schema_name()
+                    .to_string();
+                if let Some(replacement) = self.seen.get(&name) {
+                    return Ok(Transformed::yes(replacement.clone()));
+                }
                 let requires_input_order =
                     Self::requires_input_order(&function, self.plan.schema())
                         .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -147,6 +154,8 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                     }
                 }
 
+                let mut function = function;
+                self.project_window_keys(&mut function)?;
                 let mut required = function
                     .params
                     .partition_by
@@ -191,14 +200,6 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                     }
                     self.stable_ordering = Some(desired);
                 }
-                let name = Expr::WindowFunction(function.clone())
-                    .schema_name()
-                    .to_string();
-                if let Some(replacement) = self.seen.get(&name) {
-                    return Ok(Transformed::yes(replacement.clone()));
-                }
-                let mut function = function;
-                self.project_window_keys(&mut function)?;
                 let node = Expr::WindowFunction(function);
                 let output = node.schema_name().to_string();
                 let plan = mem::replace(&mut self.plan, empty_logical_plan());

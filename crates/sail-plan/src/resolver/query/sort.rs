@@ -183,12 +183,30 @@ impl PlanResolver<'_> {
     fn input_aggregate(plan: &LogicalPlan) -> Option<&Aggregate> {
         match plan {
             LogicalPlan::Aggregate(aggregate) => Some(aggregate),
-            LogicalPlan::Window(Window { input, .. }) => match input.as_ref() {
-                LogicalPlan::Aggregate(aggregate) => Some(aggregate),
-                _ => None,
-            },
+            LogicalPlan::Window(Window { input, .. }) => {
+                match Self::skip_window_key_projection(input) {
+                    LogicalPlan::Aggregate(aggregate) => Some(aggregate),
+                    _ => None,
+                }
+            }
             _ => None,
         }
+    }
+
+    /// The input below the projection that the window resolver adds for computed window
+    /// keys: it passes every input column through unchanged and appends the keys, so the
+    /// aggregate's columns keep their names. Any other plan is returned as is.
+    fn skip_window_key_projection(plan: &LogicalPlan) -> &LogicalPlan {
+        let LogicalPlan::Projection(Projection { expr, input, .. }) = plan else {
+            return plan;
+        };
+        let columns = input.schema().columns();
+        let passes_input_through = expr.len() > columns.len()
+            && expr
+                .iter()
+                .zip(columns)
+                .all(|(expr, column)| matches!(expr, Expr::Column(c) if *c == column));
+        if passes_input_through { input } else { plan }
     }
 
     fn rewrite_sort_grouping_expr(sort: Sort, aggregate: &Aggregate) -> PlanResult<Sort> {
