@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType, Field as ArrowField, Fields, Schema as ArrowSchema, SchemaRef,
+};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableSource};
@@ -50,7 +52,9 @@ use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::scan::IcebergScan;
-use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
+use crate::datasource::type_converter::{
+    ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg, iceberg_schema_to_arrow,
+};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::metadata_relation::{IcebergMetadataRelationType, metadata_relation_provider};
@@ -622,6 +626,111 @@ fn describe_sort_order(order: &SortOrder, schema: &Schema) -> Result<String> {
         .map(|fields| fields.join(", "))
 }
 
+/// Iceberg accepts only UTC timestamp labels, while Sail labels TIMESTAMP values with the session
+/// time zone. Relabeling keeps the stored instants. The fields of an existing TIMESTAMP_NTZ column
+/// of `table` keep a non-UTC zone, so that the write fails as before instead of storing the UTC
+/// wall-clock time.
+fn relabel_timestamps_as_utc(
+    input: Arc<dyn ExecutionPlan>,
+    table: Option<&ArrowSchema>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::expressions::{CastExpr, Column};
+    use datafusion::physical_plan::projection::ProjectionExec;
+
+    let schema = input.schema();
+    let relabeled = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let target = table.and_then(|table| table.field_with_name(field.name()).ok());
+            relabel_timestamp_field(field.as_ref(), target.map(|target| target.data_type()))
+        })
+        .collect::<Vec<_>>();
+    if schema
+        .fields()
+        .iter()
+        .zip(&relabeled)
+        .all(|(field, relabeled)| field.data_type() == relabeled.data_type())
+    {
+        return Ok(input);
+    }
+    let expressions = schema
+        .fields()
+        .iter()
+        .zip(relabeled)
+        .enumerate()
+        .map(|(index, (field, relabeled))| {
+            let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+            let expression: Arc<dyn PhysicalExpr> = if field.data_type() == relabeled.data_type() {
+                column
+            } else {
+                Arc::new(CastExpr::new(column, relabeled.data_type().clone(), None))
+            };
+            (expression, field.name().clone())
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
+}
+
+/// Relabels TIMESTAMP values with UTC, including in nested fields, like Delta's schema
+/// normalization, except where `target`, the type of the existing column, is TIMESTAMP_NTZ.
+fn relabel_timestamp_field(field: &ArrowField, target: Option<&DataType>) -> ArrowField {
+    let data_type = match (field.data_type(), target) {
+        (DataType::Timestamp(_, Some(_)), Some(DataType::Timestamp(_, None))) => {
+            field.data_type().clone()
+        }
+        (DataType::Timestamp(unit, Some(tz)), _) if !matches!(tz.as_ref(), "UTC" | "+00:00") => {
+            DataType::Timestamp(*unit, Some("UTC".into()))
+        }
+        (data_type, target) => relabel_nested_timestamp_fields(data_type, target),
+    };
+    field.clone().with_data_type(data_type)
+}
+
+// Adapted from the Delta Lake schema normalization, where it is private.
+fn relabel_nested_timestamp_fields(data_type: &DataType, target: Option<&DataType>) -> DataType {
+    let element = match target {
+        Some(
+            DataType::List(field)
+            | DataType::ListView(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::LargeList(field)
+            | DataType::LargeListView(field)
+            | DataType::Map(field, _),
+        ) => Some(field.data_type()),
+        _ => None,
+    };
+    let transform_element = |field: &ArrowField| Arc::new(relabel_timestamp_field(field, element));
+    match data_type {
+        DataType::Struct(fields) => {
+            let targets = match target {
+                Some(DataType::Struct(targets)) => Some(targets),
+                _ => None,
+            };
+            let transformed_fields = fields
+                .iter()
+                .map(|field| {
+                    let target = targets
+                        .and_then(|targets| targets.find(field.name()))
+                        .map(|(_, target)| target.data_type());
+                    Arc::new(relabel_timestamp_field(field.as_ref(), target))
+                })
+                .collect::<Fields>();
+            DataType::Struct(transformed_fields)
+        }
+        DataType::List(field) => DataType::List(transform_element(field)),
+        DataType::ListView(field) => DataType::ListView(transform_element(field)),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(transform_element(field), *size)
+        }
+        DataType::LargeList(field) => DataType::LargeList(transform_element(field)),
+        DataType::LargeListView(field) => DataType::LargeListView(transform_element(field)),
+        DataType::Map(field, sorted) => DataType::Map(transform_element(field), *sorted),
+        _ => data_type.clone(),
+    }
+}
+
 fn validate_scoped_overwrite_table(mode: &PhysicalSinkMode, table_exists: bool) -> Result<()> {
     if matches!(mode, PhysicalSinkMode::OverwritePartitions) && !table_exists {
         return plan_err!("Iceberg dynamic partition overwrite requires an existing table");
@@ -795,6 +904,10 @@ pub(crate) async fn plan_iceberg_write(
         existing_partition_columns.unwrap_or_default()
     };
 
+    // An overwrite that replaces the schema has no existing columns to keep, like the schema mode
+    // that `get_schema_mode` gives it.
+    let replaces_schema =
+        matches!(mode, PhysicalSinkMode::Overwrite) && iceberg_options.overwrite_schema;
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
@@ -804,6 +917,13 @@ pub(crate) async fn plan_iceberg_write(
     if let Some(target_file_size) = target_file_size {
         options.target_file_size_bytes = Some(target_file_size);
     }
+    let table_schema = table
+        .as_ref()
+        .filter(|_| !replaces_schema)
+        .and_then(|table| table.metadata().current_schema())
+        .map(iceberg_schema_to_arrow)
+        .transpose()?;
+    let physical_input = relabel_timestamps_as_utc(physical_input, table_schema.as_ref())?;
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
