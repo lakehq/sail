@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::functions::expr_fn::nanvl;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
@@ -141,9 +141,10 @@ fn reserve_key_names(reserved: &mut BTreeSet<String>, schema: &DFSchema) {
     );
 }
 
-/// Whether grouping the input is equivalent to grouping the cast result.
-/// Spark's up-casts include lossy integer-to-float conversions, so they are not
-/// sufficient here: distinct inputs must not collide, nor equal inputs split.
+/// Families selected for grouping the input instead of the cast result.
+/// Successful values must remain one-to-one; measured costly families keep computed keys.
+/// INT->FLOAT and BIGINT->FLOAT/DOUBLE round distinct keys together. Floating
+/// string casts need private NaN handling; floating widening remains computed.
 fn injective_cast(from: &DataType, to: &DataType) -> bool {
     // Decimal digits needed by every value of each signed integer type.
     let digits = |data_type: &DataType| match data_type {
@@ -153,40 +154,103 @@ fn injective_cast(from: &DataType, to: &DataType) -> bool {
         DataType::Int64 => Some(19),
         _ => None,
     };
-    let width = |precision: &u8, scale: &i8| i16::from(*precision) - i16::from(*scale);
+    let width = |precision: u8, scale: i8| i16::from(precision) - i16::from(scale);
+    let field_cast = |from: &Field, to: &Field| {
+        (!from.is_nullable() || to.is_nullable())
+            && injective_cast(from.data_type(), to.data_type())
+    };
+    let array_cast = |from: &Field, to: &Field| {
+        // Late integer-array conversion regresses even low-NDV grouping.
+        !(from.data_type().is_integer()
+            && to.data_type().is_integer()
+            && from.data_type() != to.data_type())
+            && field_cast(from, to)
+    };
     match (from, to) {
         _ if from == to => true,
         (DataType::Null, _) => true,
         (_, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
             digits(from).is_some()
+                || from.is_decimal()
                 || matches!(
                     from,
-                    DataType::Decimal128(..)
-                        | DataType::Boolean
+                    DataType::Boolean
                         | DataType::Utf8
                         | DataType::LargeUtf8
                         | DataType::Utf8View
+                        | DataType::Date32
+                        | DataType::Date64
+                        | DataType::Time32(_)
+                        | DataType::Timestamp(_, _)
+                        | DataType::Interval(_)
+                        | DataType::Duration(TimeUnit::Microsecond | TimeUnit::Nanosecond)
                 )
         }
         (DataType::Boolean, _) => digits(to).is_some(),
-        (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-            width(p2, s2) >= width(p1, s1) && s2 >= s1
-        }
-        (DataType::Decimal128(precision, scale), _) => {
+        (
+            DataType::Decimal32(p1, s1)
+            | DataType::Decimal64(p1, s1)
+            | DataType::Decimal128(p1, s1)
+            | DataType::Decimal256(p1, s1),
+            DataType::Decimal32(p2, s2)
+            | DataType::Decimal64(p2, s2)
+            | DataType::Decimal128(p2, s2)
+            | DataType::Decimal256(p2, s2),
+        ) => width(*p2, *s2) >= width(*p1, *s1) && s2 >= s1,
+        (
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale),
+            _,
+        ) => {
             *scale == 0
                 && match to {
                     DataType::Int8 => *precision <= 2,
                     DataType::Int16 => *precision <= 4,
                     DataType::Int32 => *precision <= 9,
+                    // A 19-digit raw decimal key doubles storage versus the cast Int64.
                     DataType::Int64 => *precision <= 18,
                     _ => false,
                 }
         }
-        (_, DataType::Decimal128(precision, scale)) => {
-            digits(from).is_some_and(|needed| *scale >= 0 && width(precision, scale) >= needed)
-        }
+        (
+            _,
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale)
+            | DataType::Decimal256(precision, scale),
+        ) => digits(from).is_some_and(|needed| *scale >= 0 && width(*precision, *scale) >= needed),
         (DataType::Int8 | DataType::Int16, DataType::Float32)
         | (DataType::Int8 | DataType::Int16 | DataType::Int32, DataType::Float64) => true,
+        // Date32->Timestamp remains computed: late conversion regressed distributed cases.
+        (DataType::Date32, DataType::Date64) => true,
+        (DataType::Timestamp(from_unit, _), DataType::Timestamp(to_unit, _)) => {
+            from_unit == to_unit
+                || matches!(
+                    (from_unit, to_unit),
+                    (
+                        TimeUnit::Second,
+                        TimeUnit::Millisecond | TimeUnit::Microsecond | TimeUnit::Nanosecond
+                    ) | (
+                        TimeUnit::Millisecond,
+                        TimeUnit::Microsecond | TimeUnit::Nanosecond
+                    ) | (TimeUnit::Microsecond, TimeUnit::Nanosecond)
+                )
+        }
+        (DataType::List(from), DataType::List(to))
+        | (DataType::LargeList(from), DataType::LargeList(to)) => array_cast(from, to),
+        (DataType::FixedSizeList(from, n), DataType::FixedSizeList(to, m)) => {
+            n == m && array_cast(from, to)
+        }
+        (DataType::Map(from, a), DataType::Map(to, b)) => a == b && field_cast(from, to),
+        (DataType::Struct(from), DataType::Struct(to)) => {
+            from.len() == to.len()
+                && from
+                    .iter()
+                    .zip(to)
+                    .all(|(from, to)| from.name() == to.name() && field_cast(from, to))
+        }
         _ => digits(from)
             .zip(digits(to))
             .is_some_and(|(needed, wider)| wider > needed),
@@ -1248,6 +1312,179 @@ mod tests {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+    #[test]
+    fn grouping_before_cast_selects_scalar_and_nested_conversions() {
+        let positives = [
+            (DataType::Boolean, DataType::Int64),
+            (DataType::Int64, DataType::Decimal128(19, 0)),
+            (DataType::Decimal128(18, 0), DataType::Int64),
+            (DataType::Decimal64(9, 2), DataType::Decimal128(14, 4)),
+            (DataType::Date32, DataType::Date64),
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (DataType::Date32, DataType::Utf8),
+            (DataType::Date64, DataType::Utf8),
+            (
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("America/New_York".into())),
+                DataType::Utf8,
+            ),
+            (DataType::Duration(TimeUnit::Microsecond), DataType::Utf8),
+            (
+                DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::MonthDayNano),
+                DataType::Utf8,
+            ),
+            (DataType::Int8, DataType::Int16),
+            (DataType::Int16, DataType::Int64),
+            (DataType::Int32, DataType::Int64),
+        ];
+        for (from, to) in positives {
+            assert!(injective_cast(&from, &to), "{from:?} -> {to:?}");
+            let integer_width_change = from.is_integer() && to.is_integer() && from != to;
+            let from_field = Arc::new(Field::new("item", from.clone(), true));
+            let to_field = Arc::new(Field::new("item", to.clone(), true));
+            for (from, to) in [
+                (
+                    DataType::List(Arc::clone(&from_field)),
+                    DataType::List(Arc::clone(&to_field)),
+                ),
+                (
+                    DataType::LargeList(Arc::clone(&from_field)),
+                    DataType::LargeList(Arc::clone(&to_field)),
+                ),
+                (
+                    DataType::FixedSizeList(Arc::clone(&from_field), 2),
+                    DataType::FixedSizeList(Arc::clone(&to_field), 2),
+                ),
+                (
+                    DataType::Struct(vec![from_field].into()),
+                    DataType::Struct(vec![to_field].into()),
+                ),
+            ] {
+                let array = matches!(
+                    from,
+                    DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(..)
+                );
+                assert_eq!(
+                    injective_cast(&from, &to),
+                    !(array && integer_width_change),
+                    "{from:?} -> {to:?}"
+                );
+            }
+        }
+        let map = |value| {
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Field::new("key", DataType::Int32, false),
+                            Field::new("value", value, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            )
+        };
+        assert!(injective_cast(&map(DataType::Int32), &map(DataType::Int64)));
+    }
+
+    #[test]
+    fn grouping_before_cast_keeps_measured_costly_families_computed() {
+        for (from, to) in [
+            (DataType::Binary, DataType::Utf8),
+            (DataType::LargeBinary, DataType::LargeUtf8),
+            (DataType::BinaryView, DataType::Utf8View),
+            (DataType::Decimal128(19, 0), DataType::Int64),
+            (
+                DataType::Date32,
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (
+                DataType::Date32,
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            ),
+        ] {
+            assert!(!injective_cast(&from, &to), "{from:?} -> {to:?}");
+            assert!(!injective_cast(
+                &DataType::List(Arc::new(Field::new("item", from, true))),
+                &DataType::List(Arc::new(Field::new("item", to, true))),
+            ));
+        }
+    }
+
+    #[test]
+    fn grouping_before_cast_declines_actual_collisions_and_shape_changes() {
+        let negatives = [
+            (DataType::Int32, DataType::Float32),
+            (DataType::Int64, DataType::Float32),
+            (DataType::Int64, DataType::Float64),
+            // Floating widening stays computed; string keys have separate top-level handling.
+            (DataType::Float32, DataType::Float64),
+            (DataType::Float32, DataType::Utf8),
+            (DataType::Float64, DataType::Utf8),
+            (DataType::Decimal128(10, 2), DataType::Decimal128(10, 1)),
+            (DataType::Decimal128(20, 0), DataType::Int64),
+            (DataType::Decimal128(10, 1), DataType::Int64),
+            (
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            // Arrow formats distinct out-of-range durations with the same "<invalid>" spelling.
+            (DataType::Time64(TimeUnit::Microsecond), DataType::Utf8),
+            (DataType::Time64(TimeUnit::Nanosecond), DataType::Utf8),
+            (DataType::Duration(TimeUnit::Second), DataType::Utf8),
+            (DataType::Duration(TimeUnit::Millisecond), DataType::Utf8),
+        ];
+        for (from, to) in negatives {
+            assert!(!injective_cast(&from, &to), "{from:?} -> {to:?}");
+            assert!(!injective_cast(
+                &DataType::List(Arc::new(Field::new("item", from, true))),
+                &DataType::List(Arc::new(Field::new("item", to, true))),
+            ));
+        }
+        let field = |name, nullable| Arc::new(Field::new(name, DataType::Int32, nullable));
+        assert!(!injective_cast(
+            &DataType::List(field("item", true)),
+            &DataType::List(field("item", false)),
+        ));
+        assert!(!injective_cast(
+            &DataType::FixedSizeList(field("item", true), 2),
+            &DataType::FixedSizeList(field("item", true), 3),
+        ));
+        assert!(!injective_cast(
+            &DataType::Struct(vec![field("a", true)].into()),
+            &DataType::Struct(vec![field("b", true)].into()),
+        ));
+    }
+    #[test]
+    fn time64_string_formatter_can_merge_unvalidated_raw_times() -> Result<()> {
+        for (zero, wrapped) in [
+            (
+                ScalarValue::Time64Microsecond(Some(0)),
+                ScalarValue::Time64Microsecond(Some(4_294_967_296_000_000)),
+            ),
+            (
+                ScalarValue::Time64Nanosecond(Some(0)),
+                ScalarValue::Time64Nanosecond(Some(4_294_967_296_000_000_000)),
+            ),
+        ] {
+            assert_ne!(zero, wrapped);
+            assert_eq!(
+                zero.cast_to(&DataType::Utf8)?,
+                wrapped.cast_to(&DataType::Utf8)?
+            );
+            assert!(!injective_cast(&zero.data_type(), &DataType::Utf8));
         }
         Ok(())
     }
