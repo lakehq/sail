@@ -1383,7 +1383,7 @@ def test_float_string_correlation_uses_spark_numeric_keys(spark, data_type, wind
         """
         matching = f"FROM {source} AS i(k, v) WHERE CAST(i.k AS STRING) = o.k"
         subquery = (
-            f"SELECT max(w) FROM (SELECT row_number() OVER (ORDER BY v) AS w {matching})"
+            f"SELECT max(w) FROM (SELECT row_number() OVER (ORDER BY v) AS w {matching})"  # noqa: S608
             if windowed
             else f"SELECT count(*) {matching}"
         )
