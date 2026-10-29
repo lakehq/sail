@@ -24,11 +24,12 @@ use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::filter_pushdown::PostFilterPushdown;
 use crate::input_file_name::{
-    PushDownInputFileMetadata, RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
+    PushDownInputFileMetadata, PushDownStreamedJoinInputFileMetadata,
+    RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
 };
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
-use crate::projection_pushdown::LambdaSafeProjectionPushdown;
+use crate::projection_pushdown::ContextSafeProjectionPushdown;
 use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
 
 mod barrier;
@@ -75,17 +76,18 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(scan_partitions::OptimizeScanPartitions));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
-    rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));
+    rules.push(Arc::new(ContextSafeProjectionPushdown::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
     rules.push(Arc::new(LimitPushPastWindows::new()));
     rules.push(Arc::new(HashJoinBuffering::new()));
     rules.push(Arc::new(LimitPushdown::new()));
     rules.push(Arc::new(TopKRepartition::new()));
-    rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));
+    rules.push(Arc::new(ContextSafeProjectionPushdown::new()));
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(PostFilterPushdown));
+    rules.push(Arc::new(PushDownStreamedJoinInputFileMetadata));
     rules.push(Arc::new(RewriteInputFileMetadataFallback::new()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
@@ -115,6 +117,13 @@ mod tests {
                 enable_join_reorder,
                 ..Default::default()
             });
+            let names: Vec<_> = optimizers.iter().map(|rule| rule.name()).collect();
+            assert!(names.windows(3).any(|rules| rules
+                == [
+                    PostFilterPushdown.name(),
+                    PushDownStreamedJoinInputFileMetadata.name(),
+                    RewriteInputFileMetadataFallback::new().name(),
+                ]));
             let actual_datafusion_optimizer_names: Vec<&str> = optimizers
                 .iter()
                 .map(|opt| opt.name())

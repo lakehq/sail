@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use datafusion::optimizer::push_down_limit::PushDownLimit as DataFusionPushDownLimit;
 use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
+mod input_file_metadata;
 mod lateral_join;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
@@ -11,6 +13,7 @@ mod scalar_subquery_keys;
 mod session_timestamp;
 pub mod type_coercion;
 
+use input_file_metadata::PushDownLimit;
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
@@ -54,7 +57,11 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
         if rule.name() == ScalarSubqueryToJoin::new().name() {
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
         }
-        custom.push(rule);
+        if rule.name() == DataFusionPushDownLimit::new().name() {
+            custom.push(Arc::new(PushDownLimit));
+        } else {
+            custom.push(rule);
+        }
     }
     custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
