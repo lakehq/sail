@@ -167,6 +167,7 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::correlation_cast::CorrelationCast;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
@@ -3799,6 +3800,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
             "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
+            "correlation_cast" => Ok(Arc::new(ScalarUDF::from(CorrelationCast::new()))),
             "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
@@ -4003,6 +4005,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
             || node_inner.is::<NormalizeFloatKeys>()
+            || node_inner.is::<CorrelationCast>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
@@ -7565,6 +7568,14 @@ mod tests {
 
         let coalesce = round_trip_udf(ScalarUDF::from(CoalesceFunc::new()))?;
         downcast_udf::<CoalesceFunc>(&coalesce, "CoalesceFunc")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_correlation_cast_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(CorrelationCast::new()))?;
+        downcast_udf::<CorrelationCast>(&decoded, "CorrelationCast")?;
+        assert_eq!(decoded.name(), "correlation_cast");
         Ok(())
     }
 

@@ -17,11 +17,10 @@ use datafusion_expr::{
     Expr, ExprSchemable, JoinType, LogicalPlan, Operator, ScalarUDF, Volatility, bitwise_and,
 };
 use projection::project_with_keys;
+use sail_common_datafusion::OPTIMIZER_CORRELATION_KEY_PREFIX;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
 mod projection;
-
-const CORRELATION_KEY_PREFIX: &str = "__sail_correlation_key";
 
 /// Group native correlated scalar aggregates by the value used in cast equality.
 #[derive(Debug)]
@@ -136,7 +135,7 @@ fn reserve_key_names(reserved: &mut BTreeSet<String>, schema: &DFSchema) {
             .fields()
             .iter()
             .map(|field| field.name())
-            .filter(|name| name.starts_with(CORRELATION_KEY_PREFIX))
+            .filter(|name| name.starts_with(OPTIMIZER_CORRELATION_KEY_PREFIX))
             .cloned(),
     );
 }
@@ -917,7 +916,7 @@ impl Lift<'_> {
                 column.clone()
             } else {
                 let name = loop {
-                    let name = self.aliases.next(CORRELATION_KEY_PREFIX);
+                    let name = self.aliases.next(OPTIMIZER_CORRELATION_KEY_PREFIX);
                     if self.reserved.insert(name.clone()) {
                         break name;
                     }
