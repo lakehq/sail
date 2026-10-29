@@ -10,6 +10,7 @@ use datafusion_expr::{
 };
 
 use super::is_float_vector;
+use super::norm::vector_norm_spark;
 use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -81,85 +82,12 @@ fn vector_normalize_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-/// Spark 4.2 accumulates absolute values eight at a time before processing the scalar tail.
-fn vector_l1_norm_spark(vector: &[f32]) -> f32 {
-    let mut sum = 0.0f32;
-    let mut index = 0;
-    let simd_limit = (vector.len() / 8) * 8;
-
-    while index < simd_limit {
-        sum += vector[index].abs()
-            + vector[index + 1].abs()
-            + vector[index + 2].abs()
-            + vector[index + 3].abs()
-            + vector[index + 4].abs()
-            + vector[index + 5].abs()
-            + vector[index + 6].abs()
-            + vector[index + 7].abs();
-        index += 8;
-    }
-
-    while index < vector.len() {
-        sum += vector[index].abs();
-        index += 1;
-    }
-
-    sum
-}
-
-/// Spark 4.2 accumulates squares eight at a time before processing the scalar tail.
-fn vector_l2_norm_spark(vector: &[f32]) -> f32 {
-    let mut sum_squared = 0.0f32;
-    let mut index = 0;
-    let simd_limit = (vector.len() / 8) * 8;
-
-    while index < simd_limit {
-        sum_squared += vector[index] * vector[index]
-            + vector[index + 1] * vector[index + 1]
-            + vector[index + 2] * vector[index + 2]
-            + vector[index + 3] * vector[index + 3]
-            + vector[index + 4] * vector[index + 4]
-            + vector[index + 5] * vector[index + 5]
-            + vector[index + 6] * vector[index + 6]
-            + vector[index + 7] * vector[index + 7];
-        index += 8;
-    }
-
-    while index < vector.len() {
-        sum_squared += vector[index] * vector[index];
-        index += 1;
-    }
-
-    (sum_squared as f64).sqrt() as f32
-}
-
-/// Spark 4.2 uses `Math.max`, which propagates NaN once it is encountered.
-fn vector_infinity_norm_spark(vector: &[f32]) -> f32 {
-    let mut maximum = 0.0f32;
-    for value in vector {
-        let absolute = value.abs();
-        if absolute.is_nan() || absolute > maximum {
-            maximum = absolute;
-        }
-    }
-    maximum
-}
-
-fn vector_norm_spark(vector: &[f32], degree: f32) -> Result<f32> {
-    if degree == 1.0 {
-        Ok(vector_l1_norm_spark(vector))
-    } else if degree == 2.0 {
-        Ok(vector_l2_norm_spark(vector))
-    } else if degree == f32::INFINITY {
-        Ok(vector_infinity_norm_spark(vector))
-    } else {
-        exec_err!("vector_normalize degree must be 1.0, 2.0, or float('inf'), got {degree}")
-    }
-}
-
 /// Spark 4.2 returns empty vectors unchanged and NULL when the norm is below `Float.MIN_NORMAL`.
-fn vector_normalize_spark(vector: &[f32], degree: f32) -> Result<Option<Vec<f32>>> {
-    let norm = vector_norm_spark(vector, degree)?;
+fn vector_normalize_spark(vector: Option<&[f32]>, degree: f32) -> Result<Option<Vec<f32>>> {
+    let norm = vector_norm_spark(vector, degree, "vector_normalize")?;
+    let (Some(vector), Some(norm)) = (vector, norm) else {
+        return Ok(None);
+    };
     if vector.is_empty() {
         return Ok(Some(Vec::new()));
     }
@@ -180,11 +108,9 @@ fn compute_normalize<O: OffsetSizeTrait>(
         }
         let vector = vectors.value(row);
         let vector = vector.as_primitive::<Float32Type>();
-        if vector.null_count() > 0 {
-            return Ok(None);
-        }
+        let values = (vector.null_count() == 0).then(|| vector.values().as_ref());
         let degree = degrees.map_or(2.0, |array| array.value(row));
-        let normalized = vector_normalize_spark(vector.values(), degree)?;
+        let normalized = vector_normalize_spark(values, degree)?;
         Ok(normalized.map(|values| values.into_iter().map(Some).collect::<Vec<_>>()))
     });
     let values = values.collect::<Result<Vec<Option<Vec<Option<f32>>>>>>()?;
@@ -266,27 +192,31 @@ mod tests {
 
     #[test]
     fn rejects_invalid_degree() {
-        assert!(matches!(
-            vector_normalize_spark(&[1.0], 3.0),
-            Err(error) if error.to_string().contains("degree must be")
-        ));
-        assert!(vector_normalize_spark(&[], 3.0).is_err());
-        assert!(vector_normalize_spark(&[1.0], f32::NAN).is_err());
-        assert!(vector_normalize_spark(&[1.0], f32::NEG_INFINITY).is_err());
+        for vector in [Some([1.0].as_slice()), Some([].as_slice()), None] {
+            for degree in [3.0, f32::NAN, f32::NEG_INFINITY] {
+                assert!(matches!(
+                    vector_normalize_spark(vector, degree),
+                    Err(error) if error.to_string().contains("vector_normalize degree must be")
+                ));
+            }
+        }
     }
 
     #[test]
     fn matches_spark_float_edge_cases() -> Result<()> {
         // The subnormal norm is treated as zero.
-        assert_eq!(vector_normalize_spark(&[1.0e-39, 0.0], 2.0)?, None);
+        assert_eq!(vector_normalize_spark(Some(&[1.0e-39, 0.0]), 2.0)?, None);
         // The L2 accumulation overflows to infinity, so every element becomes 0.0.
         assert_eq!(
-            vector_normalize_spark(&[3.0e19, 4.0e19], 2.0)?,
+            vector_normalize_spark(Some(&[3.0e19, 4.0e19]), 2.0)?,
             Some(vec![0.0, 0.0])
         );
-        // NaN propagates through the infinity norm like Java's `Math.max`.
-        let actual = vector_normalize_spark(&[f32::NAN, 1.0], f32::INFINITY)?;
-        assert!(actual.is_some_and(|values| values.iter().all(|value| value.is_nan())));
+        let actual = vector_normalize_spark(Some(&[f32::NAN, 1.0]), f32::INFINITY)?;
+        assert!(actual.is_some_and(|values| values[0].is_nan() && values[1] == 1.0));
+        assert_eq!(
+            vector_normalize_spark(Some(&[f32::NAN]), f32::INFINITY)?,
+            None
+        );
         Ok(())
     }
 
@@ -296,10 +226,10 @@ mod tests {
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ];
 
-        let actual = vector_normalize_spark(&vector, 2.0)?;
+        let actual = vector_normalize_spark(Some(&vector), 2.0)?;
         assert_eq!(actual.map(|values| values[15]), Some(0.41367015));
 
-        let actual = vector_normalize_spark(&vector, 1.0)?;
+        let actual = vector_normalize_spark(Some(&vector), 1.0)?;
         assert_eq!(actual.map(|values| values[15]), Some(0.11764706));
         Ok(())
     }

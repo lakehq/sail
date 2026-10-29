@@ -157,8 +157,8 @@ def test_cast_correlation_still_validates_rows_kept_by_a_semi_join(spark):
         (62, "duplicate", 2, False),
         (63, "duplicate", 1, False),
         (63, "permuted", 1, False),
-        # A floating-point key compared directly still needs a separate cast key,
-        # since -0.0 and 0.0 are equal but cast to different strings.
+        # Raw numeric and string comparisons still need separate private keys:
+        # Sail keeps raw NaN payloads apart, while their string spellings coincide.
         (3, "duplicate", 1, True),
         (7, "duplicate", 1, True),
         (8, "duplicate", 1, True),
@@ -358,12 +358,6 @@ def test_injective_cast_correlation_groups_by_raw_key(spark):
         pytest.param(
             *case,
             ansi,
-            # TODO: Remove these marks when correlated TRY_CAST keys are supported.
-            marks=pytest.mark.xfail(
-                not is_jvm_spark() and not ansi and case[0] == "BIGINT",
-                reason="Existing DataFusion alias error for ANSI-off BIGINT-to-decimal TRY_CAST correlation",
-                strict=True,
-            ),
         )
         for case in [
             ("BOOLEAN", "TINYINT", "false", "true"),
@@ -1362,3 +1356,126 @@ def test_direct_correlation_on_columns_of_every_set_keeps_grouping_id_for_duplic
         ORDER BY o.c4
     """
     assert [tuple(row) for row in spark.sql(query).collect()] == [("2", 0), ("3", 0), ("9", None)]
+
+
+# Match Spark: private numeric grouping merges signed zeros before string matching.
+@pytest.mark.parametrize("data_type", ["FLOAT", "DOUBLE"])
+@pytest.mark.parametrize("windowed", [False, True])
+@pytest.mark.parametrize("ansi", [False, True])
+def test_float_string_correlation_uses_spark_numeric_keys(spark, data_type, windowed, ansi):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        source = f"""VALUES
+            (CAST('-0.0' AS {data_type}), 1),
+            (CAST('-0.0' AS {data_type}), 2),
+            (CAST('0.0' AS {data_type}), 3),
+            (CAST('1.0' AS {data_type}), 4),
+            (CAST('NaN' AS {data_type}), 5),
+            (CAST('NaN' AS {data_type}), 6),
+            (CAST(NULL AS {data_type}), 7)
+        """
+        matching = f"FROM {source} AS i(k, v) WHERE CAST(i.k AS STRING) = o.k"
+        subquery = (
+            f"SELECT max(w) FROM (SELECT row_number() OVER (ORDER BY v) AS w {matching})"  # noqa: S608
+            if windowed
+            else f"SELECT count(*) {matching}"
+        )
+        result = spark.sql(f"""
+            SELECT o.id, ({subquery}) AS n
+            FROM VALUES (0, '-0.0'), (1, '0.0'), (2, '1.0'), (3, 'NaN'),
+                        (4, '1'), (5, '+1.0'), (6, '01.0'), (7, 'nan'), (8, ' 1.0'),
+                        (9, ''), (10, '1e9999'), (11, CAST(NULL AS STRING)),
+                        (12, '-0.0') AS o(id, k)
+            ORDER BY o.id
+        """)  # noqa: S608
+        missing = None if windowed else 0
+        assert [tuple(row) for row in result.collect()] == [
+            (0, missing),
+            (1, 3),
+            (2, 1),
+            (3, 2),
+            *[(i, missing) for i in range(4, 12)],
+            (12, missing),
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.skipif(pyspark_version() < (4,), reason="Arrow table ingestion requires PySpark 4+")
+@pytest.mark.parametrize(
+    ("data_type", "bits"),
+    [
+        (
+            pa.float32(),
+            [
+                0x7F800001,
+                0x7FC00001,
+                0x7FFFFFFF,
+                0xFF800001,
+                0xFFC00042,
+                0xFFFFFFFF,
+                0x80000000,
+                0x00000000,
+                0x3F800000,
+            ],
+        ),
+        (
+            pa.float64(),
+            [
+                0x7FF0000000000001,
+                0x7FF8000000000001,
+                0x7FFFFFFFFFFFFFFF,
+                0xFFF0000000000001,
+                0xFFF8000000000042,
+                0xFFFFFFFFFFFFFFFF,
+                0x8000000000000000,
+                0x0000000000000000,
+                0x3FF0000000000000,
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize("windowed", [False, True])
+@pytest.mark.parametrize("ansi", [False, True])
+def test_float_string_correlation_normalizes_private_keys_and_preserves_raw_values(
+    spark, data_type, bits, windowed, ansi
+):
+    # Spark groups floating string correlations by canonical float keys. User values
+    # still need their original NaN payloads and signed-zero bits.
+    width = data_type.bit_width // 8
+    raw = b"".join(value.to_bytes(width, "little") for value in bits)
+    values = pa.Array.from_buffers(
+        data_type,
+        len(bits) + 1,
+        [pa.py_buffer(bytes([0xFF, 0x01])), pa.py_buffer(raw + bytes(width))],
+    )
+    table = pa.Table.from_arrays([values, pa.array(range(len(bits) + 1), type=pa.int32())], names=["k", "seq"])
+    spark.createDataFrame(table).createOrReplaceTempView("scalar_float_string_payloads")
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", str(ansi).lower())
+    try:
+        rank = "row_number() OVER (ORDER BY seq)" if windowed else "1"
+        result = spark.sql(f"""
+            SELECT o.id,
+              (SELECT array_sort(collect_list(named_struct('seq', seq, 'k', k, 'w', w)))
+               FROM (SELECT seq, k, {rank} AS w FROM scalar_float_string_payloads AS i
+                     WHERE CAST(i.k AS STRING) = o.k)) AS events
+            FROM VALUES (0, 'NaN'), (1, '0.0'), (2, '1.0') AS o(id, k)
+            ORDER BY o.id
+        """)  # noqa: S608
+        arrow = result._to_table()[0] if hasattr(result, "_to_table") else result.toArrow()  # noqa: SLF001
+        assert arrow.column("id").to_pylist() == [0, 1, 2]
+        events = arrow.column("events").combine_chunks()
+        assert events.offsets.to_pylist() == [0, 6, 8, 9]
+        assert events.values.field("seq").to_pylist() == list(range(9))
+        expected_rank = [1, 2, 3, 4, 5, 6, 1, 2, 1] if windowed else [1] * 9
+        assert events.values.field("w").to_pylist() == expected_rank
+        actual = events.values.field("k")
+        assert actual.type == data_type
+        assert actual.null_count == 0
+        payload = actual.buffers()[1].to_pybytes()
+        assert payload[actual.offset * width : (actual.offset + len(actual)) * width] == raw
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+        spark.catalog.dropTempView("scalar_float_string_payloads")

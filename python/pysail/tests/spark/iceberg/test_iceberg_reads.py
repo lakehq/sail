@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, LongType, NestedField, StringType, TimestampType
 from pyspark.sql import functions as F  # noqa: N812
@@ -108,7 +110,9 @@ def test_limit_with_multiple_files(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
-def test_input_file_metadata_tracks_iceberg_data_files(spark, tmp_path):
+@pytest.mark.parametrize("metadata_as_data", [False, True])
+@pytest.mark.parametrize("file_count", [1, 2])
+def test_input_file_metadata_tracks_iceberg_data_files(spark, tmp_path, metadata_as_data, file_count):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.test_input_file_metadata_tracks_iceberg_data_files"
     table = catalog.create_table(
@@ -122,18 +126,33 @@ def test_input_file_metadata_tracks_iceberg_data_files(spark, tmp_path):
     first_ids = [1, 2]
     second_ids = [3, 4, 5]
     try:
-        for ids in (first_ids, second_ids):
+        batches = ([*first_ids, *second_ids],) if file_count == 1 else (first_ids, second_ids)
+        for ids in batches:
             table.append(pa.table({"unused": [0] * len(ids), "id": ids, "label": [f"v{x}" for x in ids]}))
         table_path = _local_file_path(table.location())
         data_files = {path.resolve() for path in (table_path / "data").rglob("*.parquet")}
 
-        frame = spark.read.format("iceberg").option("metadataAsDataRead", "true").load(table.location())
+        assert len(data_files) == file_count
+        expected_files = {
+            value: (path.as_uri(), 0, path.stat().st_size)
+            for path in data_files
+            for value in pq.read_table(path, columns=["id"])["id"].to_pylist()
+        }
+        frame = (
+            spark.read.format("iceberg")
+            .option("metadataAsDataRead", str(metadata_as_data).lower())
+            .load(table.location())
+        )
         metadata = [
             F.input_file_name().alias("file_name"),
             F.input_file_block_start().alias("block_start"),
             F.input_file_block_length().alias("block_length"),
         ]
         rows = frame.select("label", "id", *metadata).orderBy("id").collect()
+        limited = frame.select("id", *metadata).limit(3).collect()
+        assert len(limited) == len({row.id for row in limited}) == 3  # noqa: PLR2004
+        for row in limited:
+            assert tuple(row)[1:] == expected_files[row.id]
 
         assert [row.id for row in rows] == [*first_ids, *second_ids]
         row_files = {}
@@ -150,7 +169,10 @@ def test_input_file_metadata_tracks_iceberg_data_files(spark, tmp_path):
         second_file = {row_files[value] for value in second_ids}
         assert len(first_file) == 1
         assert len(second_file) == 1
-        assert first_file.isdisjoint(second_file)
+        if file_count == 2:  # noqa: PLR2004
+            assert first_file.isdisjoint(second_file)
+        else:
+            assert first_file == second_file
         assert first_file | second_file == data_files
 
         filtered = frame.filter("id % 2 = 1").select("label", *metadata).orderBy("label").collect()
@@ -158,10 +180,33 @@ def test_input_file_metadata_tracks_iceberg_data_files(spark, tmp_path):
             (row.label, row.file_name, row.block_start, row.block_length) for row in rows if row.id % 2 == 1
         ]
 
-        metadata_only = frame.select(*metadata).collect()
-        assert Counter(tuple(row) for row in metadata_only) == Counter(
-            (row.file_name, row.block_start, row.block_length) for row in rows
-        )
+        assert frame.count() == len(expected_files)
+        assert [tuple(row) for row in frame.select(F.lit(7)).collect()] == [(7,)] * len(expected_files)
+        expected_metadata = Counter(expected_files.values())
+        for limited in [False, True]:
+            for constant in [False, True]:
+                # The physical `unused` column is constant; id/label are deliberately pruned.
+                projected = frame.select("unused", *metadata) if constant else frame.select(*metadata)
+                actual = (projected.limit(3) if limited else projected).collect()
+                assert len(actual) == (3 if limited else len(expected_files))
+                if constant:
+                    assert all(row.unused == 0 for row in actual)
+                counts = Counter((row.file_name, row.block_start, row.block_length) for row in actual)
+                assert counts <= expected_metadata
+                if not limited:
+                    assert counts == expected_metadata
+
+        frame.createOrReplaceTempView("input_file_iceberg_subquery")
+        try:
+            scalar = spark.sql(
+                "SELECT (SELECT named_struct('file_name', input_file_name(), "
+                "'block_start', input_file_block_start(), 'block_length', input_file_block_length()) "
+                "FROM input_file_iceberg_subquery LIMIT 1) AS metadata"
+            ).collect()
+            assert len(scalar) == 1
+            assert tuple(scalar[0].metadata) in expected_metadata
+        finally:
+            spark.catalog.dropTempView("input_file_iceberg_subquery")
     finally:
         catalog.drop_table(identifier)
 

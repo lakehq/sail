@@ -154,10 +154,8 @@ impl MissingInputBoundaries {
                     || node.is::<MonotonicIdNode>()
                     || node.is::<SparkPartitionIdNode>()
             }
-            // TODO: Spark DataFrame distinct uses Deduplicate and can carry missing
-            // attributes. Sail's Distinct lowering cannot do so without
-            // changing its deduplication keys; preserve those keys before supporting it.
-            // The same applies to dropDuplicates with a subset, which Sail lowers to DistinctOn.
+            // DataFrame deduplication retains its original keys when carrying extra outputs.
+            LogicalPlan::Distinct(Distinct::On(_)) => true,
             // TODO: Spark's LateralJoin is a unary node over its left input, so a filter can
             // recover attributes removed from that input. Sail lowers it to a Join instead.
             _ => false,
@@ -496,6 +494,25 @@ impl PlanResolver<'_> {
         let Some(child) = Self::add_missing_inputs(child, &missing, state)? else {
             return Ok(None);
         };
+        if let LogicalPlan::Distinct(Distinct::On(distinct)) = plan {
+            let mut select = distinct.select_expr.clone();
+            select.extend(
+                child
+                    .schema()
+                    .columns()
+                    .into_iter()
+                    .filter(|column| missing.contains(column))
+                    .map(Expr::Column),
+            );
+            return Ok(Some(LogicalPlan::Distinct(Distinct::On(
+                datafusion_expr::DistinctOn::try_new(
+                    distinct.on_expr.clone(),
+                    select,
+                    distinct.sort_expr.clone(),
+                    Arc::new(child),
+                )?,
+            ))));
+        }
         if let LogicalPlan::Projection(projection) = plan {
             let mut expr = projection.expr.clone();
             let mut fields = child

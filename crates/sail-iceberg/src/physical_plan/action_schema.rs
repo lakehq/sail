@@ -35,6 +35,7 @@ static ACTION_SCHEMA: LazyLock<SchemaRef> =
 pub struct CommitMeta {
     pub table_uri: String,
     pub row_count: u64,
+    pub action_summary: Option<crate::operation_metrics::IcebergActionSummary>,
     pub removed_data_file_paths: Vec<String>,
     pub skip_empty_commit: bool,
     pub requirements: Vec<TableRequirement>,
@@ -49,6 +50,7 @@ pub struct CommitMeta {
 pub struct CommitMetaAction {
     pub table_uri: String,
     pub row_count: u64,
+    pub action_summary_json: Option<String>,
     pub removed_data_file_paths: Vec<String>,
     pub skip_empty_commit: bool,
     /// Requirements are relatively small but hard to trace into Arrow schema; keep as JSON.
@@ -542,6 +544,12 @@ pub fn encode_delete_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch
 }
 
 pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
+    let action_summary_json = meta
+        .action_summary
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let requirements_json = serde_json::to_string(&meta.requirements)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let table_properties_json = serde_json::to_string(&meta.table_properties)
@@ -571,6 +579,7 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
         action: ExecAction::CommitMeta(CommitMetaAction {
             table_uri: meta.table_uri,
             row_count: meta.row_count,
+            action_summary_json,
             removed_data_file_paths: meta.removed_data_file_paths,
             skip_empty_commit: meta.skip_empty_commit,
             requirements_json,
@@ -599,6 +608,12 @@ pub fn decode_actions_and_meta_from_batch(
             ExecAction::Add(a) => adds.push(a.try_into()?),
             ExecAction::Delete(d) => deletes.push(d.data_file.try_into()?),
             ExecAction::CommitMeta(m) => {
+                let action_summary = m
+                    .action_summary_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let requirements: Vec<TableRequirement> =
                     serde_json::from_str(&m.requirements_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -628,6 +643,7 @@ pub fn decode_actions_and_meta_from_batch(
                 meta.push(CommitMeta {
                     table_uri: m.table_uri,
                     row_count: m.row_count,
+                    action_summary,
                     removed_data_file_paths: m.removed_data_file_paths,
                     skip_empty_commit: m.skip_empty_commit,
                     requirements,
@@ -734,6 +750,9 @@ mod tests {
         let meta = CommitMeta {
             table_uri: "s3://bucket/table".to_string(),
             row_count: 10,
+            action_summary: Some(crate::operation_metrics::IcebergActionSummary::new(
+                crate::operation_metrics::IcebergOperation::Insert,
+            )),
             removed_data_file_paths: vec!["s3://bucket/old.parquet".to_string()],
             skip_empty_commit: true,
             requirements: vec![TableRequirement::NotExist],

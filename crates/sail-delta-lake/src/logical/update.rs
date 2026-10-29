@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use datafusion_expr::logical_plan::Extension;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, RowLevelWriteMode, UpdateInfo,
 };
@@ -25,13 +26,16 @@ pub fn expand_update_node(mut info: UpdateInfo) -> Result<LogicalPlan> {
         row_index_column,
     )?);
     Ok(LogicalPlan::Extension(Extension {
-        node: Arc::new(expand_update(
-            info,
-            mode,
-            requirements,
-            MERGE_FILE_COLUMN,
-            row_index_column,
-            &[],
-        )?),
+        node: Arc::new(
+            expand_update(
+                info,
+                mode,
+                requirements,
+                MERGE_FILE_COLUMN,
+                row_index_column,
+                &[],
+            )?
+            .with_output(CommandOutput::AffectedRows),
+        ),
     }))
 }

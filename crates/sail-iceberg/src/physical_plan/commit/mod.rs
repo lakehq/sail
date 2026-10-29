@@ -24,6 +24,7 @@ use crate::spec::{DataFile, PartitionSpec, Schema, TableRequirement, TableUpdate
 pub struct IcebergCommitInfo {
     pub table_uri: String,
     pub row_count: u64,
+    pub action_summary: Option<crate::operation_metrics::IcebergActionSummary>,
     pub data_files: Vec<DataFile>,
     pub delete_files: Vec<DataFile>,
     pub manifest_path: String,

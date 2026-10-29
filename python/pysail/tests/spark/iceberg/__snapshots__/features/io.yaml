@@ -49,6 +49,7 @@ data:
       added-data-files: '1'
       added-records: '1'
       operation: append
+      spark.insert.num-inserted-rows: '1'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'

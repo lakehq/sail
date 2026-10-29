@@ -100,6 +100,7 @@ use sail_common_datafusion::array::record_batch::{read_record_batches, write_rec
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::input_file::{
     InputFileBlockLengthFunc, InputFileBlockStartFunc, InputFileMetadataSource,
@@ -156,6 +157,7 @@ use sail_function::aggregate::theta_sketch::{
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
+use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
@@ -227,6 +229,7 @@ use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
@@ -1058,6 +1061,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 user_metadata,
                 commit_context,
                 lakehouse_table_json,
+                output,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1078,17 +1082,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
 
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
-                Ok(Arc::new(DeltaCommitExec::new(
-                    input,
-                    table_url,
-                    partition_columns,
-                    table_exists,
-                    Arc::new(sink_schema),
-                    sink_mode,
-                    user_metadata,
-                    commit_context,
-                    lakehouse_table,
-                )))
+                Ok(Arc::new(
+                    DeltaCommitExec::new(
+                        input,
+                        table_url,
+                        partition_columns,
+                        table_exists,
+                        Arc::new(sink_schema),
+                        sink_mode,
+                        user_metadata,
+                        commit_context,
+                        lakehouse_table,
+                    )
+                    .with_output(Self::try_decode_command_output(output)?),
+                ))
             }
             NodeKind::DeltaScanByAdds(r#gen::DeltaScanByAddsExecNode {
                 input,
@@ -1641,6 +1648,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 snapshot_update_kind,
                 dynamic_partition_overwrite,
                 removed_data_file_paths,
+                output,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1650,14 +1658,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let snapshot_update_kind =
                     Self::try_decode_iceberg_snapshot_update_kind(snapshot_update_kind)?;
 
-                Ok(Arc::new(
+                let commit =
                     IcebergCommitExec::new(input, table_url, lakehouse_table, snapshot_update_kind)
                         .with_expected_snapshot_id(
                             validate_read_snapshot.then_some(expected_snapshot_id),
                         )
                         .with_dynamic_partition_overwrite(dynamic_partition_overwrite)
-                        .with_removed_data_file_paths(removed_data_file_paths),
-                ))
+                        .with_removed_data_file_paths(removed_data_file_paths);
+                use r#gen::iceberg_commit_exec_node::Output;
+                let commit = match output {
+                    Some(Output::CommandOutput(output)) => {
+                        let output = Self::try_decode_command_output(output)?;
+                        if !matches!(output, CommandOutput::Empty | CommandOutput::Count) {
+                            return plan_err!("unsupported Iceberg command output");
+                        }
+                        commit.with_output(output)
+                    }
+                    Some(Output::RewriteDataFilesOutput(output)) => commit
+                        .with_rewrite_data_files_output(
+                            Arc::new(try_decode_schema(&output.schema)?),
+                            output.rewritten_data_files_count,
+                            output.rewritten_bytes_count,
+                        ),
+                    None => return plan_err!("Missing output for IcebergCommitExec"),
+                };
+                Ok(Arc::new(commit))
             }
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url,
@@ -2658,6 +2683,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url: delta_commit_exec.table_url().to_string(),
                 partition_columns: delta_commit_exec.partition_columns().to_vec(),
                 table_exists: delta_commit_exec.table_exists(),
+                output: Self::encode_command_output(delta_commit_exec.output()),
                 sink_schema: try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
                 user_metadata: delta_commit_exec.user_metadata().map(str::to_owned),
@@ -3103,6 +3129,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ),
                 dynamic_partition_overwrite: iceberg_commit_exec.dynamic_partition_overwrite(),
                 removed_data_file_paths: iceberg_commit_exec.removed_data_file_paths().to_vec(),
+                output: Some(match iceberg_commit_exec.output() {
+                    sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::Command(output) =>
+                        r#gen::iceberg_commit_exec_node::Output::CommandOutput(Self::encode_command_output(*output)),
+                    sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::RewriteDataFiles {
+                        rewritten_data_files_count, rewritten_bytes_count,
+                    } => r#gen::iceberg_commit_exec_node::Output::RewriteDataFilesOutput(r#gen::IcebergRewriteDataFilesOutput {
+                        schema: try_encode_schema(&iceberg_commit_exec.schema())?,
+                        rewritten_data_files_count: *rewritten_data_files_count,
+                        rewritten_bytes_count: *rewritten_bytes_count,
+                    }),
+                }),
             })
         } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>() {
             let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
@@ -3803,6 +3840,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "correlation_cast" => Ok(Arc::new(ScalarUDF::from(CorrelationCast::new()))),
             "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
+            "scalar_subquery_result" => Ok(Arc::new(ScalarUDF::from(ScalarSubqueryResult::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(SparkCastToVariant::new()))),
@@ -4033,6 +4071,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
+            || node_inner.is::<ScalarSubqueryResult>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
@@ -4436,6 +4475,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
                 "vector_avg" => Ok(Arc::new(AggregateUDF::from(VectorAvg::new()))),
+                "vector_sum" => Ok(Arc::new(AggregateUDF::from(VectorSum::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
             Some(UdafKind::PySparkGroupAgg(r#gen::PySparkGroupAggUdaf {
@@ -4560,6 +4600,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<TryAvgFunction>()
             || node.inner().is::<SparkTrySum>()
             || node.inner().is::<VectorAvg>()
+            || node.inner().is::<VectorSum>()
         {
             UdafKind::Standard(r#gen::StandardUdaf {})
         } else if let Some(func) = node.inner().downcast_ref::<PySparkGroupAggregateUDF>() {
@@ -5284,6 +5325,27 @@ impl RemoteExecutionCodec {
             ColumnMappingMode::Name => r#gen::DeltaColumnMappingMode::Name,
             ColumnMappingMode::Id => r#gen::DeltaColumnMappingMode::Id,
         }) as i32)
+    }
+
+    fn try_decode_command_output(output: i32) -> Result<CommandOutput> {
+        match r#gen::CommandOutput::try_from(output)
+            .map_err(|_| plan_datafusion_err!("invalid command output"))?
+        {
+            r#gen::CommandOutput::Empty => Ok(CommandOutput::Empty),
+            r#gen::CommandOutput::Count => Ok(CommandOutput::Count),
+            r#gen::CommandOutput::AffectedRows => Ok(CommandOutput::AffectedRows),
+            r#gen::CommandOutput::MergeRows => Ok(CommandOutput::MergeRows),
+            r#gen::CommandOutput::Unspecified => plan_err!("command output is unspecified"),
+        }
+    }
+
+    fn encode_command_output(output: CommandOutput) -> i32 {
+        (match output {
+            CommandOutput::Empty => r#gen::CommandOutput::Empty,
+            CommandOutput::Count => r#gen::CommandOutput::Count,
+            CommandOutput::AffectedRows => r#gen::CommandOutput::AffectedRows,
+            CommandOutput::MergeRows => r#gen::CommandOutput::MergeRows,
+        }) as i32
     }
 
     fn try_decode_iceberg_snapshot_update_kind(kind: i32) -> Result<SnapshotUpdateKind> {
@@ -6242,6 +6304,16 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_vector_sum_udaf() -> Result<()> {
+        let decoded = round_trip_udaf(AggregateUDF::from(VectorSum::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorSum>().is_some());
+        assert_eq!(decoded.name(), "vector_sum");
+
+        Ok(())
+    }
+
+    #[test]
     fn test_jev_udf_codec_preserves_async_wrapper() -> Result<()> {
         for kind in sail_function::scalar::jev::JevKind::ALL {
             let decoded = round_trip_udf(kind.udf())?;
@@ -6916,6 +6988,7 @@ mod tests {
             last_partition_id: 999,
             current_snapshot_id: Some(42),
         });
+        write_context.operation = Some(sail_iceberg::operation_metrics::IcebergOperation::Merge);
         let plan = Arc::new(IcebergWriterExec::new_copy_on_write(
             Arc::new(EmptyExec::new(input_schema)),
             table_url,
@@ -6932,6 +7005,19 @@ mod tests {
         assert_eq!(
             writer.row_level_mode(),
             Some(RowLevelWriteMode::CopyOnWrite)
+        );
+        assert_eq!(
+            writer.write_context().operation,
+            Some(sail_iceberg::operation_metrics::IcebergOperation::Merge)
+        );
+        #[expect(deprecated)]
+        let rebuilt = Arc::clone(&decoded).with_new_children(vec![Arc::clone(writer.input())])?;
+        let rebuilt = rebuilt
+            .downcast_ref::<IcebergWriterExec>()
+            .ok_or_else(|| plan_datafusion_err!("rebuilt plan is not an IcebergWriterExec"))?;
+        assert_eq!(
+            rebuilt.write_context().operation,
+            writer.write_context().operation
         );
         assert_eq!(
             writer
@@ -6982,6 +7068,107 @@ mod tests {
                 assert_eq!(commit.removed_data_file_paths(), &["data/old.parquet"]);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_commit_output_round_trip_and_reconstruction() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
+        use sail_delta_lake::physical_plan::DeltaCommitContext;
+        use sail_iceberg::physical_plan::commit::commit_exec::CommitOutput;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let url = Url::parse("file:///tmp/command-output-codec/")
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+        let codec = RemoteExecutionCodec;
+        for output in [
+            CommandOutput::Empty,
+            CommandOutput::Count,
+            CommandOutput::AffectedRows,
+            CommandOutput::MergeRows,
+        ] {
+            let delta: Arc<dyn ExecutionPlan> = Arc::new(
+                DeltaCommitExec::new(
+                    input.clone(),
+                    url.clone(),
+                    vec![],
+                    true,
+                    input.schema(),
+                    PhysicalSinkMode::Append,
+                    None,
+                    DeltaCommitContext::default(),
+                    None,
+                )
+                .with_output(output),
+            );
+            let rebuilt = delta.replace_children(
+                vec![input.clone()],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
+            let bytes = try_encode_physical_plan(&codec, rebuilt)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            assert_eq!(decoded.schema(), output.schema());
+            assert_eq!(
+                decoded
+                    .downcast_ref::<DeltaCommitExec>()
+                    .ok_or_else(|| plan_datafusion_err!("expected Delta commit"))?
+                    .output(),
+                output
+            );
+        }
+        for output in [CommandOutput::Empty, CommandOutput::Count] {
+            let iceberg: Arc<dyn ExecutionPlan> = Arc::new(
+                IcebergCommitExec::new(
+                    input.clone(),
+                    url.clone(),
+                    None,
+                    SnapshotUpdateKind::RowDelta,
+                )
+                .with_output(output),
+            );
+            let rebuilt = iceberg.replace_children(
+                vec![input.clone()],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
+            let bytes = try_encode_physical_plan(&codec, rebuilt)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            assert_eq!(decoded.schema(), output.schema());
+            assert_eq!(
+                decoded
+                    .downcast_ref::<IcebergCommitExec>()
+                    .ok_or_else(|| plan_datafusion_err!("expected Iceberg commit"))?
+                    .output(),
+                &CommitOutput::Command(output)
+            );
+        }
+        let rewrite: Arc<dyn ExecutionPlan> = Arc::new(
+            IcebergCommitExec::new(
+                input.clone(),
+                url,
+                None,
+                SnapshotUpdateKind::RewriteDataFiles,
+            )
+            .with_rewrite_data_files_output(input.schema(), 3, 42),
+        );
+        let rebuilt = rewrite.replace_children(
+            vec![input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let bytes = try_encode_physical_plan(&codec, rebuilt)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        assert_eq!(
+            decoded
+                .downcast_ref::<IcebergCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected Iceberg commit"))?
+                .output(),
+            &CommitOutput::RewriteDataFiles {
+                rewritten_data_files_count: 3,
+                rewritten_bytes_count: 42
+            }
+        );
+        assert!(RemoteExecutionCodec::try_decode_command_output(0).is_err());
+        assert!(RemoteExecutionCodec::try_decode_command_output(99).is_err());
         Ok(())
     }
 

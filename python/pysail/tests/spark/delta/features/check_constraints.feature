@@ -333,8 +333,8 @@ Feature: Delta Lake CHECK Constraints
         WHEN NOT MATCHED THEN INSERT (day, id, value) VALUES (s.day, s.id, s.value)
         """
       Then query result collected
-        | count |
-        | 2     |
+        | num_affected_rows | num_updated_rows | num_deleted_rows | num_inserted_rows |
+        | 2                 | 1                | 0                | 1                 |
       Then delta log latest commit info contains
         | path                                   | value   |
         | operation                              | "MERGE" |
