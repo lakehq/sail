@@ -1,0 +1,53 @@
+name: Free-Threading Tests
+
+on:
+  workflow_call:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/adjust-swap-space
+
+      - uses: ./.github/actions/mount-target-directory
+
+      - uses: actions/setup-python@v6
+        with:
+          # The "t" suffix selects the free-threaded (no-GIL) interpreter.
+          python-version: "3.14t"
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: rust-build-free-threaded
+          install-testing-tools: false
+
+      # pyo3 drops the abi3 feature for free-threaded targets, so this emits
+      # a cp314t wheel.
+      - name: Build Python Package
+        uses: PyO3/maturin-action@v1
+        with:
+          args: -i python3.14t
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - name: Install Package
+        run: hatch -e test-freethreaded run install-pysail
+
+      # The deselected tests fail because of pandas>=3 (which this
+      # environment must use; pandas 2 has no cp314t wheels), not because of
+      # free-threading: they fail identically with the GIL enabled.
+      # Re-include them when the tests support pandas 3.
+      - name: Run Free-Threading Tests
+        run: >-
+          hatch -e test-freethreaded run pytest --pyargs
+          pysail.tests.spark.udf
+          pysail.tests.spark.datasource
+          pysail.tests.test_free_threading
+          -v
+          -k "not test_csv_read_write_compressed
+          and not test_parquet_read_write_compressed
+          and not test_parquet_read_with_custom_extension"
