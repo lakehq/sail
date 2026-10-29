@@ -144,6 +144,7 @@ impl PlanResolver<'_> {
         defer_unresolved: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LateralExpressions> {
+        let references = self.lateral_reference_names(&expressions);
         let mut schema = Arc::clone(input.schema());
         let mut aliases = vec![];
         let mut resolved = vec![];
@@ -211,6 +212,18 @@ impl PlanResolver<'_> {
                 let column = Column::new(qualifier.clone(), &name);
                 lateral_columns.insert(column.clone());
                 columns.push(column.clone());
+                // Only referenced names need a typed staging field. Independent
+                // projections must not repeatedly copy an ever-growing schema
+                // and alias list merely to discard them after resolution.
+                if let Some(references) = &references
+                    && named
+                        .name
+                        .iter()
+                        .all(|name| !references.contains(&self.merge_name_key(name)))
+                {
+                    resolved.push(Some(named));
+                    continue;
+                }
                 // An unchanged visible input name already has precedence over
                 // lateral aliases. In particular, a wide wildcard needs no copy
                 // of the growing schema for each of its expanded columns.
@@ -267,6 +280,90 @@ impl PlanResolver<'_> {
             columns,
             schema,
         })
+    }
+
+    /// Collect possible lateral roots without resolving expressions twice. For
+    /// constructs not handled here, retain all aliases conservatively. A name
+    /// may also refer to an input column; normal resolution keeps its precedence.
+    fn lateral_reference_names(&self, expressions: &[spec::Expr]) -> Option<HashSet<String>> {
+        fn collect(expr: &spec::Expr, names: &mut HashSet<String>) -> Option<()> {
+            use spec::Expr;
+            match expr {
+                Expr::UnresolvedAttribute {
+                    name,
+                    plan_id: None,
+                    ..
+                } => {
+                    if let Some(root) = name.parts().first() {
+                        names.insert(root.as_ref().to_string());
+                    }
+                }
+                Expr::Literal(_)
+                | Expr::UnresolvedAttribute { .. }
+                | Expr::UnresolvedDate { .. }
+                | Expr::UnresolvedTime { .. }
+                | Expr::UnresolvedTimestamp { .. } => {}
+                Expr::Alias { expr, .. }
+                | Expr::Cast { expr, .. }
+                | Expr::IsFalse(expr)
+                | Expr::IsNotFalse(expr)
+                | Expr::IsTrue(expr)
+                | Expr::IsNotTrue(expr)
+                | Expr::IsNull(expr)
+                | Expr::IsNotNull(expr)
+                | Expr::IsUnknown(expr)
+                | Expr::IsNotUnknown(expr) => collect(expr, names)?,
+                Expr::UnresolvedFunction(function) => {
+                    for arg in &function.arguments {
+                        collect(arg, names)?;
+                    }
+                    for (_, arg) in &function.named_arguments {
+                        collect(arg, names)?;
+                    }
+                    if let Some(filter) = &function.filter {
+                        collect(filter, names)?;
+                    }
+                    if let Some(order_by) = &function.order_by {
+                        for sort in order_by {
+                            collect(&sort.child, names)?;
+                        }
+                    }
+                }
+                Expr::UnresolvedExtractValue { child, extraction } => {
+                    collect(child, names)?;
+                    collect(extraction, names)?;
+                }
+                Expr::InList { expr, list, .. } => {
+                    collect(expr, names)?;
+                    for value in list {
+                        collect(value, names)?;
+                    }
+                }
+                Expr::Between {
+                    expr, low, high, ..
+                } => {
+                    collect(expr, names)?;
+                    collect(low, names)?;
+                    collect(high, names)?;
+                }
+                Expr::IsDistinctFrom { left, right } | Expr::IsNotDistinctFrom { left, right } => {
+                    collect(left, names)?;
+                    collect(right, names)?;
+                }
+                _ => return None,
+            }
+            Some(())
+        }
+        let mut names = HashSet::new();
+        for expression in expressions {
+            collect(expression, &mut names)?;
+        }
+        Some(
+            names
+                .into_iter()
+                .map(|name| self.merge_name_key(&name))
+                .collect(),
+        )
     }
 
     /// Stage aliases after their input (including aggregation) has been computed.
