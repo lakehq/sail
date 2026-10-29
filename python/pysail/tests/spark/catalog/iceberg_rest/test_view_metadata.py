@@ -193,6 +193,120 @@ def test_create_view_resolves_negative_one_schema_id_to_added_schema(
     _assert_spark_representation(metadata)
 
 
+def test_replace_view_preserves_identity_properties_and_history(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    view_name = "replace_lifecycle_view"
+    _create_view(spark, view_name, comment="keep comment", properties={"purpose": "keep purpose"})
+    original = _load_view_metadata(iceberg_rest_endpoint, view_name)
+
+    spark.sql(f"CREATE OR REPLACE VIEW {NAMESPACE}.{view_name} AS SELECT 2 AS id")
+    assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {"id": 2}  # noqa: S608
+    replaced = _load_view_metadata(iceberg_rest_endpoint, view_name)
+    assert replaced["view-uuid"] == original["view-uuid"]
+    assert replaced["location"] == original["location"]
+    assert replaced["properties"]["comment"] == "keep comment"
+    assert replaced["properties"]["purpose"] == "keep purpose"
+    assert replaced["current-version-id"] > original["current-version-id"]
+    assert _current_view_version(original) in replaced["versions"]
+    assert replaced["schemas"] == original["schemas"]
+    assert replaced["version-log"][-1]["version-id"] == replaced["current-version-id"]
+    _assert_all_view_schema_ids_resolved(replaced)
+
+    # Identical definitions reuse a retained version, not an unset LAST_ADDED sentinel.
+    spark.sql(f"CREATE OR REPLACE VIEW {NAMESPACE}.{view_name} AS SELECT 2 AS id")
+    repeated = _load_view_metadata(iceberg_rest_endpoint, view_name)
+    assert repeated["current-version-id"] == replaced["current-version-id"]
+    assert repeated["versions"] == replaced["versions"]
+    assert repeated["schemas"] == replaced["schemas"]
+
+    spark.sql(
+        f"CREATE OR REPLACE VIEW {NAMESPACE}.{view_name} "
+        "COMMENT 'new comment' TBLPROPERTIES ('added'='new property') "
+        "AS SELECT named_struct('items', array(2, 3), 'label', 'nested') AS payload"
+    )
+    assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {  # noqa: S608
+        "payload": {"items": [2, 3], "label": "nested"}
+    }
+    evolved = _load_view_metadata(iceberg_rest_endpoint, view_name)
+    assert evolved["view-uuid"] == original["view-uuid"]
+    assert evolved["location"] == original["location"]
+    assert evolved["properties"]["comment"] == "new comment"
+    assert evolved["properties"]["purpose"] == "keep purpose"
+    assert evolved["properties"]["added"] == "new property"
+    assert _current_view_version(replaced) in evolved["versions"]
+    assert len(evolved["schemas"]) == len(original["schemas"]) + 1
+    _assert_all_view_schema_ids_resolved(evolved)
+    _assert_current_schema_fields(evolved, ["payload"])
+    _assert_spark_representation(evolved)
+    current_schema = _schemas_by_id(evolved)[_current_view_version(evolved)["schema-id"]]
+    payload = current_schema["fields"][0]
+    items, label = payload["type"]["fields"]
+    field_ids = [payload["id"], items["id"], items["type"]["element-id"], label["id"]]
+    assert len(set(field_ids)) == len(field_ids)
+
+
+@pytest.mark.parametrize(
+    ("shape", "expression", "expected"),
+    [
+        ("top", "CAST({value} AS DECIMAL(10, 2))", Decimal("2.00")),
+        ("nested", "named_struct('amount', CAST({value} AS DECIMAL(10, 2)))", {"amount": Decimal("2.00")}),
+        ("list", "array(CAST({value} AS DECIMAL(10, 2)))", [Decimal("2.00")]),
+        ("map", "map('amount', CAST({value} AS DECIMAL(10, 2)))", {"amount": Decimal("2.00")}),
+    ],
+    ids=["top", "nested", "list", "map"],
+)
+def test_replace_view_reuses_decimal_schema(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+    shape: str,
+    expression: str,
+    expected: Any,
+) -> None:
+    view_name = f"replace_decimal_{shape}_view"
+    _create_view(spark, view_name, definition=f"SELECT {expression.format(value=1)} AS payload")
+    original = _load_view_metadata(iceberg_rest_endpoint, view_name)
+    schema_id = _current_view_version(original)["schema-id"]
+    assert len(original["schemas"]) == 1
+
+    definition = f"SELECT {expression.format(value=2)} AS payload"
+    spark.sql(f"CREATE OR REPLACE VIEW {NAMESPACE}.{view_name} AS {definition}")
+    replaced = _load_view_metadata(iceberg_rest_endpoint, view_name)
+    assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {"payload": expected}  # noqa: S608
+    assert replaced["view-uuid"] == original["view-uuid"]
+    assert replaced["schemas"] == original["schemas"]
+    assert _current_view_version(replaced)["schema-id"] == schema_id
+    assert replaced["current-version-id"] > original["current-version-id"]
+    assert _current_view_version(original) in replaced["versions"]
+    _assert_all_view_schema_ids_resolved(replaced)
+
+    spark.sql(f"CREATE OR REPLACE VIEW {NAMESPACE}.{view_name} AS {definition}")
+    repeated = _load_view_metadata(iceberg_rest_endpoint, view_name)
+    assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {"payload": expected}  # noqa: S608
+    assert repeated["view-uuid"] == original["view-uuid"]
+    assert repeated["schemas"] == original["schemas"]
+    assert repeated["versions"] == replaced["versions"]
+    assert repeated["current-version-id"] == replaced["current-version-id"]
+    assert _current_view_version(repeated)["schema-id"] == schema_id
+    _assert_all_view_schema_ids_resolved(repeated)
+
+
+def test_replace_absent_view_creates_initial_version(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    view_name = "replace_absent_view"
+    spark.sql(f"DROP VIEW IF EXISTS {NAMESPACE}.{view_name}")
+    spark.sql(f"CREATE OR REPLACE VIEW {NAMESPACE}.{view_name} AS SELECT 2 AS id")
+    assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {"id": 2}  # noqa: S608
+    metadata = _load_view_metadata(iceberg_rest_endpoint, view_name)
+    assert metadata["current-version-id"] == 1
+    assert len(metadata["versions"]) == 1
+    _assert_all_view_schema_ids_resolved(metadata)
+    _assert_current_schema_fields(metadata, ["id"])
+
+
 def test_create_multiple_views_can_share_location_property(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
