@@ -1169,8 +1169,7 @@ data:
   rows: |-
     == Physical Plan ==
     ProjectionExec: expr=[#0@0 as p, #1@1 as q, #2@2 as v]
-      ProjectionExec: expr=[p@0 as #0, q@1 as #1, v@2 as #2]
-        DataSourceExec: file_groups={1 group: [[<tmp>/partition_schema_override/part-0.parquet:<range>, <tmp>/partition_schema_override/part-3.parquet:<range>]]}, projection=[col-p@1 as p, col-q@2 as q, col-v@0 as v], file_type=parquet
+      DataSourceExec: file_groups={1 group: [[<tmp>/partition_schema_override/part-0.parquet:<range>, <tmp>/partition_schema_override/part-3.parquet:<range>]]}, projection=[col-p@1 as #0, col-q@2 as #1, col-v@0 as #2], file_type=parquet
 ---
 name: "test_partition_filters_use_requested_schema[id-true]"
 data:
@@ -1213,8 +1212,7 @@ data:
   rows: |-
     == Physical Plan ==
     ProjectionExec: expr=[#0@0 as p, #1@1 as q, #2@2 as v]
-      ProjectionExec: expr=[p@0 as #0, q@1 as #1, v@2 as #2]
-        DataSourceExec: file_groups={1 group: [[<tmp>/partition_schema_override/part-0.parquet:<range>, <tmp>/partition_schema_override/part-3.parquet:<range>]]}, projection=[col-p@1 as p, col-q@2 as q, col-v@0 as v], file_type=parquet
+      DataSourceExec: file_groups={1 group: [[<tmp>/partition_schema_override/part-0.parquet:<range>, <tmp>/partition_schema_override/part-3.parquet:<range>]]}, projection=[col-p@1 as #0, col-q@2 as #1, col-v@0 as #2], file_type=parquet
 ---
 name: "test_partition_filters_use_requested_schema[name-true]"
 data:

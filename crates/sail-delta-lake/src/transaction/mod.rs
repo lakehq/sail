@@ -346,6 +346,10 @@ impl OperationMetrics {
         use crate::spec::DeltaOperation;
 
         match operation {
+            DeltaOperation::Truncate {} => {
+                self.num_deleted_rows = self.num_touched_rows.take();
+                self.scan_time_ms = None;
+            }
             DeltaOperation::Delete { .. } => {
                 if self.num_copied_rows.is_none() {
                     self.num_copied_rows = self.num_output_rows;
@@ -459,11 +463,10 @@ impl OperationMetrics {
             | DeltaOperation::DropColumns { .. }
             | DeltaOperation::RenameColumn { .. }
             | DeltaOperation::ReplaceColumns { .. }
-            | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                       //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
-                                                       //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
-                                                       //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
-                                                       //     numDeletedFiles, numVacuumedDirectories
+            | DeltaOperation::AlterColumn { .. }
+            | DeltaOperation::Optimize { .. }
+            | DeltaOperation::VacuumStart { .. }
+            | DeltaOperation::VacuumEnd {} => {}
         }
     }
 }
@@ -1360,7 +1363,11 @@ impl std::future::IntoFuture for PreparedCommit {
                     _ => None,
                 })
                 .unwrap_or(false);
-            let effective_max_retries = if creation_intent || current_is_blind_append {
+            // OPTIMIZE can reuse completed rewrites after checking intervening commits.
+            let effective_max_retries = if creation_intent
+                || current_is_blind_append
+                || matches!(this.data.operation, DeltaOperation::Optimize { .. })
+            {
                 this.max_retries
             } else {
                 0

@@ -1,8 +1,8 @@
 use chumsky::Parser;
 use chumsky::extra::ParserExtra;
-use chumsky::input::{Input, ValueInput};
+use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
-use chumsky::prelude::end;
+use chumsky::prelude::{custom, end};
 use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
@@ -17,16 +17,17 @@ use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Call, Cascade, Catalog,
     Catalogs, Change, Check, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns,
     Comment, Compute, Constraint, Cost, Create, Data, Database, Databases, Dbproperties, Default,
-    Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
-    Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
-    Function, Functions, Generated, Global, Identity, If, In, Increment, Inpath, Inputformat,
-    Insert, Interval, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map,
-    Matched, Merge, Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat,
-    Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename,
-    Replace, Reset, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted,
-    Source, Start, Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp,
-    Temporary, Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values,
-    Verbose, View, Views, When, With, Zone,
+    Defined, Delete, Delimited, Desc, Describe, Detail, Directory, Distributed, Drop, Dry, Escaped,
+    Evolution, Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format,
+    Formatted, From, Full, Function, Functions, Generated, Global, History, Hours, Identity, If,
+    In, Increment, Inpath, Inputformat, Insert, Interval, Into, Is, Items, Keys, Lazy, Like, Limit,
+    Lines, Lite, Load, Local, Location, Map, Matched, Merge, Name, Namespace, Namespaces, Noscan,
+    Not, Null, On, Optimize, Options, Or, Outputformat, Overwrite, Partition, Partitioned,
+    Partitions, Properties, Purge, Recover, Refresh, Rename, Replace, Reset, Restrict, Retain, Row,
+    Run, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start, Statistics,
+    Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time,
+    To, Truncate, Type, Uncache, Unset, Update, Use, User, Using, Vacuum, Values, Verbose, View,
+    Views, When, Where, With, Zone, Zorder,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -41,7 +42,7 @@ use crate::common::Sequence;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Token, TokenLabel};
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, TreeParser, TreeSyntax, TreeText};
 
 /// Parse a statement terminator: a semicolon or the end of input.
 pub(crate) fn statement_end<'a, I, E>(
@@ -65,6 +66,19 @@ pub enum Statement {
         name: ObjectName,
         #[parser(function = |(_, _, e, _), o| compose(e, o))]
         arguments: FunctionArgumentList,
+    },
+    Optimize {
+        optimize: Optimize,
+        target: Either<StringLiteral, ObjectName>,
+        full: Option<Full>,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        predicate: Option<OptimizeWhereClause>,
+        zorder: Option<ZOrderClause>,
+    },
+    Vacuum {
+        vacuum: Vacuum,
+        target: Either<StringLiteral, ObjectName>,
+        clauses: Vec<VacuumClause>,
     },
     SetCatalog {
         set: Set,
@@ -160,6 +174,11 @@ pub enum Statement {
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
         purge: Option<Purge>,
+    },
+    TruncateTable {
+        truncate: Truncate,
+        table: Table,
+        name: ObjectName,
     },
     ShowTableProperties {
         show: Show,
@@ -832,8 +851,68 @@ pub enum TableWriteOrderList {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum SnapshotReferenceCreateAction {
+    Create(Create, Option<(Or, Replace)>),
+    Replace(Replace),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum SnapshotReferenceKind {
+    Branch(crate::ast::keywords::Branch),
+    Tag(crate::ast::keywords::Tag),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ReferenceTimeUnit {
+    Days(crate::ast::keywords::Days),
+    Hours(crate::ast::keywords::Hours),
+    Minutes(crate::ast::keywords::Minutes),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ReferenceDuration {
+    pub value: IntegerLiteral,
+    pub unit: ReferenceTimeUnit,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ReferenceSnapshotRetention {
+    Count(
+        IntegerLiteral,
+        crate::ast::keywords::Snapshots,
+        Option<ReferenceDuration>,
+    ),
+    Age(ReferenceDuration),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, DataType)")]
 pub enum AlterTableOperation {
+    CreateSnapshotReference {
+        action: SnapshotReferenceCreateAction,
+        kind: SnapshotReferenceKind,
+        if_not_exists: Option<(If, Not, Exists)>,
+        name: Ident,
+        version: Option<(
+            As,
+            crate::ast::keywords::Of,
+            crate::ast::keywords::Version,
+            IntegerLiteral,
+        )>,
+        retain: Option<(crate::ast::keywords::Retain, ReferenceDuration)>,
+        retention: Option<(
+            With,
+            crate::ast::keywords::Snapshot,
+            crate::ast::keywords::Retention,
+            ReferenceSnapshotRetention,
+        )>,
+    },
+    DropSnapshotReference {
+        drop: Drop,
+        kind: SnapshotReferenceKind,
+        if_exists: Option<(If, Exists)>,
+        name: Ident,
+    },
     SetIdentifierFields {
         set: Set,
         identifier: crate::ast::keywords::Identifier,
@@ -1232,6 +1311,15 @@ pub enum AnalyzeTableModifier {
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr)")]
 pub enum DescribeItem {
+    DeltaDetail {
+        detail: Detail,
+        target: Either<StringLiteral, ObjectName>,
+    },
+    DeltaHistory {
+        history: History,
+        target: Either<StringLiteral, ObjectName>,
+        limit: Option<(Limit, IntegerLiteral)>,
+    },
     Function {
         function: Function,
         extended: Option<Extended>,
@@ -1304,4 +1392,103 @@ pub enum DescribeFunctionName {
 pub enum CommentValue {
     NotNull(StringLiteral),
     Null(Null),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum VacuumClause {
+    // TODO: Parse USING INVENTORY table/subquery inputs and pass them to VACUUM planning.
+    Retain(Retain, NumberLiteral, Hours),
+    DryRun(Dry, Run),
+    Mode(Either<Full, Lite>),
+}
+
+#[derive(Debug, Clone)]
+pub struct OptimizeWhereClause {
+    pub r#where: Where,
+    pub condition: Expr,
+    pub condition_sql: String,
+}
+
+impl<'a, I, E, P> TreeParser<'a, I, E, P> for OptimizeWhereClause
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    I::Span: std::convert::Into<TokenSpan>,
+    E: ParserExtra<'a, I> + 'a,
+    E::Error: LabelError<'a, I, TokenLabel>,
+    P: Parser<'a, I, Expr, E> + Clone + 'a,
+{
+    fn parser(expr: P, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
+        Where::parser((), options)
+            .then(custom(move |input: &mut InputRef<'a, '_, I, E>| {
+                let start = input.save();
+                let condition = input.parse(expr.clone())?;
+                let end = input.save();
+                input.rewind(start);
+
+                // Keep the original SQL for the procedure's later predicate parsing.
+                // The expression parser, not keyword matching, determines the boundary.
+                let mut condition_sql = String::new();
+                while input.cursor() < *end.cursor() {
+                    match input.next() {
+                        Some(
+                            Token::Word { raw, .. }
+                            | Token::String { raw, .. }
+                            | Token::SingleLineComment { raw }
+                            | Token::MultiLineComment { raw },
+                        ) => condition_sql.push_str(raw),
+                        Some(Token::Punctuation(p)) => condition_sql.push(p.to_char()),
+                        Some(Token::Space { count }) => {
+                            condition_sql.push_str(&" ".repeat(count));
+                        }
+                        Some(Token::Tab { count }) => {
+                            condition_sql.push_str(&"\t".repeat(count));
+                        }
+                        Some(Token::LineFeed { count }) => {
+                            condition_sql.push_str(&"\n".repeat(count));
+                        }
+                        Some(Token::CarriageReturn { count }) => {
+                            condition_sql.push_str(&"\r".repeat(count));
+                        }
+                        None => break,
+                    }
+                }
+                input.rewind(end);
+                Ok((condition, condition_sql.trim().to_string()))
+            }))
+            .map(|(r#where, (condition, condition_sql))| Self {
+                r#where,
+                condition,
+                condition_sql,
+            })
+    }
+}
+
+impl TreeSyntax for OptimizeWhereClause {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "OptimizeWhereClause".to_string(),
+            ..WhereClause::syntax()
+        }
+    }
+}
+
+impl TreeText for OptimizeWhereClause {
+    fn text(&self) -> String {
+        format!("{}{}", self.r#where.text(), self.condition.text())
+    }
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ZOrderClause {
+    pub zorder: Zorder,
+    pub by: By,
+    #[expect(clippy::type_complexity)]
+    pub columns: Either<
+        (
+            LeftParenthesis,
+            Sequence<ObjectName, Comma>,
+            RightParenthesis,
+        ),
+        Sequence<ObjectName, Comma>,
+    >,
 }

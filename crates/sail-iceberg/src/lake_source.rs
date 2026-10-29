@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType, Field as ArrowField, Fields, Schema as ArrowSchema, SchemaRef,
+};
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::logical_expr::{LogicalPlan, TableSource};
@@ -34,6 +36,7 @@ use sail_common_datafusion::datasource::{
     BucketBy, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
     create_sort_order, find_path_in_options,
 };
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::LakeProcedureProvider;
 use sail_common_datafusion::lakerelation::{
     LakeRelation, LakeRelationAccess, LakeRelationProvider, LakeRelationResolution,
@@ -49,13 +52,16 @@ use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::scan::IcebergScan;
-use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
+use crate::datasource::type_converter::{
+    ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg, iceberg_schema_to_arrow,
+};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::metadata_relation::{IcebergMetadataRelationType, metadata_relation_provider};
 use crate::operations::bootstrap::{
     NewTableMetadataStyle, bootstrap_empty_table_metadata, replace_empty_table_metadata,
 };
+use crate::operations::metadata_commit::{PreviousMetadataFile, previous_metadata_log_entry};
 use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
@@ -64,8 +70,7 @@ use crate::physical_plan::write_context::{
 };
 use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{
-    MetadataLog, NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder,
-    TableMetadata, Transform,
+    NullOrder, PartitionSpec, Schema, Snapshot, SortDirection, SortOrder, TableMetadata, Transform,
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -282,6 +287,7 @@ impl LakeSource for IcebergLakeSource {
         Ok(LakeSourceMetadata {
             schema: self.infer_schema(ctx, info).await?,
             properties: vec![],
+            partition_by: None,
         })
     }
 
@@ -291,6 +297,24 @@ impl LakeSource for IcebergLakeSource {
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
         match operation {
+            RowLevelOperation::Truncate {
+                target_plan,
+                target,
+            } => {
+                let (mode, snapshot_id) = crate::logical::row_level::target_write_state(
+                    &target_plan,
+                    sail_common_datafusion::datasource::RowLevelCommand::Truncate,
+                )?;
+                let node = sail_logical_plan::row_level::RowLevelWriteNode::new_truncate(
+                    target_plan,
+                    mode,
+                    *target,
+                )?
+                .with_expected_snapshot_id(Some(snapshot_id));
+                Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+                    node: Arc::new(node),
+                }))
+            }
             RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
             RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
             RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),
@@ -432,6 +456,41 @@ impl LakeSource for IcebergLakeSource {
         operation: LakeSourceAlterTableOperation,
         lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
+        if let LakeSourceAlterTableOperation::AlterSnapshotReference { operation } = operation {
+            let properties = if let Some(context) = lakehouse_table.as_ref() {
+                let manager = ctx.extension::<sail_catalog::manager::CatalogManager>()?;
+                let status = manager
+                    .get_table(context.catalog_table())
+                    .await
+                    .map_err(|error| {
+                        datafusion_common::DataFusionError::External(Box::new(error))
+                    })?;
+                match status.kind {
+                    sail_common_datafusion::catalog::TableKind::Table { properties, .. } => {
+                        properties
+                    }
+                    _ => return plan_err!("Snapshot references require an Iceberg table"),
+                }
+            } else {
+                vec![]
+            };
+            let table_url = Self::parse_table_url(vec![path.to_string()]).await?;
+            crate::procedure::snapshot::commit_snapshot_operation(
+                ctx,
+                &table_url,
+                &properties,
+                lakehouse_table.as_ref(),
+                crate::procedure::snapshot::SnapshotOperation::AlterReference(operation),
+                Arc::new(datafusion::arrow::datatypes::Schema::empty()),
+            )
+            .await?;
+            return Ok(
+                sail_common_datafusion::lakesource::LakeSourceAlterTableResult {
+                    catalog_updated: true,
+                    ..Default::default()
+                },
+            );
+        }
         if let Some(context) = lakehouse_table.as_ref()
             && context.commit != CommitAuthority::Filesystem
         {
@@ -566,6 +625,111 @@ fn describe_sort_order(order: &SortOrder, schema: &Schema) -> Result<String> {
         })
         .collect::<Result<Vec<_>>>()
         .map(|fields| fields.join(", "))
+}
+
+/// Iceberg accepts only UTC timestamp labels, while Sail labels TIMESTAMP values with the session
+/// time zone. Relabeling keeps the stored instants. The fields of an existing TIMESTAMP_NTZ column
+/// of `table` keep a non-UTC zone, so that the write fails as before instead of storing the UTC
+/// wall-clock time.
+fn relabel_timestamps_as_utc(
+    input: Arc<dyn ExecutionPlan>,
+    table: Option<&ArrowSchema>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::expressions::{CastExpr, Column};
+    use datafusion::physical_plan::projection::ProjectionExec;
+
+    let schema = input.schema();
+    let relabeled = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let target = table.and_then(|table| table.field_with_name(field.name()).ok());
+            relabel_timestamp_field(field.as_ref(), target.map(|target| target.data_type()))
+        })
+        .collect::<Vec<_>>();
+    if schema
+        .fields()
+        .iter()
+        .zip(&relabeled)
+        .all(|(field, relabeled)| field.data_type() == relabeled.data_type())
+    {
+        return Ok(input);
+    }
+    let expressions = schema
+        .fields()
+        .iter()
+        .zip(relabeled)
+        .enumerate()
+        .map(|(index, (field, relabeled))| {
+            let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+            let expression: Arc<dyn PhysicalExpr> = if field.data_type() == relabeled.data_type() {
+                column
+            } else {
+                Arc::new(CastExpr::new(column, relabeled.data_type().clone(), None))
+            };
+            (expression, field.name().clone())
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(ProjectionExec::try_new(expressions, input)?))
+}
+
+/// Relabels TIMESTAMP values with UTC, including in nested fields, like Delta's schema
+/// normalization, except where `target`, the type of the existing column, is TIMESTAMP_NTZ.
+fn relabel_timestamp_field(field: &ArrowField, target: Option<&DataType>) -> ArrowField {
+    let data_type = match (field.data_type(), target) {
+        (DataType::Timestamp(_, Some(_)), Some(DataType::Timestamp(_, None))) => {
+            field.data_type().clone()
+        }
+        (DataType::Timestamp(unit, Some(tz)), _) if !matches!(tz.as_ref(), "UTC" | "+00:00") => {
+            DataType::Timestamp(*unit, Some("UTC".into()))
+        }
+        (data_type, target) => relabel_nested_timestamp_fields(data_type, target),
+    };
+    field.clone().with_data_type(data_type)
+}
+
+// Adapted from the Delta Lake schema normalization, where it is private.
+fn relabel_nested_timestamp_fields(data_type: &DataType, target: Option<&DataType>) -> DataType {
+    let element = match target {
+        Some(
+            DataType::List(field)
+            | DataType::ListView(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::LargeList(field)
+            | DataType::LargeListView(field)
+            | DataType::Map(field, _),
+        ) => Some(field.data_type()),
+        _ => None,
+    };
+    let transform_element = |field: &ArrowField| Arc::new(relabel_timestamp_field(field, element));
+    match data_type {
+        DataType::Struct(fields) => {
+            let targets = match target {
+                Some(DataType::Struct(targets)) => Some(targets),
+                _ => None,
+            };
+            let transformed_fields = fields
+                .iter()
+                .map(|field| {
+                    let target = targets
+                        .and_then(|targets| targets.find(field.name()))
+                        .map(|(_, target)| target.data_type());
+                    Arc::new(relabel_timestamp_field(field.as_ref(), target))
+                })
+                .collect::<Fields>();
+            DataType::Struct(transformed_fields)
+        }
+        DataType::List(field) => DataType::List(transform_element(field)),
+        DataType::ListView(field) => DataType::ListView(transform_element(field)),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(transform_element(field), *size)
+        }
+        DataType::LargeList(field) => DataType::LargeList(transform_element(field)),
+        DataType::LargeListView(field) => DataType::LargeListView(transform_element(field)),
+        DataType::Map(field, sorted) => DataType::Map(transform_element(field), *sorted),
+        _ => data_type.clone(),
+    }
 }
 
 fn validate_scoped_overwrite_table(mode: &PhysicalSinkMode, table_exists: bool) -> Result<()> {
@@ -741,6 +905,10 @@ pub(crate) async fn plan_iceberg_write(
         existing_partition_columns.unwrap_or_default()
     };
 
+    // An overwrite that replaces the schema has no existing columns to keep, like the schema mode
+    // that `get_schema_mode` gives it.
+    let replaces_schema =
+        matches!(mode, PhysicalSinkMode::Overwrite) && iceberg_options.overwrite_schema;
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
@@ -750,6 +918,13 @@ pub(crate) async fn plan_iceberg_write(
     if let Some(target_file_size) = target_file_size {
         options.target_file_size_bytes = Some(target_file_size);
     }
+    let table_schema = table
+        .as_ref()
+        .filter(|_| !replaces_schema)
+        .and_then(|table| table.metadata().current_schema())
+        .map(iceberg_schema_to_arrow)
+        .transpose()?;
+    let physical_input = relabel_timestamps_as_utc(physical_input, table_schema.as_ref())?;
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
@@ -827,6 +1002,12 @@ impl IcebergLakeSource {
             let mut table_meta = TableMetadata::from_json(&metadata_bytes)
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
 
+            let previous_entry = previous_metadata_log_entry(
+                &table_url,
+                PreviousMetadataFile::ObjectPath(&latest_metadata_file),
+                table_meta.last_updated_ms,
+            )?;
+
             match operation {
                 LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                     crate::properties::apply_table_property_changes(
@@ -864,13 +1045,9 @@ impl IcebergLakeSource {
                 continue;
             }
 
-            let previous_metadata_timestamp_ms = table_meta.last_updated_ms;
             let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
             table_meta.last_updated_ms = timestamp_ms;
-            table_meta.metadata_log.push(MetadataLog {
-                timestamp_ms: previous_metadata_timestamp_ms,
-                metadata_file: latest_metadata_file.clone(),
-            });
+            table_meta.metadata_log.push(previous_entry);
 
             let metadata_json = table_meta
                 .to_json()

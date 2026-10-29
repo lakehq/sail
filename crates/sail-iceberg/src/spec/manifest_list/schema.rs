@@ -20,7 +20,7 @@ use serde_json::{Number, Value as JsonValue};
 use crate::spec::avro_utils::record_field;
 
 fn partitions_field() -> AvroRecordField {
-    // element record for partitions: field_summary
+    // Iceberg names nested records by field ID, including list element records.
     let fields = vec![
         record_field("contains_null", AvroSchema::Boolean, 509, true),
         record_field("contains_nan", AvroSchema::Boolean, 518, false),
@@ -36,7 +36,7 @@ fn partitions_field() -> AvroRecordField {
 
     let element_record = AvroSchema::Record(RecordSchema {
         #[expect(clippy::unwrap_used)]
-        name: Name::new("field_summary").unwrap_or_else(|_| Name::new("field_summary").unwrap()),
+        name: Name::new("r508").unwrap_or_else(|_| Name::new("r508").unwrap()),
         aliases: None,
         doc: None,
         fields,

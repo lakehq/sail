@@ -6,7 +6,6 @@ use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -36,7 +35,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
-use sail_data_source::resolve_listing_urls;
+use sail_data_source::resolve_table_url;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
@@ -157,6 +156,12 @@ impl DataSource for DeltaLakeSource {
 
 #[async_trait]
 impl LakeSource for DeltaLakeSource {
+    fn procedure_provider(
+        self: Arc<Self>,
+    ) -> Option<Arc<dyn sail_common_datafusion::lakeprocedure::LakeProcedureProvider>> {
+        Some(self)
+    }
+
     async fn table_properties(
         &self,
         ctx: &dyn Session,
@@ -203,9 +208,7 @@ impl LakeSource for DeltaLakeSource {
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
-        let (schema, properties) =
-            infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
-        Ok(LakeSourceMetadata { schema, properties })
+        infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await
     }
 
     async fn create_table_metadata(
@@ -397,7 +400,7 @@ impl LakeSource for DeltaLakeSource {
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
         if let Some(comment) = comment {
-            metadata = metadata.with_description(comment);
+            metadata = metadata.with_description(Some(comment));
         }
         let mut protocol =
             protocol_for_metadata(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -469,6 +472,21 @@ impl LakeSource for DeltaLakeSource {
         operation: RowLevelOperation,
     ) -> Result<LogicalPlan> {
         match operation {
+            RowLevelOperation::Truncate {
+                target_plan,
+                target,
+            } => {
+                let mode = sail_common_datafusion::datasource::RowLevelWriteMode::CopyOnWrite;
+                Ok(LogicalPlan::Extension(datafusion_expr::Extension {
+                    node: Arc::new(
+                        sail_logical_plan::row_level::RowLevelWriteNode::new_truncate(
+                            target_plan,
+                            mode,
+                            *target,
+                        )?,
+                    ),
+                }))
+            }
             RowLevelOperation::Delete(info) => crate::logical::delete::expand_delete_node(*info),
             RowLevelOperation::Update(info) => crate::logical::update::expand_update_node(*info),
             RowLevelOperation::Merge(info) => crate::logical::merge::expand_merge_node(*info),
@@ -486,6 +504,9 @@ impl LakeSource for DeltaLakeSource {
         let runtime_env = ctx.runtime_env();
         let commit_properties = CommitProperties::from_session_config(ctx.session_config());
         match operation {
+            LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
+                not_impl_err!("Snapshot references require an Iceberg table")
+            }
             LakeSourceAlterTableOperation::AlterIdentifierFields { .. } => {
                 not_impl_err!("Identifier fields require an Iceberg table")
             }
@@ -604,6 +625,9 @@ fn reject_catalog_managed_delta_alter(
 
 fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'static str {
     match operation {
+        LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
+            "ALTER TABLE SNAPSHOT REFERENCE"
+        }
         LakeSourceAlterTableOperation::AlterIdentifierFields { .. } => {
             "ALTER TABLE IDENTIFIER FIELDS"
         }
@@ -1015,7 +1039,9 @@ impl DeltaLakeSource {
         // Enforce existence of UNSET keys unless `IF EXISTS` was specified.
         if !if_exists {
             for key in &canonical_unsets {
-                if !existing_config.contains_key(key) {
+                if !existing_config.contains_key(key)
+                    && !(key == "comment" && snapshot.metadata().description().is_some())
+                {
                     return plan_err!(
                         "cannot remove property '{key}' because it is not set on the table"
                     );
@@ -1026,9 +1052,18 @@ impl DeltaLakeSource {
         // Build new metadata by applying changes.
         let mut new_metadata = snapshot.metadata().clone();
         for (key, value) in &validated_sets {
-            new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+            if key == "comment" {
+                new_metadata = new_metadata
+                    .with_description(Some(value.clone()))
+                    .remove_config_key(key);
+            } else {
+                new_metadata = new_metadata.add_config_key(key.clone(), value.clone());
+            }
         }
         for key in &canonical_unsets {
+            if key == "comment" {
+                new_metadata = new_metadata.with_description(None);
+            }
             new_metadata = new_metadata.remove_config_key(key);
         }
 
@@ -1597,12 +1632,11 @@ pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
 }
 
 impl DeltaLakeSource {
-    pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        let mut urls = resolve_listing_urls(ctx, paths.clone()).await?;
-        match (urls.pop(), urls.is_empty()) {
-            (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
-            _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
-        }
+    pub async fn parse_table_url(_ctx: &dyn Session, mut paths: Vec<String>) -> Result<Url> {
+        let Some(path) = paths.pop().filter(|_| paths.is_empty()) else {
+            return plan_err!("expected a single path for Delta table sink");
+        };
+        resolve_table_url(path)
     }
 }
 

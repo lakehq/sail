@@ -247,6 +247,19 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
+        for key in [
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_RETENTION_DURATION_CHECK_ENABLED,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_VACUUM_RETENTION_WINDOW_IGNORE_ENABLED,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MIN_FILE_SIZE,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_FILE_SIZE,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_DELETED_ROWS_RATIO,
+        ] {
+            if let Some(value) = config.get_option(key) {
+                output
+                    .lakehouse_options
+                    .push((key.to_string(), value.to_string()));
+            }
+        }
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_REDACTION_OPTIONS_REGEX) {
             output.redaction_options_regex = value.to_string();
         }

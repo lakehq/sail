@@ -24,6 +24,7 @@ mod procedure;
 mod row_level;
 mod show;
 mod table_properties;
+mod truncate;
 mod update;
 mod variable;
 mod with_relations;
@@ -56,6 +57,17 @@ impl PlanResolver<'_> {
             } => {
                 self.resolve_command_call_procedure(procedure, arguments, named_arguments, state)
                     .await
+            }
+            CommandNode::CallTableProcedure {
+                format,
+                procedure,
+                target,
+                arguments,
+            } => {
+                self.resolve_command_call_table_procedure(
+                    format, procedure, target, arguments, state,
+                )
+                .await
             }
             CommandNode::CurrentDatabase => {
                 self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
@@ -326,6 +338,9 @@ impl PlanResolver<'_> {
                 };
                 self.resolve_command_delete(delete, state).await
             }
+            CommandNode::TruncateTable { table } => {
+                self.resolve_command_truncate(table, state).await
+            }
             CommandNode::AlterTable {
                 table,
                 if_exists,
@@ -378,11 +393,11 @@ impl PlanResolver<'_> {
             CommandNode::CommentOnDatabase { .. } => {
                 Err(PlanError::todo("CommandNode::CommentOnDatabase"))
             }
-            CommandNode::CommentOnTable { .. } => {
-                Err(PlanError::todo("CommandNode::CommentOnTable"))
+            CommandNode::CommentOnTable { table, value } => {
+                self.resolve_comment_on_table(table, value).await
             }
-            CommandNode::CommentOnColumn { .. } => {
-                Err(PlanError::todo("CommandNode::CommentOnColumn"))
+            CommandNode::CommentOnColumn { column, value } => {
+                self.resolve_comment_on_column(column, value).await
             }
         }
     }

@@ -15,6 +15,7 @@ use datafusion::physical_plan::joins::{
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, replace_children_if_necessary,
@@ -49,7 +50,7 @@ impl JobGraph {
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let plan = ensure_single_probe_partition_for_nested_loop_join(plan)?;
         let plan = materialize_shared_file_scan_builds(plan)?;
-        let plan = ensure_worker_input_for_iceberg_procedure(plan)?;
+        let plan = ensure_worker_input_for_lake_procedure(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
@@ -69,7 +70,7 @@ impl JobGraph {
     }
 }
 
-fn ensure_worker_input_for_iceberg_procedure(
+fn ensure_worker_input_for_lake_procedure(
     plan: Arc<dyn ExecutionPlan>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     fn has_exchange(plan: &Arc<dyn ExecutionPlan>) -> bool {
@@ -81,10 +82,16 @@ fn ensure_worker_input_for_iceberg_procedure(
 
     Ok(plan
         .transform_up(|plan| {
-            let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() else {
-                return Ok(Transformed::no(plan));
+            let input = if let Some(procedure) = plan.downcast_ref::<IcebergProcedureExec>() {
+                procedure.input()
+            } else if let Some(procedure) =
+                plan.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
+            {
+                procedure.input()
+            } else {
+                None
             };
-            let Some(input) = procedure.input() else {
+            let Some(input) = input else {
                 return Ok(Transformed::no(plan));
             };
             if has_exchange(input) {
@@ -518,15 +525,24 @@ fn plan_job_graph_stages(
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
     let plan = if let Some(repartition) = subtree.plan.downcast_ref::<RepartitionExec>() {
-        if repartition.preserve_order() {
-            // We haven't found a case when order-preserving repartition can be constructed,
-            // so it's fine to return an error for now.
-            // TODO: support order-preserving repartition
+        let ordering = repartition
+            .preserve_order()
+            .then(|| repartition.properties().output_ordering().cloned())
+            .flatten();
+        if ordering.is_some() && repartition.properties().boundedness.is_unbounded() {
             return Err(ExecutionError::InternalError(
-                "repartition is order-preserving and would result in incorrect results in distributed execution".to_string()
+                "order-preserving repartition of unbounded input is not supported in distributed execution".to_string()
             ));
         }
-        let properties = repartition.properties().clone();
+        // Shuffle readers interleave producer streams. Restore the promised ordering
+        // in each receiving partition before downstream operators consume the rows.
+        let mut properties = repartition.properties().as_ref().clone();
+        if ordering.is_some() {
+            let mut equivalence = properties.eq_properties.clone();
+            equivalence.clear_orderings();
+            properties.set_eq_properties(equivalence);
+        }
+        let properties = Arc::new(properties);
         let child = subtree.only_child()?;
         let plan = match &properties.partitioning {
             Partitioning::UnknownPartitioning(n) => {
@@ -545,7 +561,15 @@ fn plan_job_graph_stages(
                 create_shuffle(child, graph, properties, consumption, scalar_context)?
             }
         };
-        PlannedSubtree::without_pending_scalar_subquery_expr(plan)
+        let plan = match ordering {
+            Some(ordering) => {
+                Arc::new(SortExec::new(ordering, plan).with_preserve_partitioning(true))
+                    as Arc<dyn ExecutionPlan>
+            }
+            None => plan,
+        };
+        let has_pending_scalar_subquery_expr = plan_node_has_scalar_subquery_expr(&plan)?;
+        PlannedSubtree::new(plan, has_pending_scalar_subquery_expr)
     } else if let Some(repartition) = subtree.plan.downcast_ref::<ExplicitRepartitionExec>() {
         let properties = repartition.properties().clone();
         let child = subtree.only_child()?;
@@ -1059,7 +1083,7 @@ mod tests {
     use datafusion::physical_expr::expressions::{binary, col};
     use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use datafusion::physical_expr::{
-        Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
+        LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -1070,6 +1094,7 @@ mod tests {
     use datafusion::physical_plan::limit::GlobalLimitExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+    use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
@@ -1394,6 +1419,42 @@ mod tests {
         };
         assert_eq!((*partitioning).clone(), range);
         assert_eq!(graph.stages()[0].distribution.channels(), 2);
+    }
+
+    #[test]
+    fn test_order_preserving_shuffle_sorts_after_receiving_rows() {
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(col("id", &schema()).unwrap())].into();
+        for options in [flight_shuffle_options(), blocking_shuffle_options()] {
+            for partitioning in [
+                Partitioning::RoundRobinBatch(4),
+                Partitioning::Hash(vec![col("id", &schema()).unwrap()], 4),
+            ] {
+                let source = UnionExec::try_new(vec![empty_plan(); 2]).unwrap();
+                let source = Arc::new(
+                    SortExec::new(ordering.clone(), source).with_preserve_partitioning(true),
+                );
+                let repartition = RepartitionExec::try_new(source, partitioning.clone())
+                    .unwrap()
+                    .with_preserve_order();
+                let graph = JobGraph::try_new(Arc::new(repartition), options.clone()).unwrap();
+                let output = graph
+                    .stages()
+                    .last()
+                    .unwrap()
+                    .plan
+                    .downcast_ref::<SortExec>()
+                    .unwrap();
+                assert!(output.preserve_partitioning());
+                assert_eq!(output.expr(), &ordering);
+                assert_eq!(output.properties().output_partitioning(), &partitioning);
+                let input = output
+                    .input()
+                    .downcast_ref::<StageInputExec<usize>>()
+                    .unwrap();
+                assert!(input.properties().output_ordering().is_none());
+            }
+        }
     }
 
     #[test]

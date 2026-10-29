@@ -37,3 +37,50 @@ Feature: substring_index output schema
         root
          |-- result: string (nullable = true)
         """
+
+    @sail-bug
+    Scenario: distinct substring_index results remain non-nullable for non-null input
+      When query
+        """
+        SELECT DISTINCT substring_index(p, '.', 1) AS s
+        FROM VALUES ('x1.CSV'), ('x1.CSV') AS t(p)
+        """
+      Then query schema
+        """
+        root
+         |-- s: string (nullable = false)
+        """
+
+  Rule: Collected results
+
+    Scenario: substring_index preserves duplicate input rows
+      When query
+        """
+        SELECT substring_index(p, '.', 1) AS s
+        FROM VALUES ('x1.CSV'), ('x1.CSV') AS t(p)
+        """
+      Then query result collected
+        | s  |
+        | x1 |
+        | x1 |
+
+    Scenario: substring_index results can be collected after grouping
+      When query
+        """
+        SELECT substring_index(p, '.', 1) AS s
+        FROM VALUES ('x1.CSV'), ('x1.CSV') AS t(p)
+        GROUP BY 1
+        """
+      Then query result collected
+        | s  |
+        | x1 |
+
+    Scenario: distinct substring_index results can be collected
+      When query
+        """
+        SELECT DISTINCT substring_index(p, '.', 1) AS s
+        FROM VALUES ('x1.CSV'), ('x1.CSV') AS t(p)
+        """
+      Then query result collected
+        | s  |
+        | x1 |

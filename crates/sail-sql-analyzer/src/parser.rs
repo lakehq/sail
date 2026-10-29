@@ -224,6 +224,182 @@ mod tests {
     }
 
     #[test]
+    fn test_lakehouse_command_targets() -> SqlResult<()> {
+        use sail_common::spec::{CommandNode, LakehouseCommandTarget, ObjectName, Plan};
+
+        for command in ["DESCRIBE DETAIL", "DESCRIBE HISTORY", "OPTIMIZE", "VACUUM"] {
+            for (target, expected) in [
+                (
+                    "'relative-table'",
+                    LakehouseCommandTarget::Path("relative-table".to_string()),
+                ),
+                (
+                    "'./relative-table'",
+                    LakehouseCommandTarget::Path("./relative-table".to_string()),
+                ),
+                (
+                    "delta.`relative-table`",
+                    LakehouseCommandTarget::Table(ObjectName::from(["delta", "relative-table"])),
+                ),
+                (
+                    "delta.`/absolute-table`",
+                    LakehouseCommandTarget::Table(ObjectName::from(["delta", "/absolute-table"])),
+                ),
+            ] {
+                let sql = format!("{command} {target}");
+                let plan = crate::statement::from_ast_statement(parse_one_statement(&sql)?)?;
+                assert!(matches!(
+                    &plan,
+                    Plan::Command(plan) if matches!(
+                        &plan.node,
+                        CommandNode::CallTableProcedure { target, .. } if target == &expected
+                    )
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_optimize_predicate_preserves_sql() -> SqlResult<()> {
+        use sail_common::spec;
+
+        use crate::expression::from_ast_expression;
+        use crate::parser::parse_expression;
+        use crate::statement::from_ast_statement;
+
+        for (predicate_sql, column) in [
+            ("`part key` = 1", "part key"),
+            ("`part.key` = 1", "part.key"),
+            ("`part-key` = 1", "part-key"),
+            ("`part``key` = 1", "part`key"),
+            ("`part key`\t=\r\n  1", "part key"),
+            ("`part key` /* WHERE ZORDER BY (ignored) */ = 1", "part key"),
+            ("`part key` -- WHERE ZORDER BY (ignored)\n = 1", "part key"),
+            ("`part key` = 1 /* ZORDER BY (ignored) */", "part key"),
+            ("`WHERE ZORDER BY` = 1", "WHERE ZORDER BY"),
+            ("zorder = 1", "zorder"),
+        ] {
+            for (suffix, zorder_sql) in [
+                ("", None),
+                (" ZORDER BY id", Some("ZORDER BY id ")),
+                (" ZORDER BY (id)", Some("ZORDER BY ( id ) ")),
+            ] {
+                let sql = format!("OPTIMIZE t WHERE {predicate_sql}{suffix}");
+                let statement = parse_one_statement(&sql)?;
+                let Statement::Optimize {
+                    predicate: Some(predicate),
+                    zorder,
+                    ..
+                } = &statement
+                else {
+                    unreachable!("expected OPTIMIZE with a predicate: {sql}");
+                };
+                assert_eq!(predicate.condition_sql, predicate_sql, "{sql}");
+                assert_eq!(zorder.is_some(), zorder_sql.is_some(), "{sql}");
+
+                let condition = from_ast_expression(predicate.condition.clone())?;
+                assert_eq!(
+                    from_ast_expression(parse_expression(&predicate.condition_sql)?)?,
+                    condition,
+                    "{sql}"
+                );
+                let spec::Expr::UnresolvedFunction(function) = condition else {
+                    unreachable!("expected equality: {sql}");
+                };
+                assert_eq!(function.function_name, spec::ObjectName::bare("=="));
+                assert_eq!(
+                    function.arguments,
+                    vec![
+                        spec::Expr::UnresolvedAttribute {
+                            name: spec::ObjectName::bare(column),
+                            plan_id: None,
+                            is_metadata_column: false,
+                        },
+                        spec::Expr::Literal(spec::Literal::Int32 { value: Some(1) }),
+                    ],
+                    "{sql}"
+                );
+
+                let mut arguments = vec![(
+                    "predicate".into(),
+                    spec::Expr::Literal(spec::Literal::Utf8 {
+                        value: Some(predicate_sql.to_string()),
+                    }),
+                )];
+                if let Some(zorder_sql) = zorder_sql {
+                    arguments.push((
+                        "zorder".into(),
+                        spec::Expr::Literal(spec::Literal::Utf8 {
+                            value: Some(zorder_sql.to_string()),
+                        }),
+                    ));
+                }
+                assert_eq!(
+                    from_ast_statement(statement)?,
+                    spec::Plan::Command(spec::CommandPlan::new(
+                        spec::CommandNode::CallTableProcedure {
+                            format: "delta".to_string(),
+                            procedure: "optimize".to_string(),
+                            target: spec::LakehouseCommandTarget::Table(spec::ObjectName::bare(
+                                "t",
+                            )),
+                            arguments,
+                        }
+                    )),
+                    "{sql}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_optimize_predicate_boundaries() -> SqlResult<()> {
+        use sail_common::spec;
+
+        use crate::expression::from_ast_expression;
+
+        let predicate_sql = "`part key` = 'WHERE ZORDER BY (ignored); it\\'s a string'";
+        let sql = format!("OPTIMIZE t WHERE {predicate_sql} ZORDER BY (id); SELECT 1");
+        let statements = parse_statements(&sql)?;
+        let [
+            Statement::Optimize {
+                predicate: Some(predicate),
+                zorder: Some(_),
+                ..
+            },
+            Statement::Query(_),
+        ] = statements.as_slice()
+        else {
+            unreachable!("expected OPTIMIZE followed by SELECT");
+        };
+        assert_eq!(predicate.condition_sql, predicate_sql);
+        let spec::Expr::UnresolvedFunction(function) =
+            from_ast_expression(predicate.condition.clone())?
+        else {
+            unreachable!("expected equality");
+        };
+        assert_eq!(
+            function.arguments[1],
+            spec::Expr::Literal(spec::Literal::Utf8 {
+                value: Some("WHERE ZORDER BY (ignored); it's a string".to_string()),
+            })
+        );
+
+        for sql in [
+            "OPTIMIZE t WHERE",
+            "OPTIMIZE t WHERE `part key` =",
+            "OPTIMIZE t WHERE `part key` = 1 AND ZORDER BY (id)",
+            "OPTIMIZE t WHERE `part key` = 1 ZORDER BY",
+            "OPTIMIZE t WHERE `part key` = 1 SELECT 1",
+        ] {
+            assert!(parse_one_statement(sql).is_err(), "{sql}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_describe_table_and_query_disambiguation() -> SqlResult<()> {
         for sql in [
             "DESCRIBE t",

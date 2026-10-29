@@ -319,12 +319,11 @@ pub async fn build_file_scan_config(
     }
 
     // Rewrite file paths with table location prefix
+    let table_root = Path::from_url_path(log_store.config().location.path())?;
     file_groups.iter_mut().for_each(|(_, files)| {
         files.iter_mut().for_each(|file| {
-            file.object_meta.location = rewrite_data_file_location(
-                Path::from(log_store.config().location.path()),
-                file.object_meta.location.clone(),
-            );
+            file.object_meta.location =
+                rewrite_data_file_location(table_root.clone(), file.object_meta.location.clone());
         });
     });
 

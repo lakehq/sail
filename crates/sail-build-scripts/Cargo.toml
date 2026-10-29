@@ -8,6 +8,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+chumsky = { workspace = true }
 lazy_static = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }

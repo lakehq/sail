@@ -262,13 +262,20 @@ pub(crate) async fn handle_execute_sql_command(
                 relation: Some(relation),
             }));
             let mut output = vec![ExecutorOutput::new(result)];
-            if metadata.reattachable {
+            let operation_id = metadata.operation_id.clone();
+            let rx: ExecutorOutputStream = if metadata.reattachable {
                 output.push(ExecutorOutput::complete());
-            }
+                let executor = Executor::completed(metadata, output);
+                let rx = executor.start()?;
+                spark.add_executor(executor)?;
+                rx
+            } else {
+                Box::pin(stream::iter(output.into_iter().map(Ok)))
+            };
             Ok(ExecutePlanResponseStream::new(
                 spark.session_id().to_string(),
-                metadata.operation_id,
-                Box::pin(stream::iter(output.into_iter().map(Ok))),
+                operation_id,
+                rx,
             ))
         }
     }

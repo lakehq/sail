@@ -196,6 +196,7 @@ pub(super) fn try_encode_higher_order_udf(
         HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
             classic: convert_tz.classic(),
             null_short_circuit: convert_tz.null_short_circuit(),
+            ..Default::default()
         })
     } else if let Some(regexp_instr) = udf_inner.downcast_ref::<SparkRegexpInstr>() {
         HigherOrderUdfKind::RegexpInstr(r#gen::SparkRegexpInstrUdf {

@@ -485,16 +485,18 @@ pub(crate) async fn alter_columns(
     if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
         validate_unmapped_names(updated.fields())?;
     }
-    let candidate =
-        preserve_schema_metadata(&current, &StructType::try_from(&updated)?, updated.fields())?;
     let (candidate, metadata) = crate::schema::manager::evolve_schema(
         &current,
-        &candidate,
+        &StructType::try_from(&updated)?,
         snapshot.metadata(),
         snapshot.effective_column_mapping_mode(),
     )
     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let mut metadata = metadata.with_partition_columns(partitions);
+    // Apply comment removals after column mapping has inherited existing metadata.
+    let candidate = preserve_schema_metadata(&current, &candidate, updated.fields())?;
+    let mut metadata = metadata
+        .with_schema(&candidate)?
+        .with_partition_columns(partitions);
     let mut properties = Vec::new();
     const STATS_COLUMNS: &str = "delta.dataSkippingStatsColumns";
     if let Some(value) = metadata.configuration().get(STATS_COLUMNS)
@@ -862,6 +864,8 @@ fn preserve_schema_metadata(
                 field
                     .metadata
                     .insert("comment".into(), MetadataValue::String(comment.clone()));
+            } else {
+                field.metadata.remove("comment");
             }
             preserve_type_metadata(
                 old.map(|f| f.data_type()),

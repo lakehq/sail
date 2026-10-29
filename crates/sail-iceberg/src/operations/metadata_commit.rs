@@ -116,13 +116,37 @@ impl MetadataFileCommit {
     }
 }
 
+pub(crate) enum PreviousMetadataFile<'a> {
+    /// An authoritative catalog pointer, which may be a URI or an absolute filesystem path.
+    CatalogLocation(&'a str),
+    /// An internal object-store key that must be resolved against the table location.
+    ObjectPath(&'a str),
+}
+
+/// Record a file location, not the object-store key used to load the metadata.
+pub(crate) fn previous_metadata_log_entry(
+    table_url: &Url,
+    previous_metadata_file: PreviousMetadataFile<'_>,
+    previous_timestamp_ms: i64,
+) -> Result<MetadataLog> {
+    Ok(MetadataLog {
+        timestamp_ms: previous_timestamp_ms,
+        metadata_file: match previous_metadata_file {
+            PreviousMetadataFile::CatalogLocation(location) => location.to_string(),
+            PreviousMetadataFile::ObjectPath(path) => table_metadata_location(table_url, path)?,
+        },
+    })
+}
+
 /// Apply snapshot actions and record the previous metadata version exactly once.
 pub(crate) fn apply_snapshot_updates(
+    table_url: &Url,
     metadata: &mut TableMetadata,
     updates: &[TableUpdate],
-    previous_metadata_file: &str,
+    previous_metadata_file: PreviousMetadataFile<'_>,
 ) -> Result<()> {
-    let previous_timestamp = metadata.last_updated_ms;
+    let previous_entry =
+        previous_metadata_log_entry(table_url, previous_metadata_file, metadata.last_updated_ms)?;
     let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     for update in updates {
         match update {
@@ -148,13 +172,127 @@ pub(crate) fn apply_snapshot_updates(
                 }
                 metadata.refs.insert(ref_name.clone(), reference.clone());
             }
+            TableUpdate::RemoveSnapshotRef { ref_name } => {
+                metadata.refs.remove(ref_name);
+            }
             _ => return internal_err!("Unsupported Iceberg snapshot metadata update"),
         }
     }
     metadata.last_updated_ms = timestamp_ms;
-    metadata.metadata_log.push(MetadataLog {
-        timestamp_ms: previous_timestamp,
-        metadata_file: previous_metadata_file.to_string(),
-    });
+    metadata.metadata_log.push(previous_entry);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previous_metadata_log_resolves_object_keys() -> Result<(), Box<dyn std::error::Error>> {
+        for (table, key, expected) in [
+            (
+                "file:///tmp/table/",
+                "tmp/table/metadata/v1.metadata.json",
+                "file:///tmp/table/metadata/v1.metadata.json",
+            ),
+            (
+                "file:///tmp/table/",
+                "/tmp/table/metadata/v1.metadata.json",
+                "file:///tmp/table/metadata/v1.metadata.json",
+            ),
+            (
+                "s3://bucket/warehouse/table/",
+                "warehouse/table/metadata/v1.metadata.json",
+                "s3://bucket/warehouse/table/metadata/v1.metadata.json",
+            ),
+            (
+                "s3://bucket/warehouse/table/",
+                "metadata/v1.metadata.json",
+                "s3://bucket/warehouse/table/metadata/v1.metadata.json",
+            ),
+            (
+                "file:///C:/warehouse/table/",
+                "C:/warehouse/table/metadata/v1.metadata.json",
+                "file:///C:/warehouse/table/metadata/v1.metadata.json",
+            ),
+            (
+                "file:///C:/warehouse/table/",
+                "warehouse/table/metadata/v1.metadata.json",
+                "file:///C:/warehouse/table/metadata/v1.metadata.json",
+            ),
+        ] {
+            let entry = previous_metadata_log_entry(
+                &Url::parse(table)?,
+                PreviousMetadataFile::ObjectPath(key),
+                123,
+            )?;
+            assert_eq!(entry.metadata_file, expected);
+            assert_eq!(entry.timestamp_ms, 123);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn previous_metadata_log_preserves_catalog_filesystem_locations()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let table = Url::parse("file:///tmp/table/")?;
+        for location in [
+            "/tmp/external/old.metadata.json",
+            "C:/external/old.metadata.json",
+        ] {
+            let entry = previous_metadata_log_entry(
+                &table,
+                PreviousMetadataFile::CatalogLocation(location),
+                456,
+            )?;
+            assert_eq!(entry.metadata_file, location);
+            assert_eq!(entry.timestamp_ms, 456);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn previous_metadata_log_preserves_absolute_locations() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let table = Url::parse("s3://bucket/warehouse/table/")?;
+        for location in [
+            "s3://bucket/warehouse/table/metadata/v1.metadata.json",
+            "s3://bucket/external-root/metadata/v1.metadata.json",
+            "s3://OTHER-BUCKET/external%25/%2f/space%20/hash%23/v1.metadata.json",
+            "file:///outside/space name/percent%/v1.metadata.json",
+            "file:///C:/outside/metadata/v1.metadata.json",
+        ] {
+            let entry = previous_metadata_log_entry(
+                &table,
+                PreviousMetadataFile::CatalogLocation(location),
+                456,
+            )?;
+            assert_eq!(entry.metadata_file, location);
+            assert_eq!(entry.timestamp_ms, 456);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn previous_metadata_log_preserves_escaped_key_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for root in ["file:///", "s3://bucket/"] {
+            // Object keys preserve URL escapes; decoding them would change the object identity.
+            for directory in ["percent%", "percent%25", "slash%2F", "space%20", "hash%23"] {
+                let table = Url::parse(&format!("{root}warehouse/{directory}/"))?;
+                let key = format!("warehouse/{directory}/metadata/v1.metadata.json");
+                let entry = previous_metadata_log_entry(
+                    &table,
+                    PreviousMetadataFile::ObjectPath(&key),
+                    789,
+                )?;
+                assert_eq!(entry.metadata_file, format!("{root}{key}"));
+                assert_eq!(
+                    crate::utils::url_to_object_path(&Url::parse(&entry.metadata_file)?)?.as_ref(),
+                    key
+                );
+            }
+        }
+        Ok(())
+    }
 }

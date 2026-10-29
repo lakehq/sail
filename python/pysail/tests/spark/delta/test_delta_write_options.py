@@ -2,6 +2,12 @@
 Test Delta Lake write options (write_batch_size, target_file_size) in Sail.
 """
 
+import json
+from urllib.parse import unquote
+
+import pyarrow.parquet as pq
+import pyspark.sql.functions as F  # noqa: N812
+import pytest
 from pyspark.sql.types import Row
 
 
@@ -133,3 +139,62 @@ def test_delta_write_options_with_partitioning(spark, tmp_path):
     filtered_df = spark.read.format("delta").load(f"{delta_path}").filter("category = 'cat_0'")
     filtered_data = filtered_df.collect()
     assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category  # noqa: PLR2004
+
+
+def test_delta_rotated_files_match_log_sizes_and_statistics(spark, tmp_path):
+    path = tmp_path / "rotated"
+    rows = 4096
+    (
+        spark.range(rows)
+        .coalesce(1)
+        .write.format("delta")
+        .option("target_file_size", "2048")
+        .option("write_batch_size", "128")
+        .save(str(path))
+    )
+    adds = [
+        action["add"]
+        for log in (path / "_delta_log").glob("*.json")
+        for line in log.read_text().splitlines()
+        if "add" in (action := json.loads(line))
+    ]
+    assert len(adds) > 1
+    assert {path / unquote(add["path"]) for add in adds} == set(path.rglob("*.parquet"))
+    total = 0
+    for add in adds:
+        file = path / unquote(add["path"])
+        metadata = pq.read_metadata(file)
+        assert add["size"] == file.stat().st_size
+        assert metadata.num_rows > 0
+        assert metadata.num_rows == json.loads(add["stats"])["numRecords"]
+        total += metadata.num_rows
+    assert total == rows
+    assert [row.id for row in spark.read.format("delta").load(str(path)).orderBy("id").collect()] == list(range(rows))
+
+
+@pytest.mark.parametrize("global_sort", [False, True], ids=["local-sort", "global-sort"])
+@pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
+def test_delta_write_preserves_input_sort(spark, tmp_path, global_sort, partitioned):
+    size = 20000
+    df = spark.range(size, numPartitions=4).select(
+        ((F.col("id") * 7919) % size).alias("k"),
+        (F.col("id") % 3).alias("p"),
+    )
+    # Include the table partition keys in the requested ordering when writing a partitioned table.
+    ordering = [F.col("p").asc_nulls_last(), F.col("k").desc()] if partitioned else [F.col("k").desc()]
+    ordered = df.orderBy(*ordering) if global_sort else df.repartition(4, "p").sortWithinPartitions(*ordering)
+    writer = ordered.write.format("delta")
+    if partitioned:
+        writer = writer.partitionBy("p")
+    path = tmp_path / "sorted_delta"
+    writer.save(str(path))
+
+    files = list(path.rglob("*.parquet"))
+    assert files
+    count = 0
+    for file in files:
+        values = pq.ParquetFile(file).read(columns=["k"]).column(0).to_pylist()
+        assert values == sorted(values, reverse=True)
+        count += len(values)
+    assert count == size
+    assert spark.read.format("delta").load(str(path)).count() == size
