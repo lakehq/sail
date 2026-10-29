@@ -1,18 +1,22 @@
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::optimizer::AnalyzerRule;
-use datafusion::optimizer::analyzer::type_coercion::TypeCoercion;
-use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
+use datafusion_common::{Column, DFSchema, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
-use datafusion_expr::type_coercion::binary::type_union_coercion;
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition,
     expr,
 };
 use sail_common::spec;
+use sail_common_datafusion::type_coercion::binary_type_coercion::type_union_coercion;
+use sail_logical_optimizer::type_coercion::TypeCoercion;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::datetime_utils::{cast_to_common_timestamp_type, session_timestamp_targets};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -182,6 +186,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                let (left, right) = self.coerce_set_operation_timestamps(left, right)?;
                 // Spark Connect treats Union as a leaf for DataFrame plan IDs.
                 // WithCTE restores separately reachable definition bindings.
                 for field in left.schema().fields() {
@@ -214,6 +219,7 @@ impl PlanResolver<'_> {
                         "`EXCEPT ALL` must have the same number of columns. Left has {left_len} columns, right has {right_len} columns."
                     )));
                 }
+                let (left, right) = self.coerce_set_operation_timestamps(left, right)?;
 
                 let types = left
                     .schema()
@@ -341,5 +347,54 @@ impl PlanResolver<'_> {
                 Ok(plan)
             }
         }
+    }
+
+    /// Spark's common type for TIMESTAMP_NTZ and TIMESTAMP columns of a set operation.
+    fn coerce_set_operation_timestamps(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+    ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
+        let left_schema = Arc::clone(left.schema());
+        let right_schema = Arc::clone(right.schema());
+        let timezone = &self.config.session_timezone_label();
+        let is_mix = |left: &DataType, right: &DataType| {
+            session_timestamp_targets(left, right, timezone).is_some()
+        };
+        if left_schema.fields().len() != right_schema.fields().len()
+            || !left_schema
+                .fields()
+                .iter()
+                .zip(right_schema.fields())
+                .any(|(left, right)| is_mix(left.data_type(), right.data_type()))
+        {
+            return Ok((left, right));
+        }
+        let coerce = |schema: &DFSchema, other: &DFSchema| {
+            schema
+                .iter()
+                .zip(other.fields())
+                .map(|((qualifier, field), other)| {
+                    let column = Expr::Column(Column::from((qualifier, field.as_ref())));
+                    match session_timestamp_targets(field.data_type(), other.data_type(), timezone)
+                    {
+                        Some((target, _)) => cast_to_common_timestamp_type(
+                            column,
+                            field.data_type(),
+                            &target,
+                            timezone,
+                        )
+                        .alias_qualified(qualifier.cloned(), field.name()),
+                        None => column,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let left_expressions = coerce(&left_schema, &right_schema);
+        let right_expressions = coerce(&right_schema, &left_schema);
+        Ok((
+            project(left, left_expressions)?,
+            project(right, right_expressions)?,
+        ))
     }
 }

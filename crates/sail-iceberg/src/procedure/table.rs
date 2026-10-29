@@ -63,13 +63,16 @@ impl ProcedureTable {
 
     pub(crate) fn validate_for_call(&self, call: &LakeProcedureCall) -> Result<()> {
         call.validate()?;
-        let Some(target) = call.target.as_ref() else {
+        let Some(sail_common_datafusion::lakeprocedure::LakeProcedureTableTarget::Table {
+            binding,
+        }) = call.target.as_ref()
+        else {
             return plan_err!("Iceberg procedure table is missing its bound call target");
         };
         let Some(context) = self.lakehouse_table.as_ref() else {
             return plan_err!("Iceberg procedure table is missing its lakehouse context");
         };
-        if !target.binding.matches_access_context(context) {
+        if !binding.matches_access_context(context) {
             return plan_err!("Iceberg procedure table does not match its bound call target");
         }
         if let Some(identity_location) = context.table_identity.table_uri.as_deref()

@@ -209,3 +209,43 @@ Feature: Set operation multiplicity and type coercion
       | INTERSECT ALL |
       | EXCEPT ALL    |
       | INTERSECT     |
+
+  Scenario Outline: Set operation multiplicity follows session timestamp coercion
+    Given config spark.sql.session.timeZone = <timezone>
+    When query
+      """
+      SELECT CAST(x AS STRING) AS x FROM (
+        SELECT x FROM VALUES
+          (TIMESTAMP_NTZ '2020-03-08 02:30:00'),
+          (TIMESTAMP_NTZ '2020-03-08 03:30:00') t(x)
+        <operation> SELECT TIMESTAMP '2020-03-08 03:30:00' AS x
+      )
+      """
+    Then query result collected
+      | x                   |
+      | <expected>          |
+
+    Examples:
+      | timezone            | operation     | expected            |
+      | America/Los_Angeles | INTERSECT ALL | 2020-03-08 03:30:00 |
+      | America/Los_Angeles | EXCEPT ALL    | 2020-03-08 03:30:00 |
+      | America/Los_Angeles | INTERSECT     | 2020-03-08 03:30:00 |
+      | Asia/Shanghai       | INTERSECT ALL | 2020-03-08 03:30:00 |
+      | Asia/Shanghai       | EXCEPT ALL    | 2020-03-08 02:30:00 |
+      | UTC                 | INTERSECT ALL | 2020-03-08 03:30:00 |
+      | UTC                 | EXCEPT ALL    | 2020-03-08 02:30:00 |
+
+  Scenario: EXCEPT DISTINCT removes values collapsed by session timestamp coercion
+    Given config spark.sql.session.timeZone = America/Los_Angeles
+    When query
+      """
+      SELECT COUNT(*) AS n FROM (
+        SELECT x FROM VALUES
+          (TIMESTAMP_NTZ '2020-03-08 02:30:00'),
+          (TIMESTAMP_NTZ '2020-03-08 03:30:00') t(x)
+        EXCEPT SELECT TIMESTAMP '2020-03-08 03:30:00' AS x
+      )
+      """
+    Then query result collected
+      | n |
+      | 0 |

@@ -20,6 +20,8 @@ use crate::lakerelation::LakeRelationProvider;
 pub struct LakeSourceMetadata {
     pub schema: SchemaRef,
     pub properties: Vec<(String, String)>,
+    /// Authoritative partitioning when available, including `Some(vec![])` for unpartitioned tables.
+    pub partition_by: Option<Vec<CatalogPartitionField>>,
 }
 
 /// A column definition used when catalog DDL asks a lake source to create
@@ -176,6 +178,7 @@ pub trait LakeSource: DataSource {
         Ok(LakeSourceMetadata {
             schema: self.infer_schema(ctx, info).await?,
             properties: vec![],
+            partition_by: None,
         })
     }
 

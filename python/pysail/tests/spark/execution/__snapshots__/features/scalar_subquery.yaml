@@ -516,6 +516,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -1067,6 +1070,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -1633,6 +1639,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -2448,6 +2457,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -3130,6 +3142,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -3679,6 +3694,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -4138,6 +4156,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -4653,6 +4674,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -5199,6 +5223,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -5708,6 +5735,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -6169,6 +6199,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -6704,6 +6737,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -7219,6 +7255,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -7726,6 +7765,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -8212,6 +8254,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -8722,6 +8767,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -9285,6 +9333,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -9836,6 +9887,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -10337,6 +10391,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -10849,6 +10906,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -11312,6 +11372,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -11771,6 +11834,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -12262,6 +12328,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -12766,6 +12835,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:

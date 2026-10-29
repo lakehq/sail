@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -35,6 +35,7 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -118,6 +119,7 @@ pub(super) struct WritePlanBuilder {
     mode: Option<WriteMode>,
     format: Option<String>,
     partition_by: Vec<CatalogPartitionField>,
+    insert_partition: Vec<spec::Identifier>,
     bucket_by: Option<spec::SaveBucketBy>,
     sort_by: Vec<spec::SortOrder>,
     cluster_by: Vec<spec::ObjectName>,
@@ -134,6 +136,7 @@ impl WritePlanBuilder {
             mode: None,
             format: None,
             partition_by: vec![],
+            insert_partition: vec![],
             bucket_by: None,
             sort_by: vec![],
             cluster_by: vec![],
@@ -164,6 +167,12 @@ impl WritePlanBuilder {
     /// Sets the partitioning fields for the builder.
     pub fn with_partition_by(mut self, partition_by: Vec<CatalogPartitionField>) -> Self {
         self.partition_by = partition_by;
+        self
+    }
+
+    /// Sets the all-dynamic INSERT clause to validate against the target metadata.
+    pub fn with_insert_partition(mut self, partition: Vec<spec::Identifier>) -> Self {
+        self.insert_partition = partition;
         self
     }
 
@@ -213,6 +222,7 @@ impl PlanResolver<'_> {
             target,
             format,
             partition_by,
+            insert_partition,
             bucket_by,
             sort_by,
             cluster_by,
@@ -338,6 +348,7 @@ impl PlanResolver<'_> {
                         | WriteMode::TruncatePartitions
                 );
                 if let Some(info) = info.as_ref().filter(|_| use_existing) {
+                    self.validate_insert_partition(&insert_partition, info)?;
                     if !table_properties.is_empty() {
                         return Err(PlanError::invalid(
                             "cannot specify table properties when writing to an existing table",
@@ -635,7 +646,7 @@ impl PlanResolver<'_> {
                 constraints: _,
                 location,
                 format,
-                partition_by,
+                mut partition_by,
                 sort_by,
                 bucket_by,
                 mut properties,
@@ -706,6 +717,11 @@ impl PlanResolver<'_> {
                             });
                             Self::merge_format_columns(&mut columns, metadata.schema.as_ref());
                         }
+                        if format.eq_ignore_ascii_case("delta")
+                            && let Some(fields) = metadata.partition_by
+                        {
+                            partition_by = fields;
+                        }
                         for field in metadata.schema.fields() {
                             if let Some(value) =
                                 ColumnFeatures::from_field(field).current_default_value()?
@@ -756,6 +772,9 @@ impl PlanResolver<'_> {
                     match lake_source.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {
                             Self::merge_format_columns(&mut columns, metadata.schema.as_ref());
+                            if let Some(fields) = metadata.partition_by {
+                                partition_by = fields;
+                            }
                             if !metadata.properties.is_empty() {
                                 let mut merged_properties = metadata.properties;
                                 merged_properties.extend(properties);
@@ -869,13 +888,32 @@ impl PlanResolver<'_> {
             self.rewrite_write_input_with_column_expressions(input, column_match, info, state)
                 .await
         } else {
-            Self::rewrite_standard_write_input(input, column_match, info)
+            self.rewrite_standard_write_input(input, column_match, info)
         }
+    }
+
+    /// Casts a value to the type of its table column. Spark takes the wall-clock time of a
+    /// TIMESTAMP value in the session time zone for a TIMESTAMP_NTZ column, and Arrow in UTC.
+    // TODO: Spark does the same for nested TIMESTAMP_NTZ fields, which still take the UTC
+    //  wall-clock time here.
+    fn cast_to_column(
+        &self,
+        expr: Expr,
+        data_type: &DataType,
+        schema: &DFSchema,
+    ) -> PlanResult<Expr> {
+        Ok(match (expr.get_type(schema)?, data_type) {
+            (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
+                session_wall_clock(expr, data_type, &self.config.session_timezone_label())
+            }
+            _ => expr.cast_to(data_type, schema)?,
+        })
     }
 
     /// Fast path for tables without column-level expressions (no generated columns,
     /// no defaults, no identity). Pure schema coercion with alias/cast.
     fn rewrite_standard_write_input(
+        &self,
         input: LogicalPlan,
         column_match: WriteColumnMatch,
         info: &TableInfo,
@@ -896,7 +934,8 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .zip(table_schema.fields().iter())
                     .map(|(column, field)| {
-                        let expr = col(column).cast_to(field.data_type(), input.schema())?;
+                        let expr =
+                            self.cast_to_column(col(column), field.data_type(), input.schema())?;
                         Ok(Self::make_nullable_if_needed(expr, field, input.schema())?
                             .alias(field.name()))
                     })
@@ -915,8 +954,11 @@ impl PlanResolver<'_> {
                             .iter()
                             .filter(|f| f.name().eq_ignore_ascii_case(name))
                             .map(|f| {
-                                let expr =
-                                    col(f.name()).cast_to(field.data_type(), input.schema())?;
+                                let expr = self.cast_to_column(
+                                    col(Column::from_name(f.name())),
+                                    field.data_type(),
+                                    input.schema(),
+                                )?;
                                 Self::make_nullable_if_needed(expr, field, input.schema())
                             })
                             .collect::<PlanResult<Vec<_>>>()?;
@@ -952,7 +994,7 @@ impl PlanResolver<'_> {
                     .map(|(column, name)| col(column).alias(name))
                     .collect::<Vec<_>>();
                 let plan = LogicalPlanBuilder::new(input).project(expr)?.build()?;
-                Self::rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
+                self.rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
             }
         }
     }
@@ -1036,9 +1078,11 @@ impl PlanResolver<'_> {
             if col.generated_always_as.is_some() {
                 if let Some(user_expr) = provided {
                     let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
+                    let cast_expr = self.cast_to_column(
+                        user_expr.clone(),
+                        col.field().data_type(),
+                        input.schema(),
+                    )?;
                     intermediate_aliases.push(cast_expr.alias(check_id.clone()));
                     gen_check_field_ids[idx] = Some(check_id);
                 }
@@ -1052,9 +1096,11 @@ impl PlanResolver<'_> {
                             col.name
                         )));
                     }
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
+                    let cast_expr = self.cast_to_column(
+                        user_expr.clone(),
+                        col.field().data_type(),
+                        input.schema(),
+                    )?;
                     intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
                 }
                 continue;
@@ -1069,7 +1115,8 @@ impl PlanResolver<'_> {
                     col.name
                 )));
             };
-            let cast_expr = input_expr.cast_to(col.field().data_type(), input.schema())?;
+            let cast_expr =
+                self.cast_to_column(input_expr, col.field().data_type(), input.schema())?;
             intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
         }
         let intermediate = LogicalPlanBuilder::new(input)

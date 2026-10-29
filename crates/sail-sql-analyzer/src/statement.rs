@@ -139,6 +139,54 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 },
             )))
         }
+        Statement::Optimize {
+            target,
+            full,
+            predicate,
+            zorder,
+            ..
+        } => {
+            let mut arguments = vec![];
+            if full.is_some() {
+                arguments.push((
+                    "full".into(),
+                    spec::Expr::Literal(spec::Literal::Boolean { value: Some(true) }),
+                ));
+            }
+            if let Some(predicate) = predicate {
+                arguments.push((
+                    "predicate".into(),
+                    lakehouse_string(predicate.condition_sql),
+                ));
+            }
+            if let Some(zorder) = zorder {
+                arguments.push(("zorder".into(), lakehouse_string(zorder.text())));
+            }
+            delta_table_procedure("optimize", target, arguments)
+        }
+        Statement::Vacuum {
+            target, clauses, ..
+        } => {
+            let mut arguments = vec![];
+            for clause in clauses {
+                use sail_sql_parser::ast::statement::VacuumClause;
+                let (key, value) = match clause {
+                    VacuumClause::Retain(_, value, _) => (
+                        "retention_hours",
+                        lakehouse_string(value.text().trim().to_string()),
+                    ),
+                    VacuumClause::DryRun(_, _) => (
+                        "dry_run",
+                        spec::Expr::Literal(spec::Literal::Boolean { value: Some(true) }),
+                    ),
+                    VacuumClause::Mode(mode) => {
+                        ("mode", lakehouse_string(mode.text().trim().to_string()))
+                    }
+                };
+                arguments.push((key.into(), value));
+            }
+            delta_table_procedure("vacuum", target, arguments)
+        }
         Statement::SetCatalog {
             set: _,
             catalog: _,
@@ -1255,6 +1303,21 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         }
         Statement::Describe { describe: _, item } => {
             let node = match item {
+                DescribeItem::DeltaDetail { target, .. } => {
+                    return delta_table_procedure("describe_detail", target, vec![]);
+                }
+                DescribeItem::DeltaHistory { target, limit, .. } => {
+                    let arguments = limit
+                        .map(|(_, limit)| {
+                            (
+                                "limit".into(),
+                                lakehouse_string(limit.text().trim().to_string()),
+                            )
+                        })
+                        .into_iter()
+                        .collect();
+                    return delta_table_procedure("describe_history", target, arguments);
+                }
                 DescribeItem::Query { query: _, item } => {
                     let query = from_ast_query(item)?;
                     spec::CommandNode::DescribeQuery {
@@ -2803,4 +2866,30 @@ fn from_ast_alter_view_operation(
     _operation: AlterViewOperation,
 ) -> SqlResult<spec::AlterViewOperation> {
     Ok(spec::AlterViewOperation::Unknown)
+}
+
+fn lakehouse_string(value: String) -> spec::Expr {
+    spec::Expr::Literal(spec::Literal::Utf8 { value: Some(value) })
+}
+
+fn delta_table_procedure(
+    procedure: &str,
+    target: Either<
+        sail_sql_parser::ast::literal::StringLiteral,
+        sail_sql_parser::ast::identifier::ObjectName,
+    >,
+    arguments: Vec<(spec::Identifier, spec::Expr)>,
+) -> SqlResult<spec::Plan> {
+    let target = match target {
+        Either::Left(path) => spec::LakehouseCommandTarget::Path(from_ast_string(path)?),
+        Either::Right(table) => spec::LakehouseCommandTarget::Table(from_ast_object_name(table)?),
+    };
+    Ok(spec::Plan::Command(spec::CommandPlan::new(
+        spec::CommandNode::CallTableProcedure {
+            format: "delta".to_string(),
+            procedure: procedure.to_string(),
+            target,
+            arguments,
+        },
+    )))
 }

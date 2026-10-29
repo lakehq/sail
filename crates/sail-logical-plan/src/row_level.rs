@@ -21,6 +21,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
@@ -45,6 +46,7 @@ pub fn align_row_level_value(
     target_type: &DataType,
     case_sensitive: bool,
     alignment: StructFieldAlignment,
+    session_timezone_label: &str,
 ) -> Result<Expr> {
     if source_type == target_type {
         return Ok(value);
@@ -53,6 +55,17 @@ pub fn align_row_level_value(
     let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
         (source_type, target_type)
     else {
+        // Spark takes the wall-clock time of a TIMESTAMP value in the session time zone for a
+        // TIMESTAMP_NTZ target, and Arrow in UTC.
+        if let (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) =
+            (source_type, target_type)
+        {
+            return Ok(session_wall_clock(
+                value,
+                target_type,
+                session_timezone_label,
+            ));
+        }
         return Ok(cast(value, target_type.clone()));
     };
 
@@ -82,6 +95,7 @@ pub fn align_row_level_value(
                 target_field.data_type(),
                 case_sensitive,
                 alignment,
+                session_timezone_label,
             )?,
             None if alignment == StructFieldAlignment::FillMissingWithNull => {
                 lit(ScalarValue::try_new_null(target_field.data_type())?)

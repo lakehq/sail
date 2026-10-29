@@ -416,6 +416,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -916,6 +919,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -1421,6 +1427,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -1924,6 +1933,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -2424,6 +2436,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -2929,6 +2944,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -3430,6 +3448,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -3934,6 +3955,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -4435,6 +4459,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
