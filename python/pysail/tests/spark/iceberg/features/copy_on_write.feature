@@ -139,22 +139,28 @@ Feature: Iceberg copy-on-write row operations
       | 3  | 30    | B    |
       | 4  | 40    | B    |
 
-  Scenario: COW operations without matches do not create snapshots
+  Scenario: COW operations without matches commit zero-action snapshots
+    Given remember current iceberg metadata
     Given statement
       """
       DELETE FROM iceberg_cow WHERE id = 99
       """
+    Then iceberg commits a no-op delete snapshot
+    Then iceberg snapshot count is 3
     Given statement
       """
       UPDATE iceberg_cow SET value = 0 WHERE id = 99
       """
+    Then iceberg commits a no-op update snapshot
+    Then iceberg snapshot count is 4
     Given statement
       """
       MERGE INTO iceberg_cow AS t
       USING (SELECT 99 AS id) AS s ON t.id = s.id
       WHEN MATCHED THEN DELETE
       """
-    Then iceberg snapshot count is 2
+    Then iceberg commits a no-op merge snapshot
+    Then iceberg snapshot count is 5
     When query
       """
       SELECT COUNT(*) AS count FROM iceberg_cow
@@ -184,15 +190,19 @@ Feature: Iceberg copy-on-write row operations
       """
     Then iceberg snapshot operation is delete
     Then iceberg snapshot count is 4
+    Given remember current iceberg metadata
     Given statement
       """
       UPDATE iceberg_cow SET value = 0
       """
+    Then iceberg commits a no-op update snapshot
+    Then iceberg snapshot count is 5
     Given statement
       """
       DELETE FROM iceberg_cow
       """
-    Then iceberg snapshot count is 4
+    Then iceberg commits a no-op delete snapshot
+    Then iceberg snapshot count is 6
     When query
       """
       SELECT COUNT(*) AS count FROM iceberg_cow
@@ -362,12 +372,14 @@ Feature: Iceberg copy-on-write row operations
       | 4  | 40    | B    |
 
   Scenario: COW NOT IN with null has no matching rows
+    Given remember current iceberg metadata
     Given statement
       """
       UPDATE iceberg_cow SET value = 99
       WHERE id NOT IN (SELECT id FROM VALUES (1), (NULL) AS source(id))
       """
-    Then iceberg snapshot count is 2
+    Then iceberg commits a no-op update snapshot
+    Then iceberg snapshot count is 3
     When query
       """
       SELECT * FROM iceberg_cow ORDER BY id

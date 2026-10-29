@@ -26,6 +26,7 @@ from pyiceberg.typedef import Record
 from pyiceberg.types import BinaryType, LongType, NestedField, StringType, StructType
 
 from pysail.testing.spark.steps.iceberg import (
+    _assert_noop_snapshot,
     _current_manifest_list,
     _current_snapshot,
     _find_latest_metadata,
@@ -370,9 +371,10 @@ def test_iceberg_sql_delete_partitioned_and_noop(spark, tmp_path):
             )
             """
         )
-        empty_table_metadata_path = _latest_metadata_path(table_path)
+        empty_table_metadata = _find_latest_metadata(table_path)
         spark.sql("DELETE FROM iceberg_sql_delete_partitioned WHERE flag = 'drop'").collect()
-        assert _latest_metadata_path(table_path) == empty_table_metadata_path
+        _assert_noop_snapshot(empty_table_metadata, _find_latest_metadata(table_path), "delete")
+        assert spark.table(table_name).collect() == []
 
         spark.sql(
             """
@@ -383,10 +385,15 @@ def test_iceberg_sql_delete_partitioned_and_noop(spark, tmp_path):
               (3, 'keep', 'B')
             """
         )
-        before_metadata_path = _latest_metadata_path(table_path)
+        before_metadata = _find_latest_metadata(table_path)
 
         spark.sql("DELETE FROM iceberg_sql_delete_partitioned WHERE flag = 'missing'").collect()
-        assert _latest_metadata_path(table_path) == before_metadata_path
+        _assert_noop_snapshot(before_metadata, _find_latest_metadata(table_path), "delete")
+        assert [tuple(row) for row in spark.table(table_name).orderBy("id").collect()] == [
+            (1, "keep", "A"),
+            (2, "drop", "A"),
+            (3, "keep", "B"),
+        ]
 
         spark.sql("DELETE FROM iceberg_sql_delete_partitioned WHERE flag = 'drop'").collect()
         entries = _current_delete_entries(table_path)
@@ -394,7 +401,7 @@ def test_iceberg_sql_delete_partitioned_and_noop(spark, tmp_path):
         assert entries[0].data_file.content == DataFileContent.POSITION_DELETES
         assert entries[0].data_file.partition == Record("A")
         metadata = _find_latest_metadata(table_path)
-        assert len(metadata["snapshots"]) == 2  # noqa: PLR2004
+        assert len(metadata["snapshots"]) == 4  # noqa: PLR2004
         rows = [
             tuple(row)
             for row in spark.sql("SELECT id, flag, part FROM iceberg_sql_delete_partitioned ORDER BY id").collect()

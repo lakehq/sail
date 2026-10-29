@@ -610,10 +610,16 @@ impl ExecutionPlan for IcebergWriterExec {
             };
 
             let mut total_rows = 0u64;
+            let mut action_summary = write_context
+                .operation
+                .map(crate::operation_metrics::IcebergActionSummary::new);
             let mut removed_data_file_paths = BTreeSet::new();
             let mut data = stream;
             while let Some(batch_result) = data.next().await {
                 let input_batch = batch_result?;
+                if let Some(summary) = &mut action_summary {
+                    summary.add_batch(&input_batch, row_level_mode)?;
+                }
                 let batch = if let Some(merge_projection) = &merge_projection {
                     if let Some(position_deletes) = &mut position_deletes {
                         let base_table_context = base_table_context.ok_or_else(|| {
@@ -647,9 +653,11 @@ impl ExecutionPlan for IcebergWriterExec {
                 if batch_row_count == 0 {
                     continue;
                 }
-                total_rows += u64::try_from(batch_row_count).map_err(|e| {
-                    DataFusionError::Execution(format!("Row count overflow: {}", e))
-                })?;
+                total_rows = total_rows
+                    .checked_add(batch_row_count as u64)
+                    .ok_or_else(|| {
+                        datafusion_common::exec_datafusion_err!("Iceberg writer row count overflow")
+                    })?;
                 writer
                     .write(&batch)
                     .await
@@ -680,10 +688,12 @@ impl ExecutionPlan for IcebergWriterExec {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
                 removed_data_file_paths: removed_data_file_paths.into_iter().collect(),
-                skip_empty_commit: row_level_mode == Some(RowLevelWriteMode::CopyOnWrite)
-                    || (row_level_mode == Some(RowLevelWriteMode::MergeOnRead)
-                        && base_table_context
-                            .is_some_and(|base| base.format_version == FormatVersion::V3)),
+                skip_empty_commit: action_summary.is_none()
+                    && (row_level_mode == Some(RowLevelWriteMode::CopyOnWrite)
+                        || (row_level_mode == Some(RowLevelWriteMode::MergeOnRead)
+                            && base_table_context
+                                .is_some_and(|base| base.format_version == FormatVersion::V3))),
+                action_summary,
                 requirements: write_context.requirements.clone(),
                 table_properties: options.table_properties,
                 lakehouse_table: options.lakehouse_table,

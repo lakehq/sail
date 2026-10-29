@@ -9,11 +9,33 @@ import pyarrow.parquet as pq
 import pytest
 from pyspark.sql.types import LongType, StringType, TimestampType
 
-from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
 
 def _actions(path, version):
     return [json.loads(line) for line in (path / "_delta_log" / f"{version:020}.json").read_text().splitlines()]
+
+
+def _assert_cdc_metrics(path, version, operation):
+    actions = _actions(path, version)
+    info = next(action["commitInfo"] for action in actions if "commitInfo" in action)
+    assert info["operation"] == operation
+    cdc = [action["cdc"] for action in actions if "cdc" in action]
+    assert cdc
+    metrics = info["operationMetrics"]
+    count_key, bytes_key = (
+        ("numTargetChangeFilesAdded", "numTargetChangeFileBytes")
+        if operation == "MERGE"
+        else ("numAddedChangeFiles", "changeFileBytes")
+    )
+    assert int(metrics[count_key]) == len(cdc)
+    assert int(metrics[bytes_key]) == sum(action["size"] for action in cdc)
+    for action in cdc:
+        assert (path / unquote(action["path"])).stat().st_size == action["size"]
+    if operation == "MERGE":
+        assert "numAddedChangeFiles" not in metrics
+        assert "changeFileBytes" not in metrics
+    return metrics
 
 
 def _feed(spark, path, start=0, end=None, **options):
@@ -82,13 +104,13 @@ def test_cdf_update_delete_merge(spark, tmp_path, deletion_vectors, column_mappi
     )
     writer.save(str(path))
     target = f"delta.`{path}`"
-    spark.sql(f"UPDATE {target} SET value = 'updated', p = 'a% /b' WHERE id = 1")  # noqa: S608
+    assert spark.sql(f"UPDATE {target} SET value = 'updated', p = 'a% /b' WHERE id = 1").collect() == [(1,)]  # noqa: S608
     assert _changes(spark, path, 1, 1) == [(1, "a", "update_preimage"), (1, "updated", "update_postimage")]
     assert sorted((row.p, row["_change_type"]) for row in _feed(spark, path, 1, 1).collect()) == [
         ("a% /b", "update_postimage"),
         ("x", "update_preimage"),
     ]
-    spark.sql(
+    result = spark.sql(
         f"""MERGE INTO {target} t
         USING (SELECT * FROM VALUES (2L, 'merged'), (3L, 'delete'), (4L, 'new') AS v(id, value)) s
         ON t.id = s.id
@@ -97,20 +119,34 @@ def test_cdf_update_delete_merge(spark, tmp_path, deletion_vectors, column_mappi
         WHEN NOT MATCHED THEN INSERT (id, value, p) VALUES (s.id, s.value, NULL)
         """  # noqa: S608
     )
+    assert result.collect() == [(3, 1, 1, 1)]
     assert _changes(spark, path, 2, 2) == [
         (2, "b", "update_preimage"),
         (2, "merged", "update_postimage"),
         (3, "c", "delete"),
         (4, "new", "insert"),
     ]
-    spark.sql(f"DELETE FROM {target} WHERE id = 2")  # noqa: S608
+    assert spark.sql(f"DELETE FROM {target} WHERE id = 2").collect() == [(1,)]  # noqa: S608
     assert _changes(spark, path, 3, 3) == [(2, "merged", "delete")]
     assert sorted((row.id, row.value) for row in spark.read.format("delta").load(str(path)).collect()) == [
         (1, "updated"),
         (4, "new"),
         (9, "keep"),
     ]
-    for version in [1, 2, 3]:
+    for version, operation in [(1, "UPDATE"), (2, "MERGE"), (3, "DELETE")]:
+        metrics = _assert_cdc_metrics(path, version, operation)
+        if operation == "MERGE":
+            assert [
+                int(metrics[key]) for key in ("numTargetRowsUpdated", "numTargetRowsDeleted", "numTargetRowsInserted")
+            ] == [1, 1, 1]
+            assert int(metrics["numOutputRows"]) == (2 if deletion_vectors else 3)
+        elif operation == "UPDATE":
+            assert int(metrics["numUpdatedRows"]) == 1
+            assert int(metrics.get("numOutputRows", 0)) == (1 if deletion_vectors else 3)
+        else:
+            assert int(metrics["numDeletedRows"]) == 1
+            # MERGE's inserted row is in a separate file, so DELETE copies no rows.
+            assert int(metrics.get("numOutputRows", 0)) == 0
         cdc = [a["cdc"] for a in _actions(path, version) if "cdc" in a]
         assert cdc
         for action in cdc:
@@ -121,12 +157,105 @@ def test_cdf_update_delete_merge(spark, tmp_path, deletion_vectors, column_mappi
             assert "_change_type" in pq.ParquetFile(filename).schema_arrow.names
 
 
+@pytest.mark.parametrize("deletion_vectors", [False, True], ids=["cow", "dv"])
+@pytest.mark.parametrize(
+    ("kind", "predicate", "deleted_ids"),
+    [
+        ("whole", "", (1, 2, 3, 4, 5)),
+        ("partition", " WHERE p = 0", (1, 2)),
+        ("null_partition", " WHERE p IS NULL", (5,)),
+        ("no_match", " WHERE p = 99", ()),
+        ("empty", "", ()),
+        ("scanned", " WHERE id = 3", (3,)),
+    ],
+    ids=["whole", "partition", "null-partition", "no-match", "empty", "scanned"],
+)
+def test_cdf_metadata_and_scanned_delete(spark, tmp_path, deletion_vectors, kind, predicate, deleted_ids):
+    path = tmp_path / "cdf_delete"
+    initial = [] if kind == "empty" else [(1, 0), (2, 0), (3, 1), (4, 1), (5, None)]
+    spark.createDataFrame(initial, "id INT, p INT").coalesce(1).write.format("delta").partitionBy("p").option(
+        "delta.enableChangeDataFeed", "true"
+    ).option("delta.enableDeletionVectors", str(deletion_vectors).lower()).save(str(path))
+    target = f"delta.`{escape_sql_identifier(str(path))}`"
+    version = 1
+    changes = [(id_, p, "insert", 0) for id_, p in initial]
+    if deletion_vectors and initial:
+        assert spark.sql(f"DELETE FROM {target} WHERE id = 1").collect() == [(1,)]  # noqa: S608
+        assert any(
+            action.get("add", {}).get("deletionVector", {}).get("cardinality") == 1 for action in _actions(path, 1)
+        )
+        assert _feed(spark, path, 1, 1).select("id", "p", "_change_type").collect() == [(1, 0, "delete")]
+        initial = initial[1:]
+        changes.append((1, 0, "delete", 1))
+        version += 1
+
+    deleted = [row for row in initial if row[0] in deleted_ids]
+    result = spark.sql(f"DELETE FROM {target}{predicate}")  # noqa: S608
+    assert result.columns == ["num_affected_rows"]
+    assert result.collect() == [(len(deleted),)]
+    final_version = int(max((path / "_delta_log").glob("*.json")).stem)
+    assert final_version in (version - 1, version)
+    if deleted:
+        assert final_version == version
+    actions = _actions(path, version) if final_version == version else []
+    cdc = [action["cdc"] for action in actions if "cdc" in action]
+    if actions:
+        metrics = next(action["commitInfo"]["operationMetrics"] for action in actions if "commitInfo" in action)
+        assert int(metrics["numDeletedRows"]) == len(deleted)
+    if kind == "scanned":
+        _assert_cdc_metrics(path, version, "DELETE")
+        assert cdc
+    else:
+        # Whole-file removes carry inferred CDF, including the old DV's live-row mask.
+        assert not cdc
+        if actions:
+            assert int(metrics["numAddedChangeFiles"]) == 0
+        assert not any("add" in action for action in actions)
+        if deletion_vectors and kind in ("whole", "partition"):
+            assert any(action.get("remove", {}).get("deletionVector", {}).get("cardinality") == 1 for action in actions)
+    changes.extend((id_, p, "delete", version) for id_, p in deleted)
+    assert (
+        _feed(spark, path, 0, final_version)
+        .select("id", "p", "_change_type", "_commit_version")
+        .orderBy("_commit_version", "id")
+        .collect()
+        == changes
+    )
+    assert spark.read.format("delta").load(str(path)).orderBy("id").collect() == [
+        row for row in initial if row[0] not in deleted_ids
+    ]
+
+
+@pytest.mark.parametrize("deletion_vectors", [False, True], ids=["cow", "dv"])
+@pytest.mark.parametrize("operation", ["DELETE", "UPDATE", "MERGE"])
+def test_cdf_noop_dml_metrics(spark, tmp_path, deletion_vectors, operation):
+    path = tmp_path / "cdf_noop_metrics"
+    initial = [(1, "a"), (9, "b")]
+    spark.createDataFrame(initial, "id LONG, value STRING").coalesce(1).write.format("delta").option(
+        "delta.enableChangeDataFeed", "true"
+    ).option("delta.enableDeletionVectors", str(deletion_vectors).lower()).save(str(path))
+    target = f"delta.`{escape_sql_identifier(str(path))}`"
+    statements = {
+        "DELETE": f"DELETE FROM {target} WHERE id = 5",  # noqa: S608
+        "UPDATE": f"UPDATE {target} SET value = 'new' WHERE id = 5",  # noqa: S608
+        "MERGE": f"MERGE INTO {target} t USING (SELECT 5L AS id) s ON t.id = s.id WHEN MATCHED THEN DELETE",
+    }
+    result = spark.sql(statements[operation])
+    assert result.collect() == ([(0, 0, 0, 0)] if operation == "MERGE" else [(0,)])
+    metrics = _assert_cdc_metrics(path, 1, operation)
+    row_key = {"DELETE": "numDeletedRows", "UPDATE": "numUpdatedRows", "MERGE": "numTargetRowsDeleted"}[operation]
+    assert int(metrics[row_key]) == 0
+    assert _feed(spark, path, 1, 1).collect() == []
+    assert spark.read.format("delta").load(str(path)).orderBy("id").collect() == initial
+
+
 def test_cdf_noop_rewrite_and_replace_where(spark, tmp_path):
     path = tmp_path / "cdf_replace"
     spark.createDataFrame([(1, "a"), (9, "b"), (None, "null")], "id LONG, value STRING").coalesce(1).write.format(
         "delta"
     ).option("delta.enableChangeDataFeed", "true").save(str(path))
-    spark.sql(f"DELETE FROM delta.`{path}` WHERE id = 5")  # noqa: S608
+    assert spark.sql(f"DELETE FROM delta.`{path}` WHERE id = 5").collect() == [(0,)]  # noqa: S608
+    _assert_cdc_metrics(path, 1, "DELETE")
     assert _feed(spark, path, 1, 1).collect() == []
     assert spark.read.format("delta").load(str(path)).count() == 3
     spark.createDataFrame([(9, "replacement")], "id LONG, value STRING").write.format("delta").mode("overwrite").option(

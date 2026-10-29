@@ -731,10 +731,17 @@ fn build_default_merge_expansion(
     requirements: MergePlanRequirements,
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
+    // Unconditional matched DELETE needs only source presence, not source values.
+    // Count and delete each physical target once even when several source rows match.
+    let unconditional_matched_delete = matches!(
+        options.matched_clauses.as_slice(),
+        [clause] if clause.condition.is_none() && matches!(clause.action, MergeMatchedAction::Delete)
+    );
     let should_preserve_cow_target_rows_by_existence_join = requirements
         .preserve_unmodified_target_rows
-        && options.matched_clauses.is_empty()
-        && !options.not_matched_by_source_clauses.is_empty();
+        && (unconditional_matched_delete
+            || (options.matched_clauses.is_empty()
+                && !options.not_matched_by_source_clauses.is_empty()));
     let include_source_only_rows = !options.not_matched_by_target_clauses.is_empty();
     let source_schema = source_plan.schema().clone();
 
