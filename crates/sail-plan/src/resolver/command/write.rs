@@ -76,6 +76,9 @@ pub(super) enum WriteMode {
     ///
     /// The data can have incompatible schema even if the target exists.
     Replace { error_if_absent: bool },
+    /// V1 saveAsTable overwrite, normalized after looking up the existing provider.
+    /// Only an existing Delta table with a compatible provider uses `replace_where`.
+    SaveAsTableOverwrite { replace_where: Option<String> },
     /// If the target exists, remove all data and write the data.
     /// If the target does not exist, return an error.
     ///
@@ -96,6 +99,26 @@ pub(super) enum WriteMode {
     ///
     /// The data must have compatible schema if the target exists.
     TruncatePartitions,
+}
+
+impl WriteMode {
+    pub(super) fn truncate_where(replace_where: String) -> PlanResult<Self> {
+        let invalid = |e| {
+            PlanError::invalid(format!(
+                "invalid replaceWhere expression: {replace_where} ({e})"
+            ))
+        };
+        let ast = sail_sql_analyzer::parser::parse_expression(&replace_where)
+            .map_err(|e| invalid(e.to_string()))?;
+        let expr = sail_sql_analyzer::expression::from_ast_expression(ast)
+            .map_err(|e| invalid(e.to_string()))?;
+        Ok(Self::TruncateIf {
+            condition: Box::new(spec::ExprWithSource {
+                expr,
+                source: Some(replace_where),
+            }),
+        })
+    }
 }
 
 pub(super) enum WriteTarget {
@@ -302,6 +325,22 @@ impl PlanResolver<'_> {
                 column_match,
             } => {
                 let info = self.resolve_table_info(&table).await?;
+                let mode = match mode {
+                    WriteMode::SaveAsTableOverwrite { replace_where } => {
+                        let conditional_delta = info.as_ref().is_some_and(|info| {
+                            info.format.eq_ignore_ascii_case("delta")
+                                && (write_format.is_empty()
+                                    || write_format.eq_ignore_ascii_case(&info.format))
+                        });
+                        match replace_where.filter(|_| conditional_delta) {
+                            Some(predicate) => WriteMode::truncate_where(predicate)?,
+                            None => WriteMode::Replace {
+                                error_if_absent: false,
+                            },
+                        }
+                    }
+                    mode => mode,
+                };
 
                 // Return early if the target exists and the mode says to skip
                 if matches!(mode, WriteMode::IgnoreIfExists) && info.is_some() {
@@ -622,6 +661,9 @@ impl PlanResolver<'_> {
                 })
             }
             WriteMode::TruncatePartitions => Ok(SinkMode::OverwritePartitions),
+            WriteMode::SaveAsTableOverwrite { .. } => Err(PlanError::internal(
+                "saveAsTable overwrite must be normalized against the target table",
+            )),
         }
     }
 
