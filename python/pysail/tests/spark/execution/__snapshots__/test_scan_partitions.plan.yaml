@@ -206,7 +206,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -303,7 +303,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -514,6 +514,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -693,7 +696,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -790,7 +793,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -993,6 +996,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -1181,7 +1187,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -1278,7 +1284,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -1483,6 +1489,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -1669,7 +1678,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -1766,7 +1775,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -1977,6 +1986,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -2156,7 +2168,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -2253,7 +2265,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -2458,6 +2470,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -2644,7 +2659,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -2741,7 +2756,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -2946,6 +2961,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -3132,7 +3150,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -3229,7 +3247,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -3440,6 +3458,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -3619,7 +3640,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -3716,7 +3737,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -3921,6 +3942,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -4107,7 +4131,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -4204,7 +4228,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit:
+    logical_plan after push_down_limit_with_input_file_metadata:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -4407,6 +4431,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
