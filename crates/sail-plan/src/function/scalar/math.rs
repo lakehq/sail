@@ -35,6 +35,7 @@ use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 
 use crate::error::{PlanError, PlanResult};
@@ -611,6 +612,73 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
     move |arg1: Expr, arg2| func(cast(arg1, DataType::Float64), cast(arg2, DataType::Float64))
 }
 
+/// Spark `factorial` takes an INT: the input is implicitly cast to INT, which honors ANSI mode
+/// (a malformed string or an out-of-range value is NULL under ANSI off and an error under ANSI on).
+/// Outside `[0, 20]` the result is NULL, never an error.
+fn spark_factorial(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arg = arguments.one()?;
+    // Spark has no dictionary type: a dictionary-encoded column is its value type.
+    let (arg, data_type) = match arg.get_type(function_context.schema) {
+        Ok(DataType::Dictionary(_, value_type)) => {
+            let value_type = *value_type;
+            (cast(arg, value_type.clone()), Some(value_type))
+        }
+        Ok(data_type) => (arg, Some(data_type)),
+        Err(_) => (arg, None),
+    };
+    if let Some(data_type) = &data_type
+        && !(data_type.is_numeric()
+            || matches!(
+                data_type,
+                DataType::Null | DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ))
+    {
+        return Err(PlanError::AnalysisError(format!(
+            "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"factorial\" due to data type mismatch: \
+             the first parameter requires the \"INT\" type, however the argument has the type \"{data_type}\"."
+        )));
+    }
+    let arg = if function_context.plan_config.ansi_mode {
+        cast(arg, DataType::Int32)
+    } else {
+        non_ansi_cast_to_int32(arg, data_type)
+    };
+    Ok(math_fn::factorial(arg))
+}
+
+/// Spark's non-ANSI cast to INT follows Java: a string is parsed leniently (`'5.7'` is 5), a
+/// floating-point NaN is 0, and an integral value keeps its low 32 bits. Wrapped values outside
+/// `[0, 20]` all end up NULL after `factorial`, so only the wraps into that range need care.
+fn non_ansi_cast_to_int32(arg: Expr, data_type: Option<DataType>) -> Expr {
+    match data_type {
+        Some(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+            ScalarUDF::from(SparkCastStringToInt32::new()).call(vec![arg])
+        }
+        // `nanvl` takes the type of both arguments: a FLOAT literal keeps a FLOAT column as is.
+        Some(DataType::Float32) => try_cast(expr_fn::nanvl(arg, lit(0.0_f32)), DataType::Int32),
+        Some(DataType::Float64) => try_cast(expr_fn::nanvl(arg, lit(0.0_f64)), DataType::Int32),
+        Some(DataType::Int64) => try_cast(wrap_low_32_bits(arg), DataType::Int32),
+        // TODO: A DECIMAL beyond BIGINT wraps in Spark (via `Decimal.toLong`) and is NULL here, and
+        //  the ANSI cast of a DECIMAL of more than 18 digits goes through DOUBLE in Spark. Both belong
+        //  in the shared CAST, see the `@sail-bug` scenarios in `factorial.feature`.
+        Some(DataType::Decimal128(..) | DataType::Decimal256(..)) => try_cast(
+            wrap_low_32_bits(try_cast(arg, DataType::Int64)),
+            DataType::Int32,
+        ),
+        _ => try_cast(arg, DataType::Int32),
+    }
+}
+
+/// The low 32 bits of the value, in `[0, 2^32)`. A result of 2^31 or more is a negative INT in Java,
+/// and the `try_cast` to INT that follows turns it into NULL, as `factorial` does for any negative.
+fn wrap_low_32_bits(arg: Expr) -> Expr {
+    arg & lit(i64::from(u32::MAX))
+}
+
 fn spark_sqrt(arg: Expr) -> Expr {
     ScalarUDF::from(SparkSqrt::new()).call(vec![cast(arg, DataType::Float64)])
 }
@@ -816,7 +884,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("e", F::nullary(eulers_constant)),
         ("exp", F::unary(double(expr_fn::exp))),
         ("expm1", F::unary(math_fn::expm1)),
-        ("factorial", F::unary(expr_fn::factorial)),
+        ("factorial", F::custom(spark_factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         (
             "greatest",
