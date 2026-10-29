@@ -119,7 +119,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit_with_input_file_metadata:
+    logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
@@ -207,7 +207,7 @@ data:
     logical_plan after eliminate_outer_join:
     SAME TEXT AS ABOVE
 
-    logical_plan after push_down_limit_with_input_file_metadata:
+    logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:

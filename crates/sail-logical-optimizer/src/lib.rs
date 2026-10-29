@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::optimizer::push_down_limit::PushDownLimit;
+use datafusion::optimizer::push_down_limit::PushDownLimit as DataFusionPushDownLimit;
 use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
@@ -13,7 +13,7 @@ mod scalar_subquery_keys;
 mod session_timestamp;
 pub mod type_coercion;
 
-use input_file_metadata::PushDownLimitWithInputFileMetadata;
+use input_file_metadata::PushDownLimit;
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
 use rewrite_binary_grouping::RewriteBinaryGrouping;
@@ -57,8 +57,8 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
         if rule.name() == ScalarSubqueryToJoin::new().name() {
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
         }
-        if rule.name() == PushDownLimit::new().name() {
-            custom.push(Arc::new(PushDownLimitWithInputFileMetadata));
+        if rule.name() == DataFusionPushDownLimit::new().name() {
+            custom.push(Arc::new(PushDownLimit));
         } else {
             custom.push(rule);
         }

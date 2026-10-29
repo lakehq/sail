@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::optimizer::push_down_limit::PushDownLimit;
+use datafusion::optimizer::push_down_limit::PushDownLimit as DataFusionPushDownLimit;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -8,13 +8,13 @@ use datafusion_common::utils::combine_limit;
 use datafusion_expr::{Expr, FetchType, Limit, LogicalPlan, Projection, SkipType, lit};
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 
-/// Keep source-dependent metadata on its original side of a limit.
+/// Extends DataFusion's limit pushdown while preserving input-file metadata evaluation context.
 #[derive(Debug)]
-pub(crate) struct PushDownLimitWithInputFileMetadata;
+pub(crate) struct PushDownLimit;
 
-impl OptimizerRule for PushDownLimitWithInputFileMetadata {
+impl OptimizerRule for PushDownLimit {
     fn name(&self) -> &str {
-        "push_down_limit_with_input_file_metadata"
+        "push_down_limit"
     }
 
     fn apply_order(&self) -> Option<ApplyOrder> {
@@ -27,7 +27,7 @@ impl OptimizerRule for PushDownLimitWithInputFileMetadata {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let LogicalPlan::Limit(limit) = plan else {
-            return PushDownLimit::new().rewrite(plan, config);
+            return DataFusionPushDownLimit::new().rewrite(plan, config);
         };
 
         // DataFusion recursively rewrites merged limits. Merge them here so that
@@ -40,7 +40,7 @@ impl OptimizerRule for PushDownLimitWithInputFileMetadata {
                 // evaluation from the scan that supplies it.
                 return Ok(Transformed::no(LogicalPlan::Limit(limit)));
             }
-            PushDownLimit::new().rewrite(LogicalPlan::Limit(limit), config)
+            DataFusionPushDownLimit::new().rewrite(LogicalPlan::Limit(limit), config)
         })
     }
 }
@@ -120,7 +120,7 @@ mod tests {
     }
 
     fn optimize(plan: LogicalPlan) -> Result<LogicalPlan> {
-        Optimizer::with_rules(vec![Arc::new(PushDownLimitWithInputFileMetadata)]).optimize(
+        Optimizer::with_rules(vec![Arc::new(PushDownLimit)]).optimize(
             plan,
             &OptimizerContext::new().with_skip_failing_rules(false),
             |_, _| {},
@@ -160,8 +160,7 @@ mod tests {
                         .project(vec![col("id"), expression.clone().alias("metadata")])?
                         .limit(skip, fetch)?
                         .build()?;
-                    let result = PushDownLimitWithInputFileMetadata
-                        .rewrite(plan.clone(), &OptimizerContext::new())?;
+                    let result = PushDownLimit.rewrite(plan.clone(), &OptimizerContext::new())?;
                     assert!(!result.transformed);
                     assert_eq!(result.data, plan);
                     let optimized = optimize(plan.clone())?;
@@ -189,12 +188,11 @@ mod tests {
                 for (skip, fetch) in limits {
                     builder = builder.limit(skip, fetch)?;
                 }
-                let result = PushDownLimitWithInputFileMetadata
-                    .rewrite(builder.build()?, &OptimizerContext::new())?;
+                let result = PushDownLimit.rewrite(builder.build()?, &OptimizerContext::new())?;
                 assert!(result.transformed);
                 assert_eq!(limit_input(&result.data, skip, fetch)?, &projected);
-                let repeated = PushDownLimitWithInputFileMetadata
-                    .rewrite(result.data.clone(), &OptimizerContext::new())?;
+                let repeated =
+                    PushDownLimit.rewrite(result.data.clone(), &OptimizerContext::new())?;
                 assert!(!repeated.transformed);
                 assert_eq!(repeated.data, result.data);
                 assert_eq!(optimize(result.data.clone())?, result.data);
@@ -226,11 +224,12 @@ mod tests {
             .limit(2, Some(10))?
             .limit(1, Some(4))?
             .build()?;
-        let upstream = Optimizer::with_rules(vec![Arc::new(PushDownLimit::new())]).optimize(
-            plan.clone(),
-            &OptimizerContext::new().with_skip_failing_rules(false),
-            |_, _| {},
-        )?;
+        let upstream = Optimizer::with_rules(vec![Arc::new(DataFusionPushDownLimit::new())])
+            .optimize(
+                plan.clone(),
+                &OptimizerContext::new().with_skip_failing_rules(false),
+                |_, _| {},
+            )?;
         let optimized = optimize(plan)?;
         assert_eq!(optimized, upstream);
         let projection = projection(&optimized)?;
@@ -274,8 +273,7 @@ mod tests {
                 .limit_by_expr(skip, fetch)?
                 .build()?;
             for plan in [nonliteral, literal] {
-                let result = PushDownLimitWithInputFileMetadata
-                    .rewrite(plan.clone(), &OptimizerContext::new())?;
+                let result = PushDownLimit.rewrite(plan.clone(), &OptimizerContext::new())?;
                 assert!(!result.transformed);
                 assert_eq!(result.data, plan);
                 assert_eq!(optimize(plan.clone())?, plan);
@@ -288,25 +286,16 @@ mod tests {
     fn replaces_upstream_rule_in_place() {
         let upstream = Optimizer::default().rules;
         let rules = crate::default_optimizer_rules();
-        let replacement = PushDownLimitWithInputFileMetadata;
-        let original = PushDownLimit::new();
-        let expected: Vec<_> = upstream
-            .iter()
-            .map(|rule| {
-                if rule.name() == original.name() {
-                    replacement.name()
-                } else {
-                    rule.name()
-                }
-            })
-            .collect();
+        let replacement = PushDownLimit;
+        let original = DataFusionPushDownLimit::new();
+        assert_eq!(replacement.name(), original.name());
+        let expected: Vec<_> = upstream.iter().map(|rule| rule.name()).collect();
         let actual: Vec<_> = rules
             .iter()
             .map(|rule| rule.name())
             .filter(|name| expected.contains(name))
             .collect();
         assert_eq!(actual, expected);
-        assert!(!rules.iter().any(|rule| rule.name() == original.name()));
         assert_eq!(
             rules
                 .iter()
