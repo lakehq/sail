@@ -1,18 +1,24 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion::optimizer::AnalyzerRule;
 use datafusion_common::{Column, DFSchema, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
-use datafusion_expr::expr::WindowFunctionParams;
+use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable, WindowFunctionParams};
 use datafusion_expr::{
-    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition,
-    expr,
+    Expr, ExprSchemable, HigherOrderUDF, LogicalPlan, LogicalPlanBuilder, ScalarUDF, WindowFrame,
+    WindowFunctionDefinition, cast, expr, lit,
 };
+use datafusion_functions::core::get_field;
 use sail_common::spec;
-use sail_common_datafusion::type_coercion::binary_type_coercion::type_union_coercion;
+use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::timestamp_cast::cast_timestamp_ntz_to_ltz;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
+use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_logical_optimizer::type_coercion::TypeCoercion;
 
 use crate::error::{PlanError, PlanResult};
@@ -221,13 +227,20 @@ impl PlanResolver<'_> {
                 }
                 let (left, right) = self.coerce_set_operation_timestamps(left, right)?;
 
+                let timezone = self.config.session_timezone_label();
                 let types = left
                     .schema()
                     .fields()
                     .iter()
                     .zip(right.schema().fields())
                     .map(|(left, right)| {
-                        type_union_coercion(left.data_type(), right.data_type()).ok_or_else(|| {
+                        set_operation_coercion(
+                            left.data_type(),
+                            right.data_type(),
+                            self.config.ansi_mode,
+                            &timezone,
+                        )
+                        .ok_or_else(|| {
                             PlanError::analysis(format!(
                                 "incompatible set operation types: {} and {}",
                                 left.data_type(),
@@ -243,9 +256,16 @@ impl PlanResolver<'_> {
                         .into_iter()
                         .zip(&types)
                         .map(|(column, data_type)| {
-                            Ok(Expr::Column(column.clone())
-                                .cast_to(data_type, plan.schema())?
-                                .alias_qualified(column.relation, column.name))
+                            let value = Expr::Column(column.clone());
+                            let source_type = value.get_type(plan.schema())?;
+                            let value = self.cast_set_operation_value(
+                                value,
+                                &source_type,
+                                data_type,
+                                plan.schema(),
+                                0,
+                            )?;
+                            Ok(value.alias_qualified(column.relation, column.name))
                         })
                         .collect::<PlanResult<Vec<_>>>()?;
                     Ok(LogicalPlanBuilder::from(plan).project(exprs)?.build()?)
@@ -347,6 +367,105 @@ impl PlanResolver<'_> {
                 Ok(plan)
             }
         }
+    }
+
+    /// Apply Spark temporal conversions at every nesting level before the
+    /// generic cast. Updating struct fields preserves null parent structs.
+    fn cast_set_operation_value(
+        &self,
+        value: Expr,
+        source_type: &DataType,
+        target_type: &DataType,
+        schema: &DFSchema,
+        list_depth: usize,
+    ) -> PlanResult<Expr> {
+        if source_type == target_type {
+            return Ok(value);
+        }
+        let timezone = self.config.session_timezone_label();
+        let value = match (source_type, target_type) {
+            (
+                DataType::List(source)
+                | DataType::LargeList(source)
+                | DataType::FixedSizeList(source, _),
+                DataType::List(target)
+                | DataType::LargeList(target)
+                | DataType::FixedSizeList(target, _),
+            ) => {
+                // transform accepts variable-size lists; the final cast restores
+                // the common list representation and element field metadata.
+                let value = if matches!(source_type, DataType::FixedSizeList(_, _)) {
+                    cast(value, DataType::List(Arc::clone(source)))
+                } else {
+                    value
+                };
+                let parameter = format!("__sail_set_operation_element_{list_depth}");
+                let variable = Expr::LambdaVariable(LambdaVariable::new(
+                    parameter.clone(),
+                    Some(Arc::clone(source)),
+                ));
+                let body = self.cast_set_operation_value(
+                    variable,
+                    source.data_type(),
+                    target.data_type(),
+                    schema,
+                    list_depth + 1,
+                )?;
+                Expr::HigherOrderFunction(HigherOrderFunction::new(
+                    Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())),
+                    vec![value, Expr::Lambda(Lambda::new(vec![parameter], body))],
+                ))
+            }
+            (DataType::Struct(source), DataType::Struct(target)) => {
+                let mut updated = value.clone();
+                for field in source {
+                    // Preserve the field matching used by the final Arrow cast.
+                    let Some(target) = target.iter().find(|target| target.name() == field.name())
+                    else {
+                        continue;
+                    };
+                    if field.data_type() == target.data_type() {
+                        continue;
+                    }
+                    let child = get_field().call(vec![value.clone(), lit(field.name().clone())]);
+                    let child = self.cast_set_operation_value(
+                        child,
+                        field.data_type(),
+                        target.data_type(),
+                        schema,
+                        list_depth,
+                    )?;
+                    updated = ScalarUDF::from(UpdateStructField::new(vec![field.name().clone()]))
+                        .call(vec![updated, child]);
+                }
+                updated
+            }
+            (
+                DataType::Date32 | DataType::Date64,
+                DataType::Timestamp(TimeUnit::Microsecond, Some(timezone)),
+            ) => cast_timestamp_ntz_to_ltz(
+                cast(value, DataType::Timestamp(TimeUnit::Microsecond, None)),
+                timezone,
+                false,
+            ),
+            (
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+                DataType::Timestamp(TimeUnit::Microsecond, timezone),
+            ) => ScalarUDF::from(SparkTimestamp::try_new(
+                timezone.clone(),
+                self.config.ansi_mode,
+                false,
+            )?)
+            .call(vec![value]),
+            (
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
+            ) => {
+                ScalarUDF::from(SparkToUtf8::new().with_timezone(Some(timezone))).call(vec![value])
+            }
+            _ => value,
+        };
+        Ok(value.cast_to(target_type, schema)?)
     }
 
     /// Spark's common type for TIMESTAMP_NTZ and TIMESTAMP columns of a set operation.

@@ -686,3 +686,17 @@ def test_nested_scalar_lateral_alias_schema(spark, grouping):
     for _ in range(16):
         query = f"SELECT b FROM (SELECT ({query}) AS a, a AS b{grouping}) q"  # noqa: S608
     assert spark.sql(query).dtypes == [("b", "int")]
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("value", ["1", "id + 1"])
+def test_wide_independent_projection(spark, value):
+    # Wide generated projections must not copy a growing lateral-alias schema
+    # for every expression. The generous timeout catches quadratic analysis,
+    # while checking the actual schema and values rather than internal plans.
+    width = 8000
+    projection = ", ".join(f"{value} AS c{i}" for i in range(width))
+    result = spark.sql(f"SELECT {projection} FROM range(1)")  # noqa: S608
+    expected_type = "int" if value == "1" else "bigint"
+    assert result.dtypes == [(f"c{i}", expected_type) for i in range(width)]
+    assert result.select("c0", f"c{width - 1}").collect() == [(1, 1)]
