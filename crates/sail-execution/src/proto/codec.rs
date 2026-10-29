@@ -157,6 +157,7 @@ use sail_function::aggregate::theta_sketch::{
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
+use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
@@ -4471,6 +4472,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
                 "vector_avg" => Ok(Arc::new(AggregateUDF::from(VectorAvg::new()))),
+                "vector_sum" => Ok(Arc::new(AggregateUDF::from(VectorSum::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
             Some(UdafKind::PySparkGroupAgg(r#gen::PySparkGroupAggUdaf {
@@ -4595,6 +4597,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<TryAvgFunction>()
             || node.inner().is::<SparkTrySum>()
             || node.inner().is::<VectorAvg>()
+            || node.inner().is::<VectorSum>()
         {
             UdafKind::Standard(r#gen::StandardUdaf {})
         } else if let Some(func) = node.inner().downcast_ref::<PySparkGroupAggregateUDF>() {
@@ -6293,6 +6296,16 @@ mod tests {
 
         assert!(decoded.inner().downcast_ref::<VectorAvg>().is_some());
         assert_eq!(decoded.name(), "vector_avg");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_sum_udaf() -> Result<()> {
+        let decoded = round_trip_udaf(AggregateUDF::from(VectorSum::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorSum>().is_some());
+        assert_eq!(decoded.name(), "vector_sum");
 
         Ok(())
     }

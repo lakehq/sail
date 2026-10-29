@@ -40,6 +40,7 @@ use sail_function::aggregate::theta_sketch::{
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
+use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -1064,7 +1065,10 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             "vector_avg",
             F::default(|| Arc::new(AggregateUDF::from(VectorAvg::new()))),
         ),
-        ("vector_sum", F::unknown("vector_sum")),
+        (
+            "vector_sum",
+            F::default(|| Arc::new(AggregateUDF::from(VectorSum::new()))),
+        ),
     ]
 }
 
