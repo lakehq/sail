@@ -15,12 +15,14 @@ use datafusion_expr::{
 };
 use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     DeltaCheckConstraintExpr, MergeIntoOptions, OPERATION_COLUMN, OptionLayer, RowLevelCommand,
     RowLevelOperationType, RowLevelTarget, RowLevelWriteMode, UpdateAssignment, UpdateInfo,
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
@@ -45,6 +47,7 @@ pub fn align_row_level_value(
     target_type: &DataType,
     case_sensitive: bool,
     alignment: StructFieldAlignment,
+    session_timezone_label: &str,
 ) -> Result<Expr> {
     if source_type == target_type {
         return Ok(value);
@@ -53,6 +56,17 @@ pub fn align_row_level_value(
     let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
         (source_type, target_type)
     else {
+        // Spark takes the wall-clock time of a TIMESTAMP value in the session time zone for a
+        // TIMESTAMP_NTZ target, and Arrow in UTC.
+        if let (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) =
+            (source_type, target_type)
+        {
+            return Ok(session_wall_clock(
+                value,
+                target_type,
+                session_timezone_label,
+            ));
+        }
         return Ok(cast(value, target_type.clone()));
     };
 
@@ -82,6 +96,7 @@ pub fn align_row_level_value(
                 target_field.data_type(),
                 case_sensitive,
                 alignment,
+                session_timezone_label,
             )?,
             None if alignment == StructFieldAlignment::FillMissingWithNull => {
                 lit(ScalarValue::try_new_null(target_field.data_type())?)
@@ -300,6 +315,7 @@ pub struct RowLevelWriteNode {
     /// `Some` means the target scan must still match at commit time. The inner
     /// value is `None` when the table had no current snapshot when it was read.
     expected_snapshot_id: Option<Option<i64>>,
+    output: CommandOutput,
     #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 1))]
     schema: DFSchemaRef,
 }
@@ -321,6 +337,7 @@ impl RowLevelWriteNode {
             effects: RowLevelEffectPlans::default(),
             commit: RowLevelCommitInfo::Truncate,
             expected_snapshot_id: None,
+            output: CommandOutput::Count,
             schema: Arc::new(DFSchema::from_unqualified_fields(
                 vec![Field::new("count", DataType::Int64, true)].into(),
                 Default::default(),
@@ -344,6 +361,7 @@ impl RowLevelWriteNode {
                 options: Box::new(options),
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema,
         }
     }
@@ -364,6 +382,7 @@ impl RowLevelWriteNode {
                 predicate: condition,
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema: Arc::new(DFSchema::empty()),
         }
     }
@@ -385,8 +404,19 @@ impl RowLevelWriteNode {
                 predicate: condition,
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema,
         }
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = output;
+        self.schema = output.df_schema();
+        self
+    }
+
+    pub fn output(&self) -> CommandOutput {
+        self.output
     }
 
     pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
@@ -510,6 +540,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             effects,
             commit: self.commit.clone(),
             expected_snapshot_id: self.expected_snapshot_id,
+            output: self.output,
             schema: self.schema.clone(),
         })
     }
@@ -1181,6 +1212,20 @@ mod tests {
         let rebuilt = UserDefinedLogicalNodeCore::with_exprs_and_inputs(&node, vec![], vec![])?;
         assert_eq!(rebuilt.expected_snapshot_id(), Some(None));
         assert_eq!(rebuilt.target_format(), "iceberg");
+        for output in [
+            CommandOutput::Empty,
+            CommandOutput::AffectedRows,
+            CommandOutput::MergeRows,
+            CommandOutput::Count,
+        ] {
+            let node = node.clone().with_output(output);
+            let rebuilt = UserDefinedLogicalNodeCore::with_exprs_and_inputs(&node, vec![], vec![])?;
+            assert_eq!(rebuilt.output(), output);
+            assert_eq!(
+                UserDefinedLogicalNodeCore::schema(&rebuilt).as_arrow(),
+                output.schema().as_ref()
+            );
+        }
         Ok(())
     }
 

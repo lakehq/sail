@@ -6,10 +6,10 @@ use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
@@ -23,6 +23,7 @@ use sail_common_datafusion::catalog::{
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     BucketBy, CATALOG_TABLE_OPTION, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
     SourceInfo, create_sort_order, find_path_in_options,
@@ -35,7 +36,7 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
-use sail_data_source::resolve_listing_urls;
+use sail_data_source::resolve_table_url;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
@@ -63,7 +64,7 @@ use crate::table::{
     create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
 };
-use crate::transaction::CommitBuilder;
+use crate::transaction::{CommitBuilder, CommitProperties};
 use crate::{DeltaTableError, create_delta_source};
 
 /// Delta Lake implementation of [`LakeSource`].
@@ -124,6 +125,7 @@ impl DataSource for DeltaLakeSource {
         };
         let SinkInfo {
             input,
+            sql_insert,
             mode,
             partition_by,
             bucket_by,
@@ -141,6 +143,11 @@ impl DataSource for DeltaLakeSource {
             node: Arc::new(DeltaWriteNode::new(
                 Arc::new(input),
                 DeltaWriteNodeOptions {
+                    output: if sql_insert {
+                        CommandOutput::Empty
+                    } else {
+                        CommandOutput::Count
+                    },
                     path,
                     mode,
                     partition_by,
@@ -156,6 +163,12 @@ impl DataSource for DeltaLakeSource {
 
 #[async_trait]
 impl LakeSource for DeltaLakeSource {
+    fn procedure_provider(
+        self: Arc<Self>,
+    ) -> Option<Arc<dyn sail_common_datafusion::lakeprocedure::LakeProcedureProvider>> {
+        Some(self)
+    }
+
     async fn table_properties(
         &self,
         ctx: &dyn Session,
@@ -208,6 +221,7 @@ impl LakeSource for DeltaLakeSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<RuntimeEnv>,
+        config: &SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
         let LakeSourceCreateTableInfo {
@@ -451,7 +465,7 @@ impl LakeSource for DeltaLakeSource {
             );
         }
 
-        CommitBuilder::default()
+        CommitBuilder::from(CommitProperties::from_session_config(config)?)
             .with_actions(actions)
             .build(replace_snapshot, log_store, operation)
             .await
@@ -581,7 +595,9 @@ impl LakeSource for DeltaLakeSource {
                 .await
             }
             LakeSourceAlterTableOperation::AddCheckConstraint { name, expression } => {
-                self.add_check_constraint(runtime_env, path, &name, &expression)
+                let commit_properties =
+                    CommitProperties::from_session_config(ctx.session_config())?;
+                self.add_check_constraint(runtime_env, path, &name, &expression, commit_properties)
                     .await
             }
         }?;
@@ -644,6 +660,7 @@ fn delta_alter_operation_name(operation: &LakeSourceAlterTableOperation) -> &'st
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct DeltaWriteNodeOptions {
+    pub output: CommandOutput,
     pub path: String,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
@@ -667,8 +684,8 @@ impl DeltaWriteNode {
     pub fn new(input: Arc<LogicalPlan>, options: DeltaWriteNodeOptions) -> Self {
         Self {
             input,
+            schema: options.output.df_schema(),
             options,
-            schema: Arc::new(DFSchema::empty()),
         }
     }
 
@@ -715,6 +732,7 @@ pub(crate) async fn plan_delta_write(
     node: &DeltaWriteNode,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let DeltaWriteNodeOptions {
+        output,
         path,
         mode,
         partition_by,
@@ -810,7 +828,7 @@ pub(crate) async fn plan_delta_write(
         }
         PhysicalSinkMode::IgnoreIfExists if table_exists => {
             return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                physical_input.schema(),
+                output.schema(),
             )));
         }
         _ => {}
@@ -908,6 +926,7 @@ pub(crate) async fn plan_delta_write(
         None,
         table_exists,
     )
+    .with_output(output)
     .with_generation_expressions(extract_generation_expressions(Some(logical_schema)))
     .with_default_expressions(extract_default_expressions(Some(logical_schema)))
     .with_target_nullability(extract_target_nullability(Some(logical_schema)))
@@ -1114,9 +1133,8 @@ impl DeltaLakeSource {
         path: &str,
         name: &str,
         expression: &str,
+        commit_properties: CommitProperties,
     ) -> Result<()> {
-        use crate::transaction::CommitBuilder;
-
         let url = parse_location_to_url(path)?;
         let object_store = runtime_env
             .object_store_registry
@@ -1169,7 +1187,7 @@ impl DeltaLakeSource {
         }
         actions.push(CommitAction::Metadata(new_metadata));
 
-        CommitBuilder::default()
+        CommitBuilder::from(commit_properties)
             .with_actions(actions)
             .build(
                 Some(snapshot),
@@ -1625,12 +1643,11 @@ pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
 }
 
 impl DeltaLakeSource {
-    pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        let mut urls = resolve_listing_urls(ctx, paths.clone()).await?;
-        match (urls.pop(), urls.is_empty()) {
-            (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
-            _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
-        }
+    pub async fn parse_table_url(_ctx: &dyn Session, mut paths: Vec<String>) -> Result<Url> {
+        let Some(path) = paths.pop().filter(|_| paths.is_empty()) else {
+            return plan_err!("expected a single path for Delta table sink");
+        };
+        resolve_table_url(path)
     }
 }
 

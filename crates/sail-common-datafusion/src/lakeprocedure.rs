@@ -20,6 +20,8 @@ pub enum LakeProcedureDataType {
     Utf8,
     StringMap,
     TimestampMicros,
+    /// SQL text resolved against the target table by the engine.
+    SqlPredicate,
 }
 
 impl LakeProcedureDataType {
@@ -28,7 +30,7 @@ impl LakeProcedureDataType {
             Self::Boolean => DataType::Boolean,
             Self::Int32 => DataType::Int32,
             Self::Int64 => DataType::Int64,
-            Self::Utf8 => DataType::Utf8,
+            Self::Utf8 | Self::SqlPredicate => DataType::Utf8,
             Self::StringMap => DataType::Map(
                 Arc::new(Field::new(
                     "entries",
@@ -54,13 +56,19 @@ impl LakeProcedureDataType {
                 | (Self::Boolean, LakeProcedureValue::Boolean(_))
                 | (Self::Int32, LakeProcedureValue::Int32(_))
                 | (Self::Int64, LakeProcedureValue::Int64(_))
-                | (Self::Utf8, LakeProcedureValue::Utf8(_))
+                | (Self::Utf8 | Self::SqlPredicate, LakeProcedureValue::Utf8(_))
                 | (Self::StringMap, LakeProcedureValue::StringMap(_))
                 | (
                     Self::TimestampMicros,
                     LakeProcedureValue::TimestampMicros(_)
                 )
         )
+    }
+}
+
+impl From<LakeProcedureDataType> for DataType {
+    fn from(value: LakeProcedureDataType) -> Self {
+        value.arrow_type()
     }
 }
 
@@ -103,21 +111,22 @@ impl LakeProcedureParameter {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct LakeProcedureField {
     pub name: String,
-    pub data_type: LakeProcedureDataType,
+    /// Results may contain nested types even though procedure arguments are restricted.
+    pub data_type: DataType,
     pub nullable: bool,
 }
 
 impl LakeProcedureField {
-    pub fn new(name: impl Into<String>, data_type: LakeProcedureDataType, nullable: bool) -> Self {
+    pub fn new(name: impl Into<String>, data_type: impl Into<DataType>, nullable: bool) -> Self {
         Self {
             name: name.into(),
-            data_type,
+            data_type: data_type.into(),
             nullable,
         }
     }
 
     fn arrow_field(&self) -> Field {
-        Field::new(&self.name, self.data_type.arrow_type(), self.nullable)
+        Field::new(&self.name, self.data_type.clone(), self.nullable)
     }
 }
 
@@ -132,6 +141,7 @@ pub enum LakeProcedureAccess {
 pub enum LakeProcedureTarget {
     Catalog,
     Table { parameter: String },
+    TableOrPath { parameter: String },
 }
 
 impl LakeProcedureTarget {
@@ -144,7 +154,7 @@ impl LakeProcedureTarget {
     pub fn table_parameter(&self) -> Option<&str> {
         match self {
             Self::Catalog => None,
-            Self::Table { parameter } => Some(parameter),
+            Self::Table { parameter } | Self::TableOrPath { parameter } => Some(parameter),
         }
     }
 }
@@ -209,7 +219,7 @@ impl LakeProcedure {
             }
         }
 
-        if let LakeProcedureTarget::Table { parameter } = &self.target {
+        if let Some(parameter) = self.target.table_parameter() {
             let target = self
                 .parameters
                 .iter()
@@ -244,8 +254,9 @@ pub struct LakeProcedureInvocationId(pub String);
 
 /// Stable table binding captured while resolving a procedure call.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub struct LakeProcedureTableTarget {
-    pub binding: LakehouseTableBinding,
+pub enum LakeProcedureTableTarget {
+    Table { binding: Box<LakehouseTableBinding> },
+    Path { location: String },
 }
 
 /// Fully bound, serializable procedure call passed from planning to execution.
@@ -299,7 +310,11 @@ impl LakeProcedureCall {
         }
         match (&self.invocation.procedure.target, &self.target) {
             (LakeProcedureTarget::Catalog, None) => {}
-            (LakeProcedureTarget::Table { parameter }, Some(target)) => {
+            (
+                LakeProcedureTarget::Table { parameter }
+                | LakeProcedureTarget::TableOrPath { parameter },
+                Some(LakeProcedureTableTarget::Table { binding }),
+            ) => {
                 if !matches!(
                     self.invocation.argument(parameter),
                     Some(LakeProcedureValue::Utf8(_))
@@ -309,7 +324,6 @@ impl LakeProcedureCall {
                         parameter
                     ));
                 }
-                let binding = &target.binding;
                 if !binding
                     .catalog_table
                     .first()
@@ -325,6 +339,14 @@ impl LakeProcedureCall {
                     ));
                 }
             }
+            (
+                LakeProcedureTarget::TableOrPath { parameter },
+                Some(LakeProcedureTableTarget::Path { location }),
+            ) if !location.is_empty()
+                && matches!(
+                    self.invocation.argument(parameter),
+                    Some(LakeProcedureValue::Utf8(_))
+                ) => {}
             _ => {
                 return Err(plan_datafusion_err!(
                     "lake procedure target does not match its descriptor"
@@ -433,8 +455,20 @@ mod tests {
 /// carries a stable serializable binding into physical execution.
 #[derive(Debug, Clone)]
 pub enum LakeProcedurePlanningTarget {
-    Catalog { catalog: String },
-    Table(Box<SourceInfo>),
+    Catalog {
+        catalog: String,
+    },
+    Table {
+        info: Box<SourceInfo>,
+        predicates: Vec<LakeProcedurePredicate>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LakeProcedurePredicate {
+    pub name: String,
+    pub expr: datafusion_expr::Expr,
+    pub schema: SchemaRef,
 }
 
 /// Where the root stage of a planned procedure runs.
@@ -496,7 +530,14 @@ pub enum LakeProcedureResolution {
 
 #[async_trait]
 pub trait LakeProcedureProvider: Send + Sync {
-    fn resolve_procedure(&self, namespace: &[String], name: &str) -> LakeProcedureResolution;
+    /// Resolves a public SQL CALL name. Providers without CALL aliases leave this unrecognized.
+    fn resolve_procedure(&self, _namespace: &[String], _name: &str) -> LakeProcedureResolution {
+        LakeProcedureResolution::Unrecognized
+    }
+
+    /// Looks up a provider-owned procedure for native SQL planning and execution revalidation.
+    /// This does not register the procedure as a public SQL CALL name.
+    fn get_procedure(&self, name: &str) -> LakeProcedureResolution;
 
     /// Plans the format-owned implementation of a fully bound procedure call.
     ///

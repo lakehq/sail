@@ -7,6 +7,7 @@ use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource, lit};
 use log::trace;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction, RowLevelCommand, RowLevelWriteMode,
@@ -112,13 +113,21 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         input_schema: info.input_schema,
     };
     let raw_target = Arc::clone(&info.target);
+    // Position deletes deduplicate physical locations, but action summaries must
+    // already see each target once. The existence join retains target identity
+    // and leaves source-only insertion multiplicity intact.
+    let target_presence_only = matches!(
+        info.options.matched_clauses.as_slice(),
+        [clause] if clause.condition.is_none() && matches!(clause.action, MergeMatchedAction::Delete)
+    );
     let expansion = expand_merge(
         info,
         MERGE_FILE_COLUMN,
         row_index_column,
         &row_metadata_columns,
         MergePlanRequirements {
-            preserve_unmodified_target_rows: mode == RowLevelWriteMode::CopyOnWrite,
+            preserve_unmodified_target_rows: mode == RowLevelWriteMode::CopyOnWrite
+                || target_presence_only,
             source_metrics: false,
             effects: RowLevelEffectRequirements::default(),
         },
@@ -150,6 +159,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         expansion.options,
         expansion.output_schema,
     )
+    .with_output(CommandOutput::Empty)
     .with_expected_snapshot_id(expected_snapshot_id);
 
     Ok(LogicalPlan::Extension(Extension {

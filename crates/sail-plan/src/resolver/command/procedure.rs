@@ -19,7 +19,8 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakeprocedure::{
     LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureDataType,
     LakeProcedureInvocation, LakeProcedureInvocationId, LakeProcedurePlanningTarget,
-    LakeProcedureResolution, LakeProcedureTableTarget, LakeProcedureTarget, LakeProcedureValue,
+    LakeProcedureProvider, LakeProcedureResolution, LakeProcedureTableTarget, LakeProcedureTarget,
+    LakeProcedureValue,
 };
 use sail_common_datafusion::literal::LiteralEvaluator;
 use uuid::Uuid;
@@ -28,6 +29,14 @@ use crate::error::{PlanError, PlanResult};
 use crate::procedure::LakeProcedureNode;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+
+struct ResolvedLakeProcedure {
+    catalog: String,
+    namespace: Vec<String>,
+    lake_source: String,
+    provider: Arc<dyn LakeProcedureProvider>,
+    procedure: LakeProcedure,
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_command_call_procedure(
@@ -81,6 +90,109 @@ impl PlanResolver<'_> {
                 procedure_parts.join(".")
             )));
         };
+        self.plan_lake_procedure(
+            ResolvedLakeProcedure {
+                catalog: procedure_catalog.to_string(),
+                namespace: procedure_namespace,
+                lake_source: lake_source_name,
+                provider,
+                procedure,
+            },
+            arguments,
+            named_arguments,
+            state,
+        )
+        .await
+    }
+
+    pub(super) async fn resolve_command_call_table_procedure(
+        &self,
+        format: String,
+        procedure_name: String,
+        target: spec::LakehouseCommandTarget,
+        arguments: Vec<(spec::Identifier, spec::Expr)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let table = match target {
+            spec::LakehouseCommandTarget::Table(table) => table,
+            spec::LakehouseCommandTarget::Path(path) => {
+                // Resolve explicit paths before using the shared procedure target routing.
+                let url = sail_data_source::resolve_table_url(path)?;
+                spec::ObjectName::from([format.clone(), url.as_str().to_string()])
+            }
+        };
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let parts: Vec<String> = table.into();
+        let is_path = matches!(parts.as_slice(), [source, path] if source.eq_ignore_ascii_case(&format) && (path.starts_with('/') || path.contains(":/")));
+        let catalog = if is_path {
+            manager.resolve_catalog_reference(None)?.to_string()
+        } else {
+            manager
+                .resolve_table_reference_with_default_catalog(
+                    &manager.resolve_catalog_reference(None)?,
+                    &parts,
+                )?
+                .catalog()
+                .to_string()
+        };
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
+        let provider = registry
+            .get_lake_source(&format)?
+            .procedure_provider()
+            .ok_or_else(|| {
+                PlanError::unsupported(format!(
+                    "Lake source '{format}' does not provide procedures"
+                ))
+            })?;
+        let procedure = match provider.get_procedure(&procedure_name) {
+            LakeProcedureResolution::Supported(procedure) => procedure,
+            LakeProcedureResolution::Unsupported { reason } => {
+                return Err(PlanError::unsupported(reason));
+            }
+            LakeProcedureResolution::Unrecognized => {
+                return Err(PlanError::analysis(format!(
+                    "Procedure not found: {format}.{procedure_name}"
+                )));
+            }
+        };
+        let table = parts
+            .iter()
+            .map(|part| format!("`{}`", part.replace('`', "``")))
+            .collect::<Vec<_>>()
+            .join(".");
+        self.plan_lake_procedure(
+            ResolvedLakeProcedure {
+                catalog,
+                namespace: vec![format.clone()],
+                lake_source: format,
+                provider,
+                procedure,
+            },
+            vec![spec::Expr::Literal(spec::Literal::Utf8 {
+                value: Some(table),
+            })],
+            arguments,
+            state,
+        )
+        .await
+    }
+
+    async fn plan_lake_procedure(
+        &self,
+        resolved: ResolvedLakeProcedure,
+        arguments: Vec<spec::Expr>,
+        named_arguments: Vec<(spec::Identifier, spec::Expr)>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let ResolvedLakeProcedure {
+            catalog: procedure_catalog,
+            namespace: procedure_namespace,
+            lake_source: lake_source_name,
+            provider,
+            procedure,
+        } = resolved;
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let registry = self.ctx.extension::<DataSourceRegistry>()?;
         procedure.validate()?;
 
         let bound = bind_procedure_arguments(
@@ -105,14 +217,15 @@ impl PlanResolver<'_> {
             arguments: values,
             procedure,
         };
-        let (target, planning_target) = match &invocation.procedure.target {
+        let (target, mut planning_target) = match &invocation.procedure.target {
             LakeProcedureTarget::Catalog => (
                 None,
                 LakeProcedurePlanningTarget::Catalog {
                     catalog: procedure_catalog.to_string(),
                 },
             ),
-            LakeProcedureTarget::Table { parameter } => {
+            LakeProcedureTarget::Table { parameter }
+            | LakeProcedureTarget::TableOrPath { parameter } => {
                 let Some(LakeProcedureValue::Utf8(table_name)) = invocation.argument(parameter)
                 else {
                     return Err(PlanError::invalid(format!(
@@ -122,68 +235,92 @@ impl PlanResolver<'_> {
                 let table_ast = sail_sql_analyzer::parser::parse_object_name(table_name)?;
                 let table_name = sail_sql_analyzer::expression::from_ast_object_name(table_ast)?;
                 let table_reference: Vec<String> = table_name.into();
-                let resolved_table = manager.resolve_table_reference_with_default_catalog(
-                    &procedure_catalog,
-                    &table_reference,
-                )?;
-                if !resolved_table
-                    .catalog()
-                    .eq_ignore_ascii_case(&procedure_catalog)
+                if matches!(
+                    invocation.procedure.target,
+                    LakeProcedureTarget::TableOrPath { .. }
+                ) && let [format, path] = table_reference.as_slice()
+                    && format.eq_ignore_ascii_case(&lake_source_name)
+                    && (path.starts_with('/') || path.contains(":/"))
                 {
-                    return Err(PlanError::invalid(format!(
-                        "Cannot run procedure from catalog '{procedure_catalog}' against table '{}' in catalog '{}'",
-                        table_reference.join("."),
-                        resolved_table.catalog()
-                    )));
+                    let info = procedure_path_source(path.clone());
+                    (
+                        Some(LakeProcedureTableTarget::Path {
+                            location: path.clone(),
+                        }),
+                        LakeProcedurePlanningTarget::Table {
+                            info: Box::new(info),
+                            predicates: vec![],
+                        },
+                    )
+                } else {
+                    let resolved_table = manager.resolve_table_reference_with_default_catalog(
+                        &procedure_catalog,
+                        &table_reference,
+                    )?;
+                    if !resolved_table
+                        .catalog()
+                        .eq_ignore_ascii_case(&procedure_catalog)
+                    {
+                        return Err(PlanError::invalid(format!(
+                            "Cannot run procedure from catalog '{procedure_catalog}' against table '{}' in catalog '{}'",
+                            table_reference.join("."),
+                            resolved_table.catalog()
+                        )));
+                    }
+                    let table_status = manager.get_table_by_reference(&resolved_table).await?;
+                    let TableKind::Table {
+                        location,
+                        format,
+                        properties,
+                        ..
+                    } = &table_status.kind
+                    else {
+                        return Err(PlanError::invalid(format!(
+                            "Lakehouse procedure target is not a table: {}",
+                            table_name_for_display(&table_status)
+                        )));
+                    };
+                    if !format.eq_ignore_ascii_case(&lake_source_name) {
+                        return Err(PlanError::invalid(format!(
+                            "Procedure '{}' is provided by lake source '{lake_source_name}' and cannot target table '{}' with format '{format}'",
+                            invocation.procedure.name,
+                            table_name_for_display(&table_status)
+                        )));
+                    }
+                    let mut canonical_table = vec![resolved_table.catalog().to_string()];
+                    canonical_table.extend(table_status.database.iter().cloned());
+                    canonical_table.push(table_status.name.clone());
+                    let planning = resolve_procedure_table_planning(
+                        manager.as_ref(),
+                        &canonical_table,
+                        format,
+                        invocation.procedure.access,
+                    )
+                    .await?;
+                    (
+                        Some(LakeProcedureTableTarget::Table {
+                            binding: Box::new(LakehouseTableBinding::from_execution(
+                                &planning.binding,
+                            )),
+                        }),
+                        LakeProcedurePlanningTarget::Table {
+                            info: Box::new(SourceInfo {
+                                paths: location.iter().cloned().collect(),
+                                lakehouse_table: Some(planning.access),
+                                schema: None,
+                                constraints: Default::default(),
+                                partition_by: vec![],
+                                bucket_by: None,
+                                sort_order: vec![],
+                                options: vec![OptionLayer::TablePropertyList {
+                                    items: properties.clone(),
+                                }],
+                                read_case_sensitive: true,
+                            }),
+                            predicates: vec![],
+                        },
+                    )
                 }
-                let table_status = manager.get_table_by_reference(&resolved_table).await?;
-                let TableKind::Table {
-                    location,
-                    format,
-                    properties,
-                    ..
-                } = &table_status.kind
-                else {
-                    return Err(PlanError::invalid(format!(
-                        "Lakehouse procedure target is not a table: {}",
-                        table_name_for_display(&table_status)
-                    )));
-                };
-                if !format.eq_ignore_ascii_case(&lake_source_name) {
-                    return Err(PlanError::invalid(format!(
-                        "Procedure '{}' is provided by lake source '{lake_source_name}' and cannot target table '{}' with format '{format}'",
-                        invocation.procedure.name,
-                        table_name_for_display(&table_status)
-                    )));
-                }
-                let mut canonical_table = vec![resolved_table.catalog().to_string()];
-                canonical_table.extend(table_status.database.iter().cloned());
-                canonical_table.push(table_status.name.clone());
-                let planning = resolve_procedure_table_planning(
-                    manager.as_ref(),
-                    &canonical_table,
-                    format,
-                    invocation.procedure.access,
-                )
-                .await?;
-                (
-                    Some(LakeProcedureTableTarget {
-                        binding: LakehouseTableBinding::from_execution(&planning.binding),
-                    }),
-                    LakeProcedurePlanningTarget::Table(Box::new(SourceInfo {
-                        paths: location.iter().cloned().collect(),
-                        lakehouse_table: Some(planning.access),
-                        schema: None,
-                        constraints: Default::default(),
-                        partition_by: vec![],
-                        bucket_by: None,
-                        sort_order: vec![],
-                        options: vec![OptionLayer::TablePropertyList {
-                            items: properties.clone(),
-                        }],
-                        read_case_sensitive: true,
-                    })),
-                )
             }
         };
         let call = LakeProcedureCall {
@@ -194,6 +331,84 @@ impl PlanResolver<'_> {
             target,
             invocation,
         };
+        if let LakeProcedurePlanningTarget::Table { info, predicates } = &mut planning_target {
+            info.options.push(OptionLayer::OptionList {
+                items: self.config.lakehouse_options.clone(),
+            });
+            for parameter in &call.invocation.procedure.parameters {
+                if parameter.data_type != LakeProcedureDataType::SqlPredicate {
+                    continue;
+                }
+                let Some(LakeProcedureValue::Utf8(sql)) = call.invocation.argument(&parameter.name)
+                else {
+                    continue;
+                };
+                let metadata = registry
+                    .get_lake_source(&call.lake_source)?
+                    .infer_metadata(&self.ctx.state(), *info.clone())
+                    .await?;
+                let names = state.register_fields(metadata.schema.fields());
+                let schema = Arc::new(DFSchema::try_from(
+                    sail_common_datafusion::rename::schema::rename_schema(
+                        &metadata.schema,
+                        &names,
+                    )?,
+                )?);
+                let ast = sail_sql_analyzer::parser::parse_expression(sql)?;
+                let expr = self
+                    .resolve_expression(
+                        sail_sql_analyzer::expression::from_ast_expression(ast)?,
+                        &schema,
+                        state,
+                    )
+                    .await?;
+                let plan = datafusion_expr::LogicalPlanBuilder::from(LogicalPlan::EmptyRelation(
+                    datafusion_expr::EmptyRelation {
+                        produce_one_row: false,
+                        schema,
+                    },
+                ))
+                .filter(expr)?
+                .build()?;
+                let session = self.ctx.state();
+                let analyzed = session.analyzer().execute_and_check(
+                    plan,
+                    session.config_options().as_ref(),
+                    |_, _| {},
+                )?;
+                let LogicalPlan::Filter(filter) = analyzed else {
+                    return Err(PlanError::invalid("Invalid procedure predicate"));
+                };
+                use datafusion_common::tree_node::{Transformed, TreeNode};
+                let expr = filter
+                    .predicate
+                    .transform(|expr| {
+                        if let datafusion_expr::Expr::Column(column) = &expr
+                            && let Some(index) = names.iter().position(|name| name == &column.name)
+                        {
+                            return Ok(Transformed::yes(datafusion_expr::Expr::Column(
+                                datafusion_common::Column::from_name(
+                                    metadata.schema.field(index).name(),
+                                ),
+                            )));
+                        }
+                        Ok(Transformed::no(expr))
+                    })?
+                    .data;
+                if expr.is_volatile() {
+                    return Err(PlanError::invalid(
+                        "Procedure predicates must be deterministic",
+                    ));
+                }
+                predicates.push(
+                    sail_common_datafusion::lakeprocedure::LakeProcedurePredicate {
+                        name: parameter.name.clone(),
+                        expr,
+                        schema: metadata.schema,
+                    },
+                );
+            }
+        }
         let session = self.ctx.state();
         let plan = provider
             .plan_procedure(&session, planning_target, &call)
@@ -218,7 +433,9 @@ impl PlanResolver<'_> {
             LakeProcedureDataType::Boolean => spec::DataType::Boolean,
             LakeProcedureDataType::Int32 => spec::DataType::Int32,
             LakeProcedureDataType::Int64 => spec::DataType::Int64,
-            LakeProcedureDataType::Utf8 => spec::DataType::Utf8,
+            LakeProcedureDataType::Utf8 | LakeProcedureDataType::SqlPredicate => {
+                spec::DataType::Utf8
+            }
             LakeProcedureDataType::TimestampMicros => spec::DataType::Timestamp {
                 time_unit: spec::TimeUnit::Microsecond,
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
@@ -433,4 +650,18 @@ fn table_name_for_display(status: &sail_common_datafusion::catalog::TableStatus)
         .cloned()
         .collect::<Vec<_>>()
         .join(".")
+}
+
+fn procedure_path_source(path: String) -> SourceInfo {
+    SourceInfo {
+        paths: vec![path],
+        lakehouse_table: None,
+        schema: None,
+        constraints: Default::default(),
+        partition_by: vec![],
+        bucket_by: None,
+        sort_order: vec![],
+        options: vec![],
+        read_case_sensitive: true,
+    }
 }

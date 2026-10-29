@@ -352,3 +352,47 @@ def test_write_with_partition_columns(spark, tmp_path):
     assert spark.read.parquet(location).select("a", "b").collect() == [
         ("42", "foo"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("table_format", "method"),
+    [
+        ("parquet", "save_as_table"),
+        pytest.param(
+            "parquet",
+            "write_to",
+            marks=pytest.mark.skipif(is_jvm_spark(), reason="Spark can't write into v1 tables with writeTo"),
+        ),
+        pytest.param(
+            "delta",
+            "write_to",
+            marks=pytest.mark.skipif(is_jvm_spark(), reason="Delta Lake isn't configured for JVM Spark tests"),
+        ),
+        pytest.param(
+            "delta",
+            "save_as_table",
+            marks=pytest.mark.skipif(is_jvm_spark(), reason="Delta Lake isn't configured for JVM Spark tests"),
+        ),
+    ],
+)
+def test_append_matches_mixed_case_columns_by_name(spark, tmp_path, table_format, method):
+    # Every column is nullable so the write should take the plain coercion path.
+    location = str(tmp_path / "t2")
+    spark.sql(f"""
+        CREATE TABLE t2 (ColumnOne STRING, ColumnTwo STRING)
+        USING {table_format}
+        LOCATION '{escape_sql_string_literal(location)}'
+    """)
+
+    # Column order reversed intentionally to guarantee columns are matched
+    # by name, and not by position.
+    # Should ensure that falling back to position in the future fails here.
+    df = spark.createDataFrame([("col_two", "col_one")], schema="ColumnTwo STRING, ColumnOne STRING")
+    if method == "write_to":
+        df.writeTo("t2").append()
+    else:
+        df.write.format(table_format).saveAsTable("t2", mode="append")
+
+    actual = spark.sql("SELECT * FROM t2").toPandas()
+    expected = pd.DataFrame({"ColumnOne": ["col_one"], "ColumnTwo": ["col_two"]})
+    assert_frame_equal(actual, expected)

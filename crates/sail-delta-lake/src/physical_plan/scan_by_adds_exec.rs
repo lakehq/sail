@@ -643,6 +643,7 @@ pub struct DeltaScanByAddsExec {
     statistics: Statistics,
     scan_metrics: ScanMetrics,
     cache: Arc<PlanProperties>,
+    preserve_file_groups: bool,
 }
 
 impl DeltaScanByAddsExec {
@@ -680,7 +681,17 @@ impl DeltaScanByAddsExec {
             statistics,
             scan_metrics: Arc::new(Mutex::new(Vec::new())),
             cache,
+            preserve_file_groups: false,
         }
+    }
+
+    pub fn preserve_file_groups(mut self) -> Self {
+        self.preserve_file_groups = true;
+        self
+    }
+
+    pub fn preserves_file_groups(&self) -> bool {
+        self.preserve_file_groups
     }
 
     pub fn with_output_statistics(mut self, output_statistics: Option<Statistics>) -> Self {
@@ -807,6 +818,10 @@ impl DeltaScanByAddsExec {
 
 #[async_trait]
 impl ExecutionPlan for DeltaScanByAddsExec {
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![!self.preserve_file_groups]
+    }
+
     fn name(&self) -> &'static str {
         "DeltaScanByAddsExec"
     }

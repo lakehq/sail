@@ -204,6 +204,7 @@ impl PlanResolver<'_> {
                 target_field.data_type(),
                 self.config.case_sensitive,
                 StructFieldAlignment::Exact,
+                &self.config.session_timezone_label(),
             )?;
             resolved_assignments.push(UpdateAssignment { column, value });
         }

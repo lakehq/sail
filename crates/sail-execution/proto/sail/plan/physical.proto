@@ -77,6 +77,8 @@ message ExtendedPhysicalPlanNode {
     IcebergFileTasksExecNode iceberg_file_tasks = 62;
     IcebergRewriteExecNode iceberg_rewrite = 63;
     InputFileMetadataExecNode input_file_metadata = 64;
+    DeltaMaintenanceExecNode delta_maintenance = 65;
+    DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
   }
 }
 
@@ -265,6 +267,7 @@ message ExtendedScalarUdf {
     SparkMapFromEntriesUdf spark_map_from_entries = 37;
     StrToMapUdf str_to_map = 38;
     SparkSequenceUdf spark_sequence = 39;
+    SparkToStringUdf spark_to_string = 40;
   }
 }
 
@@ -350,6 +353,10 @@ message SparkUnixTimestampUdf {
 message SparkSequenceUdf {
   string session_timezone = 1;
   bool ansi_mode = 2;
+}
+
+message SparkToStringUdf {
+  optional string timezone = 1;
 }
 
 message SparkDateFormatUdf {
@@ -471,9 +478,17 @@ message SparkMakeTimestampNtzUdf {
   bool is_try = 1;
 }
 
+enum ConvertTzMode {
+  CONVERT_TZ_MODE_FUNCTION = 0;
+  CONVERT_TZ_MODE_CAST = 1;
+  CONVERT_TZ_MODE_TRY_CAST = 2;
+}
+
 message ConvertTzUdf {
   bool classic = 1;
   bool null_short_circuit = 2;
+  ConvertTzMode mode = 3;
+  optional string output_timezone = 4;
 }
 
 message StandardUdaf {}
@@ -658,6 +673,7 @@ message ShowStringExecNode {
   ShowStringStyle style = 4;
   uint64 truncate = 5;
   bytes schema = 6;
+  optional string timezone = 7;
 }
 
 enum ShowStringStyle {
@@ -859,6 +875,14 @@ message DeltaWriterExecNode {
   string lakehouse_table_json = 10;
 }
 
+enum CommandOutput {
+  COMMAND_OUTPUT_UNSPECIFIED = 0;
+  COMMAND_OUTPUT_EMPTY = 1;
+  COMMAND_OUTPUT_COUNT = 2;
+  COMMAND_OUTPUT_AFFECTED_ROWS = 3;
+  COMMAND_OUTPUT_MERGE_ROWS = 4;
+}
+
 message DeltaCommitExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -869,6 +893,7 @@ message DeltaCommitExecNode {
   optional string user_metadata = 7;
   DeltaCommitContext commit_context = 8;
   string lakehouse_table_json = 9;
+  CommandOutput output = 10;
 }
 
 message DeltaScanByAddsExecNode {
@@ -885,6 +910,7 @@ message DeltaScanByAddsExecNode {
   string lakehouse_table_json = 11;
   string catalog_managed_commits_json = 12;
   repeated PhysicalProjectionExpr input_file_projection = 13;
+  bool preserve_file_groups = 14;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -1081,6 +1107,16 @@ message IcebergCommitExecNode {
   IcebergSnapshotUpdateKind snapshot_update_kind = 6;
   bool dynamic_partition_overwrite = 7;
   repeated string removed_data_file_paths = 8;
+  oneof output {
+    CommandOutput command_output = 9;
+    IcebergRewriteDataFilesOutput rewrite_data_files_output = 10;
+  }
+}
+
+message IcebergRewriteDataFilesOutput {
+  bytes schema = 1;
+  int32 rewritten_data_files_count = 2;
+  int64 rewritten_bytes_count = 3;
 }
 
 message IcebergManifestScanExecNode {
@@ -1273,5 +1309,23 @@ message IcebergRewriteExecNode {
 }
 
 message IcebergRewriteGroupAssignment {
+  repeated uint64 groups = 1;
+}
+
+message DeltaMaintenanceExecNode {
+  string call = 1;
+  map<string, string> options = 2;
+  optional bytes predicate = 3;
+  optional bytes predicate_schema = 4;
+  bytes input = 5;
+  string optimize_plan = 6;
+}
+
+message DeltaOptimizeRewriteExecNode {
+  bytes input = 1;
+  repeated DeltaOptimizeGroupAssignment assignments = 2;
+}
+
+message DeltaOptimizeGroupAssignment {
   repeated uint64 groups = 1;
 }

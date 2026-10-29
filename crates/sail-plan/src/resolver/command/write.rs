@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -35,6 +35,7 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -125,6 +126,7 @@ pub(super) struct WritePlanBuilder {
     options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
     table_is_external: bool,
+    sql_insert: bool,
 }
 
 impl WritePlanBuilder {
@@ -142,7 +144,13 @@ impl WritePlanBuilder {
             options: vec![],
             table_properties: vec![],
             table_is_external: false,
+            sql_insert: false,
         }
+    }
+
+    pub fn with_sql_insert(mut self) -> Self {
+        self.sql_insert = true;
+        self
     }
 
     /// Sets the write target for the builder.
@@ -228,6 +236,7 @@ impl PlanResolver<'_> {
             options,
             table_properties,
             table_is_external,
+            sql_insert,
         } = builder;
 
         let Some(mode) = mode else {
@@ -249,6 +258,7 @@ impl PlanResolver<'_> {
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
+            sql_insert,
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
             partition_by: partition_by.clone(),
@@ -887,13 +897,32 @@ impl PlanResolver<'_> {
             self.rewrite_write_input_with_column_expressions(input, column_match, info, state)
                 .await
         } else {
-            Self::rewrite_standard_write_input(input, column_match, info)
+            self.rewrite_standard_write_input(input, column_match, info)
         }
+    }
+
+    /// Casts a value to the type of its table column. Spark takes the wall-clock time of a
+    /// TIMESTAMP value in the session time zone for a TIMESTAMP_NTZ column, and Arrow in UTC.
+    // TODO: Spark does the same for nested TIMESTAMP_NTZ fields, which still take the UTC
+    //  wall-clock time here.
+    fn cast_to_column(
+        &self,
+        expr: Expr,
+        data_type: &DataType,
+        schema: &DFSchema,
+    ) -> PlanResult<Expr> {
+        Ok(match (expr.get_type(schema)?, data_type) {
+            (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) => {
+                session_wall_clock(expr, data_type, &self.config.session_timezone_label())
+            }
+            _ => expr.cast_to(data_type, schema)?,
+        })
     }
 
     /// Fast path for tables without column-level expressions (no generated columns,
     /// no defaults, no identity). Pure schema coercion with alias/cast.
     fn rewrite_standard_write_input(
+        &self,
         input: LogicalPlan,
         column_match: WriteColumnMatch,
         info: &TableInfo,
@@ -914,7 +943,8 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .zip(table_schema.fields().iter())
                     .map(|(column, field)| {
-                        let expr = col(column).cast_to(field.data_type(), input.schema())?;
+                        let expr =
+                            self.cast_to_column(col(column), field.data_type(), input.schema())?;
                         Ok(Self::make_nullable_if_needed(expr, field, input.schema())?
                             .alias(field.name()))
                     })
@@ -933,8 +963,11 @@ impl PlanResolver<'_> {
                             .iter()
                             .filter(|f| f.name().eq_ignore_ascii_case(name))
                             .map(|f| {
-                                let expr =
-                                    col(f.name()).cast_to(field.data_type(), input.schema())?;
+                                let expr = self.cast_to_column(
+                                    col(Column::from_name(f.name())),
+                                    field.data_type(),
+                                    input.schema(),
+                                )?;
                                 Self::make_nullable_if_needed(expr, field, input.schema())
                             })
                             .collect::<PlanResult<Vec<_>>>()?;
@@ -970,7 +1003,7 @@ impl PlanResolver<'_> {
                     .map(|(column, name)| col(column).alias(name))
                     .collect::<Vec<_>>();
                 let plan = LogicalPlanBuilder::new(input).project(expr)?.build()?;
-                Self::rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
+                self.rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
             }
         }
     }
@@ -1054,9 +1087,11 @@ impl PlanResolver<'_> {
             if col.generated_always_as.is_some() {
                 if let Some(user_expr) = provided {
                     let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
+                    let cast_expr = self.cast_to_column(
+                        user_expr.clone(),
+                        col.field().data_type(),
+                        input.schema(),
+                    )?;
                     intermediate_aliases.push(cast_expr.alias(check_id.clone()));
                     gen_check_field_ids[idx] = Some(check_id);
                 }
@@ -1070,9 +1105,11 @@ impl PlanResolver<'_> {
                             col.name
                         )));
                     }
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
+                    let cast_expr = self.cast_to_column(
+                        user_expr.clone(),
+                        col.field().data_type(),
+                        input.schema(),
+                    )?;
                     intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
                 }
                 continue;
@@ -1087,7 +1124,8 @@ impl PlanResolver<'_> {
                     col.name
                 )));
             };
-            let cast_expr = input_expr.cast_to(col.field().data_type(), input.schema())?;
+            let cast_expr =
+                self.cast_to_column(input_expr, col.field().data_type(), input.schema())?;
             intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
         }
         let intermediate = LogicalPlanBuilder::new(input)
