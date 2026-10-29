@@ -4,6 +4,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from pyspark.sql.functions import expr
+from pyspark.sql.types import ArrayType, FloatType, StructField
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
@@ -44,16 +45,17 @@ def test_vector_sum_distinct_merges_partitions(spark):
 @pytest.mark.parametrize(
     "sql",
     [
-        "SELECT array(CAST('-0.0' AS FLOAT)) AS v UNION ALL SELECT array(0.0F) AS v",
-        "SELECT array(0.0F) AS v UNION ALL SELECT array(CAST('-0.0' AS FLOAT)) AS v",
+        "SELECT v FROM VALUES (array(1.0F, CAST('-0.0' AS FLOAT))), (array(1.0F, 0.0F)), (array(4.0F, 8.0F)) AS t(v)",
+        "SELECT v FROM VALUES (array(1.0F, 0.0F)), (array(1.0F, CAST('-0.0' AS FLOAT))), (array(4.0F, 8.0F)) AS t(v)",
     ],
 )
 def test_vector_sum_distinct_normalizes_signed_zero(spark, sql):
-    vectors = spark.sql(sql)
-    assert sorted(math.copysign(1.0, row.v[0]) for row in vectors.collect()) == [-1.0, 1.0]
-    result = vectors.selectExpr("vector_sum(DISTINCT v) AS total").first()
-    assert result.total == [0.0]
-    assert math.copysign(1.0, result.total[0]) == 1.0
+    vectors = spark.sql(sql).repartition(4)
+    assert sorted(math.copysign(1.0, row.v[1]) for row in vectors.collect() if row.v[0] == 1.0) == [-1.0, 1.0]
+    assert vectors.selectExpr("vector_sum(v) AS total").first().total == [6.0, 8.0]
+    result = vectors.selectExpr("vector_sum(DISTINCT v) AS total")
+    assert result.schema["total"] == StructField("total", ArrayType(FloatType(), containsNull=False), nullable=True)
+    assert result.first().total == [5.0, 8.0]
 
 
 def test_vector_sum_distinct_normalizes_signed_zero_across_partitions(spark):

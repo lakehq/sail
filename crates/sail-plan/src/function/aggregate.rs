@@ -83,16 +83,16 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn vector_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+fn vector_aggregate(input: AggFunctionInput, func: AggregateUDF) -> PlanResult<expr::Expr> {
     let mut args = input.arguments;
     if input.distinct && args.len() == 1 {
         args = args
             .into_iter()
-            .map(|arg| normalize_vector_avg_argument(arg, input.function_context.schema))
+            .map(|arg| normalize_vector_aggregate_argument(arg, input.function_context.schema))
             .collect::<PlanResult<_>>()?;
     }
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(VectorAvg::new())),
+        func: Arc::new(func),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -103,7 +103,10 @@ fn vector_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn normalize_vector_avg_argument(arg: expr::Expr, schema: &DFSchema) -> PlanResult<expr::Expr> {
+fn normalize_vector_aggregate_argument(
+    arg: expr::Expr,
+    schema: &DFSchema,
+) -> PlanResult<expr::Expr> {
     let field = match arg.get_type(schema)? {
         DataType::List(field) | DataType::LargeList(field)
             if field.data_type() == &DataType::Float32 =>
@@ -113,7 +116,7 @@ fn normalize_vector_avg_argument(arg: expr::Expr, schema: &DFSchema) -> PlanResu
         _ => return Ok(arg),
     };
     // DISTINCT can become GROUP BY before reaching the normalization-aware accumulator.
-    let parameter = "__sail_vector_avg_element".to_string();
+    let parameter = "__sail_vector_aggregate_element".to_string();
     let variable = expr::Expr::LambdaVariable(LambdaVariable::new(parameter.clone(), Some(field)));
     let body = when(isnan(variable.clone()), lit(f32::NAN))
         .when(variable.clone().eq(lit(0.0f32)), lit(0.0f32))
@@ -1106,10 +1109,13 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("var_pop", F::default(variance::var_pop_udaf)),
         ("var_samp", F::default(variance::var_samp_udaf)),
         ("variance", F::default(variance::var_samp_udaf)),
-        ("vector_avg", F::custom(vector_avg)),
+        (
+            "vector_avg",
+            F::custom(|input| vector_aggregate(input, VectorAvg::new().into())),
+        ),
         (
             "vector_sum",
-            F::default(|| Arc::new(AggregateUDF::from(VectorSum::new()))),
+            F::custom(|input| vector_aggregate(input, VectorSum::new().into())),
         ),
     ]
 }
@@ -1146,18 +1152,21 @@ mod tests {
         ]))?))
     }
 
-    fn vector_avg_test_expression(
+    fn vector_aggregate_test_expression(
+        name: &str,
         schema: &Arc<DFSchema>,
         arguments: Vec<expr::Expr>,
         distinct: bool,
+        ignore_nulls: Option<bool>,
         clauses: bool,
     ) -> PlanResult<expr::Expr> {
         let plan_config = Arc::new(PlanConfig::default());
         let session_context = SessionContext::new();
-        vector_avg(AggFunctionInput {
+        let function = get_built_in_aggregate_function(name)?;
+        function(AggFunctionInput {
             arguments,
             distinct,
-            ignore_nulls: clauses.then_some(true),
+            ignore_nulls,
             filter: clauses.then(|| Box::new(col("included"))),
             order_by: if clauses {
                 vec![col("value").sort(true, false)]
@@ -1175,7 +1184,8 @@ mod tests {
     }
 
     #[test]
-    fn vector_avg_normalizes_only_supported_distinct_arguments() -> PlanResult<()> {
+    fn vector_aggregates_normalize_only_distinct_arguments_and_preserve_clauses() -> PlanResult<()>
+    {
         for nullable in [false, true] {
             let field = Arc::new(Field::new_list_field(DataType::Float32, nullable));
             for data_type in [
@@ -1183,9 +1193,9 @@ mod tests {
                 DataType::LargeList(Arc::clone(&field)),
             ] {
                 let schema = sum_test_schema(data_type.clone())?;
-                let normalized = normalize_vector_avg_argument(col("value"), &schema)?;
+                let normalized = normalize_vector_aggregate_argument(col("value"), &schema)?;
                 let variable = expr::Expr::LambdaVariable(LambdaVariable::new(
-                    "__sail_vector_avg_element".to_string(),
+                    "__sail_vector_aggregate_element".to_string(),
                     Some(Arc::clone(&field)),
                 ));
                 let expected_body = when(isnan(variable.clone()), lit(f32::NAN))
@@ -1203,100 +1213,150 @@ mod tests {
                     vec![
                         col("value"),
                         expr::Expr::Lambda(Lambda::new(
-                            vec!["__sail_vector_avg_element".to_string()],
+                            vec!["__sail_vector_aggregate_element".to_string()],
                             expected_body,
                         ))
                     ]
                 );
                 assert_eq!(normalized.get_type(&schema)?, data_type);
                 assert!(normalized.nullable(&schema)?);
-                for distinct in [false, true] {
-                    let expr::Expr::AggregateFunction(aggregate) =
-                        vector_avg_test_expression(&schema, vec![col("value")], distinct, true)?
-                    else {
-                        return Err(PlanError::internal("expected vector_avg"));
-                    };
-                    assert_eq!(
-                        aggregate.params.args,
-                        vec![if distinct {
-                            normalized.clone()
-                        } else {
-                            col("value")
-                        }]
-                    );
-                    assert_eq!(aggregate.params.distinct, distinct);
-                    assert_eq!(aggregate.params.filter, Some(Box::new(col("included"))));
-                    assert_eq!(
-                        aggregate.params.order_by,
-                        vec![col("value").sort(true, false)]
-                    );
-                    assert_eq!(
-                        aggregate.params.null_treatment,
-                        get_null_treatment(Some(true))
-                    );
+                for name in ["vector_avg", "vector_sum"] {
+                    for distinct in [false, true] {
+                        for ignore_nulls in [None, Some(false), Some(true)] {
+                            let expr::Expr::AggregateFunction(aggregate) =
+                                vector_aggregate_test_expression(
+                                    name,
+                                    &schema,
+                                    vec![col("value")],
+                                    distinct,
+                                    ignore_nulls,
+                                    true,
+                                )?
+                            else {
+                                return Err(PlanError::internal("expected vector aggregate"));
+                            };
+                            assert_eq!(aggregate.func.name(), name);
+                            assert_eq!(
+                                aggregate.params.args,
+                                vec![if distinct {
+                                    normalized.clone()
+                                } else {
+                                    col("value")
+                                }]
+                            );
+                            assert_eq!(aggregate.params.distinct, distinct);
+                            assert_eq!(aggregate.params.filter, Some(Box::new(col("included"))));
+                            assert_eq!(
+                                aggregate.params.order_by,
+                                vec![col("value").sort(true, false)]
+                            );
+                            assert_eq!(
+                                aggregate.params.null_treatment,
+                                get_null_treatment(ignore_nulls)
+                            );
+                        }
+                    }
                 }
             }
-        }
-        for data_type in [
-            DataType::Null,
-            DataType::Float32,
-            DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))),
-        ] {
-            let schema = sum_test_schema(data_type)?;
-            assert_eq!(
-                normalize_vector_avg_argument(col("value"), &schema)?,
-                col("value")
-            );
-        }
-        let schema = sum_test_schema(DataType::Float32)?;
-        for arguments in [vec![], vec![col("value"), col("value")]] {
-            let expr::Expr::AggregateFunction(aggregate) =
-                vector_avg_test_expression(&schema, arguments.clone(), true, false)?
-            else {
-                return Err(PlanError::internal("expected vector_avg"));
-            };
-            assert_eq!(aggregate.params.args, arguments);
         }
         Ok(())
     }
 
     #[test]
-    fn vector_avg_distinct_rewrite_groups_normalized_values() -> PlanResult<()> {
+    fn vector_aggregates_preserve_invalid_arguments_for_type_checking() -> PlanResult<()> {
+        let float_field = Arc::new(Field::new_list_field(DataType::Float32, true));
+        let double_field = Arc::new(Field::new_list_field(DataType::Float64, true));
+        for (data_type, arguments) in [
+            (DataType::List(Arc::clone(&float_field)), vec![]),
+            (
+                DataType::List(Arc::clone(&float_field)),
+                vec![col("value"), col("value")],
+            ),
+            (DataType::Null, vec![col("value")]),
+            (DataType::Float32, vec![col("value")]),
+            (
+                DataType::List(Arc::clone(&double_field)),
+                vec![col("value")],
+            ),
+            (DataType::LargeList(double_field), vec![col("value")]),
+            (DataType::FixedSizeList(float_field, 2), vec![col("value")]),
+        ] {
+            let schema = sum_test_schema(data_type)?;
+            for name in ["vector_avg", "vector_sum"] {
+                for distinct in [false, true] {
+                    let expression = vector_aggregate_test_expression(
+                        name,
+                        &schema,
+                        arguments.clone(),
+                        distinct,
+                        None,
+                        false,
+                    )?;
+                    assert!(expression.get_type(&schema).is_err());
+                    let expr::Expr::AggregateFunction(aggregate) = expression else {
+                        return Err(PlanError::internal("expected vector aggregate"));
+                    };
+                    assert_eq!(aggregate.func.name(), name);
+                    assert_eq!(aggregate.params.args, arguments);
+                    assert_eq!(aggregate.params.distinct, distinct);
+                    assert_eq!(aggregate.params.filter, None);
+                    assert!(aggregate.params.order_by.is_empty());
+                    assert_eq!(aggregate.params.null_treatment, None);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn vector_aggregates_distinct_rewrite_groups_normalized_values() -> PlanResult<()> {
         for data_type in [
             DataType::List(Arc::new(Field::new_list_field(DataType::Float32, true))),
             DataType::LargeList(Arc::new(Field::new_list_field(DataType::Float32, true))),
         ] {
             let schema = sum_test_schema(data_type)?;
-            let aggregate = vector_avg_test_expression(&schema, vec![col("value")], true, false)?;
-            let input = LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row: false,
-                schema: Arc::clone(&schema),
-            });
-            let plan = LogicalPlanBuilder::from(input)
-                .aggregate(Vec::<expr::Expr>::new(), vec![aggregate])?
-                .build()?;
-            let rewritten = SingleDistinctToGroupBy::new()
-                .rewrite(plan, &OptimizerContext::new())?
-                .data;
-            let LogicalPlan::Projection(projection) = rewritten else {
-                return Err(PlanError::internal("expected distinct rewrite projection"));
-            };
-            let LogicalPlan::Aggregate(outer) = projection.input.as_ref() else {
-                return Err(PlanError::internal("expected outer aggregate"));
-            };
-            let expr::Expr::AggregateFunction(average) = &outer.aggr_expr[0] else {
-                return Err(PlanError::internal("expected rewritten vector_avg"));
-            };
-            assert!(!average.params.distinct);
-            assert_eq!(average.params.args, vec![col("alias1")]);
-            let LogicalPlan::Aggregate(inner) = outer.input.as_ref() else {
-                return Err(PlanError::internal("expected distinct grouping"));
-            };
-            assert!(inner.aggr_expr.is_empty());
-            assert_eq!(
-                inner.group_expr,
-                vec![normalize_vector_avg_argument(col("value"), &schema)?.alias("alias1")]
-            );
+            for name in ["vector_avg", "vector_sum"] {
+                let aggregate = vector_aggregate_test_expression(
+                    name,
+                    &schema,
+                    vec![col("value")],
+                    true,
+                    None,
+                    false,
+                )?;
+                let input = LogicalPlan::EmptyRelation(EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::clone(&schema),
+                });
+                let plan = LogicalPlanBuilder::from(input)
+                    .aggregate(Vec::<expr::Expr>::new(), vec![aggregate])?
+                    .build()?;
+                let rewritten = SingleDistinctToGroupBy::new()
+                    .rewrite(plan, &OptimizerContext::new())?
+                    .data;
+                let LogicalPlan::Projection(projection) = rewritten else {
+                    return Err(PlanError::internal("expected distinct rewrite projection"));
+                };
+                let LogicalPlan::Aggregate(outer) = projection.input.as_ref() else {
+                    return Err(PlanError::internal("expected outer aggregate"));
+                };
+                let expr::Expr::AggregateFunction(aggregate) = &outer.aggr_expr[0] else {
+                    return Err(PlanError::internal("expected rewritten vector aggregate"));
+                };
+                assert_eq!(aggregate.func.name(), name);
+                assert!(!aggregate.params.distinct);
+                assert_eq!(aggregate.params.args, vec![col("alias1")]);
+                let LogicalPlan::Aggregate(inner) = outer.input.as_ref() else {
+                    return Err(PlanError::internal("expected distinct grouping"));
+                };
+                assert!(inner.aggr_expr.is_empty());
+                assert_eq!(
+                    inner.group_expr,
+                    vec![
+                        normalize_vector_aggregate_argument(col("value"), &schema)?.alias("alias1")
+                    ]
+                );
+            }
         }
         Ok(())
     }
