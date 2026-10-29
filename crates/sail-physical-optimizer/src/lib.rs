@@ -33,6 +33,7 @@ use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
 
 mod barrier;
 mod collect_left;
+mod correlation_cast;
 mod explicit_repartition;
 mod filter_pushdown;
 mod input_file_name;
@@ -62,6 +63,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(SelectSemiJoinBuildSide));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
+    rules.push(Arc::new(correlation_cast::OptimizeCorrelationCasts));
     rules.push(Arc::new(FilterPushdown::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
     // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.

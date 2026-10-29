@@ -8,6 +8,8 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-common = { path = "../sail-common" }
+sail-function = { path = "../sail-function" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 
@@ -15,3 +17,6 @@ datafusion = { workspace = true }
 datafusion-datasource = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+datafusion-proto = { workspace = true }
