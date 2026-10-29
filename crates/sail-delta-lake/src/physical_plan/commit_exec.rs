@@ -49,8 +49,8 @@ use crate::schema::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
-    StatValue, Stats, StructField, StructType, TableFeature, commit_path,
+    Add, ColumnMetadataKey, ColumnValueStat, CommitAction, DeltaError, DeltaOperation, Metadata,
+    MetadataValue, SaveMode, StatValue, Stats, StructField, StructType, TableFeature, commit_path,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
@@ -658,7 +658,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut final_actions = initial_actions;
             final_actions.extend(actions);
             if !table_exists {
-                final_actions = apply_identity_high_water_marks(final_actions, None)?;
+                final_actions = apply_identity_high_water_marks(final_actions, None, false)?;
             }
             let kinds: Vec<&'static str> = final_actions
                 .iter()
@@ -904,6 +904,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 final_actions = apply_identity_high_water_marks(
                     final_actions,
                     reference.as_deref().map(|snapshot| snapshot.metadata()),
+                    matches!(operation, DeltaOperation::Merge { .. }),
                 )?;
             }
 
@@ -1125,6 +1126,7 @@ impl ExecutionPlan for DeltaCommitExec {
 fn apply_identity_high_water_marks(
     mut actions: Vec<CommitAction>,
     reference_metadata: Option<&Metadata>,
+    require_identity_bounds: bool,
 ) -> Result<Vec<CommitAction>> {
     let metadata_index = actions
         .iter()
@@ -1147,7 +1149,11 @@ fn apply_identity_high_water_marks(
         return Ok(actions);
     }
 
-    let candidates = collect_identity_high_water_mark_candidates(&actions, &identity_columns)?;
+    let candidates = collect_identity_high_water_mark_candidates(
+        &actions,
+        &identity_columns,
+        require_identity_bounds,
+    )?;
     if candidates.is_empty() {
         return Ok(actions);
     }
@@ -1223,6 +1229,7 @@ fn collect_identity_columns_for_commit(
 fn collect_identity_high_water_mark_candidates(
     actions: &[CommitAction],
     identity_columns: &[IdentityColumnCommitInfo],
+    require_identity_bounds: bool,
 ) -> Result<HashMap<String, i64>> {
     let mut candidates: HashMap<String, i64> = HashMap::new();
     for action in actions {
@@ -1230,18 +1237,29 @@ fn collect_identity_high_water_mark_candidates(
             continue;
         };
         let Some(stats_json) = add.stats.as_deref() else {
+            if require_identity_bounds {
+                return Err(DataFusionError::Plan(format!(
+                    "Delta identity MERGE requires AddFile statistics for `{}`",
+                    add.path
+                )));
+            }
             continue;
         };
         let stats = Stats::from_json_str(stats_json).map_err(|e| {
             DataFusionError::Plan(format!("failed to parse Delta AddFile stats: {e}"))
         })?;
         for identity in identity_columns {
-            let stat = if identity.step > 0 {
-                stats.max_value(&identity.stats_name)
+            let candidate = if require_identity_bounds {
+                identity_merge_high_water_mark_candidate(add, &stats, identity)?
             } else {
-                stats.min_value(&identity.stats_name)
+                let stat = if identity.step > 0 {
+                    stats.max_value(&identity.stats_name)
+                } else {
+                    stats.min_value(&identity.stats_name)
+                };
+                stat.and_then(stat_value_i64)
             };
-            let Some(value) = stat.and_then(stat_value_i64) else {
+            let Some(value) = candidate else {
                 continue;
             };
             candidates
@@ -1257,6 +1275,53 @@ fn collect_identity_high_water_mark_candidates(
         }
     }
     Ok(candidates)
+}
+
+/// MERGE must not publish generated values without a watermark. Even an explicit-only
+/// or rewritten file is rejected if its identity statistics cannot establish a safe bound.
+fn identity_merge_high_water_mark_candidate(
+    add: &Add,
+    stats: &Stats,
+    identity: &IdentityColumnCommitInfo,
+) -> Result<Option<i64>> {
+    let (bounds, direction) = if identity.step > 0 {
+        (&stats.max_values, "maxValues")
+    } else {
+        (&stats.min_values, "minValues")
+    };
+    let invalid_stats = || {
+        DataFusionError::Plan(format!(
+            "Delta identity MERGE requires usable {direction} statistics for identity column `{}` in `{}` unless exact statistics prove it is all NULL or empty",
+            identity.name, add.path
+        ))
+    };
+    let null_count = stats.null_count.get(&identity.stats_name);
+    if stats.num_records < 0
+        || null_count.is_some_and(|count| {
+            count
+                .as_value()
+                .is_none_or(|count| count < 0 || count > stats.num_records)
+        })
+    {
+        return Err(invalid_stats());
+    }
+    match bounds.get(&identity.stats_name) {
+        Some(ColumnValueStat::Value(StatValue::Number(value))) => {
+            value.as_i64().map(Some).ok_or_else(invalid_stats)
+        }
+        None | Some(ColumnValueStat::Value(StatValue::Null))
+            // numRecords is physical, not the live count after a deletion vector.
+            // Keep the no-bound exception to exact, non-DV file statistics. Loose
+            // directional bounds above are still safe conservative watermarks.
+            if add.deletion_vector.is_none()
+                && stats.tight_bounds
+                && (stats.num_records == 0
+                    || stats.null_count_value(&identity.stats_name) == Some(stats.num_records)) =>
+        {
+            Ok(None)
+        }
+        _ => Err(invalid_stats()),
+    }
 }
 
 fn update_identity_high_water_marks_in_schema(
@@ -1334,10 +1399,12 @@ fn round_identity_high_water_mark(start: i64, step: i64, value: i64) -> Result<i
             "identity high water mark `{value}` cannot be compared with start `{start}` without overflowing BIGINT"
         ))
     })?;
-    if value_offset % step == 0 {
+    let overflow =
+        || DataFusionError::Plan("identity high water mark rounding overflowed BIGINT".to_string());
+    if value_offset.checked_rem(step).ok_or_else(overflow)? == 0 {
         return Ok(value);
     }
-    let quotient = value_offset / step;
+    let quotient = value_offset.checked_div(step).ok_or_else(overflow)?;
     let same_direction = (value_offset > 0 && step > 0) || (value_offset < 0 && step < 0);
     let step_multiple = if same_direction {
         quotient.checked_add(1).ok_or_else(|| {
@@ -1382,6 +1449,211 @@ fn stat_value_i64(value: &StatValue) -> Option<i64> {
         StatValue::Number(value) => value.as_i64(),
         StatValue::String(value) => value.parse().ok(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use serde_json::json;
+
+    use super::{
+        IdentityColumnCommitInfo, collect_identity_high_water_mark_candidates,
+        round_identity_high_water_mark,
+    };
+    use crate::spec::{Add, CommitAction, DeletionVectorDescriptor};
+
+    fn identity(step: i64) -> IdentityColumnCommitInfo {
+        IdentityColumnCommitInfo {
+            name: "id".to_string(),
+            stats_name: "physical.id".to_string(),
+            start: 0,
+            step,
+            high_water_mark: None,
+        }
+    }
+
+    fn add(stats: Option<String>) -> CommitAction {
+        CommitAction::Add(Add {
+            path: "part.parquet".to_string(),
+            stats,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn merge_watermark_uses_directional_physical_bounds() {
+        for (step, expected) in [(1, 12), (-1, -9)] {
+            for tight_bounds in [true, false] {
+                let actions = [(-5, 12), (-9, 7)].map(|(min, max)| {
+                    add(Some(
+                        json!({
+                            "numRecords": 2,
+                            "tightBounds": tight_bounds,
+                            "minValues": {"physical.id": min, "id": -100},
+                            "maxValues": {"physical.id": max, "id": 100},
+                            "nullCount": {"physical.id": 0}
+                        })
+                        .to_string(),
+                    ))
+                });
+                let candidates =
+                    collect_identity_high_water_mark_candidates(&actions, &[identity(step)], true)
+                        .expect("valid directional bounds");
+                assert_eq!(candidates.get("id"), Some(&expected));
+            }
+        }
+    }
+
+    #[test]
+    fn merge_watermark_rejects_missing_or_malformed_statistics() {
+        for step in [1, -1] {
+            let direction = if step > 0 { "maxValues" } else { "minValues" };
+            let mut invalid = vec![
+                None,
+                Some("{".to_string()),
+                Some("{}".to_string()),
+                Some(json!({"numRecords": -1}).to_string()),
+                Some(json!({"numRecords": 1}).to_string()),
+                Some(json!({"numRecords": 2, "nullCount": {"physical.id": 1}}).to_string()),
+                Some(json!({"numRecords": 1, "nullCount": {"id": 1}}).to_string()),
+            ];
+            for bound in [
+                json!(null),
+                json!(true),
+                json!(1.5),
+                json!("1"),
+                json!(9223372036854775808_u64),
+                json!({"nested": 1}),
+                json!([1]),
+            ] {
+                invalid.push(Some(
+                    json!({
+                        "numRecords": 1, direction: {"physical.id": bound}
+                    })
+                    .to_string(),
+                ));
+            }
+            for count in [json!(-1), json!(2), json!({"nested": 1})] {
+                invalid.push(Some(
+                    json!({
+                        "numRecords": 1,
+                        direction: {"physical.id": 1},
+                        "nullCount": {"physical.id": count}
+                    })
+                    .to_string(),
+                ));
+            }
+            for stats in invalid {
+                let actions = [
+                    add(Some(
+                        json!({"numRecords": 1, direction: {"physical.id": 1}}).to_string(),
+                    )),
+                    add(stats),
+                ];
+                assert!(
+                    collect_identity_high_water_mark_candidates(&actions, &[identity(step)], true,)
+                        .is_err(),
+                    "invalid stats accepted: {actions:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn merge_watermark_allows_only_exact_non_dv_empty_or_all_null_proof() {
+        for step in [1, -1] {
+            for stats in [
+                json!({"numRecords": 0}),
+                json!({"numRecords": 2, "nullCount": {"physical.id": 2}}),
+                json!({"numRecords": 2, "nullCount": {"physical.id": 2},
+                    "minValues": {"physical.id": null}, "maxValues": {"physical.id": null}}),
+            ] {
+                let actions = [add(Some(stats.to_string()))];
+                assert!(
+                    collect_identity_high_water_mark_candidates(&actions, &[identity(step)], true,)
+                        .expect("exact empty/all-null stats")
+                        .is_empty()
+                );
+
+                let mut loose = stats.clone();
+                loose["tightBounds"] = json!(false);
+                assert!(
+                    collect_identity_high_water_mark_candidates(
+                        &[add(Some(loose.to_string()))],
+                        &[identity(step)],
+                        true,
+                    )
+                    .is_err()
+                );
+                let dv_action = CommitAction::Add(Add {
+                    stats: Some(stats.to_string()),
+                    deletion_vector: Some(DeletionVectorDescriptor::default()),
+                    ..Default::default()
+                });
+                assert!(
+                    collect_identity_high_water_mark_candidates(
+                        &[dv_action],
+                        &[identity(step)],
+                        true,
+                    )
+                    .is_err()
+                );
+            }
+        }
+        assert!(
+            collect_identity_high_water_mark_candidates(&[], &[identity(1)], true,)
+                .expect("no Add actions")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn non_merge_watermark_keeps_optional_statistics_policy() {
+        for step in [1, -1] {
+            let direction = if step > 0 { "maxValues" } else { "minValues" };
+            let actions = [add(None), add(Some(json!({"numRecords": 1}).to_string()))];
+            assert!(
+                collect_identity_high_water_mark_candidates(&actions, &[identity(step)], false,)
+                    .expect("optional stats for non-MERGE writes")
+                    .is_empty()
+            );
+            let actions = [add(Some(
+                json!({
+                    "numRecords": 1, direction: {"physical.id": "42"}
+                })
+                .to_string(),
+            ))];
+            assert_eq!(
+                collect_identity_high_water_mark_candidates(&actions, &[identity(step)], false,)
+                    .expect("existing string-bound handling")
+                    .get("id"),
+                Some(&42)
+            );
+        }
+    }
+
+    #[test]
+    fn watermark_rounding_is_directional_and_checked() {
+        for (start, step, value, expected) in [
+            (10, 3, 42, 43),
+            (0, -3, -4, -6),
+            (0, -3, 4, 3),
+            (i64::MAX, 1, i64::MAX, i64::MAX),
+            (i64::MIN, -1, i64::MIN, i64::MIN),
+        ] {
+            assert_eq!(
+                round_identity_high_water_mark(start, step, value).ok(),
+                Some(expected)
+            );
+        }
+        for (start, step, value) in [
+            (0, -1, i64::MIN),
+            (0, 0, 1),
+            (i64::MIN, 1, i64::MAX),
+            (0, 2, i64::MAX),
+        ] {
+            assert!(round_identity_high_water_mark(start, step, value).is_err());
+        }
     }
 }
 

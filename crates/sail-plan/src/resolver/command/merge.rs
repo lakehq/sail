@@ -7,7 +7,8 @@ use datafusion_common::{DFSchema, JoinType, ScalarValue};
 use datafusion_expr::utils::{expr_to_columns, find_aggregate_exprs, split_conjunction};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, build_join_schema, lit};
 use sail_common::spec;
-use sail_common_datafusion::column_features::ColumnFeatures;
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
+use sail_common_datafusion::column_features::{ColumnFeatureKey, ColumnFeatures};
 use sail_common_datafusion::datasource::{DataSourceRegistry, MergeInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
@@ -79,15 +80,6 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
-        if target_schema.fields().iter().any(|field| {
-            ColumnFeatures::from_map(field.metadata())
-                .identity()
-                .is_some()
-        }) {
-            return Err(PlanError::unsupported(
-                "MERGE INTO tables with Delta identity columns is not yet supported",
-            ));
-        }
 
         // Capture the user-facing field names before further resolution pollutes the state.
         let resolved_target_field_names = Self::get_field_names(target_schema, state)?;
@@ -133,6 +125,15 @@ impl PlanResolver<'_> {
                 state,
             )
             .await?;
+        let identity_columns = self.validate_merge_identity_columns(
+            target_schema,
+            &resolved_target_field_names,
+            &resolved_source_field_names,
+            &matched_clauses,
+            &not_matched_by_source,
+            &not_matched_by_target,
+            with_schema_evolution,
+        )?;
         let generated_column_exprs = self
             .resolve_delta_merge_generated_column_exprs(
                 target_schema,
@@ -200,6 +201,7 @@ impl PlanResolver<'_> {
             residual_predicates,
             target_only_predicates,
             generated_column_exprs,
+            identity_columns,
             default_column_exprs,
             check_constraint_exprs,
         };
@@ -573,6 +575,119 @@ impl PlanResolver<'_> {
         } else {
             left.eq_ignore_ascii_case(right)
         }
+    }
+
+    fn validate_merge_identity_columns(
+        &self,
+        target_schema: &datafusion_common::DFSchemaRef,
+        target_names: &[String],
+        source_names: &[String],
+        matched: &[MergeMatchedClause],
+        target_only: &[MergeNotMatchedBySourceClause],
+        inserts: &[MergeNotMatchedByTargetClause],
+        with_schema_evolution: bool,
+    ) -> PlanResult<Vec<(String, CatalogTableColumnIdentity)>> {
+        let mut identities = Vec::new();
+        for (field, name) in target_schema.fields().iter().zip(target_names) {
+            let features = ColumnFeatures::from_field(field);
+            let has_identity = [
+                ColumnFeatureKey::IdentityStart,
+                ColumnFeatureKey::IdentityStep,
+                ColumnFeatureKey::IdentityAllowExplicitInsert,
+                ColumnFeatureKey::IdentityHighWaterMark,
+            ]
+            .into_iter()
+            .any(|key| features.raw(key).is_some());
+            if !has_identity {
+                continue;
+            }
+            let identity = features.identity().ok_or_else(|| {
+                PlanError::invalid(format!("Invalid identity metadata for `{name}`"))
+            })?;
+            if field.data_type() != &DataType::Int64 || identity.step == 0 {
+                return Err(PlanError::invalid(format!(
+                    "Identity column `{name}` requires BIGINT and a nonzero step"
+                )));
+            }
+            if features
+                .raw(ColumnFeatureKey::IdentityHighWaterMark)
+                .is_some()
+                && identity.high_water_mark.is_none()
+            {
+                return Err(PlanError::invalid(format!(
+                    "Invalid identity watermark for `{name}`"
+                )));
+            }
+            if let Some(hwm) = identity.high_water_mark {
+                let offset = i128::from(hwm) - i128::from(identity.start);
+                if offset % i128::from(identity.step) != 0 || offset / i128::from(identity.step) < 0
+                {
+                    return Err(PlanError::invalid(format!(
+                        "Invalid identity watermark for `{name}`"
+                    )));
+                }
+            }
+            if with_schema_evolution {
+                return Err(PlanError::unsupported(
+                    "MERGE schema evolution with identity columns is not supported",
+                ));
+            }
+            let assigns_identity = |assignments: &[MergeAssignment]| {
+                assignments
+                    .iter()
+                    .any(|assignment| assignment.column == *field.name())
+            };
+            if matched.iter().any(|clause| match &clause.action {
+                MergeMatchedAction::UpdateAll => true,
+                MergeMatchedAction::UpdateSet(assignments) => assigns_identity(assignments),
+                MergeMatchedAction::Delete => false,
+            }) || target_only.iter().any(|clause| match &clause.action {
+                MergeNotMatchedBySourceAction::UpdateSet(assignments) => {
+                    assigns_identity(assignments)
+                }
+                MergeNotMatchedBySourceAction::Delete => false,
+            }) {
+                return Err(PlanError::invalid(format!(
+                    "MERGE UPDATE cannot assign Delta identity column `{name}`"
+                )));
+            }
+            for clause in inserts {
+                let supplied = match &clause.action {
+                    MergeNotMatchedByTargetAction::InsertAll => {
+                        if !source_names
+                            .iter()
+                            .any(|source| self.merge_names_equal(source, name))
+                        {
+                            return Err(PlanError::unsupported(
+                                "MERGE INSERT * omitting identity columns is not supported; use named columns",
+                            ));
+                        }
+                        true
+                    }
+                    MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
+                        if let Some(index) =
+                            columns.iter().position(|column| column == field.name())
+                        {
+                            if Self::expr_contains_default_column_value(&values[index])? {
+                                return Err(PlanError::unsupported(
+                                    "MERGE DEFAULT for an identity column is not supported; omit the column",
+                                ));
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+                if supplied && !identity.allow_explicit_insert {
+                    return Err(PlanError::invalid(format!(
+                        "Providing values for GENERATED ALWAYS AS IDENTITY column `{name}` is not supported"
+                    )));
+                }
+            }
+            identities.push((field.name().clone(), identity));
+        }
+        Ok(identities)
     }
 
     fn validate_merge_star_columns(
