@@ -93,7 +93,7 @@ def test_correlated_timestamp_date_cast_floors_the_full_input_range(cast_key_sca
         pytest.skip("Spark Parquet does not support nanosecond timestamp logical types")
     day = 86_400_000_000 if unit == "us" else 86_400_000_000_000
     values = [-(1 << 63), -day - 1, -day, -1, 0, day - 1, day, (1 << 63) - 1, None]
-    days = sorted({value // day for value in values if value is not None}) + [None]
+    days = sorted({value // day for value in values if value is not None}) + [None]  # noqa: RUF005
     inner = cast_key_scan("inner", pa.table({"k": pa.array(values, type=pa.timestamp(unit, tz=zone))}))
     outer = cast_key_scan("outer", _outer_table(pa.array(days, type=pa.date32())))
     expected = [
