@@ -22,6 +22,7 @@ use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;
 use crate::spec::manifest::{ManifestEntry, ManifestWriter, ManifestWriterBuilder};
 use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
+use crate::spec::snapshots::summary as summary_properties;
 use crate::spec::{
     DataFile, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestFile, ManifestStatus,
     Operation, PartitionSpec, Schema, SnapshotBuilder, SnapshotReference, SnapshotRetention,
@@ -83,28 +84,35 @@ fn with_manifest_totals<'a>(
     }
 
     if let Some(total_data_files) = total_data_files {
-        summary = summary.with_property("total-data-files", total_data_files.to_string());
+        summary = summary.with_property(
+            summary_properties::TOTAL_DATA_FILES,
+            total_data_files.to_string(),
+        );
     }
     if let Some(total_delete_files) = total_delete_files {
-        summary = summary.with_property("total-delete-files", total_delete_files.to_string());
+        summary = summary.with_property(
+            summary_properties::TOTAL_DELETE_FILES,
+            total_delete_files.to_string(),
+        );
     }
     if let Some(total_records) = total_records {
-        summary = summary.with_property("total-records", total_records.to_string());
+        summary =
+            summary.with_property(summary_properties::TOTAL_RECORDS, total_records.to_string());
     }
 
     if let Some(previous_position_deletes) =
-        delete_totals_base.previous_total("total-position-deletes")
+        delete_totals_base.previous_total(summary_properties::TOTAL_POSITION_DELETES)
     {
         summary = summary.with_property(
-            "total-position-deletes",
+            summary_properties::TOTAL_POSITION_DELETES,
             (previous_position_deletes + added_position_deletes).to_string(),
         );
     }
     if let Some(previous_equality_deletes) =
-        delete_totals_base.previous_total("total-equality-deletes")
+        delete_totals_base.previous_total(summary_properties::TOTAL_EQUALITY_DELETES)
     {
         summary = summary.with_property(
-            "total-equality-deletes",
+            summary_properties::TOTAL_EQUALITY_DELETES,
             (previous_equality_deletes + added_equality_deletes).to_string(),
         );
     }
@@ -404,6 +412,7 @@ pub struct SnapshotProducer<'a> {
     pub is_bootstrap: bool,
     pub row_lineage_start_row_id: Option<i64>,
     pub dynamic_partition_overwrite: bool,
+    pub snapshot_properties: BTreeMap<String, String>,
 }
 
 pub(crate) struct PreparedSnapshotCommit {
@@ -528,7 +537,13 @@ impl<'a> SnapshotProducer<'a> {
             is_bootstrap: false,
             row_lineage_start_row_id: None,
             dynamic_partition_overwrite: false,
+            snapshot_properties: BTreeMap::new(),
         }
+    }
+
+    pub fn with_snapshot_properties(mut self, properties: BTreeMap<String, String>) -> Self {
+        self.snapshot_properties = properties;
+        self
     }
 
     pub fn with_write_path_mode(mut self, mode: crate::utils::WritePathMode) -> Self {
@@ -908,6 +923,7 @@ impl<'a> SnapshotProducer<'a> {
         self,
         update_kind: SnapshotUpdateKind,
     ) -> Result<PreparedSnapshotCommit, String> {
+        summary_properties::validate_snapshot_properties(&self.snapshot_properties)?;
         let store_ctx = self
             .store_ctx
             .clone()
@@ -989,39 +1005,53 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
         let mut summary = crate::spec::snapshots::Summary::new(operation.clone());
+        summary
+            .additional_properties
+            .extend(self.snapshot_properties.clone());
         if self.dynamic_partition_overwrite {
-            summary = summary.with_property("replace-partitions", "true");
+            summary = summary.with_property(summary_properties::REPLACE_PARTITIONS, "true");
         }
         if added_data_file_count > 0 {
             summary = summary
-                .with_property("added-data-files", added_data_file_count.to_string())
-                .with_property("added-records", added_records.to_string());
+                .with_property(
+                    summary_properties::ADDED_DATA_FILES,
+                    added_data_file_count.to_string(),
+                )
+                .with_property(summary_properties::ADDED_RECORDS, added_records.to_string());
         }
         if !self.added_delete_files.is_empty() {
             summary = summary.with_property(
-                "added-delete-files",
+                summary_properties::ADDED_DELETE_FILES,
                 self.added_delete_files.len().to_string(),
             );
             if added_position_delete_files > 0 {
                 summary = summary.with_property(
-                    "added-position-delete-files",
+                    summary_properties::ADDED_POSITION_DELETE_FILES,
                     added_position_delete_files.to_string(),
                 );
             }
             if added_deletion_vectors > 0 {
-                summary = summary.with_property("added-dvs", added_deletion_vectors.to_string());
+                summary = summary.with_property(
+                    summary_properties::ADDED_DVS,
+                    added_deletion_vectors.to_string(),
+                );
             }
             if added_position_deletes > 0 {
-                summary = summary
-                    .with_property("added-position-deletes", added_position_deletes.to_string());
+                summary = summary.with_property(
+                    summary_properties::ADDED_POSITION_DELETES,
+                    added_position_deletes.to_string(),
+                );
             }
             if added_equality_delete_files > 0 {
                 summary = summary
                     .with_property(
-                        "added-equality-delete-files",
+                        summary_properties::ADDED_EQUALITY_DELETE_FILES,
                         added_equality_delete_files.to_string(),
                     )
-                    .with_property("added-equality-deletes", added_equality_deletes.to_string());
+                    .with_property(
+                        summary_properties::ADDED_EQUALITY_DELETES,
+                        added_equality_deletes.to_string(),
+                    );
             }
         }
 
@@ -1114,32 +1144,35 @@ impl<'a> SnapshotProducer<'a> {
             + removed_position_deletes.equality_delete_files;
         if removed_delete_files > 0 {
             summary = summary
-                .with_property("removed-delete-files", removed_delete_files.to_string())
                 .with_property(
-                    "removed-position-deletes",
+                    summary_properties::REMOVED_DELETE_FILES,
+                    removed_delete_files.to_string(),
+                )
+                .with_property(
+                    summary_properties::REMOVED_POSITION_DELETES,
                     removed_position_deletes.positions.to_string(),
                 );
         }
         if removed_position_deletes.equality_delete_files > 0 {
             summary = summary
                 .with_property(
-                    "removed-equality-delete-files",
+                    summary_properties::REMOVED_EQUALITY_DELETE_FILES,
                     removed_position_deletes.equality_delete_files.to_string(),
                 )
                 .with_property(
-                    "removed-equality-deletes",
+                    summary_properties::REMOVED_EQUALITY_DELETES,
                     removed_position_deletes.equality_deletes.to_string(),
                 );
         }
         if removed_position_deletes.position_delete_files > 0 {
             summary = summary.with_property(
-                "removed-position-delete-files",
+                summary_properties::REMOVED_POSITION_DELETE_FILES,
                 removed_position_deletes.position_delete_files.to_string(),
             );
         }
         if removed_position_deletes.deletion_vectors > 0 {
             summary = summary.with_property(
-                "removed-dvs",
+                summary_properties::REMOVED_DVS,
                 removed_position_deletes.deletion_vectors.to_string(),
             );
         }
@@ -1177,12 +1210,24 @@ impl<'a> SnapshotProducer<'a> {
                 .and_then(|count| count.checked_add(added_rows))
                 .ok_or_else(|| "Iceberg total record count overflow".to_string())?;
             summary = summary
-                .with_property("added-data-files", added_files.to_string())
-                .with_property("deleted-data-files", stats.deleted_files.to_string())
-                .with_property("added-records", added_rows.to_string())
-                .with_property("deleted-records", stats.deleted_rows.to_string())
-                .with_property("total-data-files", total_data_files.to_string())
-                .with_property("total-records", total_records.to_string());
+                .with_property(
+                    summary_properties::ADDED_DATA_FILES,
+                    added_files.to_string(),
+                )
+                .with_property(
+                    summary_properties::DELETED_DATA_FILES,
+                    stats.deleted_files.to_string(),
+                )
+                .with_property(summary_properties::ADDED_RECORDS, added_rows.to_string())
+                .with_property(
+                    summary_properties::DELETED_RECORDS,
+                    stats.deleted_rows.to_string(),
+                )
+                .with_property(
+                    summary_properties::TOTAL_DATA_FILES,
+                    total_data_files.to_string(),
+                )
+                .with_property(summary_properties::TOTAL_RECORDS, total_records.to_string());
         }
 
         let new_added_rows: i64 = self
@@ -1271,7 +1316,7 @@ impl<'a> SnapshotProducer<'a> {
         if removed_position_deletes.positions > 0
             && let Some(total) = summary
                 .additional_properties
-                .get("total-position-deletes")
+                .get(summary_properties::TOTAL_POSITION_DELETES)
                 .and_then(|value| value.parse::<u64>().ok())
         {
             let remaining = total
@@ -1279,13 +1324,16 @@ impl<'a> SnapshotProducer<'a> {
                 .ok_or_else(|| {
                     "Iceberg removed position deletes exceed the snapshot total".to_string()
                 })?;
-            summary = summary.with_property("total-position-deletes", remaining.to_string());
+            summary = summary.with_property(
+                summary_properties::TOTAL_POSITION_DELETES,
+                remaining.to_string(),
+            );
         }
 
         if update_kind == SnapshotUpdateKind::Truncate {
             summary = summary
-                .with_property("total-position-deletes", "0")
-                .with_property("total-equality-deletes", "0");
+                .with_property(summary_properties::TOTAL_POSITION_DELETES, "0")
+                .with_property(summary_properties::TOTAL_EQUALITY_DELETES, "0");
         }
 
         let mut list_writer = ManifestListWriter::new();

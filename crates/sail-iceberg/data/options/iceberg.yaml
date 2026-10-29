@@ -89,6 +89,14 @@
 
 ### Write-Only Options ###
 
+- key: snapshot_properties
+  description: Per-write snapshot summary annotations from snapshot-property.<key> options.
+  supported: true
+  rust_type: "std::collections::BTreeMap<String, String>"
+  scopes: [write]
+  # Prefix options are extracted by the Iceberg resolver, not exact-key generation.
+  origins: []
+
 - key: overwrite_mode
   description: Select overwrite mode.
   default:
@@ -475,16 +483,6 @@
     - type: option
       keys: [check-nullability]
       parser: crate::options::parsers::parse_bool
-
-- key: snapshot_property
-  description: Prefix for custom snapshot summary properties.
-  supported: false
-  rust_type: String
-  scopes: [write]
-  origins:
-    - type: option
-      keys: [snapshot-property]
-      parser: crate::options::parsers::parse_string
 
 - key: fanout_enabled
   description: Override partitioned fanout behavior.

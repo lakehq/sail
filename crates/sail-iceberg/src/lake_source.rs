@@ -118,6 +118,7 @@ impl DataSource for IcebergLakeSource {
     }
 
     async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+        crate::options::snapshot_properties_from_options(&info.options)?;
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Iceberg table options");
         };

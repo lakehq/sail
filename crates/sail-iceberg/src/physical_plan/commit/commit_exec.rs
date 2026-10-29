@@ -765,6 +765,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 updates: vec![],
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
+                snapshot_properties: commit_meta.snapshot_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
                 snapshot_update_kind,
                 schema: commit_meta.schema,
@@ -1221,6 +1222,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     Some(store_ctx.clone()),
                     Some(manifest_meta),
                 )
+                .with_snapshot_properties(commit_info.snapshot_properties.clone())
                 .with_added_delete_files(commit_info.delete_files.clone())
                 .with_removed_data_file_paths(removed_data_file_paths.clone())
                 .with_partition_specs(table_meta.partition_specs.clone())
@@ -1538,6 +1540,7 @@ mod tests {
                 skip_empty_commit: false,
                 requirements: vec![],
                 table_properties,
+                snapshot_properties: Default::default(),
                 lakehouse_table: None,
                 schema: Some(evolved_schema),
                 partition_spec: None,
@@ -1933,6 +1936,42 @@ mod tests {
     }
 
     #[test]
+    fn partition_snapshot_properties_must_match_even_for_empty_partitions() {
+        let first = CommitMeta {
+            row_count: 1,
+            snapshot_properties: std::collections::BTreeMap::from([(
+                "run-id".to_string(),
+                "first".to_string(),
+            )]),
+            ..Default::default()
+        };
+        let mut accumulated = Some(first.clone());
+        let empty = CommitMeta {
+            row_count: 0,
+            ..first.clone()
+        };
+        IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, empty)
+            .expect("matching empty partition");
+        assert_eq!(accumulated, Some(first.clone()));
+        for properties in [
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::from([("run-id".into(), "other".into())]),
+            std::collections::BTreeMap::from([("another-key".into(), "first".into())]),
+        ] {
+            let incompatible = CommitMeta {
+                row_count: 0,
+                snapshot_properties: properties,
+                ..first.clone()
+            };
+            assert!(
+                IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, incompatible)
+                    .is_err()
+            );
+            assert_eq!(accumulated, Some(first.clone()));
+        }
+    }
+
+    #[test]
     fn empty_predicate_overwrite_validates_expected_snapshot() {
         for skip_empty_commit in [false, true] {
             futures::executor::block_on(async {
@@ -1970,6 +2009,7 @@ mod tests {
                     skip_empty_commit,
                     requirements: vec![],
                     table_properties,
+                    snapshot_properties: Default::default(),
                     lakehouse_table: None,
                     schema: None,
                     partition_spec: None,
@@ -2245,6 +2285,10 @@ mod tests {
                         skip_empty_commit: false,
                         requirements: vec![],
                         table_properties,
+                        snapshot_properties: std::collections::BTreeMap::from([
+                            ("run-id".into(), "retry-value".into()),
+                            ("empty".into(), "".into()),
+                        ]),
                         lakehouse_table: None,
                         schema: None,
                         partition_spec: None,
@@ -2283,6 +2327,34 @@ mod tests {
 
             assert_eq!(batch.num_rows(), 1);
             assert!(conflict_store.fault_injected.load(Ordering::SeqCst));
+            let committed_bytes = store_ctx
+                .prefixed
+                .get(&Path::from("metadata/v3.metadata.json"))
+                .await
+                .expect("committed metadata")
+                .bytes()
+                .await
+                .expect("metadata bytes");
+            let committed = TableMetadata::from_json(&committed_bytes).expect("metadata JSON");
+            let summary = &committed
+                .current_snapshot()
+                .expect("current snapshot")
+                .summary
+                .additional_properties;
+            assert_eq!(
+                summary.get("run-id").map(String::as_str),
+                Some("retry-value")
+            );
+            assert_eq!(summary.get("empty").map(String::as_str), Some(""));
+            assert_eq!(summary.get("added-records").map(String::as_str), Some("1"));
+            assert_eq!(
+                committed
+                    .snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.snapshot_id() == 17),
+                Some(&current_snapshot)
+            );
+            assert!(!committed.properties.contains_key("run-id"));
             let metadata_prefix = Path::from("tmp/commit-conflict/metadata");
             let metadata_objects = memory
                 .list(Some(&metadata_prefix))

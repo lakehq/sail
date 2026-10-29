@@ -686,6 +686,7 @@ impl ExecutionPlan for IcebergWriterExec {
                             .is_some_and(|base| base.format_version == FormatVersion::V3)),
                 requirements: write_context.requirements.clone(),
                 table_properties: options.table_properties,
+                snapshot_properties: options.snapshot_properties,
                 lakehouse_table: options.lakehouse_table,
                 schema: write_context
                     .commit_writer_schema

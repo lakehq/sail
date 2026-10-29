@@ -12,6 +12,8 @@
 
 pub mod commit_exec;
 
+use std::collections::BTreeMap;
+
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,8 @@ pub struct IcebergCommitInfo {
     pub updates: Vec<TableUpdate>,
     pub requirements: Vec<TableRequirement>,
     pub table_properties: Vec<(String, String)>,
+    #[serde(default)]
+    pub snapshot_properties: BTreeMap<String, String>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub snapshot_update_kind: SnapshotUpdateKind,
     #[serde(skip_serializing_if = "Option::is_none")]
