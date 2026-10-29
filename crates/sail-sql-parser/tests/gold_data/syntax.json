@@ -7728,19 +7728,6 @@
               }
             },
             {
-              "name": "OptimizeWhereClause",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Keyword(Where)"
-                  },
-                  {
-                    "nonTerminal": "Expression"
-                  }
-                ]
-              }
-            },
-            {
               "name": "Option(AliasClause)",
               "node": {
                 "optional": {
@@ -8201,14 +8188,6 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Operator(Equals)"
-                }
-              }
-            },
-            {
-              "name": "Option(OptimizeWhereClause)",
-              "node": {
-                "optional": {
-                  "nonTerminal": "OptimizeWhereClause"
                 }
               }
             },
@@ -10369,7 +10348,7 @@
                         "nonTerminal": "Option(Keyword(Full))"
                       },
                       {
-                        "nonTerminal": "Option(OptimizeWhereClause)"
+                        "nonTerminal": "Option(WhereClause)"
                       },
                       {
                         "nonTerminal": "Option(ZOrderClause)"
