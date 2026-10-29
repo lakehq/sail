@@ -11,6 +11,7 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::{ExecutionPlan, Partitioning, PlanProperties};
 use sail_common::utils::datetime::is_fixed_zero_offset_timezone;
+use sail_common_datafusion::OPTIMIZER_CORRELATION_KEY_PREFIX;
 use sail_function::scalar::correlation_cast::CorrelationCast;
 
 /// Specialize correlation casts after native statistics have guided join selection.
@@ -45,11 +46,11 @@ fn rewrite_projection(
     let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
         return Ok(Transformed::no(plan));
     };
-    if !projection
-        .expr()
-        .iter()
-        .any(|x| x.alias.starts_with("__sail_correlation_key_"))
-    {
+    if !projection.expr().iter().any(|x| {
+        x.alias
+            .strip_prefix(OPTIMIZER_CORRELATION_KEY_PREFIX)
+            .is_some_and(|suffix| suffix.starts_with('_'))
+    }) {
         return Ok(Transformed::no(plan));
     }
     let schema = projection.input().schema();
@@ -59,7 +60,11 @@ fn rewrite_projection(
         .iter()
         .map(|expression| {
             let unchanged = || Ok(expression.clone());
-            if !expression.alias.starts_with("__sail_correlation_key_") {
+            if !expression
+                .alias
+                .strip_prefix(OPTIMIZER_CORRELATION_KEY_PREFIX)
+                .is_some_and(|suffix| suffix.starts_with('_'))
+            {
                 return unchanged();
             }
             let Some(cast) = expression.expr.downcast_ref::<CastExpr>() else {
