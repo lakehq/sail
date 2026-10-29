@@ -538,14 +538,20 @@ fn push_late_metadata_through_file_context(
         .is_some_and(|scan| scan.data_source().is::<FileScanConfig>());
     // Connector scan nodes absorb metadata through their source-local projection hook.
     // Keep this allowlist source-only: a general projection swap can cross an exchange.
-    if (file_scan
+    if file_scan
         || matches!(
             input.name(),
-            "DeltaScanByAddsExec" | "IcebergScanByDataFilesExec"
-        ))
-        && let Some(source) = input.try_swapping_with_projection(projection)?
+            "DeltaScanByAddsExec" | "IcebergScanByDataFilesExec" | "IcebergDeleteApplyExec"
+        )
     {
-        return Ok(Transformed::yes(source));
+        // Preserve the lambda evaluation schema above source projection merges.
+        let extracted = extract_metadata_projection(Arc::clone(&plan))?;
+        if extracted.transformed {
+            return Ok(extracted);
+        }
+        if let Some(source) = input.try_swapping_with_projection(projection)? {
+            return Ok(Transformed::yes(source));
+        }
     }
     // Filters, unnest, union and explicit non-shuffle coalesce preserve the context.
     // Sorts, buffers, exchanges, limits and unknown operators deliberately stop it.

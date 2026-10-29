@@ -511,6 +511,54 @@ def test_input_file_metadata_streamed_join(streamed_join_input, context):
         assert actual == expected
 
 
+@pytest.mark.parametrize(
+    ("extra_column", "retain_id"),
+    [
+        pytest.param("extra", False, id="narrowed"),
+        pytest.param("x", False, id="lambda-name-collision"),
+        pytest.param("extra", True, id="repeated-computed-column"),
+    ],
+)
+@pytest.mark.parametrize("with_metadata", [False, True], ids=["control", "metadata"])
+def test_input_file_metadata_streamed_join_narrowed_lambda(
+    streamed_join_input, tmp_path, extra_column, retain_id, with_metadata
+):
+    spark, _, _ = streamed_join_input
+    path = tmp_path / "narrowed.parquet"
+    pq.write_table(pa.table({"id": [101, 103], "arr": [[1, 2], [3, 4]], extra_column: [800, 900]}), path)
+    spark.read.parquet(str(path)).createOrReplaceTempView("input_file_narrowed_probe")
+    # Spark 4.0.4: narrowing must preserve both the captured computed column and
+    # the lambda parameter, even when a raw field has the parameter's name.
+    selected_id = "t.id, " if retain_id else ""
+    probe_id = "id, " if retain_id else ""
+    metadata = (
+        ", input_file_name() AS file_name, input_file_block_start() AS block_start, "
+        "input_file_block_length() AS block_length"
+        if with_metadata
+        else ""
+    )
+    try:
+        dataframe = spark.sql(
+            f"SELECT {selected_id}t.mapped{metadata} FROM range(101,102) r CROSS JOIN "  # noqa: S608
+            f"(SELECT {probe_id}transform(arr, x -> x + id) AS mapped "
+            f"FROM (SELECT id + {extra_column} AS id, arr FROM input_file_narrowed_probe) q) t"
+        )
+        rows = dataframe.collect()
+        assert sorted(row.mapped for row in rows) == [[902, 903], [1006, 1007]]
+        if retain_id:
+            # Selecting id again must not strand metadata when merging the full
+            # projection would duplicate the source's id + extra expression.
+            assert {row.id: row.mapped for row in rows} == {901: [902, 903], 1003: [1006, 1007]}
+        if with_metadata:
+            assert StructType([dataframe.schema[field.name] for field in METADATA_SCHEMA]) == METADATA_SCHEMA
+            assert all(
+                (row.file_name, row.block_start, row.block_length) == (path.as_uri(), 0, path.stat().st_size)
+                for row in rows
+            )
+    finally:
+        spark.catalog.dropTempView("input_file_narrowed_probe")
+
+
 def test_input_file_metadata_filtered_file_build_uses_defaults(streamed_join_input):
     spark, _, _ = streamed_join_input
     dataframe = spark.sql(

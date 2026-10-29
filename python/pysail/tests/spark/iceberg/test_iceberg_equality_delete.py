@@ -25,6 +25,7 @@ from pyiceberg.transforms import IdentityTransform, TruncateTransform
 from pyiceberg.typedef import Record
 from pyiceberg.types import BinaryType, LongType, NestedField, StringType, StructType
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.steps.iceberg import (
     _current_manifest_list,
     _current_snapshot,
@@ -352,6 +353,88 @@ def test_iceberg_sql_delete_writes_position_delete_file_and_filters_rows(spark, 
         ]
     finally:
         _drop_table(spark, table_name)
+
+
+@pytest.fixture
+def streamed_join_iceberg(tmp_path):
+    # Keep the scan and streamed probe together, including on local-cluster workers.
+    with (
+        spark_connect_server({"SAIL_EXECUTION__DEFAULT_PARALLELISM": "1"}) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        spark = sessions.create()
+        name = "iceberg_streamed_join"
+        path = tmp_path / name
+        try:
+            spark.sql(f"""
+                CREATE TABLE {name} (id BIGINT, label STRING)
+                USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'
+                TBLPROPERTIES ('format-version'='2', 'write.delete.mode'='merge-on-read')
+            """)
+            spark.sql("INSERT INTO iceberg_streamed_join VALUES (101,'a'),(102,'b'),(103,'c')")
+            spark.sql("INSERT INTO iceberg_streamed_join VALUES (105,'d'),(107,'e')")
+            spark.sql("DELETE FROM iceberg_streamed_join WHERE id=102").collect()
+            # A post-delete append supplies a clean branch alongside delete-aware files.
+            spark.sql("INSERT INTO iceberg_streamed_join VALUES (109,'fresh')")
+
+            [entry] = _current_delete_entries(path)
+            assert entry.data_file.content == DataFileContent.POSITION_DELETES
+            delete_path = _local_table_path(entry.data_file.file_path)
+            [deleted] = pq.read_table(delete_path).to_pylist()
+            assert pq.read_table(_local_table_path(deleted["file_path"])).to_pylist()[deleted["pos"]] == {
+                "id": 102,
+                "label": "b",
+            }
+            # Independently decode the data artifacts, not a second Sail query.
+            expected = {}
+            file_ids = []
+            for data_path in path.rglob("*.parquet"):
+                if data_path == delete_path:
+                    continue
+                records = pq.read_table(data_path).to_pylist()
+                file_ids.append(sorted(record["id"] for record in records))
+                for record in records:
+                    expected[record["id"]] = (record["label"], data_path.as_uri(), 0, data_path.stat().st_size)
+            assert sorted(file_ids) == [[101, 102, 103], [105, 107], [109]]
+            del expected[102]
+            assert {key: value[0] for key, value in expected.items()} == {
+                101: "a",
+                103: "c",
+                105: "d",
+                107: "e",
+                109: "fresh",
+            }
+            yield spark, expected
+        finally:
+            _drop_table(spark, name)
+
+
+@pytest.mark.parametrize("context", ["direct", "cross", "right", "materialized_cross", "materialized_right"])
+def test_input_file_metadata_streamed_join_with_deletes(streamed_join_iceberg, context):
+    spark, expected = streamed_join_iceberg
+    metadata = (
+        "input_file_name() AS file_name, input_file_block_start() AS block_start, "
+        "input_file_block_length() AS block_length"
+    )
+    source = "iceberg_streamed_join"
+    if context.startswith("materialized"):
+        source = f"(SELECT id, label, {metadata} FROM {source})"  # noqa: S608
+        metadata = "t.file_name, t.block_start, t.block_length"
+    if context.endswith("cross"):
+        source = f"range(101,102) r CROSS JOIN {source} t"
+    elif context.endswith("right"):
+        source = f"range(101,104) r RIGHT JOIN {source} t ON r.id=t.id"
+    else:
+        source = f"{source} t"
+    dataframe = spark.sql(f"SELECT t.id, t.label, {metadata} FROM {source}")  # noqa: S608
+    rows = dataframe.collect()
+    assert sorted(row.id for row in rows) == [101, 103, 105, 107, 109]
+    # Spark 4.0.4 + Iceberg 1.10.0 confirms provenance after deletes in both joins.
+    # Sail reads whole files here; Spark's manifest-derived splits may start at 4.
+    assert {row.id: tuple(row)[1:] for row in rows} == expected
+    for field, data_type in [("file_name", "string"), ("block_start", "bigint"), ("block_length", "bigint")]:
+        assert dataframe.schema[field].dataType.simpleString() == data_type
+        assert not dataframe.schema[field].nullable
 
 
 def test_iceberg_sql_delete_partitioned_and_noop(spark, tmp_path):
