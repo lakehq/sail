@@ -275,16 +275,22 @@ def test_iceberg_sql_delete_writes_position_delete_file_and_filters_rows(spark, 
         ]
         assert rows == [(1, "keep-1", "keep"), (3, "keep-3", "keep")]
 
-        metadata_rows = spark.sql(
+        metadata_frame = spark.sql(
             """
             SELECT id,
                    input_file_name() AS file_name,
                    input_file_block_start() AS block_start,
                    input_file_block_length() AS block_length
             FROM iceberg_sql_position_delete
-            ORDER BY id
             """
-        ).collect()
+        )
+        metadata_rows = metadata_frame.orderBy("id").collect()
+        limited = metadata_frame.limit(1).collect()
+        assert len(limited) == 1
+        assert limited[0].id in [1, 3]
+        data_file = _local_table_path(limited[0].file_name)
+        assert limited[0].id in pq.read_table(data_file, columns=["id"])["id"].to_pylist()
+        assert tuple(limited[0])[1:] == (data_file.as_uri(), 0, data_file.stat().st_size)
         assert [row.id for row in metadata_rows] == [1, 3]
         assert all(row.file_name for row in metadata_rows)
         for row in metadata_rows:
