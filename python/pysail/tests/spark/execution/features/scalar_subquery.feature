@@ -730,11 +730,7 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
 
-  # Spark 4 analyzes this query and raises the scalar-subquery cardinality error
-  # at runtime. Sail currently rejects it during planning via DataFusion's
-  # correlated scalar subquery invariant.
   @spark-4
-  @sail-bug
   Scenario: Unaggregated correlated scalar subquery errors at runtime
     When query
       """
@@ -2144,10 +2140,8 @@ Feature: Scalar subqueries in distributed execution
         | 1  | 1 | 1 |
         | 2  | 0 | 0 |
 
-    # Spark 4.2 pulls the DOUBLE -> STRING up-cast over the aggregate and groups by the
-    # raw value, which merges -0.0 and 0.0. Sail groups by the compared string.
-    @sail-only
-    Scenario: A cast of a floating-point column compared directly keeps signed zeros apart
+    # Match Spark's numeric grouping shortcut: signed zeros merge before the string cast.
+    Scenario: A floating-point cast correlation uses Spark signed-zero grouping
       When query
         """
         SELECT o.d2, o.s,
@@ -2158,8 +2152,8 @@ Feature: Scalar subqueries in distributed execution
         """
       Then query result collected ordered
         | d2  | s    | n |
-        | 0.0 | -0.0 | 1 |
-        | 0.0 | 0.0  | 1 |
+        | 0.0 | -0.0 | 0 |
+        | 0.0 | 0.0  | 2 |
 
     # Spark 4.2 treats INT -> FLOAT as a lossless up-cast and groups by the raw value,
     # returning (16777216.0, 1) twice. Sail groups by the compared FLOAT value.

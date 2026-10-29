@@ -86,8 +86,8 @@ Feature: Delta Lake Delete
         DELETE FROM delta.`{{ location.string }}` AS target WHERE target.id = 2
         """
       Then query result collected
-        | count |
-        | 0     |
+        | num_affected_rows |
+        | 1                 |
       Then delta log latest commit info contains
         | path                            | value    |
         | operation                       | "DELETE" |
@@ -103,8 +103,8 @@ Feature: Delta Lake Delete
         DELETE FROM delta.`{{ location.string }}` WHERE id = 2
         """
       Then query result collected
-        | count |
-        | 0     |
+        | num_affected_rows |
+        | 0                 |
 
     Scenario: DELETE preserves rows for which the predicate is unknown
       Given variable location for temporary directory delta_delete_unknown

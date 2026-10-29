@@ -41,16 +41,18 @@ def test_delta_log_assertions_observe_new_commits(tmp_path, which):
             return obj["operationParameters"]["watermark"]
         return obj["metaData"]["schemaString"]["fields"][0]["metadata"]["delta.identity.highWaterMark"]
 
-    commit(0, 2)
+    first_watermark = 2
+    latest_watermark = 3
+    commit(0, first_watermark)
     first = _delta_log_compute(which, variables, cache)
-    assert value(first) == 2
-    commit(1, 3)
+    assert value(first) == first_watermark
+    commit(1, latest_watermark)
     latest = _delta_log_compute(which, variables, cache)
     if which == "first commit protocol and metadata":
         assert latest is first
-        assert value(latest) == 2
+        assert value(latest) == first_watermark
         assert cache == {which: first}
     else:
-        assert value(latest) == 3
-        assert value(first) == 2
+        assert value(latest) == latest_watermark
+        assert value(first) == first_watermark
         assert cache == {}

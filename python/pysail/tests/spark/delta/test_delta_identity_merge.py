@@ -67,28 +67,30 @@ def _state(spark, name, path):
 
 
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
-@pytest.mark.parametrize("start,step", [(10, 3), (0, -2)])
+@pytest.mark.parametrize(("start", "step"), [(10, 3), (0, -2)])
 def test_merge_identity_lifecycle(spark, identity_table, mode, start, step):
     name, path = identity_table(mode=mode, start=start, step=step)
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()  # noqa: S608
     before = _watermark(path)
     spark.sql(f"""
         MERGE INTO {name} t USING (SELECT 1 AS k,11 AS v UNION ALL SELECT 2,22) s ON t.k=s.k
         WHEN MATCHED THEN UPDATE SET v=s.v
         WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,s.v)
-    """).collect()
+    """).collect()  # noqa: S608
     rows = spark.table(name).orderBy("k").collect()
     assert rows[0] == (start, 1, 11)
     generated = rows[1].id
-    assert (generated - start) % step == 0 and (generated - before) * step > 0
+    assert (generated - start) % step == 0
+    assert (generated - before) * step > 0
     assert _watermark(path) == generated
     merge_commit = [json.loads(line) for line in list(_log(path).values())[-1].splitlines()]
     assert any("add" in action for action in merge_commit)
     assert any("metaData" in action for action in merge_commit)
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,33)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,33)").collect()  # noqa: S608
     reopened = spark.read.format("delta").load(str(path)).orderBy("k").collect()
-    assert [row.k for row in reopened] == [1, 2, 3]
-    assert len({row.id for row in reopened}) == 3
+    expected_keys = [1, 2, 3]
+    assert [row.k for row in reopened] == expected_keys
+    assert len({row.id for row in reopened}) == len(expected_keys)
     assert (reopened[2].id - generated) * step > 0
     assert _watermark(path) == reopened[2].id
     assert _metadata(path)["id"]["delta.identity.allowExplicitInsert"] == (mode == "BY DEFAULT")
@@ -102,16 +104,18 @@ def test_merge_by_default_explicit_and_null_are_not_generated(spark, identity_ta
         MERGE INTO {name} t USING (SELECT 1 AS k UNION ALL SELECT 2) s ON t.k=s.k
         WHEN NOT MATCHED AND s.k=1 THEN INSERT (id,k,v) VALUES (42,s.k,10)
         WHEN NOT MATCHED THEN INSERT (id,k,v) VALUES (NULL,s.k,20)
-    """).collect()
+    """).collect()  # noqa: S608
     assert spark.table(name).orderBy("k").collect() == [(42, 1, 10), (None, 2, 20)]
-    assert _watermark(path) == 43  # Existing Sail policy: round explicit values forward.
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,30)").collect()
-    assert spark.table(name).where("k=3").first().id == 46
+    expected_watermark = 43  # Existing Sail policy: round explicit values forward.
+    assert _watermark(path) == expected_watermark
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (3,30)").collect()  # noqa: S608
+    expected_next_id = 46
+    assert spark.table(name).where("k=3").first().id == expected_next_id
 
 
 @pytest.mark.parametrize("mode", ["ALWAYS", "BY DEFAULT"])
 @pytest.mark.parametrize(
-    "clause,error",
+    ("clause", "error"),
     [
         ("WHEN MATCHED THEN UPDATE SET id=t.id", "UPDATE cannot assign Delta identity"),
         ("WHEN MATCHED THEN UPDATE SET *", "UPDATE cannot assign Delta identity"),
@@ -121,7 +125,7 @@ def test_merge_by_default_explicit_and_null_are_not_generated(spark, identity_ta
 )
 def test_merge_identity_assignments_rejected(spark, identity_table, mode, clause, error):
     name, path = identity_table(mode=mode)
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()  # noqa: S608
     before = _state(spark, name, path)
     with pytest.raises(Exception, match=error):
         spark.sql(f"MERGE INTO {name} t USING (SELECT 1 AS k,10 AS v,100L AS id) s ON t.k=s.k {clause}").collect()
@@ -136,7 +140,7 @@ def test_merge_always_rejects_supply_even_in_unreachable_clause(spark, identity_
         spark.sql(f"""
             MERGE INTO {name} t USING (SELECT 1 AS k,10 AS v) s ON t.k=s.k
             WHEN NOT MATCHED AND false THEN INSERT (id,k,v) VALUES ({value},s.k,s.v)
-        """).collect()
+        """).collect()  # noqa: S608
     assert _state(spark, name, path) == before
 
 
@@ -144,7 +148,7 @@ def test_merge_always_rejects_supply_even_in_unreachable_clause(spark, identity_
 def test_merge_identity_star_omission_and_evolution_fail_closed(spark, identity_table, evolution):
     name, path = identity_table(mode="BY DEFAULT")
     before = _state(spark, name, path)
-    with pytest.raises(Exception, match="schema evolution with identity|INSERT \\* omitting identity"):
+    with pytest.raises(Exception, match=r"schema evolution with identity|INSERT \* omitting identity"):
         spark.sql(f"""
             MERGE {"WITH SCHEMA EVOLUTION" if evolution else ""} INTO {name} t
             USING (SELECT 1 AS k,10 AS v) s ON t.k=s.k WHEN NOT MATCHED THEN INSERT *
@@ -154,18 +158,20 @@ def test_merge_identity_star_omission_and_evolution_fail_closed(spark, identity_
 
 @pytest.mark.parametrize("matched", [False, True], ids=["fast-append", "copy-on-write"])
 def test_merge_multiple_insert_clauses_share_allocation(spark, identity_table, matched):
+    identity_start = 5
     name, path = identity_table(
-        schema="""
-        id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 5 INCREMENT BY 5),
+        schema=f"""
+        id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH {identity_start} INCREMENT BY 5),
         decreasing BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 0 INCREMENT BY -3),
         k INT, v INT
     """
     )
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,100)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,100)").collect()  # noqa: S608
     source = "identity_source_" + uuid.uuid4().hex
-    spark.range(0, 129, numPartitions=8).selectExpr("CAST(id AS INT) AS k").repartition(8).createOrReplaceTempView(
-        source
-    )
+    row_count = 129
+    spark.range(0, row_count, numPartitions=8).selectExpr("CAST(id AS INT) AS k").repartition(
+        8
+    ).createOrReplaceTempView(source)
     try:
         update = "WHEN MATCHED THEN UPDATE SET v=101" if matched else ""
         spark.sql(f"""
@@ -173,12 +179,13 @@ def test_merge_multiple_insert_clauses_share_allocation(spark, identity_table, m
             WHEN NOT MATCHED AND s.k % 3 = 0 THEN INSERT (decreasing,k,v) VALUES (1000L+s.k,s.k,1)
             WHEN NOT MATCHED AND s.k % 2 = 0 THEN INSERT (k,v) VALUES (s.k,2)
             WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,3)
-        """).collect()
+        """).collect()  # noqa: S608
         rows = spark.table(name).orderBy("k").collect()
-        assert len(rows) == 129
-        assert len({row.id for row in rows}) == 129
-        assert all((row.id - 5) % 5 == 0 for row in rows)
-        assert rows[0].id == 5 and rows[0].decreasing == 0
+        assert len(rows) == row_count
+        assert len({row.id for row in rows}) == row_count
+        assert all((row.id - identity_start) % 5 == 0 for row in rows)
+        assert rows[0].id == identity_start
+        assert rows[0].decreasing == 0
         generated = [row.decreasing for row in rows if row.k % 3 != 0]
         assert len(set(generated)) == len(generated)
         assert all(value < 0 and value % -3 == 0 for value in generated)
@@ -190,9 +197,9 @@ def test_merge_multiple_insert_clauses_share_allocation(spark, identity_table, m
         spark.catalog.dropTempView(source)
 
 
-@pytest.mark.parametrize("start,step", [(9223372036854775807, 1), (-9223372036854775808, -1)])
+@pytest.mark.parametrize(("start", "step"), [(9223372036854775807, 1), (-9223372036854775808, -1)])
 @pytest.mark.parametrize(
-    "source,condition",
+    ("source", "condition"),
     [
         ("SELECT 1 AS k,11 AS v", "true"),
         ("SELECT 2 AS k,22 AS v", "false"),
@@ -201,12 +208,12 @@ def test_merge_multiple_insert_clauses_share_allocation(spark, identity_table, m
 )
 def test_merge_without_generated_rows_allows_exhausted_watermark(spark, identity_table, start, step, source, condition):
     name, path = identity_table(start=start, step=step)
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (1,10)").collect()  # noqa: S608
     spark.sql(f"""
         MERGE INTO {name} t USING ({source}) s ON t.k=s.k
         WHEN MATCHED THEN UPDATE SET v=s.v
         WHEN NOT MATCHED AND {condition} THEN INSERT (k,v) VALUES (s.k,s.v)
-    """).collect()
+    """).collect()  # noqa: S608
     assert spark.table(name).count() == 1
     assert spark.table(name).first().id == start
     assert _watermark(path) == start
@@ -228,16 +235,16 @@ def test_merge_missing_watermark_evidence_fails_without_commit(spark, identity_t
     name, path = identity_table(properties=properties, schema=schema)
     before = _state(spark, name, path)
     files_before = set(path.rglob("*.parquet"))
-    with pytest.raises(Exception, match="change data feed|min/max statistics"):
+    with pytest.raises(Exception, match=r"change data feed|min/max statistics"):
         spark.sql(f"""
             MERGE INTO {name} t USING (SELECT 1 AS k,10 AS v) s ON t.k=s.k
             WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,s.v)
-        """).collect()
+        """).collect()  # noqa: S608
     assert _state(spark, name, path) == before
     assert set(path.rglob("*.parquet")) == files_before
 
 
-@pytest.mark.parametrize("start,step", [(1, 1), (0, -2)])
+@pytest.mark.parametrize(("start", "step"), [(1, 1), (0, -2)])
 def test_merge_missing_identity_row_group_bounds_rejects_atomically(single_partition_spark, tmp_path, start, step):
     spark = single_partition_spark
     # The default Parquet row-group size makes an all-NULL group followed by one generated row.
@@ -254,12 +261,12 @@ def test_merge_missing_identity_row_group_bounds_rejects_atomically(single_parti
         before = _state(spark, name, path)
         assert _watermark(path) is None
         spark.range(limit + 1, numPartitions=1).selectExpr("id AS k").createOrReplaceTempView(source)
-        with pytest.raises(Exception, match="Delta identity MERGE requires usable.*statistics"):
+        with pytest.raises(Exception, match=r"Delta identity MERGE requires usable.*statistics"):
             spark.sql(f"""
                 MERGE INTO {name} t USING {source} s ON t.k=s.k
                 WHEN NOT MATCHED AND s.k < {limit} THEN INSERT (id,k) VALUES (NULL,s.k)
                 WHEN NOT MATCHED THEN INSERT (k) VALUES (s.k)
-            """).collect()
+            """).collect()  # noqa: S608
         assert _state(spark, name, path) == before
         assert _watermark(path) is None
         assert spark.read.format("delta").load(str(path)).collect() == []
@@ -268,9 +275,10 @@ def test_merge_missing_identity_row_group_bounds_rejects_atomically(single_parti
         # the actual two-group layout; none may appear in the committed table.
         files = list(path.glob("*.parquet"))
         assert files
+        expected_row_groups = 2
         for file in files:
             parquet = pq.ParquetFile(file)
-            assert parquet.metadata.num_row_groups == 2
+            assert parquet.metadata.num_row_groups == expected_row_groups
             null_group = parquet.metadata.row_group(0)
             value_group = parquet.metadata.row_group(1)
             assert null_group.num_rows == limit
@@ -281,7 +289,7 @@ def test_merge_missing_identity_row_group_bounds_rejects_atomically(single_parti
             assert value_group.column(0).statistics.min == value_group.column(0).statistics.max == start
 
         for offset in range(2):
-            spark.sql(f"INSERT INTO {name} (k) VALUES ({limit + 1 + offset})").collect()
+            spark.sql(f"INSERT INTO {name} (k) VALUES ({limit + 1 + offset})").collect()  # noqa: S608
             assert _watermark(path) == start + offset * step
         assert spark.read.format("delta").load(str(path)).orderBy("k").collect() == [
             (start, limit + 1),
@@ -296,20 +304,20 @@ def test_merge_missing_identity_row_group_bounds_rejects_atomically(single_parti
         spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 
 
-@pytest.mark.parametrize("start,step", [(1, 1), (0, -2)])
+@pytest.mark.parametrize(("start", "step"), [(1, 1), (0, -2)])
 def test_merge_all_null_and_empty_inputs_do_not_require_identity_bounds(spark, identity_table, start, step):
     name, path = identity_table(mode="BY DEFAULT", start=start, step=step)
     before = _state(spark, name, path)
     spark.sql(f"""
         MERGE INTO {name} t USING (SELECT 1 AS k WHERE false) s ON t.k=s.k
         WHEN NOT MATCHED THEN INSERT (k) VALUES (s.k)
-    """).collect()
+    """).collect()  # noqa: S608
     assert _state(spark, name, path) == before
     spark.sql(f"""
         MERGE INTO {name} t USING (SELECT 1 AS k UNION ALL SELECT 2) s ON t.k=s.k
         WHEN NOT MATCHED AND s.k < 3 THEN INSERT (id,k) VALUES (NULL,s.k)
         WHEN NOT MATCHED THEN INSERT (k) VALUES (s.k)
-    """).collect()
+    """).collect()  # noqa: S608
     assert spark.table(name).orderBy("k").collect() == [(None, 1, None), (None, 2, None)]
     assert _watermark(path) is None
     adds = [json.loads(line)["add"] for line in list(_log(path).values())[-1].splitlines() if "add" in json.loads(line)]
@@ -318,21 +326,22 @@ def test_merge_all_null_and_empty_inputs_do_not_require_identity_bounds(spark, i
         stats = json.loads(add["stats"])
         assert stats["numRecords"] > 0
         assert stats["nullCount"]["id"] == stats["numRecords"]
-        assert "id" not in stats.get("minValues", {}) and "id" not in stats.get("maxValues", {})
+        assert "id" not in stats.get("minValues", {})
+        assert "id" not in stats.get("maxValues", {})
         assert stats.get("tightBounds", True) is True
         assert add.get("deletionVector") is None
-    spark.sql(f"INSERT INTO {name} (k) VALUES (3)").collect()
+    spark.sql(f"INSERT INTO {name} (k) VALUES (3)").collect()  # noqa: S608
     assert spark.table(name).where("k=3").first().id == start
     assert _watermark(path) == start
 
 
 def test_merge_generation_failure_does_not_commit(spark, identity_table):
     name, path = identity_table(start=9223372036854775806, step=1)
-    spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,0)").collect()
+    spark.sql(f"INSERT INTO {name} (k,v) VALUES (0,0)").collect()  # noqa: S608
     before = _state(spark, name, path)
     with pytest.raises(Exception, match="DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW"):
         spark.sql(f"""
             MERGE INTO {name} t USING (SELECT 1 AS k,10 AS v UNION ALL SELECT 2,20) s ON t.k=s.k
             WHEN NOT MATCHED THEN INSERT (k,v) VALUES (s.k,s.v)
-        """).collect()
+        """).collect()  # noqa: S608
     assert _state(spark, name, path) == before

@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion::functions::expr_fn::nanvl;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
@@ -14,7 +15,7 @@ use datafusion_expr::utils::{
     split_conjunction,
 };
 use datafusion_expr::{
-    Expr, ExprSchemable, JoinType, LogicalPlan, Operator, ScalarUDF, Volatility, bitwise_and,
+    Expr, ExprSchemable, JoinType, LogicalPlan, Operator, ScalarUDF, Volatility, bitwise_and, lit,
 };
 use projection::project_with_keys;
 use sail_common_datafusion::OPTIMIZER_CORRELATION_KEY_PREFIX;
@@ -22,7 +23,7 @@ use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 
 mod projection;
 
-/// Group native correlated scalar aggregates by the value used in cast equality.
+/// Normalize grouping keys for native correlated scalar aggregates.
 #[derive(Debug)]
 pub struct NormalizeScalarSubqueryKeys;
 
@@ -889,14 +890,35 @@ impl Lift<'_> {
             } else {
                 outer
             };
-            // Like Spark, group by the input of an injective cast rather than
-            // casting every row; the comparison below applies the cast instead.
-            let key = if !canonical
+            let float_string_nan = if cast.is_some() && data_type.is_string() {
+                input
+                    .schema()
+                    .qualified_field_from_column(&column)
+                    .ok()
+                    .and_then(|(_, field)| match field.data_type() {
+                        DataType::Float32 => {
+                            Some(ScalarValue::Float32(Some(f32::from_bits(0x7fc0_0000))))
+                        }
+                        DataType::Float64 => Some(ScalarValue::Float64(Some(f64::from_bits(
+                            0x7ff8_0000_0000_0000,
+                        )))),
+                        _ => None,
+                    })
+            } else {
+                None
+            };
+            // Match Spark's float-to-string shortcut, including its signed-zero
+            // collapse. Only this private key merges NaN payloads; raw values stay intact.
+            let key = if let Some(nan) = float_string_nan {
+                ScalarUDF::from(NormalizeFloatKeys::new())
+                    .call(vec![nanvl(Expr::Column(column), lit(nan))])
+            } else if !canonical
                 && input
                     .schema()
                     .qualified_field_from_column(&column)
                     .is_ok_and(|(_, field)| injective_cast(field.data_type(), &data_type))
             {
+                // Group injective casts by their input; the comparison casts each group.
                 Expr::Column(column)
             } else {
                 let value = match cast {
@@ -927,8 +949,7 @@ impl Lift<'_> {
                 self.hidden.insert(column.name.clone());
                 column
             };
-            // Compare through a same-type cast, as native compares `CAST(column)`,
-            // or through the cast itself for an injective key's raw input.
+            // Compare through a same-type cast, or restore the cast above a raw input key.
             // A column pair would let filter pushdown infer outer predicates onto
             // the key and evaluate the cast on rows that local predicates exclude.
             let compared = Expr::Cast(Cast::new(Box::new(Expr::Column(column.clone())), data_type));
@@ -1074,4 +1095,160 @@ fn mask_grouping_id(plan: LogicalPlan, bits: usize, data_type: &DataType) -> Res
                 .update_data(|expression| name.restore(expression)))
         })?
         .data)
+}
+
+#[cfg(test)]
+#[expect(clippy::panic)]
+mod tests {
+    use arrow::array::{Array, ArrayRef, AsArray, Float32Array, Float64Array};
+    use arrow::datatypes::{Field, Float32Type, Float64Type, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion::physical_expr::create_physical_expr;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::logical_plan::EmptyRelation;
+    use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
+
+    use super::*;
+
+    #[test]
+    fn float_string_shortcut_uses_private_numeric_keys_and_keeps_string_comparison() -> Result<()> {
+        for from in [DataType::Float32, DataType::Float64] {
+            for to in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+                for windowed in [false, true] {
+                    let raw: ArrayRef = match from {
+                        DataType::Float32 => Arc::new(Float32Array::from(vec![
+                            Some(-0.0),
+                            Some(0.0),
+                            Some(f32::from_bits(0x7f80_0001)),
+                            Some(f32::from_bits(0xffc0_0042)),
+                            Some(1.25),
+                            None,
+                        ])),
+                        _ => Arc::new(Float64Array::from(vec![
+                            Some(-0.0),
+                            Some(0.0),
+                            Some(f64::from_bits(0x7ff0_0000_0000_0001)),
+                            Some(f64::from_bits(0xfff8_0000_0000_0042)),
+                            Some(1.25),
+                            None,
+                        ])),
+                    };
+                    let schema = Arc::new(Schema::new(vec![Field::new("raw", from.clone(), true)]));
+                    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&raw)])?;
+                    let input = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: Arc::new(DFSchema::try_from(schema.as_ref().clone())?),
+                    }));
+                    let column = Column::from_name("raw");
+                    let outer = Expr::OuterReferenceColumn(
+                        Arc::new(Field::new("outer", to.clone(), true)),
+                        Column::from_name("outer"),
+                    );
+                    let mut pending = vec![Pending {
+                        cast: Some(Cast::new(
+                            Box::new(Expr::Column(column.clone())),
+                            to.clone(),
+                        )),
+                        column: column.clone(),
+                        outer: outer.clone(),
+                    }];
+                    let aliases = AliasGenerator::new();
+                    let mut reserved = BTreeSet::new();
+                    let pinned = HashSet::new();
+                    let domains = BTreeSet::new();
+                    let mut lift = Lift {
+                        aliases: &aliases,
+                        reserved: &mut reserved,
+                        pinned: &pinned,
+                        domains: &domains,
+                        hidden: HashSet::new(),
+                        reads_grouping_id: false,
+                        grouping_ids_fit: true,
+                        open_mask: None,
+                        masked: false,
+                        grouping_set_ancestors: 0,
+                    };
+                    let mut keys = BTreeSet::new();
+                    let plan =
+                        lift.materialize(Arc::clone(&input), &mut pending, &mut keys, windowed)?;
+                    assert!(pending.is_empty());
+                    assert_eq!(keys.len(), 1);
+                    let LogicalPlan::Filter(filter) = plan.as_ref() else {
+                        panic!("expected correlation filter")
+                    };
+                    let Expr::BinaryExpr(predicate) = &filter.predicate else {
+                        panic!("expected equality")
+                    };
+                    let Expr::Cast(compared) = predicate.left.as_ref() else {
+                        panic!("expected final string cast")
+                    };
+                    assert_eq!(compared.field.data_type(), &to);
+                    assert_eq!(predicate.right.as_ref(), &outer);
+                    let LogicalPlan::Projection(projection) = filter.input.as_ref() else {
+                        panic!("expected private projection")
+                    };
+                    assert_eq!(projection.expr.len(), 2);
+                    assert_eq!(projection.expr[0], Expr::Column(column));
+                    let Expr::Alias(key) = &projection.expr[1] else {
+                        panic!("expected private key")
+                    };
+                    assert!(key.name.starts_with(OPTIMIZER_CORRELATION_KEY_PREFIX));
+                    assert_eq!(key.expr.get_type(input.schema())?, from);
+                    assert!(!injective_cast(&from, &to));
+                    let physical = create_physical_expr(
+                        &key.expr,
+                        input.schema(),
+                        &ExecutionProps::new(),
+                        &PhysicalPlanningContext::default(),
+                    )?;
+                    let normalized = physical.evaluate(&batch)?.into_array(batch.num_rows())?;
+                    assert_eq!(normalized.data_type(), &from);
+                    assert!(normalized.is_null(5));
+                    match from {
+                        DataType::Float32 => {
+                            let values = normalized.as_primitive::<Float32Type>();
+                            assert_eq!(
+                                (values.value(0).to_bits(), values.value(1).to_bits()),
+                                (0, 0)
+                            );
+                            assert_eq!(
+                                (values.value(2).to_bits(), values.value(3).to_bits()),
+                                (0x7fc0_0000, 0x7fc0_0000)
+                            );
+                            assert_eq!(values.value(4).to_bits(), 1.25_f32.to_bits());
+                            assert_eq!(
+                                raw.as_primitive::<Float32Type>().value(0).to_bits(),
+                                (-0.0_f32).to_bits()
+                            );
+                            assert_eq!(
+                                raw.as_primitive::<Float32Type>().value(2).to_bits(),
+                                0x7f80_0001
+                            );
+                        }
+                        _ => {
+                            let values = normalized.as_primitive::<Float64Type>();
+                            assert_eq!(
+                                (values.value(0).to_bits(), values.value(1).to_bits()),
+                                (0, 0)
+                            );
+                            assert_eq!(
+                                (values.value(2).to_bits(), values.value(3).to_bits()),
+                                (0x7ff8_0000_0000_0000, 0x7ff8_0000_0000_0000)
+                            );
+                            assert_eq!(values.value(4).to_bits(), 1.25_f64.to_bits());
+                            assert_eq!(
+                                raw.as_primitive::<Float64Type>().value(0).to_bits(),
+                                (-0.0_f64).to_bits()
+                            );
+                            assert_eq!(
+                                raw.as_primitive::<Float64Type>().value(2).to_bits(),
+                                0x7ff0_0000_0000_0001
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }

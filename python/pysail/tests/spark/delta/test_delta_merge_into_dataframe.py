@@ -49,7 +49,7 @@ def test_dataframe_merge_into_omitted_identity(spark, tmp_path):
         USING DELTA LOCATION '{table_path_literal}'
     """)
     try:
-        spark.sql(f"INSERT INTO {table_name} (k,value) VALUES (1,10)")
+        spark.sql(f"INSERT INTO {table_name} (k,value) VALUES (1,10)")  # noqa: S608
         source = spark.createDataFrame([(1, 11), (2, 22)], "src_k INT, src_value INT")
         (
             source.mergeInto(table_name, F.expr("k = src_k"))

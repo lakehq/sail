@@ -1,3 +1,6 @@
+use datafusion::logical_expr::InvariantLevel;
+use datafusion::optimizer::AnalyzerRule;
+use datafusion::optimizer::analyzer::function_rewrite::ApplyFunctionRewrites;
 use datafusion::prelude::SessionContext;
 use log::warn;
 use sail_common::spec;
@@ -36,9 +39,27 @@ use crate::spark::connect::{StorageLevel, plan};
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
-    let NamedPlan { plan, fields } = resolver
+    let NamedPlan { mut plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
+    let session_state = ctx.state();
+    let analyzer = session_state.analyzer();
+    let config = session_state.config_options();
+    // Apply the same analysis rules as execution so coercion and UDF resolution
+    // determine the final schema. Do not validate executable invariants here:
+    // DataFusion recursively checks subqueries both explicitly and through
+    // apply_with_subqueries, making that validation exponential in nesting depth.
+    // Execution still performs its normal validation before optimization.
+    plan.check_invariants(InvariantLevel::Always)?;
+    if !analyzer.function_rewrites.is_empty() {
+        plan = ApplyFunctionRewrites::new(analyzer.function_rewrites.clone())
+            .analyze(plan, config.as_ref())?;
+    }
+    for rule in &analyzer.rules {
+        plan = rule
+            .analyze(plan, config.as_ref())
+            .map_err(|error| error.context(rule.name()))?;
+    }
     let schema = if let Some(fields) = fields {
         rename_schema(plan.schema().inner(), fields.as_slice())?
     } else {

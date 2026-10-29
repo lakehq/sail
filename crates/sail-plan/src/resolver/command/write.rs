@@ -125,6 +125,7 @@ pub(super) struct WritePlanBuilder {
     options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
     table_is_external: bool,
+    sql_insert: bool,
 }
 
 impl WritePlanBuilder {
@@ -142,7 +143,13 @@ impl WritePlanBuilder {
             options: vec![],
             table_properties: vec![],
             table_is_external: false,
+            sql_insert: false,
         }
+    }
+
+    pub fn with_sql_insert(mut self) -> Self {
+        self.sql_insert = true;
+        self
     }
 
     /// Sets the write target for the builder.
@@ -228,6 +235,7 @@ impl PlanResolver<'_> {
             options,
             table_properties,
             table_is_external,
+            sql_insert,
         } = builder;
 
         let Some(mode) = mode else {
@@ -249,6 +257,7 @@ impl PlanResolver<'_> {
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
+            sql_insert,
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
             partition_by: partition_by.clone(),

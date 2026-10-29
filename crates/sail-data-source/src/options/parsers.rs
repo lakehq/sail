@@ -1,7 +1,18 @@
 use crate::error::{DataSourceError, DataSourceResult};
+use crate::options::ParseMode;
 
 pub fn parse_string(_key: &str, value: &str) -> DataSourceResult<String> {
     Ok(value.to_string())
+}
+
+/// Spark matches the mode case-insensitively and falls back to `PERMISSIVE`
+/// for an unknown mode (`ParseMode.fromString`).
+pub fn parse_parse_mode(_key: &str, value: &str) -> DataSourceResult<ParseMode> {
+    Ok(match value.to_ascii_uppercase().as_str() {
+        "DROPMALFORMED" => ParseMode::DropMalformed,
+        "FAILFAST" => ParseMode::FailFast,
+        _ => ParseMode::Permissive,
+    })
 }
 
 pub fn parse_usize(key: &str, value: &str) -> DataSourceResult<usize> {

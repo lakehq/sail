@@ -20,6 +20,7 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::catalog::CatalogPartitionField;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -37,6 +38,7 @@ pub struct IcebergTableConfig {
 }
 
 pub struct IcebergPlanBuilder<'a> {
+    output: CommandOutput,
     input: Arc<dyn ExecutionPlan>,
     table_config: IcebergTableConfig,
     sink_mode: PhysicalSinkMode,
@@ -58,6 +60,7 @@ impl<'a> IcebergPlanBuilder<'a> {
         session: &'a dyn Session,
     ) -> Self {
         Self {
+            output: CommandOutput::Count,
             input,
             table_config,
             sink_mode,
@@ -68,6 +71,11 @@ impl<'a> IcebergPlanBuilder<'a> {
             preserve_input_partitions: false,
             session,
         }
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = output;
+        self
     }
 
     pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
@@ -259,6 +267,7 @@ impl<'a> IcebergPlanBuilder<'a> {
                 self.table_config.options.lakehouse_table.clone(),
                 snapshot_update_kind,
             )
+            .with_output(self.output)
             .with_expected_snapshot_id(self.expected_snapshot_id)
             .with_removed_data_file_paths(self.removed_data_file_paths.clone())
             .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite),

@@ -277,6 +277,7 @@ pub(super) async fn plan_rewrite_data_files(
         node: Arc::new(IcebergWriteNode::new(
             Arc::new(scan),
             IcebergWriteNodeOptions {
+                output: sail_common_datafusion::command::CommandOutput::Count,
                 path: path.clone(),
                 mode: SinkMode::Append,
                 partition_by,
@@ -289,7 +290,7 @@ pub(super) async fn plan_rewrite_data_files(
                 target_file_size: Some(rewrite_options.target_file_size),
                 preserve_input_partitions: true,
             },
-        )),
+        )?),
     });
     let runner = LogicalPlan::Extension(Extension {
         node: Arc::new(RewriteDataFilesRunNode {

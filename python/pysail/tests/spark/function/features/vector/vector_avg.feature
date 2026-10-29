@@ -98,6 +98,65 @@ Feature: vector_avg
         | result     |
         | [2.5, 5.0] |
 
+    Scenario: DISTINCT treats positive and negative zero as the same vector
+      When query
+        """
+        SELECT vector_avg(DISTINCT v) AS result
+        FROM VALUES (array(-0.0F)), (array(0.0F)), (array(6.0F)) AS t(v)
+        """
+      Then query result
+        | result |
+        | [3.0]  |
+
+    Scenario: DISTINCT normalizes signed zeros across partitions and groups
+      When query
+        """
+        SELECT g, vector_avg(DISTINCT v) AS result
+        FROM (
+          SELECT id % 2 AS g,
+            CASE WHEN id % 3 = 0 THEN array(-0.0F)
+                 WHEN id % 3 = 1 THEN array(0.0F)
+                 ELSE array(6.0F) END AS v
+          FROM range(0, 120, 1, 4)
+        ) AS t
+        GROUP BY g
+        ORDER BY g
+        """
+      Then query result ordered
+        | g | result |
+        | 0 | [3.0]  |
+        | 1 | [3.0]  |
+
+    Scenario: DISTINCT preserves null and empty vector handling
+      When query
+        """
+        SELECT g, vector_avg(DISTINCT v) AS result
+        FROM VALUES
+          (0, CAST(NULL AS ARRAY<FLOAT>)),
+          (0, array(1F, CAST(NULL AS FLOAT))),
+          (0, array(-0.0F)), (0, array(0.0F)), (0, array(6F)),
+          (1, CAST(array() AS ARRAY<FLOAT>)), (1, CAST(array() AS ARRAY<FLOAT>)),
+          (2, CAST(NULL AS ARRAY<FLOAT>)), (2, array(CAST(NULL AS FLOAT)))
+        AS t(g, v)
+        GROUP BY g
+        ORDER BY g
+        """
+      Then query result ordered
+        | g | result |
+        | 0 | [3.0]  |
+        | 1 | []     |
+        | 2 | NULL   |
+
+    Scenario: DISTINCT signed zeros are normalized next to a different distinct aggregate
+      When query
+        """
+        SELECT vector_avg(DISTINCT v) AS result, count(DISTINCT k) AS n
+        FROM VALUES (0, array(-0.0F)), (1, array(0.0F)), (2, array(6F)) AS t(k, v)
+        """
+      Then query result
+        | result | n |
+        | [3.0]  | 3 |
+
     Scenario: DISTINCT next to another aggregate averages each distinct vector once
       When query
         """
@@ -330,6 +389,13 @@ Feature: vector_avg
         FROM VALUES (array(1.0F, 2.0F)), (array(3.0F)) AS tab(col)
         """
       Then query error (?i)(VECTOR_DIMENSION_MISMATCH|matching dimensions)
+
+    Scenario: DISTINCT does not accept ARRAY<DOUBLE>
+      When query
+        """
+        SELECT vector_avg(DISTINCT array(1D, 2D)) AS result
+        """
+      Then query error (?i)(DATATYPE_MISMATCH|ARRAY<FLOAT>)
 
     Scenario: ARRAY<DOUBLE> input is rejected
       When query

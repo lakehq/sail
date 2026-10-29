@@ -29,6 +29,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::expressions::Column;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -68,6 +69,7 @@ pub fn assemble_commit_plan(
     user_metadata: Option<String>,
     write_context: DeltaWriteContext,
     lakehouse_table: Option<LakehouseExecutionContext>,
+    output: CommandOutput,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -98,17 +100,20 @@ pub fn assemble_commit_plan(
         commit_input
     };
 
-    Ok(Arc::new(DeltaCommitExec::new(
-        Arc::new(CoalescePartitionsExec::new(commit_input)),
-        table_url,
-        partition_columns,
-        table_exists,
-        table_schema,
-        PhysicalSinkMode::Append,
-        user_metadata,
-        write_context.commit_context.clone(),
-        lakehouse_table,
-    )))
+    Ok(Arc::new(
+        DeltaCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(commit_input)),
+            table_url,
+            partition_columns,
+            table_exists,
+            table_schema,
+            PhysicalSinkMode::Append,
+            user_metadata,
+            write_context.commit_context.clone(),
+            lakehouse_table,
+        )
+        .with_output(output),
+    ))
 }
 
 /// Build an Add-action metadata source from a set of touched file paths.
