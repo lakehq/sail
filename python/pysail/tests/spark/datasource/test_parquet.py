@@ -83,6 +83,22 @@ def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_parquet_path_read_uses_footer_sorting_columns(spark, tmp_path):
+    path = tmp_path / "parquet_footer_sorting_columns.parquet"
+    table = pa.table({"id": [None, 1, 2]})
+    pq.write_table(
+        table,
+        path,
+        sorting_columns=[pq.SortingColumn(0, descending=False, nulls_first=True)],
+    )
+
+    query = f"SELECT id FROM parquet.`{path}` ORDER BY id ASC NULLS FIRST"
+    plan = spark.sql(f"EXPLAIN {query}").first()[0]
+
+    assert spark.sql(query).collect() == [Row(id=None), Row(id=1), Row(id=2)]
+    assert "SortExec" not in plan
+
+
 def test_parquet_path_glob_filter(spark, tmp_path):
     keep_source = tmp_path / "parquet_keep_source"
     drop_source = tmp_path / "parquet_drop_source"

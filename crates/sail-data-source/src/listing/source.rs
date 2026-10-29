@@ -265,7 +265,11 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
                 .with_table_partition_cols(partition_fields)
                 .build(),
             constraints,
-            file_sort_order: vec![sort_order],
+            file_sort_order: if sort_order.is_empty() {
+                vec![]
+            } else {
+                vec![sort_order]
+            },
             collect_stat: ctx.config().collect_statistics(),
             target_partitions: ctx.config().target_partitions(),
             read_format: Arc::new(read_format),
