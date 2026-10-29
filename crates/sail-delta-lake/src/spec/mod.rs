@@ -4,6 +4,7 @@ pub mod checkpoint;
 pub mod checksum;
 pub mod error;
 pub mod fields;
+pub mod inspection;
 pub mod log;
 pub mod metadata;
 pub mod operation;

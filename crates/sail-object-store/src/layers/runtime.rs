@@ -40,16 +40,6 @@ impl RuntimeAwareObjectStore {
         Ok(Self { inner, handle })
     }
 
-    fn wrap_multipart_upload(
-        &self,
-        multipart: Box<dyn MultipartUpload>,
-    ) -> Box<dyn MultipartUpload> {
-        Box::new(RuntimeAwareMultipartUpload::new(
-            multipart,
-            self.handle.clone(),
-        ))
-    }
-
     fn wrap_get_result(&self, result: GetResult) -> GetResult {
         match result {
             GetResult {
@@ -102,11 +92,17 @@ impl ObjectStore for RuntimeAwareObjectStore {
     ) -> Result<Box<dyn MultipartUpload>> {
         let inner = self.inner.clone();
         let location = location.clone();
-        let multipart = self
-            .handle
-            .spawn(async move { inner.put_multipart_opts(&location, opts).await })
-            .await??;
-        Ok(self.wrap_multipart_upload(multipart))
+        let handle = self.handle.clone();
+        self.handle
+            .spawn(async move {
+                let multipart = inner.put_multipart_opts(&location, opts).await?;
+                // Install cleanup before returning across the runtime boundary.
+                Ok(
+                    Box::new(RuntimeAwareMultipartUpload::new(multipart, handle))
+                        as Box<dyn MultipartUpload>,
+                )
+            })
+            .await?
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -194,15 +190,24 @@ impl ObjectStore for RuntimeAwareObjectStore {
 
 #[derive(Debug)]
 struct RuntimeAwareMultipartUpload {
-    inner: Arc<Mutex<Box<dyn MultipartUpload>>>,
+    inner: Arc<Mutex<MultipartUploadState>>,
     handle: Handle,
     parts: TaskTracker,
     parts_cancel: CancellationToken,
 }
 
+#[derive(Debug)]
+struct MultipartUploadState {
+    upload: Box<dyn MultipartUpload>,
+    finished: bool,
+}
+
 impl RuntimeAwareMultipartUpload {
     pub fn new(inner: Box<dyn MultipartUpload>, handle: Handle) -> Self {
-        let inner = Arc::new(Mutex::new(inner));
+        let inner = Arc::new(Mutex::new(MultipartUploadState {
+            upload: inner,
+            finished: false,
+        }));
         Self {
             inner,
             handle,
@@ -221,7 +226,7 @@ impl MultipartUpload for RuntimeAwareMultipartUpload {
         let part = match self.inner.try_lock() {
             Ok(mut inner) => {
                 let _guard = self.handle.enter();
-                inner.put_part(data)
+                inner.upload.put_part(data)
             }
             Err(e) => {
                 return Box::pin(async move {
@@ -252,7 +257,11 @@ impl MultipartUpload for RuntimeAwareMultipartUpload {
         self.handle
             .spawn(async move {
                 let mut inner = inner.lock().await;
-                inner.complete().await
+                let result = inner.upload.complete().await;
+                if result.is_ok() {
+                    inner.finished = true;
+                }
+                result
             })
             .await?
     }
@@ -267,9 +276,37 @@ impl MultipartUpload for RuntimeAwareMultipartUpload {
         self.handle
             .spawn(async move {
                 let mut inner = inner.lock().await;
-                inner.abort().await
+                if inner.finished {
+                    return Ok(());
+                }
+                let result = inner.upload.abort().await;
+                if result.is_ok() {
+                    inner.finished = true;
+                }
+                result
             })
             .await?
+    }
+}
+
+impl Drop for RuntimeAwareMultipartUpload {
+    fn drop(&mut self) {
+        self.parts_cancel.cancel();
+        self.parts.close();
+        let parts = self.parts.clone();
+        let inner = self.inner.clone();
+        self.handle.spawn(async move {
+            let _ = timeout(Duration::from_secs(15), parts.wait()).await;
+            let mut inner = inner.lock().await;
+            // Completion runs under the same lock, including when its caller is cancelled.
+            if !inner.finished {
+                if let Err(error) = inner.upload.abort().await {
+                    log::warn!("Failed to abort abandoned multipart upload: {error}");
+                } else {
+                    inner.finished = true;
+                }
+            }
+        });
     }
 }
 
@@ -333,6 +370,10 @@ mod tests {
         records: Records,
         started: Arc<Notify>,
         dropped: Arc<Notify>,
+        aborted: Arc<AtomicUsize>,
+        released: Arc<Notify>,
+        fail_part: bool,
+        completion: Option<(Arc<Notify>, Arc<Notify>)>,
     }
 
     impl RecordingMultipartUpload {
@@ -344,8 +385,18 @@ mod tests {
                 records: records.clone(),
                 started: Arc::new(Notify::new()),
                 dropped: Arc::new(Notify::new()),
+                aborted: Arc::new(AtomicUsize::new(0)),
+                released: Arc::new(Notify::new()),
+                fail_part: false,
+                completion: None,
             };
             (upload, records)
+        }
+    }
+
+    impl Drop for RecordingMultipartUpload {
+        fn drop(&mut self) {
+            self.released.notify_one();
         }
     }
 
@@ -365,11 +416,18 @@ mod tests {
             let records = self.records.clone();
             let started = self.started.clone();
             let dropped = NotifyOnDrop(self.dropped.clone());
+            let fail = self.fail_part;
             Box::pin(async move {
                 let _dropped = dropped;
                 started.notify_one();
                 // All parts must be in flight at the same time to pass the barrier.
                 barrier.wait().await;
+                if fail {
+                    return Err(object_store::Error::Generic {
+                        store: "RecordingMultipartUpload",
+                        source: "part upload failed".into(),
+                    });
+                }
                 records
                     .lock()
                     .await
@@ -379,6 +437,10 @@ mod tests {
         }
 
         async fn complete(&mut self) -> Result<PutResult> {
+            if let Some((started, resume)) = &self.completion {
+                started.notify_one();
+                resume.notified().await;
+            }
             Ok(PutResult {
                 e_tag: None,
                 version: None,
@@ -386,6 +448,7 @@ mod tests {
         }
 
         async fn abort(&mut self) -> Result<()> {
+            self.aborted.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
     }
@@ -401,6 +464,75 @@ mod tests {
         // The barrier is only released when both parts are in flight at the same
         // time, so this times out if the wrapper serializes the uploads.
         timeout(Duration::from_secs(5), try_join(first, second)).await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dropped_multipart_upload_aborts_in_flight_parts() -> Result<(), Box<dyn Error>> {
+        let (inner, _) = RecordingMultipartUpload::new(2);
+        let started = inner.started.clone();
+        let aborted = inner.aborted.clone();
+        let released = inner.released.clone();
+        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), Handle::current());
+        let part = upload.put_part(vec![1].into());
+        timeout(Duration::from_secs(5), started.notified()).await?;
+        drop(upload);
+        assert!(part.await.is_err());
+        timeout(Duration::from_secs(5), released.notified()).await?;
+        assert_eq!(aborted.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_part_is_aborted_when_finishing_buffered_upload() -> Result<(), Box<dyn Error>> {
+        let (mut inner, _) = RecordingMultipartUpload::new(1);
+        inner.fail_part = true;
+        let aborted = inner.aborted.clone();
+        let released = inner.released.clone();
+        let upload = RuntimeAwareMultipartUpload::new(Box::new(inner), Handle::current());
+        let mut writer = object_store::WriteMultipart::new(Box::new(upload));
+        writer.put(Bytes::from_static(b"part"));
+        assert!(writer.finish().await.is_err());
+        timeout(Duration::from_secs(5), released.notified()).await?;
+        assert_eq!(aborted.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finished_multipart_upload_is_not_aborted_again() -> Result<(), Box<dyn Error>> {
+        for abort in [false, true] {
+            let (inner, _) = RecordingMultipartUpload::new(1);
+            let aborted = inner.aborted.clone();
+            let released = inner.released.clone();
+            let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), Handle::current());
+            if abort {
+                upload.abort().await?;
+            } else {
+                upload.complete().await?;
+            }
+            drop(upload);
+            timeout(Duration::from_secs(5), released.notified()).await?;
+            assert_eq!(aborted.load(Ordering::SeqCst), usize::from(abort));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_completion_does_not_abort_committed_upload() -> Result<(), Box<dyn Error>> {
+        let (mut inner, _) = RecordingMultipartUpload::new(1);
+        let started = Arc::new(Notify::new());
+        let resume = Arc::new(Notify::new());
+        inner.completion = Some((started.clone(), resume.clone()));
+        let aborted = inner.aborted.clone();
+        let released = inner.released.clone();
+        let mut upload = RuntimeAwareMultipartUpload::new(Box::new(inner), Handle::current());
+        let task = tokio::spawn(async move { upload.complete().await });
+        timeout(Duration::from_secs(5), started.notified()).await?;
+        task.abort();
+        assert!(task.await.is_err());
+        resume.notify_one();
+        timeout(Duration::from_secs(5), released.notified()).await?;
+        assert_eq!(aborted.load(Ordering::SeqCst), 0);
         Ok(())
     }
 

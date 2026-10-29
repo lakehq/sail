@@ -58,6 +58,17 @@ impl PlanResolver<'_> {
                 self.resolve_command_call_procedure(procedure, arguments, named_arguments, state)
                     .await
             }
+            CommandNode::CallTableProcedure {
+                format,
+                procedure,
+                target,
+                arguments,
+            } => {
+                self.resolve_command_call_table_procedure(
+                    format, procedure, target, arguments, state,
+                )
+                .await
+            }
             CommandNode::CurrentDatabase => {
                 self.resolve_catalog_command(CatalogCommand::CurrentDatabase)
             }
