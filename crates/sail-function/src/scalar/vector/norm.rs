@@ -135,16 +135,23 @@ fn vector_infinity_norm_spark(vector: &[f32]) -> f32 {
     maximum
 }
 
-fn vector_norm_spark(vector: &[f32], degree: f32) -> Result<f32> {
-    if degree == 1.0 {
-        Ok(vector_l1_norm_spark(vector))
+/// A missing slice represents a vector containing null elements, not an outer NULL.
+/// Spark validates the degree before checking elements for nulls.
+pub(super) fn vector_norm_spark(
+    vector: Option<&[f32]>,
+    degree: f32,
+    function: &str,
+) -> Result<Option<f32>> {
+    let compute = if degree == 1.0 {
+        vector_l1_norm_spark
     } else if degree == 2.0 {
-        Ok(vector_l2_norm_spark(vector))
+        vector_l2_norm_spark
     } else if degree == f32::INFINITY {
-        Ok(vector_infinity_norm_spark(vector))
+        vector_infinity_norm_spark
     } else {
-        exec_err!("vector_norm degree must be 1.0, 2.0, or float('inf'), got {degree}")
-    }
+        return exec_err!("{function} degree must be 1.0, 2.0, or float('inf'), got {degree}");
+    };
+    Ok(vector.map(compute))
 }
 
 fn compute_norm<O: OffsetSizeTrait>(
@@ -158,11 +165,9 @@ fn compute_norm<O: OffsetSizeTrait>(
         }
         let vector = vectors.value(row);
         let vector = vector.as_primitive::<Float32Type>();
-        if vector.null_count() > 0 {
-            return Ok(None);
-        }
+        let values = (vector.null_count() == 0).then(|| vector.values().as_ref());
         let degree = degrees.map_or(2.0, |array| array.value(row));
-        Ok(Some(vector_norm_spark(vector.values(), degree)?))
+        vector_norm_spark(values, degree, "vector_norm")
     });
     let values = values.collect::<Result<Vec<Option<f32>>>>()?;
     Ok(Arc::new(Float32Array::from(values)))
@@ -217,20 +222,23 @@ mod tests {
 
     #[test]
     fn rejects_invalid_degree() {
-        assert!(matches!(
-            vector_norm_spark(&[1.0], 3.0),
-            Err(error) if error.to_string().contains("degree must be")
-        ));
-        assert!(vector_norm_spark(&[1.0], f32::NAN).is_err());
-        assert!(vector_norm_spark(&[1.0], f32::NEG_INFINITY).is_err());
+        for vector in [Some([1.0].as_slice()), Some([].as_slice()), None] {
+            for degree in [3.0, f32::NAN, f32::NEG_INFINITY] {
+                assert!(matches!(
+                    vector_norm_spark(vector, degree, "vector_norm"),
+                    Err(error) if error.to_string().contains("vector_norm degree must be")
+                ));
+            }
+        }
     }
 
     #[test]
     fn matches_spark_float_edge_cases() -> Result<()> {
-        assert_eq!(vector_norm_spark(&[3.0e38, 3.0e38], 1.0)?, f32::INFINITY);
-        assert_eq!(vector_norm_spark(&[3.0e19, 4.0e19], 2.0)?, f32::INFINITY);
-        assert_eq!(vector_norm_spark(&[1.0e-23, 0.0], 2.0)?, 0.0);
-        assert_eq!(vector_norm_spark(&[f32::NAN, 1.0], f32::INFINITY)?, 1.0);
+        let norm = |v: &[f32], d| vector_norm_spark(Some(v), d, "vector_norm");
+        assert_eq!(norm(&[3.0e38, 3.0e38], 1.0)?, Some(f32::INFINITY));
+        assert_eq!(norm(&[3.0e19, 4.0e19], 2.0)?, Some(f32::INFINITY));
+        assert_eq!(norm(&[1.0e-23, 0.0], 2.0)?, Some(0.0));
+        assert_eq!(norm(&[f32::NAN, 1.0], f32::INFINITY)?, Some(1.0));
         Ok(())
     }
 

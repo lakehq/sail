@@ -4,11 +4,12 @@ import pytest
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
-
-@pytest.mark.skipif(
+pytestmark = pytest.mark.skipif(
     is_jvm_spark() and pyspark_version() < (4, 2),
     reason="vector_avg requires Spark 4.2+",
 )
+
+
 def test_vector_avg_with_parquet_large_list(spark, tmp_path):
     # Parquet large lists exercise the `LargeList` input path, which SQL literals cannot produce.
     # The remaining behavior is covered by `features/vector/vector_avg.feature`.
