@@ -601,6 +601,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -1170,6 +1173,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -1737,6 +1743,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -2571,6 +2580,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -3274,6 +3286,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -3775,6 +3790,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -4246,6 +4264,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -4761,6 +4782,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -5325,6 +5349,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -5822,6 +5849,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -6295,6 +6325,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -6834,6 +6867,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -7357,6 +7393,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -7861,6 +7900,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -8350,6 +8392,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -8866,6 +8911,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -9451,6 +9499,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -9989,6 +10040,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -10503,6 +10557,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -10993,6 +11050,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -11449,6 +11509,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -11927,6 +11990,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -12421,6 +12487,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -12931,6 +13000,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:

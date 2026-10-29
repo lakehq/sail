@@ -303,6 +303,14 @@ def assert_schema_tree(df, docstring):
     assert docstring.strip() == actual.strip()
 
 
+@then("query result is empty")
+def query_result_is_empty(query, spark):
+    """Execute once and require an empty command schema and zero result rows."""
+    df = spark.sql(query)
+    assert df.schema.fields == []
+    assert df.collect() == []
+
+
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))
 def query_result(datatable, ordered, query, spark):
     """Execute the SQL query and compare result with expected data table."""

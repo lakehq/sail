@@ -71,7 +71,7 @@ use crate::spec::{
     DeltaResult, Protocol, SaveMode, StructType, TableFeature, contains_timestampntz_arrow,
     contains_variant_arrow,
 };
-use crate::transaction::CommitBuilder;
+use crate::transaction::{CommitBuilder, CommitProperties};
 
 /// In memory representation of a Delta Table
 ///
@@ -582,7 +582,8 @@ where
         return Ok(false);
     };
     let (actions, operation) = catalog_managed_bootstrap_actions(info, table_url)?;
-    CommitBuilder::default()
+    let commit_properties = CommitProperties::from_session_config(&ctx.session_config())?;
+    CommitBuilder::from(commit_properties)
         .with_actions(actions)
         .build(None, log_store, operation)
         .await

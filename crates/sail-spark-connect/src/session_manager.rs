@@ -9,6 +9,7 @@ use sail_common::actor::ActorSystem;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+use sail_common_datafusion::session::config::SessionConfigService;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_plan::catalog::SparkCatalogObjectDisplay;
 use sail_plan::formatter::SparkPlanFormatter;
@@ -48,16 +49,19 @@ impl ServerSessionMutator for SparkSessionMutator {
             Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
             Box::new(SparkPlanFormatter),
         );
-        let spark = SparkSession::try_new(
-            info.session_id.clone(),
-            info.user_id.clone(),
-            SparkSessionOptions {
-                execution_heartbeat_interval: Duration::from_secs(
-                    self.config.spark.execution_heartbeat_interval_secs,
-                ),
-            },
-        )
-        .map_err(|e| internal_datafusion_err!("{e}"))?;
+        let spark = Arc::new(
+            SparkSession::try_new(
+                info.session_id.clone(),
+                info.user_id.clone(),
+                SparkSessionOptions {
+                    execution_heartbeat_interval: Duration::from_secs(
+                        self.config.spark.execution_heartbeat_interval_secs,
+                    ),
+                },
+            )
+            .map_err(|e| internal_datafusion_err!("{e}"))?,
+        );
+        let config_service = SessionConfigService::new(spark.clone());
         // Seed the DataFusion `execution.time_zone` from the resolved Spark session timezone at
         // session creation. `SparkSession::try_new` sets `spark.sql.session.timeZone` to the
         // system timezone, but nothing otherwise copies it into `SessionConfig`; without this
@@ -73,7 +77,8 @@ impl ServerSessionMutator for SparkSessionMutator {
         config.options_mut().execution.time_zone = Some(session_timezone);
         Ok(config
             .with_extension(Arc::new(plan_service))
-            .with_extension(Arc::new(spark)))
+            .with_extension(spark)
+            .with_extension(Arc::new(config_service)))
     }
 
     fn mutate_state(

@@ -36,7 +36,6 @@ use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
-use crate::resolver::tree::window::WindowRewriter;
 
 /// Projections resolved by index, with typed columns for lateral dependencies.
 /// A `None` marks a projection deferred until grouping is materialized.
@@ -587,8 +586,7 @@ impl PlanResolver<'_> {
             self.rewrite_projection::<SparkPartitionIdRewriter>(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<ExplodeRewriter>(plan, projections, state)?;
-        let (plan, projections) =
-            self.rewrite_projection::<WindowRewriter>(plan, projections, state)?;
+        let (plan, projections) = self.rewrite_window_projection(plan, projections, state)?;
         let (plan, projections) =
             self.rewrite_projection::<ExistsRewriter>(plan, projections, state)?;
         let projections = projections

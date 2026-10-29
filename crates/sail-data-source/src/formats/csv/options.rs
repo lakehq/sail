@@ -9,7 +9,7 @@ use crate::error::{DataSourceError, DataSourceResult};
 use crate::options::r#gen::{
     CsvReadOptions, CsvReadPartialOptions, CsvWriteOptions, CsvWritePartialOptions,
 };
-use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
+use crate::options::{BuildPartialOptions, ParseMode, PartialOptions, ResolveOptions};
 use crate::utils::char_to_u8;
 
 impl BuildPartialOptions<CsvReadPartialOptions> for CsvOptions {
@@ -28,6 +28,7 @@ impl BuildPartialOptions<CsvReadPartialOptions> for CsvOptions {
             multi_line: self.newlines_in_values,
             compression: Some(self.compression.to_string()),
             allow_truncated_rows: self.truncated_rows,
+            mode: None,
             path_glob_filter: None,
         })
     }
@@ -63,6 +64,7 @@ impl CsvReadOptions {
             multi_line,
             compression,
             allow_truncated_rows,
+            mode,
             path_glob_filter: _,
         } = self;
         let null_regex = match (null_value.as_str(), null_regex.as_str()) {
@@ -143,7 +145,7 @@ impl CsvReadOptions {
             schema_infer_max_rec,
             compression,
             newlines_in_values: Some(multi_line),
-            truncated_rows: Some(allow_truncated_rows),
+            truncated_rows: Some(allow_truncated_rows && mode == ParseMode::Permissive),
             ..CsvOptions::default()
         })
     }
@@ -312,6 +314,41 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.null_value, None);
         assert_eq!(options.null_regex, Some("MEOW".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_csv_read_options_truncated_rows() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+
+        // Short rows are padded with nulls only in Spark's `PERMISSIVE` mode,
+        // and only while `allowTruncatedRows` is not turned off.
+        let cases: &[(&[(&str, &str)], bool)] = &[
+            (&[], true),
+            (&[("mode", "PERMISSIVE")], true),
+            (&[("mode", "permissive")], true),
+            (&[("mode", "unknown")], true),
+            (&[("mode", "FAILFAST")], false),
+            (&[("mode", "failFast")], false),
+            (&[("mode", "DROPMALFORMED")], false),
+            (&[("allowTruncatedRows", "false")], false),
+            (
+                &[("allowTruncatedRows", "false"), ("mode", "PERMISSIVE")],
+                false,
+            ),
+            (
+                &[("allowTruncatedRows", "true"), ("mode", "FAILFAST")],
+                false,
+            ),
+        ];
+        for (kv, expected) in cases {
+            let options = CsvReadOptions::resolve(&state, vec![option_list(kv)])
+                .and_then(|o| o.into_table_options())
+                .map_err(datafusion_common::DataFusionError::from)?;
+            assert_eq!(options.truncated_rows, Some(*expected), "{kv:?}");
+        }
 
         Ok(())
     }
