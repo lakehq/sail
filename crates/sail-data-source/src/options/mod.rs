@@ -16,6 +16,14 @@ pub mod r#gen {
     include!(concat!(env!("OUT_DIR"), "/options/binary.rs"));
 }
 
+/// The mode for dealing with corrupt records during parsing, as Spark's `ParseMode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseMode {
+    Permissive,
+    DropMalformed,
+    FailFast,
+}
+
 /// A trait for resolving concrete options.
 pub trait ResolveOptions: Sized {
     /// Resolves the options from option layers and session configuration.
