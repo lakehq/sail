@@ -785,8 +785,9 @@ pub(crate) async fn commit(
     actions: Vec<CommitAction>,
     operation: DeltaOperation,
 ) -> Result<()> {
+    let commit_properties = CommitProperties::from_session_config(ctx.session_config())?;
     let Some(lakehouse) = catalog_managed_commit_context(lakehouse) else {
-        return CommitBuilder::from(CommitProperties::from_session_config(ctx.session_config()))
+        return CommitBuilder::from(commit_properties)
             .with_actions(actions)
             .build(Some(snapshot), log_store, operation)
             .await
@@ -809,7 +810,7 @@ pub(crate) async fn commit(
     };
     let coordinator = DeltaCatalogCommitCoordinator::new(ctx, lakehouse.catalog_table());
     let latest = coordinator.latest_table_version(lakehouse, &table).await?;
-    let staged = CommitBuilder::from(CommitProperties::from_session_config(ctx.session_config()))
+    let staged = CommitBuilder::from(commit_properties)
         .with_actions(actions.clone())
         .build(Some(snapshot), log_store.clone(), operation)
         .into_staged_commit_future_with_catalog_latest_version(latest)

@@ -28,7 +28,6 @@ use datafusion::prelude::SessionConfig;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
-use sail_common_datafusion::session::delta::DeltaSessionConfig;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
@@ -41,6 +40,7 @@ use crate::delta_log::{
     CommitOrBytes, LogStoreRef, ObjectStoreRef, resolve_effective_protocol_and_metadata,
     resolve_version_timestamp,
 };
+use crate::options::session_user_metadata;
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
@@ -1068,12 +1068,9 @@ impl Default for CommitProperties {
 }
 
 impl CommitProperties {
-    pub(crate) fn from_session_config(config: &SessionConfig) -> Self {
-        Self::default().with_user_metadata(
-            config
-                .get_extension::<DeltaSessionConfig>()
-                .and_then(|config| config.user_metadata.clone()),
-        )
+    /// Captures current session metadata for this commit and its retries.
+    pub(crate) fn from_session_config(config: &SessionConfig) -> datafusion_common::Result<Self> {
+        Ok(Self::default().with_user_metadata(session_user_metadata(config)?))
     }
 
     /// Attach operation metrics that will be merged into the Delta log `commitInfo` action

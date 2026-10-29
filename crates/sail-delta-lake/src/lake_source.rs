@@ -458,7 +458,7 @@ impl LakeSource for DeltaLakeSource {
             );
         }
 
-        CommitBuilder::from(CommitProperties::from_session_config(config))
+        CommitBuilder::from(CommitProperties::from_session_config(config)?)
             .with_actions(actions)
             .build(replace_snapshot, log_store, operation)
             .await
@@ -502,7 +502,6 @@ impl LakeSource for DeltaLakeSource {
     ) -> Result<sail_common_datafusion::lakesource::LakeSourceAlterTableResult> {
         reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         let runtime_env = ctx.runtime_env();
-        let commit_properties = CommitProperties::from_session_config(ctx.session_config());
         match operation {
             LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
                 not_impl_err!("Snapshot references require an Iceberg table")
@@ -589,6 +588,8 @@ impl LakeSource for DeltaLakeSource {
                 .await
             }
             LakeSourceAlterTableOperation::AddCheckConstraint { name, expression } => {
+                let commit_properties =
+                    CommitProperties::from_session_config(ctx.session_config())?;
                 self.add_check_constraint(runtime_env, path, &name, &expression, commit_properties)
                     .await
             }
