@@ -16,12 +16,40 @@ pub struct RemoteError {
 
 /// A mutation may have committed and must not be retried automatically.
 #[derive(Debug, Error)]
-#[error("commit state unknown: {0}")]
-pub struct CommitStateUnknownError(pub String);
+pub struct CommitStateUnknownError {
+    message: String,
+    #[source]
+    source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+}
+
+impl CommitStateUnknownError {
+    pub fn with_source(
+        message: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+}
 
 impl From<String> for CommitStateUnknownError {
     fn from(message: String) -> Self {
-        Self(message)
+        Self {
+            message,
+            source: None,
+        }
+    }
+}
+
+impl fmt::Display for CommitStateUnknownError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "commit state unknown: {}", self.message)?;
+        if let Some(source) = &self.source {
+            write!(f, ": {source}")?;
+        }
+        Ok(())
     }
 }
 
@@ -214,5 +242,55 @@ impl CommonErrorCause {
     /// from the innermost error.
     pub fn new<Py: PythonErrorCauseExtractor>(error: &(dyn std::error::Error + 'static)) -> Self {
         Self::build::<Py>(error, &mut HashSet::new())
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::error::Error;
+    use std::io;
+
+    use super::*;
+
+    struct NoPythonError;
+
+    impl PythonErrorCauseExtractor for NoPythonError {
+        fn extract(_: &(dyn Error + 'static)) -> Option<PythonErrorCause> {
+            None
+        }
+    }
+
+    #[test]
+    fn commit_state_unknown_without_source_preserves_behavior() {
+        let error = CommitStateUnknownError::from("catalog commit may have succeeded".to_string());
+        let expected = "commit state unknown: catalog commit may have succeeded";
+        assert_eq!(error.to_string(), expected);
+        assert!(error.source().is_none());
+        let cause =
+            CommonErrorCause::new::<NoPythonError>(&DataFusionError::External(Box::new(error)));
+        assert!(
+            matches!(&cause, CommonErrorCause::CommitStateUnknown(message) if message == expected)
+        );
+        assert!(!cause.is_retryable());
+    }
+
+    #[test]
+    fn commit_state_unknown_with_source_preserves_typed_cause() {
+        let error = CommitStateUnknownError::with_source(
+            "commit may have succeeded",
+            io::Error::new(io::ErrorKind::PermissionDenied, "verification denied"),
+        );
+        let source = error.source().unwrap().downcast_ref::<io::Error>().unwrap();
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(source.to_string(), "verification denied");
+        let expected = "commit state unknown: commit may have succeeded: verification denied";
+        assert_eq!(error.to_string(), expected);
+        let cause =
+            CommonErrorCause::new::<NoPythonError>(&DataFusionError::External(Box::new(error)));
+        assert!(
+            matches!(&cause, CommonErrorCause::CommitStateUnknown(message) if message == expected)
+        );
+        assert!(!cause.is_retryable());
     }
 }
