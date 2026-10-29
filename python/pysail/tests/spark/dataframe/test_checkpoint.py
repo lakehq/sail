@@ -195,6 +195,24 @@ def test_checkpoint_preserves_saved_row_order(spark, local):
     assert checkpointed.collect() == [(i,) for i in range(9, -1, -1)]
 
 
+@pytest.mark.parametrize("local", [False, True], ids=["checkpoint", "local-checkpoint"])
+@pytest.mark.parametrize("ordering", ["global", "local-hash", "local-round-robin"])
+def test_sorted_checkpoint_preserves_grouping_results(spark, local, ordering):
+    size, keys = 20000, 101
+    source = spark.range(size, numPartitions=4).select((sf.col("id") % keys).alias("k"))
+    if ordering == "global":
+        ordered = source.orderBy("k")
+    elif ordering == "local-hash":
+        ordered = source.repartition(4, "k").sortWithinPartitions("k")
+    else:
+        ordered = source.repartition(4).sortWithinPartitions("k")
+    checkpointed = ordered.localCheckpoint() if local else ordered.checkpoint()
+
+    expected = [(k, size // keys + (k < size % keys)) for k in range(keys)]
+    assert sorted(tuple(row) for row in checkpointed.groupBy("k").count().collect()) == expected
+    assert checkpointed.select("k").distinct().count() == keys
+
+
 def test_checkpoint_rejects_unimplemented_fallback_semantics(spark):
     source = spark.range(3)
 

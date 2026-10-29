@@ -132,8 +132,7 @@ pub struct LakehouseCommitRequest {
 }
 
 // TODO: Expand this with typed success payloads, retry/reconcile hints, and
-// cleanup policy before wiring providers that can return commit-state-unknown
-// after side effects. Keep REST requirements/updates, metadata-location CAS,
+// cleanup policy. Keep REST requirements/updates, metadata-location CAS,
 // Delta ratification, and provider-native update outcomes distinct.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LakehouseCommitOutcome {

@@ -353,7 +353,7 @@ fn apply_target_nullability(
 }
 
 fn operation_for_sink_mode(
-    table_url: &Url,
+    _table_url: &Url,
     partition_columns: &[String],
     sink_mode: &PhysicalSinkMode,
 ) -> Option<DeltaOperation> {
@@ -375,11 +375,9 @@ fn operation_for_sink_mode(
             predicate: source.clone(),
         }),
         PhysicalSinkMode::ErrorIfExists | PhysicalSinkMode::IgnoreIfExists => None,
-        PhysicalSinkMode::OverwritePartitions => Some(DeltaOperation::Write {
-            mode: SaveMode::Overwrite,
-            partition_by,
-            predicate: Some(format!("__unsupported_overwrite_partitions_at={table_url}")),
-        }),
+        PhysicalSinkMode::OverwritePartitions => {
+            Some(DeltaOperation::DynamicPartitionOverwrite { partition_by })
+        }
     }
 }
 

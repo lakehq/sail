@@ -156,3 +156,23 @@ def test_binary_read_partition_columns(spark, tmp_path):
         ("payload.bin", len(bin_content), bin_content, "data", "bin"),
     }
     assert read_df.filter("kind = 'image'").count() == 1
+
+
+def test_binary_read_large_files(spark, tmp_path):
+    # The files total more than 1 MiB, so the scan is eligible for byte-range
+    # splitting, and their uneven sizes put partition boundaries inside files.
+    rng = np.random.default_rng(42)
+    sizes = {"a.bin": 700 * 1024, "b.bin": 1536 * 1024, "c.bin": 3 * 1024 * 1024}
+    files = {}
+    for name, size in sizes.items():
+        content = rng.integers(0, 256, size, dtype=np.uint8).tobytes()
+        (tmp_path / name).write_bytes(content)
+        files[name] = content
+
+    rows = spark.read.format("binaryFile").load(str(tmp_path)).collect()
+
+    assert sorted(row.path.split("/")[-1] for row in rows) == sorted(files)
+    for row in rows:
+        content = files[row.path.split("/")[-1]]
+        assert row.length == len(content)
+        assert row.content == content

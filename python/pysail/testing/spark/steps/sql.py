@@ -5,6 +5,8 @@ import json
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 from jinja2 import Template
@@ -61,6 +63,31 @@ def variable_for_temporary_directory(name, directory, tmp_path, variables):
     This step does not create the directory, it only stores its absolute path.
     """
     variables[name] = PathWrapper(tmp_path / directory)
+    return variables
+
+
+@given(parsers.parse("variable {name} for location of table {table}"), target_fixture="variables")
+def variable_for_table_location(name: str, table: str, spark, variables: dict) -> dict:
+    """Defines a variable for the directory of a table, taken from `DESCRIBE EXTENDED`.
+
+    A `file:` URI is percent-decoded, as Sail does when it reads and writes the table;
+    a bare path is used as is.
+    """
+    rows = spark.sql(f"DESCRIBE EXTENDED {table}").collect()
+    location = next(r.data_type for r in rows if r.col_name == "Location")
+    if location[:5].lower() == "file:":
+        uri = urlparse(location)
+        location = url2pathname(f"//{uri.netloc}{uri.path}" if uri.netloc and uri.netloc != "localhost" else uri.path)
+    variables[name] = PathWrapper(Path(location))
+    return variables
+
+
+@given(parsers.parse("variable {name} for subdirectory {subdir} of {location_var}"), target_fixture="variables")
+def variable_for_subdirectory(name: str, subdir: str, location_var: str, variables: dict) -> dict:
+    """Defines a variable pointing to a subdirectory of a location."""
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+    variables[name] = PathWrapper(Path(location.path) / subdir)
     return variables
 
 
@@ -151,6 +178,14 @@ def query_schema(docstring, query, spark):
     """Analyze the SQL query and compare schema with expected schema tree string."""
     df = spark.sql(query)
     assert_schema_tree(df, docstring)
+
+
+@then("query column types")
+def query_column_types(datatable, query, spark):
+    """Compare ordered column names and types, without nullability or metadata."""
+    header, *columns = datatable
+    assert header == ["column", "type"]
+    assert [list(column) for column in spark.sql(query).dtypes] == columns
 
 
 @when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
@@ -266,6 +301,14 @@ def assert_schema_tree(df, docstring):
             df.printSchema()
         actual = buf.getvalue()
     assert docstring.strip() == actual.strip()
+
+
+@then("query result is empty")
+def query_result_is_empty(query, spark):
+    """Execute once and require an empty command schema and zero result rows."""
+    df = spark.sql(query)
+    assert df.schema.fields == []
+    assert df.collect() == []
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))

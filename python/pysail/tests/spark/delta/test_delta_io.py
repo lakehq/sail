@@ -613,6 +613,7 @@ def test_delta_io_ignore_mode(spark, delta_test_data, tmp_path):
     initial_data = initial_result.collect()
     assert len(initial_data) == 3  # noqa: PLR2004
     commit_files_before = sorted((delta_path / "_delta_log").glob("*.json"))
+    files_before = {path.relative_to(delta_path): path.read_bytes() for path in delta_path.rglob("*") if path.is_file()}
 
     # Try to write new data with ignore mode - should be ignored since table exists
     new_data = [
@@ -621,6 +622,13 @@ def test_delta_io_ignore_mode(spark, delta_test_data, tmp_path):
     ]
     df2 = spark.createDataFrame(new_data)
     df2.write.format("delta").mode("ignore").partitionBy("missing").save(str(delta_path))
+    # Ignoring an existing path must not execute the input, even via the path option.
+    spark.range(1).selectExpr("raise_error('ignored input was executed') AS id").write.format("delta").mode(
+        "ignore"
+    ).option("path", str(delta_path)).save()
+    assert {
+        path.relative_to(delta_path): path.read_bytes() for path in delta_path.rglob("*") if path.is_file()
+    } == files_before
 
     # Read data again - should be unchanged
     result_df = spark.read.format("delta").load(delta_table_path).sort("id")

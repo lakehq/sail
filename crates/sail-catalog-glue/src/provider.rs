@@ -756,7 +756,9 @@ impl CatalogProvider for GlueCatalogProvider {
 
     fn validate_alter_table(&self, options: &AlterTableOptions) -> CatalogResult<()> {
         match options {
-            AlterTableOptions::AlterColumnType { name, data_type } => {
+            AlterTableOptions::AlterColumnType {
+                name, data_type, ..
+            } => {
                 managed_table::validate_column_path(name)?;
                 arrow_to_glue_type(data_type).map(|_| ())
             }

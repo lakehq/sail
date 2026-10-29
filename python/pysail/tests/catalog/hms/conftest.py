@@ -21,6 +21,7 @@ def hms_catalog(hms_service: HmsService) -> object:
     catalog = _native._catalog._hms.HmsCatalogProvider(  # noqa: SLF001
         "native-hms-tests",
         [hms_service.endpoint],
+        thrift_transport=hms_service.transport,
     )
     deadline = time.monotonic() + 60
     last_error = None

@@ -261,10 +261,6 @@ _QUERIES = {
 # on the Delta table without column mapping. The value is the reason, and whether
 # the failure only happens on partitioned tables.
 _KNOWN_QUERY_FAILURES = {
-    "nvl_array_struct": (
-        "type coercion fails on nested fields carrying Spark field metadata, also without Delta",
-        False,
-    ),
     "filter_array_struct": (
         "a higher-order function over an array of structs in a filter cannot resolve the column",
         False,

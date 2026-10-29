@@ -108,14 +108,17 @@ Feature: vector_normalize
         | result     |
         | [0.0, 0.0] |
 
-    Scenario: NaN propagates through the infinity norm
+    Scenario: infinity norm ignores NaN when selecting the maximum
       When query
         """
-        SELECT vector_normalize(array(float('nan'), 1.0F), float('inf')) AS result
+        SELECT
+          vector_normalize(array(float('nan'), 1.0F), float('inf')) AS nan_first,
+          vector_normalize(array(1.0F, float('nan')), float('inf')) AS nan_last,
+          vector_normalize(array(float('nan')), float('inf')) AS only_nan
         """
       Then query result
-        | result     |
-        | [NaN, NaN] |
+        | nan_first  | nan_last   | only_nan |
+        | [NaN, 1.0] | [1.0, NaN] | NULL     |
 
   Rule: Output schema
 

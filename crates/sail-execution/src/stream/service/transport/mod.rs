@@ -10,6 +10,7 @@ use hyper::client::conn::http2::{Builder, SendRequest};
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder, MaybeHttpsStream};
 use hyper_util::client::legacy::connect::{Connection, HttpConnector};
 use hyper_util::rt::{TokioExecutor, TokioTimer};
+use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 use sail_common::telemetry::{TracingClientLayer, TracingClientService};
 use tokio::sync::Mutex;
 use tonic::body::Body;
@@ -36,7 +37,9 @@ impl ClientBuilder for FlightClient {
         let service = ServiceBuilder::new()
             .layer(TracingClientLayer)
             .service(transport);
-        Ok(FlightClient::with_origin(service, origin))
+        // A message holds at least one row, so a large value can exceed tonic's 4 MiB default.
+        Ok(FlightClient::with_origin(service, origin)
+            .max_decoding_message_size(GRPC_MAX_MESSAGE_LENGTH_DEFAULT))
     }
 }
 

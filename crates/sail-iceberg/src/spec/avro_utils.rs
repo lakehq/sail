@@ -66,6 +66,9 @@ pub(crate) fn avro_compatible_name(name: &str) -> String {
 
 /// Wrap a schema in an optional (null-union) Avro schema.
 pub fn optional(schema: AvroSchema) -> AvroSchema {
+    if schema == AvroSchema::Null {
+        return schema;
+    }
     #[expect(clippy::unwrap_used)]
     AvroSchema::Union(UnionSchema::new(vec![AvroSchema::Null, schema]).unwrap())
 }

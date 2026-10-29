@@ -764,6 +764,65 @@ def check_iceberg_snapshot_operation(variables, operation: str):
     assert actual_operation == operation, f"expected operation {operation!r}, got {actual_operation!r}"
 
 
+def _assert_noop_snapshot(before: dict, after: dict, operation: str) -> None:
+    """Check a committed no-op against Spark/Iceberg action-summary semantics."""
+    previous = before.get("snapshots", [])
+    assert len(after["snapshots"]) == len(previous) + 1
+    assert after["snapshots"][:-1] == previous
+    current = _current_snapshot(after)
+    assert current["snapshot-id"] not in {item["snapshot-id"] for item in previous}
+    if previous:
+        assert current["parent-snapshot-id"] == before["current-snapshot-id"]
+    else:
+        assert current.get("parent-snapshot-id") is None
+    assert after["refs"]["main"]["snapshot-id"] == current["snapshot-id"]
+    if after["format-version"] >= 2:  # noqa: PLR2004
+        assert current["sequence-number"] == before.get("last-sequence-number", 0) + 1
+        assert after["last-sequence-number"] == current["sequence-number"]
+    summary = current["summary"]
+    assert summary["operation"] == ("delete" if operation == "delete" else "overwrite")
+    metric_names = {
+        "delete": [],
+        "update": ["spark.update.num-copied-rows", "spark.update.num-updated-rows"],
+        "merge": [
+            f"spark.merge-into.num-target-rows-{action}"
+            for action in (
+                "copied",
+                "deleted",
+                "inserted",
+                "updated",
+                "matched-deleted",
+                "matched-updated",
+                "not-matched-by-source-deleted",
+                "not-matched-by-source-updated",
+            )
+        ],
+    }
+    action_metrics = {
+        key: value
+        for key, value in summary.items()
+        if key.startswith(("spark.insert.", "spark.delete.", "spark.update.", "spark.merge-into."))
+    }
+    assert action_metrics == dict.fromkeys(metric_names[operation], "0")
+    old_summary = _current_snapshot(before)["summary"] if previous else {}
+    for key in ("total-records", "total-data-files", "total-delete-files", "total-position-deletes"):
+        assert summary[key] == old_summary.get(key, "0"), key
+    for key in ("schemas", "current-schema-id", "partition-specs", "default-spec-id", "table-uuid"):
+        assert after[key] == before[key], key
+
+
+@given("remember current iceberg metadata")
+def remember_current_iceberg_metadata(variables):
+    variables["remembered_iceberg_metadata"] = _find_latest_metadata(Path(variables["location"].path))
+
+
+@then(parsers.parse("iceberg commits a no-op {operation} snapshot"))
+def check_iceberg_noop_snapshot(variables, operation: str):
+    after = _find_latest_metadata(Path(variables["location"].path))
+    _assert_noop_snapshot(variables["remembered_iceberg_metadata"], after, operation)
+    variables["remembered_iceberg_metadata"] = after
+
+
 @then(parsers.parse("iceberg snapshot count is {count:d}"))
 def check_iceberg_snapshot_count(variables, count: int):
     """Check that the table has the expected number of snapshots."""

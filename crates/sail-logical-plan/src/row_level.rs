@@ -15,12 +15,14 @@ use datafusion_expr::{
 };
 use educe::Educe;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     DeltaCheckConstraintExpr, MergeIntoOptions, OPERATION_COLUMN, OptionLayer, RowLevelCommand,
     RowLevelOperationType, RowLevelTarget, RowLevelWriteMode, UpdateAssignment, UpdateInfo,
 };
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::check_constraints::apply_delta_check_constraint_filter;
@@ -45,6 +47,7 @@ pub fn align_row_level_value(
     target_type: &DataType,
     case_sensitive: bool,
     alignment: StructFieldAlignment,
+    session_timezone_label: &str,
 ) -> Result<Expr> {
     if source_type == target_type {
         return Ok(value);
@@ -53,6 +56,17 @@ pub fn align_row_level_value(
     let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
         (source_type, target_type)
     else {
+        // Spark takes the wall-clock time of a TIMESTAMP value in the session time zone for a
+        // TIMESTAMP_NTZ target, and Arrow in UTC.
+        if let (DataType::Timestamp(_, Some(_)), DataType::Timestamp(_, None)) =
+            (source_type, target_type)
+        {
+            return Ok(session_wall_clock(
+                value,
+                target_type,
+                session_timezone_label,
+            ));
+        }
         return Ok(cast(value, target_type.clone()));
     };
 
@@ -82,6 +96,7 @@ pub fn align_row_level_value(
                 target_field.data_type(),
                 case_sensitive,
                 alignment,
+                session_timezone_label,
             )?,
             None if alignment == StructFieldAlignment::FillMissingWithNull => {
                 lit(ScalarValue::try_new_null(target_field.data_type())?)
@@ -256,6 +271,7 @@ impl RowLevelEffectPlans {
 /// Information retained until the format-specific commit is planned.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RowLevelCommitInfo {
+    Truncate,
     Delete { predicate: Option<ExprWithSource> },
     Update { predicate: Option<ExprWithSource> },
     Merge { options: Box<MergeIntoOptions> },
@@ -264,6 +280,7 @@ pub enum RowLevelCommitInfo {
 impl RowLevelCommitInfo {
     pub fn command(&self) -> RowLevelCommand {
         match self {
+            Self::Truncate => RowLevelCommand::Truncate,
             Self::Delete { .. } => RowLevelCommand::Delete,
             Self::Update { .. } => RowLevelCommand::Update,
             Self::Merge { .. } => RowLevelCommand::Merge,
@@ -273,14 +290,14 @@ impl RowLevelCommitInfo {
     pub fn predicate(&self) -> Option<&ExprWithSource> {
         match self {
             Self::Delete { predicate } | Self::Update { predicate } => predicate.as_ref(),
-            Self::Merge { .. } => None,
+            Self::Truncate | Self::Merge { .. } => None,
         }
     }
 
     pub fn merge_options(&self) -> Option<&MergeIntoOptions> {
         match self {
             Self::Merge { options } => Some(options),
-            Self::Delete { .. } | Self::Update { .. } => None,
+            Self::Truncate | Self::Delete { .. } | Self::Update { .. } => None,
         }
     }
 }
@@ -298,6 +315,7 @@ pub struct RowLevelWriteNode {
     /// `Some` means the target scan must still match at commit time. The inner
     /// value is `None` when the table had no current snapshot when it was read.
     expected_snapshot_id: Option<Option<i64>>,
+    output: CommandOutput,
     #[educe(PartialOrd(method(partial_cmp_by_equality), rank = 1))]
     schema: DFSchemaRef,
 }
@@ -307,6 +325,26 @@ fn partial_cmp_by_equality<T: PartialEq>(left: &T, right: &T) -> Option<Ordering
 }
 
 impl RowLevelWriteNode {
+    pub fn new_truncate(
+        raw_target: Arc<LogicalPlan>,
+        mode: RowLevelWriteMode,
+        target: RowLevelTarget,
+    ) -> Result<Self> {
+        Ok(Self {
+            target,
+            raw_target,
+            mode,
+            effects: RowLevelEffectPlans::default(),
+            commit: RowLevelCommitInfo::Truncate,
+            expected_snapshot_id: None,
+            output: CommandOutput::Count,
+            schema: Arc::new(DFSchema::from_unqualified_fields(
+                vec![Field::new("count", DataType::Int64, true)].into(),
+                Default::default(),
+            )?),
+        })
+    }
+
     pub fn new_merge(
         raw_target: Arc<LogicalPlan>,
         mode: RowLevelWriteMode,
@@ -323,6 +361,7 @@ impl RowLevelWriteNode {
                 options: Box::new(options),
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema,
         }
     }
@@ -343,6 +382,7 @@ impl RowLevelWriteNode {
                 predicate: condition,
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema: Arc::new(DFSchema::empty()),
         }
     }
@@ -364,8 +404,19 @@ impl RowLevelWriteNode {
                 predicate: condition,
             },
             expected_snapshot_id: None,
+            output: CommandOutput::Empty,
             schema,
         }
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = output;
+        self.schema = output.df_schema();
+        self
+    }
+
+    pub fn output(&self) -> CommandOutput {
+        self.output
     }
 
     pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
@@ -460,6 +511,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             self.target.format
         )?;
         match &self.commit {
+            RowLevelCommitInfo::Truncate => {}
             RowLevelCommitInfo::Delete { predicate } | RowLevelCommitInfo::Update { predicate } => {
                 if let Some(source) = predicate.as_ref().and_then(|value| value.source.as_deref()) {
                     write!(f, ", condition={}", source.trim())?;
@@ -488,6 +540,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             effects,
             commit: self.commit.clone(),
             expected_snapshot_id: self.expected_snapshot_id,
+            output: self.output,
             schema: self.schema.clone(),
         })
     }
@@ -1159,6 +1212,20 @@ mod tests {
         let rebuilt = UserDefinedLogicalNodeCore::with_exprs_and_inputs(&node, vec![], vec![])?;
         assert_eq!(rebuilt.expected_snapshot_id(), Some(None));
         assert_eq!(rebuilt.target_format(), "iceberg");
+        for output in [
+            CommandOutput::Empty,
+            CommandOutput::AffectedRows,
+            CommandOutput::MergeRows,
+            CommandOutput::Count,
+        ] {
+            let node = node.clone().with_output(output);
+            let rebuilt = UserDefinedLogicalNodeCore::with_exprs_and_inputs(&node, vec![], vec![])?;
+            assert_eq!(rebuilt.output(), output);
+            assert_eq!(
+                UserDefinedLogicalNodeCore::schema(&rebuilt).as_arrow(),
+                output.schema().as_ref()
+            );
+        }
         Ok(())
     }
 

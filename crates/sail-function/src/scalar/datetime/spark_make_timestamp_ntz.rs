@@ -9,8 +9,7 @@ use datafusion_common::cast::{
 use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-
-const MICROS_PER_DAY: i64 = 86_400_000_000; // 24 * 60 * 60 * 1_000_000
+use sail_common::utils::datetime::MICROS_PER_DAY;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMakeTimestampNtz {

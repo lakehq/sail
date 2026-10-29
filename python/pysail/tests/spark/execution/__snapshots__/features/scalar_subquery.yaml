@@ -8,7 +8,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         Filter: outer_t.#3 = (<subquery>)
           Subquery:
@@ -26,6 +26,22 @@ data:
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
+    Sort: outer_t.#9 ASC NULLS FIRST
+      Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
+        Filter: outer_t.#3 = (<subquery>)
+          Subquery:
+            Projection: max(inner_t.#7) AS #8
+              Aggregate: groupBy=[[]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Filter: #6 = outer_ref(outer_t.#2)
+                  Projection: #4 AS #6, #5 AS #7
+                    Projection: column1 AS #4, column2 AS #5
+                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+          SubqueryAlias: outer_t
+            Projection: #0 AS #2, #1 AS #3
+              Projection: column1 AS #0, column2 AS #1
+                Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
 
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
@@ -66,8 +82,17 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         Projection: outer_t.#2, outer_t.#3
           Filter: outer_t.#3 = __scalar_sq_1.#8
@@ -77,18 +102,17 @@ data:
                   Projection: column1 AS #0, column2 AS #1
                     Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
               SubqueryAlias: __scalar_sq_1
-                Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-                  Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                    SubqueryAlias: inner_t
-                      Projection: #4 AS #6, #5 AS #7
-                        Projection: column1 AS #4, column2 AS #5
-                          Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+                Projection: max(inner_t.#7) AS #8, #6, __always_true
+                  Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                    Projection: #4 AS #6, #5 AS #7
+                      Projection: column1 AS #4, column2 AS #5
+                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_lateral_join:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         Projection: outer_t.#2, outer_t.#3
           Filter: outer_t.#3 = __scalar_sq_1.#8
@@ -98,12 +122,11 @@ data:
                   Projection: column1 AS #0, column2 AS #1
                     Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
               SubqueryAlias: __scalar_sq_1
-                Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-                  Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                    SubqueryAlias: inner_t
-                      Projection: #4 AS #6, #5 AS #7
-                        Projection: column1 AS #4, column2 AS #5
-                          Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+                Projection: max(inner_t.#7) AS #8, #6, __always_true
+                  Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                    Projection: #4 AS #6, #5 AS #7
+                      Projection: column1 AS #4, column2 AS #5
+                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -124,7 +147,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         Projection: outer_t.#2, outer_t.#3
           Filter: outer_t.#3 = __scalar_sq_1.#8
@@ -134,18 +157,17 @@ data:
                   Projection: column1 AS #0, column2 AS #1
                     Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
               SubqueryAlias: __scalar_sq_1
-                Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-                  Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                    SubqueryAlias: inner_t
-                      Projection: #4 AS #6, #5 AS #7
-                        Projection: column1 AS #4, column2 AS #5
-                          Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+                Projection: max(inner_t.#7) AS #8, #6, __always_true
+                  Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                    Projection: #4 AS #6, #5 AS #7
+                      Projection: column1 AS #4, column2 AS #5
+                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         Projection: outer_t.#2, outer_t.#3
           Inner Join: outer_t.#2 = __scalar_sq_1.#6 Filter: outer_t.#3 = __scalar_sq_1.#8
@@ -154,18 +176,17 @@ data:
                 Projection: column1 AS #0, column2 AS #1
                   Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
             SubqueryAlias: __scalar_sq_1
-              Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-                Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                  SubqueryAlias: inner_t
-                    Projection: #4 AS #6, #5 AS #7
-                      Projection: column1 AS #4, column2 AS #5
-                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Projection: max(inner_t.#7) AS #8, #6, __always_true
+                Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                  Projection: #4 AS #6, #5 AS #7
+                    Projection: column1 AS #4, column2 AS #5
+                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_group_by_constant:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         Projection: outer_t.#2, outer_t.#3
           Inner Join: outer_t.#2 = __scalar_sq_1.#6 Filter: outer_t.#3 = __scalar_sq_1.#8
@@ -174,13 +195,12 @@ data:
                 Projection: column1 AS #0, column2 AS #1
                   Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
             SubqueryAlias: __scalar_sq_1
-              Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-                Projection: inner_t.#6, Boolean(true) AS __always_true, max(inner_t.#7)
-                  Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                    SubqueryAlias: inner_t
-                      Projection: #4 AS #6, #5 AS #7
-                        Projection: column1 AS #4, column2 AS #5
-                          Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Projection: max(inner_t.#7) AS #8, #6, __always_true
+                Projection: #6, Boolean(true) AS __always_true, max(inner_t.#7)
+                  Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                    Projection: #4 AS #6, #5 AS #7
+                      Projection: column1 AS #4, column2 AS #5
+                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after common_sub_expression_eliminate:
     SAME TEXT AS ABOVE
@@ -189,18 +209,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         Inner Join: outer_t.#2 = __scalar_sq_1.#6 Filter: outer_t.#3 = __scalar_sq_1.#8
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -227,20 +246,28 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_join:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         LeftSemi Join: outer_t.#2 = __scalar_sq_1.#6 Filter: outer_t.#3 = __scalar_sq_1.#8
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -250,18 +277,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         LeftSemi Join: outer_t.#2 = __scalar_sq_1.#6, outer_t.#3 = __scalar_sq_1.#8
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -333,6 +359,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -393,18 +428,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10
         LeftSemi Join: outer_t.#2 = __scalar_sq_1.#6, outer_t.#3 = __scalar_sq_1.#8
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     initial_physical_plan:
     SortExec: expr=[#9@0 ASC], preserve_partitioning=[false]
@@ -413,8 +447,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
             DataSourceExec: partitions=1, partition_sizes=[1]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                   DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -426,8 +460,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
                   DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
 
@@ -439,8 +473,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32, #3:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], schema=[#8:Int32;N, #6:Int32]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], schema=[#6:Int32, #7:Int32]
                   DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
 
@@ -453,8 +487,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -470,8 +504,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -480,6 +514,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -503,9 +540,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -530,9 +567,9 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                 RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                       DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -564,6 +601,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -588,9 +628,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -604,9 +644,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -627,7 +667,7 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -638,7 +678,7 @@ data:
     distribution=Hash(keys=[#6@1, #8@0], channels=4)
     placement=Worker
     ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-      AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+      AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
         StageInputExec: input=0, partitioning=Hash([#6@0], 4)
 
     === stage 3 ===
@@ -671,7 +711,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #9 ASC NULLS FIRST, #10 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST, outer_t.#10 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, (<subquery>) AS mx AS #11
         Subquery:
           Projection: max(inner_t.#7) AS #8
@@ -688,6 +728,21 @@ data:
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
+    Sort: outer_t.#9 ASC NULLS FIRST, outer_t.#10 ASC NULLS FIRST
+      Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, (<subquery>) AS mx AS #11
+        Subquery:
+          Projection: max(inner_t.#7) AS #8
+            Aggregate: groupBy=[[]], aggr=[[max(#7) AS max(inner_t.#7)]]
+              Filter: #6 = outer_ref(outer_t.#2)
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+        SubqueryAlias: outer_t
+          Projection: #0 AS #2, #1 AS #3
+            Projection: column1 AS #0, column2 AS #1
+              Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
 
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
@@ -728,8 +783,17 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
-    Sort: #9 ASC NULLS FIRST, #10 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST, outer_t.#10 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join:  Filter: __scalar_sq_1.#6 = outer_t.#2
           SubqueryAlias: outer_t
@@ -737,18 +801,17 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-              Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: #4 AS #6, #5 AS #7
-                    Projection: column1 AS #4, column2 AS #5
-                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6, __always_true
+              Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_lateral_join:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: #9 ASC NULLS FIRST, #10 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST, outer_t.#10 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
@@ -756,12 +819,11 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-              Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: #4 AS #6, #5 AS #7
-                    Projection: column1 AS #4, column2 AS #5
-                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6, __always_true
+              Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -794,7 +856,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_group_by_constant:
-    Sort: #9 ASC NULLS FIRST, #10 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST, outer_t.#10 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
@@ -802,13 +864,12 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-              Projection: inner_t.#6, Boolean(true) AS __always_true, max(inner_t.#7)
-                Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                  SubqueryAlias: inner_t
-                    Projection: #4 AS #6, #5 AS #7
-                      Projection: column1 AS #4, column2 AS #5
-                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6, __always_true
+              Projection: #6, Boolean(true) AS __always_true, max(inner_t.#7)
+                Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                  Projection: #4 AS #6, #5 AS #7
+                    Projection: column1 AS #4, column2 AS #5
+                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after common_sub_expression_eliminate:
     SAME TEXT AS ABOVE
@@ -817,18 +878,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #9 ASC NULLS FIRST, #10 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST, outer_t.#10 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -858,6 +918,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -918,18 +987,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #9 ASC NULLS FIRST, #10 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST, outer_t.#10 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+            Projection: max(inner_t.#7) AS #8, #6
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     initial_physical_plan:
     SortExec: expr=[#9@0 ASC, #10@1 ASC], preserve_partitioning=[false]
@@ -938,8 +1006,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
             DataSourceExec: partitions=1, partition_sizes=[1]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                   DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -951,8 +1019,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
                   DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
 
@@ -964,8 +1032,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32, #3:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], schema=[#8:Int32;N, #6:Int32]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], schema=[#6:Int32, #7:Int32]
                   DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
 
@@ -978,8 +1046,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -995,8 +1063,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1005,6 +1073,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -1028,9 +1099,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1053,9 +1124,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1068,9 +1139,9 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                 RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                       DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1102,6 +1173,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -1126,9 +1200,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1142,9 +1216,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1165,7 +1239,7 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1176,7 +1250,7 @@ data:
     distribution=Hash(keys=[#6@1], channels=4)
     placement=Worker
     ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-      AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+      AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
         StageInputExec: input=0, partitioning=Hash([#6@0], 4)
 
     === stage 3 ===
@@ -1209,7 +1283,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, (<subquery>) AS mx AS #11
         Subquery:
           Projection: max(inner_t.#7) AS #8
@@ -1226,6 +1300,21 @@ data:
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
+    Sort: outer_t.#9 ASC NULLS FIRST
+      Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, (<subquery>) AS mx AS #11
+        Subquery:
+          Projection: max(inner_t.#7) AS #8
+            Aggregate: groupBy=[[]], aggr=[[max(#7) AS max(inner_t.#7)]]
+              Filter: #6 = outer_ref(outer_t.#2)
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
+        SubqueryAlias: outer_t
+          Projection: #0 AS #2, #1 AS #3
+            Projection: column1 AS #0, column2 AS #1
+              Values: (Int32(1), Int32(2)), (Int32(2), Int32(3))
 
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
@@ -1266,8 +1355,17 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join:  Filter: __scalar_sq_1.#6 = outer_t.#2
           SubqueryAlias: outer_t
@@ -1275,18 +1373,17 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-              Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: #4 AS #6, #5 AS #7
-                    Projection: column1 AS #4, column2 AS #5
-                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
+            Projection: max(inner_t.#7) AS #8, #6, __always_true
+              Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
 
     logical_plan after decorrelate_lateral_join:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
@@ -1294,12 +1391,11 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-              Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: #4 AS #6, #5 AS #7
-                    Projection: column1 AS #4, column2 AS #5
-                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
+            Projection: max(inner_t.#7) AS #8, #6, __always_true
+              Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -1332,7 +1428,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_group_by_constant:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
@@ -1340,13 +1436,12 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6, __always_true
-              Projection: inner_t.#6, Boolean(true) AS __always_true, max(inner_t.#7)
-                Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                  SubqueryAlias: inner_t
-                    Projection: #4 AS #6, #5 AS #7
-                      Projection: column1 AS #4, column2 AS #5
-                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
+            Projection: max(inner_t.#7) AS #8, #6, __always_true
+              Projection: #6, Boolean(true) AS __always_true, max(inner_t.#7)
+                Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                  Projection: #4 AS #6, #5 AS #7
+                    Projection: column1 AS #4, column2 AS #5
+                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
 
     logical_plan after common_sub_expression_eliminate:
     SAME TEXT AS ABOVE
@@ -1355,18 +1450,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
+            Projection: max(inner_t.#7) AS #8, #6
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -1396,6 +1490,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -1456,18 +1559,17 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #9 ASC NULLS FIRST
+    Sort: outer_t.#9 ASC NULLS FIRST
       Projection: outer_t.#2 AS #9, outer_t.#3 AS #10, __scalar_sq_1.#8 AS mx AS #11
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) AS #8, inner_t.#6
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
+            Projection: max(inner_t.#7) AS #8, #6
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2))
 
     initial_physical_plan:
     SortExec: expr=[#9@0 ASC], preserve_partitioning=[false]
@@ -1476,8 +1578,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
             DataSourceExec: partitions=1, partition_sizes=[1]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                   DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1489,8 +1591,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
                   DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
 
@@ -1502,8 +1604,8 @@ data:
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32, #3:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], schema=[#8:Int32;N, #6:Int32]
-            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
-              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
+            AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
+              AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
                 ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], schema=[#6:Int32, #7:Int32]
                   DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
 
@@ -1516,8 +1618,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1533,8 +1635,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1543,6 +1645,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -1566,9 +1671,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1591,9 +1696,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1606,9 +1711,9 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                 RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                       DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1640,6 +1745,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -1664,9 +1772,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1680,9 +1788,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1703,7 +1811,7 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -1714,7 +1822,7 @@ data:
     distribution=Hash(keys=[#6@1], channels=4)
     placement=Worker
     ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6]
-      AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+      AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
         StageInputExec: input=0, partitioning=Hash([#6@0], 4)
 
     === stage 3 ===
@@ -1747,7 +1855,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         Filter: outer_t.#3 = (<subquery>)
           Subquery:
@@ -1772,6 +1880,29 @@ data:
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
+    Sort: outer_t.#12 ASC NULLS FIRST
+      Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
+        Filter: outer_t.#3 = (<subquery>)
+          Subquery:
+            Projection: max(inner_t.#7) + (<subquery>) AS #11
+              Subquery:
+                Projection: min(u.#9) AS #10
+                  Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
+                    SubqueryAlias: u
+                      Projection: #8 AS #9
+                        Projection: column1 AS #8
+                          Values: (Int32(1))
+              Aggregate: groupBy=[[]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Filter: #6 = outer_ref(outer_t.#2)
+                  Projection: #4 AS #6, #5 AS #7
+                    Projection: column1 AS #4, column2 AS #5
+                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+          SubqueryAlias: outer_t
+            Projection: #0 AS #2, #1 AS #3
+              Projection: column1 AS #0, column2 AS #1
+                Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
 
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
@@ -1812,8 +1943,17 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         Projection: outer_t.#2, outer_t.#3
           Filter: outer_t.#3 = __scalar_sq_1.#11
@@ -1823,7 +1963,7 @@ data:
                   Projection: column1 AS #0, column2 AS #1
                     Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
               SubqueryAlias: __scalar_sq_1
-                Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6, __always_true
+                Projection: max(inner_t.#7) + (<subquery>) AS #11, #6, __always_true
                   Subquery:
                     Projection: min(u.#9) AS #10
                       Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
@@ -1831,17 +1971,16 @@ data:
                           Projection: #8 AS #9
                             Projection: column1 AS #8
                               Values: (Int32(1))
-                  Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                    SubqueryAlias: inner_t
-                      Projection: #4 AS #6, #5 AS #7
-                        Projection: column1 AS #4, column2 AS #5
-                          Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+                  Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                    Projection: #4 AS #6, #5 AS #7
+                      Projection: column1 AS #4, column2 AS #5
+                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_lateral_join:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         Projection: outer_t.#2, outer_t.#3
           Filter: outer_t.#3 = __scalar_sq_1.#11
@@ -1851,7 +1990,7 @@ data:
                   Projection: column1 AS #0, column2 AS #1
                     Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
               SubqueryAlias: __scalar_sq_1
-                Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6, __always_true
+                Projection: max(inner_t.#7) + (<subquery>) AS #11, #6, __always_true
                   Subquery:
                     Projection: min(u.#9) AS #10
                       Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
@@ -1859,11 +1998,10 @@ data:
                           Projection: #8 AS #9
                             Projection: column1 AS #8
                               Values: (Int32(1))
-                  Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                    SubqueryAlias: inner_t
-                      Projection: #4 AS #6, #5 AS #7
-                        Projection: column1 AS #4, column2 AS #5
-                          Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+                  Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                    Projection: #4 AS #6, #5 AS #7
+                      Projection: column1 AS #4, column2 AS #5
+                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -1884,7 +2022,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_outer_join:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         Projection: outer_t.#2, outer_t.#3
           Filter: outer_t.#3 = __scalar_sq_1.#11
@@ -1894,7 +2032,7 @@ data:
                   Projection: column1 AS #0, column2 AS #1
                     Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
               SubqueryAlias: __scalar_sq_1
-                Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6, __always_true
+                Projection: max(inner_t.#7) + (<subquery>) AS #11, #6, __always_true
                   Subquery:
                     Projection: min(u.#9) AS #10
                       Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
@@ -1902,17 +2040,16 @@ data:
                           Projection: #8 AS #9
                             Projection: column1 AS #8
                               Values: (Int32(1))
-                  Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                    SubqueryAlias: inner_t
-                      Projection: #4 AS #6, #5 AS #7
-                        Projection: column1 AS #4, column2 AS #5
-                          Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+                  Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                    Projection: #4 AS #6, #5 AS #7
+                      Projection: column1 AS #4, column2 AS #5
+                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after push_down_limit:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         Projection: outer_t.#2, outer_t.#3
           Inner Join: outer_t.#2 = __scalar_sq_1.#6 Filter: outer_t.#3 = __scalar_sq_1.#11
@@ -1921,7 +2058,7 @@ data:
                 Projection: column1 AS #0, column2 AS #1
                   Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
             SubqueryAlias: __scalar_sq_1
-              Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6, __always_true
+              Projection: max(inner_t.#7) + (<subquery>) AS #11, #6, __always_true
                 Subquery:
                   Projection: min(u.#9) AS #10
                     Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
@@ -1929,17 +2066,16 @@ data:
                         Projection: #8 AS #9
                           Projection: column1 AS #8
                             Values: (Int32(1))
-                Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                  SubqueryAlias: inner_t
-                    Projection: #4 AS #6, #5 AS #7
-                      Projection: column1 AS #4, column2 AS #5
-                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+                Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                  Projection: #4 AS #6, #5 AS #7
+                    Projection: column1 AS #4, column2 AS #5
+                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_group_by_constant:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         Projection: outer_t.#2, outer_t.#3
           Inner Join: outer_t.#2 = __scalar_sq_1.#6 Filter: outer_t.#3 = __scalar_sq_1.#11
@@ -1948,7 +2084,7 @@ data:
                 Projection: column1 AS #0, column2 AS #1
                   Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
             SubqueryAlias: __scalar_sq_1
-              Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6, __always_true
+              Projection: max(inner_t.#7) + (<subquery>) AS #11, #6, __always_true
                 Subquery:
                   Projection: min(u.#9) AS #10
                     Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
@@ -1956,12 +2092,11 @@ data:
                         Projection: #8 AS #9
                           Projection: column1 AS #8
                             Values: (Int32(1))
-                Projection: inner_t.#6, Boolean(true) AS __always_true, max(inner_t.#7)
-                  Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                    SubqueryAlias: inner_t
-                      Projection: #4 AS #6, #5 AS #7
-                        Projection: column1 AS #4, column2 AS #5
-                          Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+                Projection: #6, Boolean(true) AS __always_true, max(inner_t.#7)
+                  Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                    Projection: #4 AS #6, #5 AS #7
+                      Projection: column1 AS #4, column2 AS #5
+                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after common_sub_expression_eliminate:
     SAME TEXT AS ABOVE
@@ -1970,24 +2105,23 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         Inner Join: outer_t.#2 = __scalar_sq_1.#6 Filter: outer_t.#3 = __scalar_sq_1.#11
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
                     SubqueryAlias: u
                       Projection: column1 AS #9
                         Values: (Int32(1))
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -2014,26 +2148,34 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_join:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         LeftSemi Join: outer_t.#2 = __scalar_sq_1.#6 Filter: outer_t.#3 = __scalar_sq_1.#11
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
                     SubqueryAlias: u
                       Projection: column1 AS #9
                         Values: (Int32(1))
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2043,24 +2185,23 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         LeftSemi Join: outer_t.#2 = __scalar_sq_1.#6, outer_t.#3 = __scalar_sq_1.#11
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
                     SubqueryAlias: u
                       Projection: column1 AS #9
                         Values: (Int32(1))
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -2132,6 +2273,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2192,24 +2342,23 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #12 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13
         LeftSemi Join: outer_t.#2 = __scalar_sq_1.#6, outer_t.#3 = __scalar_sq_1.#11
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(5)), (Int32(2), Int32(1)), (Int32(2), Int32(4))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
                     SubqueryAlias: u
                       Projection: column1 AS #9
                         Values: (Int32(1))
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     initial_physical_plan:
     ScalarSubqueryExec: subqueries=1
@@ -2219,8 +2368,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2238,8 +2387,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
               DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
                     DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
       ProjectionExec: expr=[min(u.#9)@0 as #10], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]]
@@ -2257,8 +2406,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32, #3:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
             ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6], schema=[#11:Int32;N, #6:Int32]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], schema=[#6:Int32, #7:Int32]
                     DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
       ProjectionExec: expr=[min(u.#9)@0 as #10], schema=[#10:Int32;N]
@@ -2277,8 +2426,8 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                       DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2300,8 +2449,8 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                       DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2315,6 +2464,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -2339,9 +2491,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2364,9 +2516,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2390,9 +2542,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2428,6 +2580,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -2453,9 +2608,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2474,9 +2629,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2512,7 +2667,7 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -2524,7 +2679,7 @@ data:
     placement=Worker
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-        AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+        AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
           StageInputExec: input=0, partitioning=Hash([#6@0], 4)
       StageInputExec: input=1, partitioning=UnknownPartitioning(1)
 
@@ -2558,7 +2713,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #12 ASC NULLS FIRST, #13 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST, outer_t.#13 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13, (<subquery>) AS shifted AS #14
         Subquery:
           Projection: max(inner_t.#7) + (<subquery>) AS #11
@@ -2582,6 +2737,28 @@ data:
 
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
+    Sort: outer_t.#12 ASC NULLS FIRST, outer_t.#13 ASC NULLS FIRST
+      Projection: outer_t.#2 AS #12, outer_t.#3 AS #13, (<subquery>) AS shifted AS #14
+        Subquery:
+          Projection: max(inner_t.#7) + (<subquery>) AS #11
+            Subquery:
+              Projection: min(u.#9) AS #10
+                Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
+                  SubqueryAlias: u
+                    Projection: #8 AS #9
+                      Projection: column1 AS #8
+                        Values: (Int32(1))
+            Aggregate: groupBy=[[]], aggr=[[max(#7) AS max(inner_t.#7)]]
+              Filter: #6 = outer_ref(outer_t.#2)
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+        SubqueryAlias: outer_t
+          Projection: #0 AS #2, #1 AS #3
+            Projection: column1 AS #0, column2 AS #1
+              Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
 
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
@@ -2622,8 +2799,17 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
-    Sort: #12 ASC NULLS FIRST, #13 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST, outer_t.#13 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13, __scalar_sq_1.#11 AS shifted AS #14
         Left Join:  Filter: __scalar_sq_1.#6 = outer_t.#2
           SubqueryAlias: outer_t
@@ -2631,7 +2817,7 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6, __always_true
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6, __always_true
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
@@ -2639,17 +2825,16 @@ data:
                       Projection: #8 AS #9
                         Projection: column1 AS #8
                           Values: (Int32(1))
-              Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: #4 AS #6, #5 AS #7
-                    Projection: column1 AS #4, column2 AS #5
-                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after decorrelate_lateral_join:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: #12 ASC NULLS FIRST, #13 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST, outer_t.#13 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13, __scalar_sq_1.#11 AS shifted AS #14
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
@@ -2657,7 +2842,7 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6, __always_true
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6, __always_true
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
@@ -2665,11 +2850,10 @@ data:
                       Projection: #8 AS #9
                         Projection: column1 AS #8
                           Values: (Int32(1))
-              Aggregate: groupBy=[[inner_t.#6, Boolean(true) AS __always_true]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: #4 AS #6, #5 AS #7
-                    Projection: column1 AS #4, column2 AS #5
-                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Aggregate: groupBy=[[#6, Boolean(true) AS __always_true]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: #4 AS #6, #5 AS #7
+                  Projection: column1 AS #4, column2 AS #5
+                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after eliminate_duplicated_expr:
     SAME TEXT AS ABOVE
@@ -2702,7 +2886,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_group_by_constant:
-    Sort: #12 ASC NULLS FIRST, #13 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST, outer_t.#13 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13, __scalar_sq_1.#11 AS shifted AS #14
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
@@ -2710,7 +2894,7 @@ data:
               Projection: column1 AS #0, column2 AS #1
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6, __always_true
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6, __always_true
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
@@ -2718,12 +2902,11 @@ data:
                       Projection: #8 AS #9
                         Projection: column1 AS #8
                           Values: (Int32(1))
-              Projection: inner_t.#6, Boolean(true) AS __always_true, max(inner_t.#7)
-                Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                  SubqueryAlias: inner_t
-                    Projection: #4 AS #6, #5 AS #7
-                      Projection: column1 AS #4, column2 AS #5
-                        Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Projection: #6, Boolean(true) AS __always_true, max(inner_t.#7)
+                Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                  Projection: #4 AS #6, #5 AS #7
+                    Projection: column1 AS #4, column2 AS #5
+                      Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after common_sub_expression_eliminate:
     SAME TEXT AS ABOVE
@@ -2732,24 +2915,23 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #12 ASC NULLS FIRST, #13 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST, outer_t.#13 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13, __scalar_sq_1.#11 AS shifted AS #14
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
                     SubqueryAlias: u
                       Projection: column1 AS #9
                         Values: (Int32(1))
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     logical_plan after rewrite_binary_grouping:
     SAME TEXT AS ABOVE
@@ -2779,6 +2961,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -2839,24 +3030,23 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #12 ASC NULLS FIRST, #13 ASC NULLS FIRST
+    Sort: outer_t.#12 ASC NULLS FIRST, outer_t.#13 ASC NULLS FIRST
       Projection: outer_t.#2 AS #12, outer_t.#3 AS #13, __scalar_sq_1.#11 AS shifted AS #14
         Left Join: outer_t.#2 = __scalar_sq_1.#6
           SubqueryAlias: outer_t
             Projection: column1 AS #2, column2 AS #3
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(4)), (Int32(2), Int32(1)), (Int32(2), Int32(3))
           SubqueryAlias: __scalar_sq_1
-            Projection: max(inner_t.#7) + (<subquery>) AS #11, inner_t.#6
+            Projection: max(inner_t.#7) + (<subquery>) AS #11, #6
               Subquery:
                 Projection: min(u.#9) AS #10
                   Aggregate: groupBy=[[]], aggr=[[min(u.#9)]]
                     SubqueryAlias: u
                       Projection: column1 AS #9
                         Values: (Int32(1))
-              Aggregate: groupBy=[[inner_t.#6]], aggr=[[max(inner_t.#7)]]
-                SubqueryAlias: inner_t
-                  Projection: column1 AS #6, column2 AS #7
-                    Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
+              Aggregate: groupBy=[[#6]], aggr=[[max(#7) AS max(inner_t.#7)]]
+                Projection: column1 AS #6, column2 AS #7
+                  Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
     initial_physical_plan:
     ScalarSubqueryExec: subqueries=1
@@ -2866,8 +3056,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
               DataSourceExec: partitions=1, partition_sizes=[1]
             ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                     DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2885,8 +3075,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
               DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
                     DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
       ProjectionExec: expr=[min(u.#9)@0 as #10], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]]
@@ -2904,8 +3094,8 @@ data:
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32, #3:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
             ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6], schema=[#11:Int32;N, #6:Int32]
-              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
-                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
+              AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7):Int32;N]
+                AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)], schema=[#6:Int32, max(inner_t.#7)[value]:Int32;N]
                   ProjectionExec: expr=[column1@0 as #6, column2@1 as #7], schema=[#6:Int32, #7:Int32]
                     DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Int32]
       ProjectionExec: expr=[min(u.#9)@0 as #10], schema=[#10:Int32;N]
@@ -2924,8 +3114,8 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                       DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2947,8 +3137,8 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
-                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
+                  AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                       DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -2962,6 +3152,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -2986,9 +3179,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -3011,9 +3204,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -3035,9 +3228,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -3055,9 +3248,9 @@ data:
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                   RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                         DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -3093,6 +3286,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -3118,9 +3314,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -3139,9 +3335,9 @@ data:
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                     RepartitionExec: partitioning=Hash([#6@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+                      AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
                         ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
                           DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[min(u.#9)@0 as #10]
@@ -3177,7 +3373,7 @@ data:
     partitions=1
     distribution=Hash(keys=[#6@0], channels=4)
     placement=Worker
-    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+    AggregateExec: mode=Partial, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
       ProjectionExec: expr=[column1@0 as #6, column2@1 as #7]
         DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -3189,7 +3385,7 @@ data:
     placement=Worker
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6]
-        AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(inner_t.#7)]
+        AggregateExec: mode=FinalPartitioned, gby=[#6@0 as #6], aggr=[max(#7) as max(inner_t.#7)]
           StageInputExec: input=0, partitioning=Hash([#6@0], 4)
       StageInputExec: input=1, partitioning=UnknownPartitioning(1)
 
@@ -3237,6 +3433,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -3274,6 +3473,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3364,6 +3572,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3492,6 +3709,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -3570,6 +3790,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -3642,7 +3865,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #5 ASC NULLS FIRST
+    Sort: t.#5 ASC NULLS FIRST
       Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #6
         Subquery:
           Projection: CAST(s.#3 AS Int64) AS #4
@@ -3657,6 +3880,9 @@ data:
               Values: (Int32(1)), (Int32(2))
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_grouping_function:
@@ -3698,6 +3924,15 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -3732,7 +3967,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
-    Sort: #5 ASC NULLS FIRST
+    Sort: t.#5 ASC NULLS FIRST
       Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #6
         Subquery:
           Projection: CAST(s.#3 AS Int64) AS #4
@@ -3759,7 +3994,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #5 ASC NULLS FIRST
+    Sort: t.#5 ASC NULLS FIRST
       Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #6
         Subquery:
           Projection: CAST(s.#3 AS Int64) AS #4
@@ -3799,6 +4034,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -3859,7 +4103,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #5 ASC NULLS FIRST
+    Sort: t.#5 ASC NULLS FIRST
       Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #6
         Subquery:
           Projection: CAST(s.#3 AS Int64) AS #4
@@ -3930,6 +4174,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -4017,6 +4264,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -4125,6 +4375,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -4162,6 +4415,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4259,6 +4521,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4426,6 +4697,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -4508,6 +4782,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -4605,7 +4882,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #8 ASC NULLS FIRST
+    Sort: t.#8 ASC NULLS FIRST
       Projection: t.#1 AS #8, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #9
         Subquery:
           Projection: min(s.#3) + (<subquery>) AS #7
@@ -4629,11 +4906,14 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    Sort: #8 ASC NULLS FIRST
+    Sort: t.#8 ASC NULLS FIRST
       Projection: t.#1 AS #8, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #9
         Subquery:
           Projection: CAST(min(s.#3) + (<subquery>) AS #7 AS Int64)
@@ -4687,6 +4967,15 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -4736,7 +5025,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #8 ASC NULLS FIRST
+    Sort: t.#8 ASC NULLS FIRST
       Projection: t.#1 AS #8, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #9
         Subquery:
           Projection: CAST(min(s.#3) + (<subquery>) AS #7 AS Int64)
@@ -4782,6 +5071,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -4842,7 +5140,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #8 ASC NULLS FIRST
+    Sort: t.#8 ASC NULLS FIRST
       Projection: t.#1 AS #8, CAST(t.#1 AS Int64) + (<subquery>) AS shifted AS #9
         Subquery:
           Projection: CAST(min(s.#3) + (<subquery>) AS #7 AS Int64)
@@ -4949,6 +5247,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -5048,6 +5349,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -5143,7 +5447,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #5 ASC NULLS FIRST
+    Sort: t.#5 ASC NULLS FIRST
       Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS maybe_shifted AS #6
         Subquery:
           Projection: min(s.#3) AS #4
@@ -5158,6 +5462,9 @@ data:
               Values: (Int32(1)), (Int32(2))
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_grouping_function:
@@ -5188,7 +5495,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
-    Sort: #5 ASC NULLS FIRST
+    Sort: t.#5 ASC NULLS FIRST
       Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS maybe_shifted AS #6
         Subquery:
           Projection: min(s.#3) AS #4
@@ -5209,6 +5516,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5260,7 +5576,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #5 ASC NULLS FIRST
+    Sort: t.#5 ASC NULLS FIRST
       Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS maybe_shifted AS #6
         Subquery:
           Projection: min(s.#3) AS #4
@@ -5300,6 +5616,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5360,7 +5685,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #5 ASC NULLS FIRST
+    Sort: t.#5 ASC NULLS FIRST
       Projection: t.#1 AS #5, CAST(t.#1 AS Int64) + (<subquery>) AS maybe_shifted AS #6
         Subquery:
           Projection: min(s.#3) AS #4
@@ -5435,6 +5760,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -5519,6 +5847,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -5610,6 +5941,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -5647,6 +5981,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5738,6 +6081,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -5879,6 +6231,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -5970,6 +6325,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -6079,6 +6437,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -6140,6 +6501,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6245,6 +6615,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6391,6 +6770,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -6483,6 +6865,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -6584,6 +6969,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -6634,6 +7022,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6739,6 +7136,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -6885,6 +7291,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -6982,6 +7391,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -7102,6 +7514,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -7139,6 +7554,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7230,6 +7654,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7371,6 +7804,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -7462,6 +7898,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -7569,6 +8008,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -7606,6 +8048,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7697,6 +8148,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -7838,6 +8298,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -7929,6 +8392,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -8039,6 +8505,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -8089,6 +8558,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8181,6 +8659,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8327,6 +8814,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -8423,6 +8913,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -8514,7 +9007,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #7 ASC NULLS FIRST
+    Sort: l.#7 ASC NULLS FIRST
       Projection: l.#1 AS #7, r.#3 AS #8
         Inner Join:  Filter: CAST(l.#1 AS Int64) + (<subquery>) = CAST(r.#3 AS Int64)
           Subquery:
@@ -8534,6 +9027,9 @@ data:
                 Values: (Int32(11)), (Int32(12)), (Int32(13))
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_grouping_function:
@@ -8575,6 +9071,15 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -8582,7 +9087,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after extract_equijoin_predicate:
-    Sort: #7 ASC NULLS FIRST
+    Sort: l.#7 ASC NULLS FIRST
       Projection: l.#1 AS #7, r.#3 AS #8
         Inner Join: CAST(l.#1 AS Int64) + (<subquery>) = CAST(r.#3 AS Int64)
           Subquery:
@@ -8641,7 +9146,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #7 ASC NULLS FIRST
+    Sort: l.#7 ASC NULLS FIRST
       Projection: l.#1 AS #7, r.#3 AS #8
         Inner Join: CAST(l.#1 AS Int64) + (<subquery>) = CAST(r.#3 AS Int64)
           Subquery:
@@ -8685,6 +9190,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -8745,7 +9259,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #7 ASC NULLS FIRST
+    Sort: l.#7 ASC NULLS FIRST
       Projection: l.#1 AS #7, r.#3 AS #8
         Inner Join: CAST(l.#1 AS Int64) + (<subquery>) = CAST(r.#3 AS Int64)
           Subquery:
@@ -8867,6 +9381,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -8982,6 +9499,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -9066,7 +9586,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #7 ASC NULLS FIRST, #8 ASC NULLS FIRST
+    Sort: l.#7 ASC NULLS FIRST, r.#8 ASC NULLS FIRST
       Projection: l.#1 AS #7, r.#3 AS #8
         Inner Join:  Filter: CAST(l.#1 AS Int64) + (<subquery>) < CAST(r.#3 AS Int64)
           Subquery:
@@ -9086,6 +9606,9 @@ data:
                 Values: (Int32(11)), (Int32(12)), (Int32(13))
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_grouping_function:
@@ -9127,6 +9650,15 @@ data:
     logical_plan after decorrelate_predicate_subquery:
     SAME TEXT AS ABOVE
 
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
+    SAME TEXT AS ABOVE
+
     logical_plan after scalar_subquery_to_join:
     SAME TEXT AS ABOVE
 
@@ -9143,7 +9675,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after eliminate_cross_join:
-    Sort: #7 ASC NULLS FIRST, #8 ASC NULLS FIRST
+    Sort: l.#7 ASC NULLS FIRST, r.#8 ASC NULLS FIRST
       Projection: l.#1 AS #7, r.#3 AS #8
         Filter: CAST(l.#1 AS Int64) + (<subquery>) < CAST(r.#3 AS Int64)
           Subquery:
@@ -9194,7 +9726,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #7 ASC NULLS FIRST, #8 ASC NULLS FIRST
+    Sort: l.#7 ASC NULLS FIRST, r.#8 ASC NULLS FIRST
       Projection: l.#1 AS #7, r.#3 AS #8
         Filter: CAST(l.#1 AS Int64) + (<subquery>) < CAST(r.#3 AS Int64)
           Subquery:
@@ -9239,6 +9771,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9299,7 +9840,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #7 ASC NULLS FIRST, #8 ASC NULLS FIRST
+    Sort: l.#7 ASC NULLS FIRST, r.#8 ASC NULLS FIRST
       Projection: l.#1 AS #7, r.#3 AS #8
         Filter: CAST(l.#1 AS Int64) + (<subquery>) < CAST(r.#3 AS Int64)
           Subquery:
@@ -9395,6 +9936,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -9494,6 +10038,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -9602,6 +10149,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -9639,6 +10189,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9732,6 +10291,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -9879,6 +10447,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -9986,6 +10557,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -10074,7 +10648,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: CASE WHEN (<subquery>) = Int32(2) THEN #2 WHEN Boolean(true) THEN negative(#2) END DESC NULLS LAST
+    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 WHEN Boolean(true) THEN negative(t.#2) END DESC NULLS LAST
       Subquery:
         Projection: min(s.#4) AS #5
           Aggregate: groupBy=[[]], aggr=[[min(s.#4)]]
@@ -10089,6 +10663,9 @@ data:
               Values: (Int32(1)), (Int32(2)), (Int32(3))
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_grouping_function:
@@ -10119,7 +10696,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
-    Sort: CASE WHEN (<subquery>) = Int32(2) THEN #2 ELSE negative(#2) END AS CASE WHEN #5 = Int32(2) THEN #2 WHEN Boolean(true) THEN negative(#2) END DESC NULLS LAST
+    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END AS CASE WHEN #5 = Int32(2) THEN t.#2 WHEN Boolean(true) THEN negative(t.#2) END DESC NULLS LAST
       Subquery:
         Projection: min(s.#4) AS #5
           Aggregate: groupBy=[[]], aggr=[[min(s.#4)]]
@@ -10140,6 +10717,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10191,7 +10777,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: CASE WHEN (<subquery>) = Int32(2) THEN #2 ELSE negative(#2) END AS CASE WHEN #5 = Int32(2) THEN #2 WHEN Boolean(true) THEN negative(#2) END DESC NULLS LAST
+    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END AS CASE WHEN #5 = Int32(2) THEN t.#2 WHEN Boolean(true) THEN negative(t.#2) END DESC NULLS LAST
       Subquery:
         Projection: min(s.#4) AS #5
           Aggregate: groupBy=[[]], aggr=[[min(s.#4)]]
@@ -10231,6 +10817,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10291,7 +10886,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: CASE WHEN (<subquery>) = Int32(2) THEN #2 ELSE negative(#2) END AS CASE WHEN #5 = Int32(2) THEN #2 WHEN Boolean(true) THEN negative(#2) END DESC NULLS LAST
+    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END AS CASE WHEN #5 = Int32(2) THEN t.#2 WHEN Boolean(true) THEN negative(t.#2) END DESC NULLS LAST
       Subquery:
         Projection: min(s.#4) AS #5
           Aggregate: groupBy=[[]], aggr=[[min(s.#4)]]
@@ -10366,6 +10961,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -10450,6 +11048,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -10541,6 +11142,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -10578,6 +11182,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10669,6 +11282,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -10810,6 +11432,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -10884,6 +11509,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -10961,7 +11589,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #6 ASC NULLS FIRST
+    Sort: t.#6 ASC NULLS FIRST
       Projection: t.#1 AS #6, sum(t.#1 + #4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS total AS #7
         WindowAggr: windowExpr=[[sum(CAST(t.#1 AS Int64) + (<subquery>)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
@@ -10977,6 +11605,9 @@ data:
                 Values: (Int32(1)), (Int32(2)), (Int32(3))
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_grouping_function:
@@ -11016,6 +11647,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11067,7 +11707,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #6 ASC NULLS FIRST
+    Sort: t.#6 ASC NULLS FIRST
       Projection: t.#1 AS #6, sum(t.#1 + #4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS total AS #7
         WindowAggr: windowExpr=[[sum(CAST(t.#1 AS Int64) + (<subquery>)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
@@ -11108,6 +11748,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11168,7 +11817,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #6 ASC NULLS FIRST
+    Sort: t.#6 ASC NULLS FIRST
       Projection: t.#1 AS #6, sum(t.#1 + #4) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS total AS #7
         WindowAggr: windowExpr=[[sum(CAST(t.#1 AS Int64) + (<subquery>)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
@@ -11248,6 +11897,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -11338,6 +11990,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -11436,6 +12091,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -11486,6 +12144,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11578,6 +12245,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -11720,6 +12396,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -11810,6 +12489,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -11888,7 +12570,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: #6 ASC NULLS FIRST
+    Sort: t.#6 ASC NULLS FIRST
       Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
         WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
@@ -11906,11 +12588,14 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    Sort: #6 ASC NULLS FIRST
+    Sort: t.#6 ASC NULLS FIRST
       Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
         WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
@@ -11947,7 +12632,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
-    Sort: #6 ASC NULLS FIRST
+    Sort: t.#6 ASC NULLS FIRST
       Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
         WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
@@ -11969,6 +12654,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -12020,7 +12714,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: #6 ASC NULLS FIRST
+    Sort: t.#6 ASC NULLS FIRST
       Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
         WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
@@ -12061,6 +12755,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_keys:
     SAME TEXT AS ABOVE
 
     logical_plan after scalar_subquery_to_join:
@@ -12121,7 +12824,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: #6 ASC NULLS FIRST
+    Sort: t.#6 ASC NULLS FIRST
       Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
         WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
@@ -12201,6 +12904,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -12294,6 +13000,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:

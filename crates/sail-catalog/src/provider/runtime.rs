@@ -270,6 +270,28 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         self.inner.validate_alter_table(options)
     }
 
+    async fn rename_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        destination_database: &Namespace,
+        destination_table: &str,
+    ) -> CatalogResult<()> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        let destination_database = destination_database.clone();
+        let destination_table = destination_table.to_string();
+        self.handle
+            .spawn(async move {
+                inner
+                    .rename_table(&database, &table, &destination_database, &destination_table)
+                    .await
+            })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute rename_table: {e}")))?
+    }
+
     async fn alter_table(
         &self,
         database: &Namespace,

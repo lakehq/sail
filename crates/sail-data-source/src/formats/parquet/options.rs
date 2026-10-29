@@ -69,6 +69,8 @@ impl ParquetReadOptions {
             reorder_filters,
             schema_force_view_types,
             binary_as_string,
+            // Spark reads INT96 as `TimestampType`, which stores UTC instants.
+            coerce_int96_tz: coerce_int96.as_ref().map(|_| "UTC".to_string()),
             coerce_int96,
             bloom_filter_on_read,
             max_predicate_cache_size,

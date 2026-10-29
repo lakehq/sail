@@ -45,7 +45,7 @@ pub async fn read_deletion_vector(
                 .ok_or_else(|| DeltaError::generic("expected file-based DV but got None"))?;
 
             // Use the full path from the URL so the object store can find the file.
-            let path = Path::from(dv_url.path());
+            let path = Path::from_url_path(dv_url.path())?;
 
             let offset = u64::try_from(dv.offset.unwrap_or(1))
                 .map_err(|_| DeltaError::generic("DV offset must be non-negative"))?;
@@ -225,13 +225,8 @@ impl DeletionVectorWriter {
         let (encoded_uuid, relative_path, _uuid) = new_uuid_dv_path()?;
         // The relative_path is relative to the table root (e.g., "70/deletion_vector_<uuid>.bin").
         // We must prefix it with the table root path for the object store.
-        let table_root_path = Path::from(self.table_root.path());
-        let full_path = Path::from(format!(
-            "{}{}{}",
-            table_root_path,
-            object_store::path::DELIMITER,
-            relative_path
-        ));
+        let table_root_path = Path::from_url_path(self.table_root.path())?;
+        let full_path = Path::parse(format!("{table_root_path}/{relative_path}"))?;
         let payload = PutPayload::from(Bytes::from(file_content));
         self.store
             .put(&full_path, payload)

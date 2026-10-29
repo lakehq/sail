@@ -120,7 +120,9 @@ def test_iceberg_metadata_tables(spark, tmp_path):
         ]
         assert [row.latest_sequence_number for row in metadata_log[1:]] == [1, 2]
         assert all(row.latest_schema_id is not None for row in metadata_log[1:])
-        assert all(row.file.endswith(".metadata.json") for row in metadata_log)
+        assert [row.file for row in metadata_log] == [
+            (tmp_path / table_name / "metadata" / f"v{version}.metadata.json").as_uri() for version in range(1, 4)
+        ]
 
         manifests = spark.sql(
             f"""

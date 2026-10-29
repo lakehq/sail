@@ -187,6 +187,7 @@ pub enum TableUpdate {
         spec_id: i32,
     },
     AddSortOrder {
+        #[serde(rename = "sort-order")]
         sort_order: SortOrder,
     },
     SetDefaultSortOrder {

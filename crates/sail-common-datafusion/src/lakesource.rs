@@ -6,10 +6,13 @@ use datafusion::catalog::Session;
 use datafusion::execution::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
-use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
+use crate::datasource::{
+    DataSource, DeleteInfo, MergeInfo, RowLevelTarget, SourceInfo, UpdateInfo,
+};
 use crate::lakeprocedure::LakeProcedureProvider;
 use crate::lakerelation::LakeRelationProvider;
 
@@ -18,6 +21,8 @@ use crate::lakerelation::LakeRelationProvider;
 pub struct LakeSourceMetadata {
     pub schema: SchemaRef,
     pub properties: Vec<(String, String)>,
+    /// Authoritative partitioning when available, including `Some(vec![])` for unpartitioned tables.
+    pub partition_by: Option<Vec<CatalogPartitionField>>,
 }
 
 /// A column definition used when catalog DDL asks a lake source to create
@@ -65,15 +70,25 @@ pub struct LakeSourceCreateTableResult {
 
 #[derive(Debug, Default)]
 pub struct LakeSourceAlterTableResult {
+    /// Current logical partition transforms after format metadata has committed.
+    pub partition_by: Option<Vec<CatalogPartitionField>>,
     /// The lake source committed catalog metadata together with the format metadata.
     pub catalog_updated: bool,
     /// Committed schema for catalogs that keep a copy of the table's columns.
     pub schema: Option<SchemaRef>,
+    /// Property changes implied by the alteration, such as renamed statistics columns.
+    pub properties: Vec<(String, String)>,
+    /// Properties removed from the previous format metadata by the alteration.
+    pub removed_properties: Vec<String>,
 }
 
 /// A row-level operation that requires lake-source-specific planning.
 #[derive(Debug, Clone)]
 pub enum RowLevelOperation {
+    Truncate {
+        target_plan: Arc<LogicalPlan>,
+        target: Box<RowLevelTarget>,
+    },
     Delete(Box<DeleteInfo>),
     Update(Box<UpdateInfo>),
     Merge(Box<MergeInfo>),
@@ -81,6 +96,36 @@ pub enum RowLevelOperation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LakeSourceAlterTableOperation {
+    AlterSnapshotReference {
+        operation: sail_common::spec::SnapshotReferenceOperation,
+    },
+    AlterIdentifierFields {
+        names: Vec<Vec<String>>,
+        drop: bool,
+    },
+    AlterPartitionSpec {
+        add: Option<(CatalogPartitionField, Option<String>)>,
+        drop: Option<CatalogPartitionField>,
+    },
+    SetPartitioning {
+        partition_by: Vec<CatalogPartitionField>,
+    },
+    SetWriteOrder {
+        order: Vec<crate::catalog::CatalogSortField>,
+        distribution: Option<String>,
+        case_sensitive: bool,
+    },
+    SetLocation {
+        location: String,
+    },
+    ReplaceColumns {
+        schema: datafusion::arrow::datatypes::SchemaRef,
+        case_sensitive: bool,
+    },
+    AlterColumns {
+        changes: Vec<sail_common::spec::ColumnChange<DataType>>,
+        case_sensitive: bool,
+    },
     /// Alters table properties (SET/UNSET TBLPROPERTIES).
     ///
     /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
@@ -96,6 +141,7 @@ pub enum LakeSourceAlterTableOperation {
     AlterColumnType {
         column_path: Vec<String>,
         data_type: DataType,
+        case_sensitive: bool,
     },
     /// Alters the default expression of a table column.
     AlterColumnDefault {
@@ -103,7 +149,14 @@ pub enum LakeSourceAlterTableOperation {
         default: Option<String>,
     },
     /// Adds a CHECK constraint after the caller has validated existing rows.
-    AddCheckConstraint { name: String, expression: String },
+    AddCheckConstraint {
+        name: String,
+        expression: String,
+    },
+    DropCheckConstraint {
+        name: String,
+        if_exists: bool,
+    },
 }
 
 /// A lakehouse data source with table metadata, DML, and DDL semantics.
@@ -126,6 +179,7 @@ pub trait LakeSource: DataSource {
         Ok(LakeSourceMetadata {
             schema: self.infer_schema(ctx, info).await?,
             properties: vec![],
+            partition_by: None,
         })
     }
 
@@ -144,9 +198,10 @@ pub trait LakeSource: DataSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<RuntimeEnv>,
+        config: &SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
-        let _ = (runtime_env, info);
+        let _ = (runtime_env, config, info);
         Ok(LakeSourceCreateTableResult::default())
     }
 
@@ -158,6 +213,10 @@ pub trait LakeSource: DataSource {
     ) -> Result<LogicalPlan> {
         let _ = ctx;
         match operation {
+            RowLevelOperation::Truncate { .. } => not_impl_err!(
+                "TRUNCATE TABLE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
             RowLevelOperation::Delete(_) => not_impl_err!(
                 "DELETE is not yet implemented for lake source '{}'",
                 self.name()
@@ -184,6 +243,17 @@ pub trait LakeSource: DataSource {
         let _ = lakehouse_table;
         let runtime_env = ctx.runtime_env();
         match operation {
+            LakeSourceAlterTableOperation::AlterSnapshotReference { .. }
+            | LakeSourceAlterTableOperation::AlterIdentifierFields { .. }
+            | LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
+            | LakeSourceAlterTableOperation::SetPartitioning { .. }
+            | LakeSourceAlterTableOperation::SetWriteOrder { .. }
+            | LakeSourceAlterTableOperation::SetLocation { .. }
+            | LakeSourceAlterTableOperation::ReplaceColumns { .. }
+            | LakeSourceAlterTableOperation::AlterColumns { .. } => not_impl_err!(
+                "Column alteration not supported for lake source '{}'",
+                self.name()
+            ),
             LakeSourceAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
                     .await
@@ -191,6 +261,7 @@ pub trait LakeSource: DataSource {
             LakeSourceAlterTableOperation::AlterColumnType {
                 column_path,
                 data_type,
+                ..
             } => {
                 self.alter_table_column_type(runtime_env, path, column_path, data_type)
                     .await
@@ -202,7 +273,8 @@ pub trait LakeSource: DataSource {
                 self.alter_table_column_default(runtime_env, path, column_path, default)
                     .await
             }
-            LakeSourceAlterTableOperation::AddCheckConstraint { .. } => {
+            LakeSourceAlterTableOperation::AddCheckConstraint { .. }
+            | LakeSourceAlterTableOperation::DropCheckConstraint { .. } => {
                 not_impl_err!(
                     "CHECK constraint alteration not supported for lake source '{}'",
                     self.name()

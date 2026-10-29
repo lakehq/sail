@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::common::{Result, not_impl_err, plan_err};
+use datafusion::common::{Result, ScalarValue, plan_err};
 use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::simplify::SimplifyContextBuilder;
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand, RowLevelWriteMode};
@@ -28,6 +31,28 @@ pub(crate) async fn plan_iceberg_row_level_write(
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    if node.command() == RowLevelCommand::Truncate {
+        let table_url =
+            IcebergLakeSource::parse_table_url(vec![node.target_location().to_string()]).await?;
+        let metadata_location = resolve_iceberg_metadata_location(
+            node.target_lakehouse_table(),
+            metadata_location_from_options(node.target_options()),
+            catalog_managed_iceberg_from_options(node.target_options()),
+        )?;
+        let table = Table::load_with_metadata_location(
+            session.runtime_env().as_ref(),
+            table_url.clone(),
+            metadata_location,
+        )
+        .await?;
+        return plan_metadata_delete(session, node, &table, &table_url)
+            .await?
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "TRUNCATE requires a full-table metadata delete"
+                )
+            });
+    }
     match node.mode() {
         RowLevelWriteMode::MergeOnRead => {
             plan_iceberg_merge_on_read(session, node, physical_inputs).await
@@ -72,7 +97,7 @@ async fn plan_iceberg_merge_on_read(
 
     let merge_projection = IcebergMergeRowProjection::try_new(write_plan.schema())?;
     let data_rows_schema = merge_projection.data_schema();
-    let write_context = prepare_iceberg_write_context(
+    let mut write_context = prepare_iceberg_write_context(
         &table_url,
         Some(table.metadata()),
         &writer_options,
@@ -80,6 +105,8 @@ async fn plan_iceberg_merge_on_read(
         &PhysicalSinkMode::Append,
         data_rows_schema.as_ref(),
     )?;
+    write_context.operation =
+        crate::operation_metrics::IcebergOperation::from_row_level(node.command());
     let writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergWriterExec::new_merge(
         Arc::clone(write_plan),
         table_url.clone(),
@@ -95,8 +122,9 @@ async fn plan_iceberg_merge_on_read(
             writer,
             table_url,
             writer_options.lakehouse_table.clone(),
-            SnapshotUpdateKind::RowDelta,
+            row_level_snapshot_update_kind(node),
         )
+        .with_output(node.output())
         .with_expected_snapshot_id(node.expected_snapshot_id()),
     ))
 }
@@ -131,7 +159,7 @@ async fn plan_iceberg_copy_on_write(
     let partition_columns = IcebergLakeSource::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session, node)?;
     let distribution_key = match node.command() {
-        RowLevelCommand::Delete => "write.delete.distribution-mode",
+        RowLevelCommand::Truncate | RowLevelCommand::Delete => "write.delete.distribution-mode",
         RowLevelCommand::Update => "write.update.distribution-mode",
         RowLevelCommand::Merge => "write.merge.distribution-mode",
     };
@@ -146,11 +174,15 @@ async fn plan_iceberg_copy_on_write(
     writer_options.copy_on_write_partitioning = match mode.to_ascii_lowercase().as_str() {
         "none" => false,
         "hash" => true,
-        "range" => return not_impl_err!("Iceberg copy-on-write range distribution"),
+        "range" => {
+            // A single ordered range preserves the contract until range exchanges are available.
+            writer_options.copy_on_write_single_partition = true;
+            false
+        }
         _ => return plan_err!("Unknown Iceberg write distribution mode: {mode}"),
     };
     let data_schema = IcebergMergeRowProjection::try_new(input.schema())?.data_schema();
-    let write_context = prepare_iceberg_write_context(
+    let mut write_context = prepare_iceberg_write_context(
         &table_url,
         Some(table.metadata()),
         &writer_options,
@@ -158,6 +190,8 @@ async fn plan_iceberg_copy_on_write(
         &PhysicalSinkMode::Append,
         data_schema.as_ref(),
     )?;
+    write_context.operation =
+        crate::operation_metrics::IcebergOperation::from_row_level(node.command());
     let writer = Arc::new(IcebergWriterExec::new_copy_on_write(
         Arc::clone(input),
         table_url.clone(),
@@ -165,22 +199,30 @@ async fn plan_iceberg_copy_on_write(
         writer_options.clone(),
         write_context,
     )?);
-    let snapshot_update_kind = if node.merge_options().is_some_and(|options| {
-        options.matched_clauses.is_empty() && options.not_matched_by_source_clauses.is_empty()
-    }) {
-        SnapshotUpdateKind::FastAppend
-    } else {
-        SnapshotUpdateKind::RowLevelRewrite
-    };
     Ok(Arc::new(
         IcebergCommitExec::new(
             writer,
             table_url,
             writer_options.lakehouse_table.clone(),
-            snapshot_update_kind,
+            row_level_snapshot_update_kind(node),
         )
+        .with_output(node.output())
         .with_expected_snapshot_id(node.expected_snapshot_id()),
     ))
+}
+
+fn row_level_snapshot_update_kind(node: &RowLevelWriteNode) -> SnapshotUpdateKind {
+    // Insert-only MERGE appends even when no source rows are inserted.
+    if node.merge_options().is_some_and(|options| {
+        options.matched_clauses.is_empty() && options.not_matched_by_source_clauses.is_empty()
+    }) {
+        SnapshotUpdateKind::FastAppend
+    } else {
+        match node.mode() {
+            RowLevelWriteMode::MergeOnRead => SnapshotUpdateKind::RowDelta,
+            RowLevelWriteMode::CopyOnWrite => SnapshotUpdateKind::RowLevelRewrite,
+        }
+    }
 }
 
 async fn plan_metadata_delete(
@@ -193,11 +235,31 @@ async fn plan_metadata_delete(
         .condition()
         .map(|condition| condition.expr.clone())
         .unwrap_or_else(|| datafusion_expr::lit(true));
-    let Some(paths) = crate::logical::row_level::target_scan(node.raw_target())?
-        .metadata_delete_paths(session, &predicate)
-        .await?
-    else {
-        return Ok(None);
+    let schema = node.raw_target().schema();
+    let context = SimplifyContextBuilder::default()
+        .with_schema(Arc::clone(schema))
+        .with_config_options(Arc::new(session.config_options().clone()))
+        .with_query_execution_start_time(session.execution_props().query_execution_start_time)
+        .build();
+    let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
+    let simplified = simplifier.simplify(simplifier.coerce(predicate.clone(), schema)?)?;
+    let skip_empty_commit = matches!(
+        simplified,
+        Expr::Literal(
+            ScalarValue::Boolean(Some(false) | None) | ScalarValue::Null,
+            _
+        )
+    );
+    let paths = if skip_empty_commit {
+        Vec::new()
+    } else {
+        let Some(paths) = crate::logical::row_level::target_scan(node.raw_target())?
+            .metadata_delete_paths(session, &predicate)
+            .await?
+        else {
+            return Ok(None);
+        };
+        paths
     };
     let writer_options = resolve_row_level_writer_options(session, node)?;
     let partition_columns = IcebergLakeSource::partition_columns_from_metadata(table)?;
@@ -216,7 +278,9 @@ async fn plan_metadata_delete(
     let batch = encode_commit_meta(CommitMeta {
         table_uri: table_url.to_string(),
         removed_data_file_paths: paths,
-        skip_empty_commit: true,
+        // Only a provably false or NULL predicate skips the commit, not an
+        // ordinary metadata DELETE whose original predicate prunes all files.
+        skip_empty_commit,
         requirements: write_context.requirements,
         table_properties: writer_options.table_properties.clone(),
         lakehouse_table: writer_options.lakehouse_table.clone(),
@@ -228,8 +292,13 @@ async fn plan_metadata_delete(
             input,
             table_url.clone(),
             writer_options.lakehouse_table,
-            SnapshotUpdateKind::RowLevelRewrite,
+            if node.command() == RowLevelCommand::Truncate {
+                SnapshotUpdateKind::Truncate
+            } else {
+                SnapshotUpdateKind::RowLevelRewrite
+            },
         )
+        .with_output(node.output())
         .with_expected_snapshot_id(node.expected_snapshot_id()),
     )))
 }

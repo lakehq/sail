@@ -173,6 +173,7 @@ def test_failover_from_dead_primary_endpoint(hms_service: HmsService) -> None:
     catalog = HmsCatalogProvider(
         "native-hms-failover",
         ["127.0.0.1:1", hms_service.endpoint],
+        thrift_transport=hms_service.transport,
         connect_timeout_secs=1,
     )
 

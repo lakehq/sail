@@ -330,17 +330,20 @@ pub fn build_standard_write_layers(
     // DeltaCommitExec is single-partition; gather writer partitions first.
     let writer: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(writer));
 
-    Ok(Arc::new(DeltaCommitExec::new(
-        writer,
-        ctx.table_url().clone(),
-        ctx.partition_columns().to_vec(),
-        ctx.table_exists(),
-        original_schema,
-        sink_mode.clone(),
-        ctx.options().user_metadata.clone(),
-        write_context.commit_context.clone(),
-        ctx.lakehouse_table().cloned(),
-    )))
+    Ok(Arc::new(
+        DeltaCommitExec::new(
+            writer,
+            ctx.table_url().clone(),
+            ctx.partition_columns().to_vec(),
+            ctx.table_exists(),
+            original_schema,
+            sink_mode.clone(),
+            ctx.options().user_metadata.clone(),
+            write_context.commit_context.clone(),
+            ctx.lakehouse_table().cloned(),
+        )
+        .with_output(ctx.config().output),
+    ))
 }
 
 pub fn align_schemas_for_union(

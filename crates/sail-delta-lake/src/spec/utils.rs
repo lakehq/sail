@@ -27,6 +27,7 @@ use super::schema::{DataType, StructField};
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs#L1092-L1150>
 const INVALID: &AsciiSet = &CONTROLS
+    .add(b' ')
     .add(b'\\')
     .add(b'{')
     .add(b'^')

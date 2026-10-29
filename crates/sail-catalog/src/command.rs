@@ -2,7 +2,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
+use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation, TableKind};
 use sail_common_datafusion::datasource::{DataSourceRegistry, is_lakehouse_format};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::{
@@ -92,6 +92,11 @@ pub enum CatalogCommand {
         table: Vec<String>,
         options: DropTableOptions,
     },
+    RenameTable {
+        table: Vec<String>,
+        destination: Vec<String>,
+        if_exists: bool,
+    },
     AlterTable {
         table: Vec<String>,
         if_exists: bool,
@@ -153,6 +158,9 @@ pub enum CatalogCommand {
         table: Vec<String>,
         extended: bool,
     },
+    TruncateTable {
+        table: Vec<String>,
+    },
     DescribeDatabase {
         database: Vec<String>,
         extended: bool,
@@ -188,6 +196,7 @@ impl CatalogCommand {
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
             CatalogCommand::AlterTable { .. } => "AlterTable",
+            CatalogCommand::RenameTable { .. } => "RenameTable",
             CatalogCommand::ListColumns { .. } => "ListColumns",
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
@@ -201,6 +210,7 @@ impl CatalogCommand {
             CatalogCommand::CreateTemporaryView { .. } => "CreateTemporaryView",
             CatalogCommand::CreateView { .. } => "CreateView",
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
+            CatalogCommand::TruncateTable { .. } => "TruncateTable",
             CatalogCommand::DescribeDatabase { .. } => "DescribeDatabase",
         }
     }
@@ -255,9 +265,11 @@ impl CatalogCommand {
             | CatalogCommand::DropDatabase { .. }
             | CatalogCommand::DropTable { .. }
             | CatalogCommand::AlterTable { .. }
+            | CatalogCommand::RenameTable { .. }
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
-            | CatalogCommand::DropView { .. } => display.bools().schema()?,
+            | CatalogCommand::DropView { .. }
+            | CatalogCommand::TruncateTable { .. } => display.bools().schema()?,
         };
         Ok(schema)
     }
@@ -440,6 +452,17 @@ impl CatalogCommand {
                 manager.drop_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
+            CatalogCommand::RenameTable {
+                table,
+                destination,
+                if_exists,
+            } => {
+                match manager.rename_table(&table, &destination).await {
+                    Err(CatalogError::NotFound(CatalogObject::Table, _)) if if_exists => {}
+                    result => result?,
+                };
+                display.bools().to_record_batch(vec![true])?
+            }
             CatalogCommand::AlterTable {
                 table,
                 if_exists,
@@ -467,6 +490,50 @@ impl CatalogCommand {
                     }
                     _ => (None, None),
                 };
+                if matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
+                    && (location.is_none()
+                        || !format
+                            .as_deref()
+                            .is_some_and(|format| format.eq_ignore_ascii_case("iceberg")))
+                {
+                    return Err(CatalogError::NotSupported(
+                        "Snapshot references require an Iceberg table with a location".into(),
+                    ));
+                }
+                if format
+                    .as_deref()
+                    .is_some_and(|format| !is_lakehouse_format(format))
+                    && let AlterTableOptions::AlterColumns { changes, .. } = &options
+                    && changes.iter().any(|change| {
+                        matches!(change, sail_common::spec::ColumnChange::Rename { .. })
+                    })
+                {
+                    return Err(CatalogError::NotSupported(
+                        "RENAME COLUMN requires a format that preserves column identities".into(),
+                    ));
+                }
+                if format
+                    .as_deref()
+                    .is_some_and(|format| format.eq_ignore_ascii_case("csv"))
+                    && match &options {
+                        AlterTableOptions::ReplaceColumns { .. } => true,
+                        AlterTableOptions::AlterColumns { changes, .. } => {
+                            changes.iter().any(|change| {
+                                matches!(
+                                    change,
+                                    sail_common::spec::ColumnChange::Add { .. }
+                                        | sail_common::spec::ColumnChange::Drop { .. }
+                                        | sail_common::spec::ColumnChange::Position { .. }
+                                )
+                            })
+                        }
+                        _ => false,
+                    }
+                {
+                    return Err(CatalogError::NotSupported(
+                        "CSV column additions, drops, reordering and replacement require rewriting existing files".into(),
+                    ));
+                }
 
                 // Lake sources commit authoritative format metadata, including catalog
                 // metadata when the provider supports an atomic update.
@@ -476,6 +543,18 @@ impl CatalogCommand {
                     // Skip straight to catalog-only update.
                     // This mirrors Spark+Delta where DeltaCatalog intercepts ALTER TABLE
                     // for Delta tables but plain tables fall through to SessionCatalog.
+                    if matches!(
+                        options,
+                        AlterTableOptions::AlterIdentifierFields { .. }
+                            | AlterTableOptions::SetWriteOrder { .. }
+                            | AlterTableOptions::AlterPartitionSpec { .. }
+                            | AlterTableOptions::SetPartitioning { .. }
+                    ) && !format.eq_ignore_ascii_case("iceberg")
+                    {
+                        return Err(CatalogError::NotSupported(
+                            "Identifier, partition and write order evolution require an Iceberg table".into(),
+                        ));
+                    }
                     if !is_lakehouse_format(&format) {
                         manager.alter_table(&table, options).await?;
                         return Ok(display.bools().to_record_batch(vec![true])?);
@@ -499,7 +578,8 @@ impl CatalogCommand {
                         )
                         .await?
                         .execution;
-                    if matches!(lakehouse_table.commit,
+                    if !matches!(options, AlterTableOptions::AlterSnapshotReference { .. })
+                        && matches!(lakehouse_table.commit,
                         sail_common_datafusion::catalog::CommitAuthority::IcebergRestCommit
                         | sail_common_datafusion::catalog::CommitAuthority::VersionedCatalogCommit)
                     {
@@ -517,13 +597,47 @@ impl CatalogCommand {
                     // observe successful storage mutation followed by stale
                     // DESCRIBE/SHOW metadata.
                     if !result.catalog_updated {
-                        let catalog_options = catalog_sync_alter_options(&format, &options)?;
+                        let mut catalog_options = catalog_sync_alter_options(&format, &options)?;
                         if let Some(schema) = result.schema {
+                            if let AlterTableOptions::ReplaceColumns { fields, .. } =
+                                &mut catalog_options
+                            {
+                                *fields = schema.fields().clone();
+                            }
                             manager
                                 .alter_table_with_schema(&table, catalog_options, schema)
                                 .await?;
                         } else {
                             manager.alter_table(&table, catalog_options).await?;
+                        }
+                        if let Some(partition_by) = result.partition_by {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::SetPartitioning { partition_by },
+                                )
+                                .await?;
+                        }
+                        if !result.properties.is_empty() {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::SetTableProperties {
+                                        properties: result.properties,
+                                    },
+                                )
+                                .await?;
+                        }
+                        if !result.removed_properties.is_empty() {
+                            manager
+                                .alter_table(
+                                    &table,
+                                    AlterTableOptions::UnsetTableProperties {
+                                        keys: result.removed_properties,
+                                        if_exists: true,
+                                    },
+                                )
+                                .await?;
                         }
                     }
                     return Ok(display.bools().to_record_batch(vec![true])?);
@@ -711,6 +825,104 @@ impl CatalogCommand {
             }
             CatalogCommand::CreateView { view, options } => {
                 manager.create_view(&view, options).await?;
+                display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::TruncateTable { table } => {
+                // Resolve views first, as Spark does, so that a temporary view cannot
+                // redirect the command to a table of the same name.
+                let status = manager.get_table_or_view(&table).await?;
+                let TableKind::Table {
+                    location,
+                    format,
+                    partition_by,
+                    is_external,
+                    ..
+                } = status.kind
+                else {
+                    return Err(CatalogError::NotSupported(format!(
+                        "[EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE] 'TRUNCATE TABLE' expects a table but `{}` is a view.",
+                        status.name
+                    )));
+                };
+                // Like Spark's `TruncateTableCommand` (`CANNOT_TRUNCATE_EXTERNAL_TABLE`), the data
+                // of an external table, which includes every table with a `LOCATION`, is never
+                // deleted.
+                if is_external {
+                    return Err(CatalogError::NotSupported(format!(
+                        "[CANNOT_TRUNCATE_EXTERNAL_TABLE] Operation not allowed: TRUNCATE TABLE on external tables: `{}`.",
+                        status.name
+                    )));
+                }
+                if is_lakehouse_format(&format) {
+                    return Err(CatalogError::NotSupported(
+                        "TRUNCATE TABLE is not supported for tables with \
+                         transaction logs (Delta Lake, Iceberg). \
+                         Use format-specific overwrite operations instead."
+                            .to_string(),
+                    ));
+                }
+                let partition_columns = partition_by
+                    .iter()
+                    .map(|field| field.column.clone())
+                    .collect::<Vec<_>>();
+                if let Some(ref loc) = location {
+                    let Some(dir) = local_table_dir(loc)? else {
+                        return Err(CatalogError::NotSupported(format!(
+                            "TRUNCATE TABLE for non-local table location: {loc}"
+                        )));
+                    };
+                    if dir.parent().is_none() {
+                        return Err(CatalogError::External(format!(
+                            "TRUNCATE TABLE on filesystem root is not allowed: {}",
+                            dir.display()
+                        )));
+                    }
+                    tokio::task::spawn_blocking(move || -> CatalogResult<()> {
+                        // Like Spark, recreate the directory if it is gone.
+                        if !dir.exists() {
+                            return std::fs::create_dir_all(&dir).map_err(|e| {
+                                CatalogError::External(format!(
+                                    "failed to create table directory at {}: {e}",
+                                    dir.display()
+                                ))
+                            });
+                        }
+                        let has_delta = dir.join("_delta_log").exists();
+                        // Iceberg tables have a `metadata/version-hint.text` file
+                        // (or `.iceberg` marker). A plain `metadata/` subdirectory
+                        // is not sufficient — it could be user data.
+                        let has_iceberg_meta =
+                            dir.join("metadata").join("version-hint.text").exists();
+                        let has_iceberg_dot = dir.join(".iceberg").exists();
+                        if has_delta || has_iceberg_meta || has_iceberg_dot {
+                            return Err(CatalogError::NotSupported(
+                                "TRUNCATE TABLE is not supported for tables with \
+                                 transaction logs (Delta Lake, Iceberg). \
+                                 Use format-specific overwrite operations instead."
+                                    .to_string(),
+                            ));
+                        }
+                        // Like Spark's `TruncateTableCommand`, a partitioned table only
+                        // loses its partition directories; otherwise the table
+                        // directory is replaced by an empty one with the same
+                        // permissions.
+                        if partition_columns.is_empty() {
+                            replace_with_empty_dir(&dir)
+                        } else {
+                            clear_partition_dirs(&dir, &partition_columns)
+                        }
+                        .map_err(|e| {
+                            CatalogError::External(format!(
+                                "failed to truncate table directory at {}: {e}",
+                                dir.display()
+                            ))
+                        })
+                    })
+                    .await
+                    .map_err(|e| {
+                        CatalogError::External(format!("TRUNCATE TABLE task failed: {e}"))
+                    })??;
+                }
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::DescribeDatabase { database, extended } => {
@@ -935,6 +1147,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     lake_source
         .create_table_metadata(
             ctx.runtime_env(),
+            &ctx.session_config(),
             LakeSourceCreateTableInfo {
                 path: location,
                 columns: columns
@@ -1030,6 +1243,98 @@ impl CreateTableColumnView for sail_common_datafusion::catalog::TableColumnStatu
     }
 }
 
+/// Resolves a table location to the local directory that Sail's own table I/O reads and writes:
+/// a `file:` URI is converted to a path (percent-decoded, `localhost` authority accepted), a bare
+/// path is taken literally, and a relative path is resolved against the current directory.
+/// A location with any other scheme is not local.
+fn local_table_dir(location: &str) -> CatalogResult<Option<std::path::PathBuf>> {
+    if location
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+    {
+        let path = url::Url::parse(location)
+            .ok()
+            .and_then(|url| url.to_file_path().ok());
+        return match path {
+            Some(path) => Ok(Some(path)),
+            None => Err(CatalogError::External(format!(
+                "TRUNCATE TABLE cannot resolve the table location {location} to a local path"
+            ))),
+        };
+    }
+    if location.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.len() > 1
+            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    }) {
+        return Ok(None);
+    }
+    if location.is_empty() {
+        return Err(CatalogError::External(
+            "TRUNCATE TABLE requires a non-empty table location".to_string(),
+        ));
+    }
+    let path = std::path::PathBuf::from(location);
+    if path.is_absolute() {
+        return Ok(Some(path));
+    }
+    let cwd = std::env::current_dir().map_err(|e| {
+        CatalogError::External(format!("TRUNCATE TABLE cannot resolve table location: {e}"))
+    })?;
+    Ok(Some(cwd.join(path)))
+}
+
+/// Empties the partition directories of a Hive-partitioned table (`col=value/...`, one level per
+/// partition column) and leaves everything else under `dir` in place, as Spark's
+/// `TruncateTableCommand` does with the partition locations it gets from the catalog. Each
+/// partition directory is replaced by an empty one, so a symlinked partition becomes a plain
+/// directory and its target is left alone.
+fn clear_partition_dirs(dir: &std::path::Path, columns: &[String]) -> std::io::Result<()> {
+    let Some((column, rest)) = columns.split_first() else {
+        return replace_with_empty_dir(dir);
+    };
+    let prefix = format!("{column}=");
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        // `Path::is_dir` follows symlinks, as the table reads do.
+        let is_partition = path.is_dir()
+            && entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.get(..prefix.len()))
+                .is_some_and(|head| head.eq_ignore_ascii_case(&prefix));
+        if is_partition {
+            clear_partition_dirs(&path, rest)?;
+        }
+    }
+    Ok(())
+}
+
+/// Replaces `dir` with an empty directory that has the same permissions. The old contents are
+/// only deleted once the new directory is in place, so a failure leaves the data where it was.
+fn replace_with_empty_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    let permissions = std::fs::metadata(dir)?.permissions();
+    let backup = {
+        let name = dir.file_name().unwrap_or_default().to_string_lossy();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        dir.with_file_name(format!(".{name}.truncate-{}-{nanos}", std::process::id()))
+    };
+    std::fs::rename(dir, &backup)?;
+    let created =
+        std::fs::create_dir(dir).and_then(|()| std::fs::set_permissions(dir, permissions));
+    if let Err(e) = created {
+        let _ = std::fs::remove_dir(dir);
+        std::fs::rename(&backup, dir)?;
+        return Err(e);
+    }
+    std::fs::remove_dir_all(&backup)
+}
+
 fn catalog_sync_alter_options(
     format: &str,
     options: &AlterTableOptions,
@@ -1039,6 +1344,12 @@ fn catalog_sync_alter_options(
             // Existence was checked against the format metadata before committing.
             Ok(AlterTableOptions::UnsetTableProperties {
                 keys: keys.clone(),
+                if_exists: true,
+            })
+        }
+        AlterTableOptions::DropCheckConstraint { name, .. } => {
+            Ok(AlterTableOptions::UnsetTableProperties {
+                keys: vec![format!("delta.constraints.{}", name.to_lowercase())],
                 if_exists: true,
             })
         }
@@ -1513,5 +1824,41 @@ mod tests {
         assert!(
             matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
         );
+    }
+    #[test]
+    fn test_local_table_dir_converts_file_uris_only() {
+        let dir = |location: &str| local_table_dir(location).ok().flatten();
+        let spaced = Some(std::path::PathBuf::from("/tmp/a b"));
+        assert_eq!(dir("file:///tmp/a%20b"), spaced);
+        assert_eq!(dir("FILE:///tmp/a%20b"), spaced);
+        assert_eq!(dir("file:/tmp/a%20b"), spaced);
+        // `localhost` is an empty authority, as in the table I/O
+        assert_eq!(dir("file://localhost/tmp/a%20b"), spaced);
+        // a bare path is taken literally, so a real `%` is preserved
+        assert_eq!(
+            dir("/tmp/a%20b"),
+            Some(std::path::PathBuf::from("/tmp/a%20b"))
+        );
+    }
+
+    #[test]
+    fn test_local_table_dir_resolves_relative_paths_against_cwd() {
+        let cwd = std::env::current_dir().ok();
+        assert!(cwd.is_some());
+        let expected = cwd.map(|cwd| cwd.join("spark-warehouse/t"));
+        assert_eq!(
+            local_table_dir("spark-warehouse/t").ok().flatten(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_local_table_dir_rejects_other_schemes_and_bad_locations() {
+        for location in ["s3://bucket/key", "memory:///t", "hdfs://nn/path"] {
+            assert!(matches!(local_table_dir(location), Ok(None)), "{location}");
+        }
+        for location in ["", "file://otherhost/tmp/t"] {
+            assert!(local_table_dir(location).is_err(), "{location}");
+        }
     }
 }

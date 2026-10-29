@@ -212,6 +212,13 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         plan
     };
 
+    from_ast_with_clause(plan, with)
+}
+
+pub(crate) fn from_ast_with_clause(
+    plan: spec::QueryPlan,
+    with: Option<WithClause>,
+) -> SqlResult<spec::QueryPlan> {
     if let Some(WithClause {
         with: _,
         recursive,

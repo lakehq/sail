@@ -2,10 +2,37 @@ import datetime
 from decimal import Decimal
 
 import pytest
+from pyspark.errors import AnalysisException
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import any_of
+
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="Pre-existing projected array-index type validation bug", strict=True)
+@pytest.mark.parametrize("ansi", [True, False])
+@pytest.mark.parametrize("value", ["0.5", "0.5D"])
+@pytest.mark.parametrize("operation", ["schema", "collect"])
+def test_projected_array_index_analysis_error(spark, ansi, value, operation):
+    previous = spark.conf.get("spark.sql.ansi.enabled")
+    try:
+        spark.conf.set("spark.sql.ansi.enabled", ansi)
+        source = spark.range(2).select(
+            F.array(F.lit(10), F.lit(20)).alias("a"),
+            F.when(F.col("id") == 0, F.lit(0)).otherwise(F.expr(value)).alias("0"),
+        )
+
+        def evaluate():
+            result = source.select(F.col("a")[F.col("0")].alias("v"))
+            if operation == "schema":
+                return result.schema
+            return result.collect()
+
+        with pytest.raises(AnalysisException, match=r"DATATYPE_MISMATCH\.UNEXPECTED_INPUT_TYPE"):
+            evaluate()
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous)
 
 
 @pytest.mark.parametrize(
@@ -94,3 +121,49 @@ def test_div(spark):
         Row(result=-13)
     ]
     assert spark.sql("SELECT INTERVAL '100' HOUR div INTERVAL '1' DAY AS result").collect() == [Row(result=4)]
+
+
+@pytest.mark.parametrize("data_type", ["float", "double"])
+@pytest.mark.parametrize("zero", [0.0, -0.0])
+def test_signed_zero_divisors(spark, data_type, zero):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        divisor = F.lit(zero).cast(data_type)
+        rows = (
+            spark.range(2)
+            .select(
+                (F.lit(1) / divisor).alias("literal_division"),
+                (F.lit(1) % divisor).alias("literal_remainder"),
+                (F.col("id") / divisor).alias("column_division"),
+                (F.col("id") % divisor).alias("column_remainder"),
+            )
+            .collect()
+        )
+        assert (
+            rows
+            == [Row(literal_division=None, literal_remainder=None, column_division=None, column_remainder=None)] * 2
+        )
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)
+
+
+@pytest.mark.parametrize("ansi", ["true", "false"])
+def test_div_after_projected_case(spark, ansi):
+    previous_ansi = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    try:
+        projected = spark.range(2).select(
+            F.when(F.col("id") == 0, F.lit(0)).otherwise(F.expr("1.5")).alias("numerator"),
+            F.when(F.col("id") == 0, F.lit(1)).otherwise(F.expr("0.5")).alias("denominator"),
+        )
+        rows = projected.select(
+            F.expr("numerator DIV 0.5").alias("dividend_case"),
+            F.expr("3 DIV denominator").alias("divisor_case"),
+        ).collect()
+        assert sorted(rows) == [
+            Row(dividend_case=0, divisor_case=3),
+            Row(dividend_case=3, divisor_case=6),
+        ]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", previous_ansi)

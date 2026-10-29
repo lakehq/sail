@@ -37,3 +37,28 @@ Feature: upper output schema
         root
          |-- result: string (nullable = true)
         """
+
+    @sail-bug
+    Scenario: distinct upper results remain non-nullable for non-null input
+      When query
+        """
+        SELECT DISTINCT upper(p) AS s
+        FROM VALUES ('x1.CSV'), ('x1.CSV') AS t(p)
+        """
+      Then query schema
+        """
+        root
+         |-- s: string (nullable = false)
+        """
+
+  Rule: Collected results
+
+    Scenario: distinct upper results can be collected
+      When query
+        """
+        SELECT DISTINCT upper(p) AS s
+        FROM VALUES ('x1.CSV'), ('x1.CSV') AS t(p)
+        """
+      Then query result collected
+        | s      |
+        | X1.CSV |

@@ -29,9 +29,7 @@ Feature: Lakehouse commits in distributed execution
         INSERT INTO distributed_delta_commit
         SELECT id FROM range(0, 400, 1, 4)
         """
-      Then query result collected
-        | count |
-        | 400   |
+      Then query result is empty
       Then data files in location count is 4
       Then delta log latest commit info contains
         | path                           | value |
@@ -74,9 +72,7 @@ Feature: Lakehouse commits in distributed execution
         INSERT INTO distributed_iceberg_commit
         SELECT id FROM range(0, 400, 1, 4)
         """
-      Then query result collected
-        | count |
-        | 400   |
+      Then query result is empty
       Then data files in location count is 4
       When query
         """

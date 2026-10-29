@@ -52,6 +52,16 @@ def _hms_test_database_name(request: pytest.FixtureRequest, prefix: str, max_nam
     return f"{prefix}{safe_name[:available]}{suffix}"
 
 
+def _hadoop_aws_package() -> str:
+    from pyspark.find_spark_home import _find_spark_home
+
+    jars = list((Path(_find_spark_home()) / "jars").glob("hadoop-client-api-*.jar"))
+    if len(jars) != 1:
+        raise RuntimeError(f"Expected one Hadoop client API jar, found {jars}")
+    version = jars[0].name.removeprefix("hadoop-client-api-").removesuffix(".jar")
+    return f"org.apache.hadoop:hadoop-aws:{version}"
+
+
 def _hms_s3_core_site_xml(endpoint: str) -> str:
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <configuration>
@@ -97,7 +107,7 @@ def _hms_s3_core_site_xml(endpoint: str) -> str:
 
 def _spark_s3_options(endpoint: str) -> dict[str, str]:
     return {
-        "spark.jars.packages": "org.apache.hadoop:hadoop-aws:3.4.2",
+        "spark.jars.packages": _hadoop_aws_package(),
         "spark.hadoop.fs.s3.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
         "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
         "spark.hadoop.fs.s3a.endpoint": endpoint,
@@ -267,7 +277,8 @@ def hms_s3_container(
     container.with_env("HIVE_AUX_JARS_PATH", s3a_classpath)
     container.with_env(
         "SERVICE_OPTS",
-        f"-Dhive.metastore.warehouse.dir={hms_warehouse_dir.as_uri()}",
+        f"-Dhive.metastore.warehouse.dir={hms_warehouse_dir.as_uri()} "
+        "-Dhive.metastore.disallow.incompatible.col.type.changes=false",
     )
     container.with_network(hms_s3_network)
     container.with_volume_mapping(hms_warehouse_dir, str(hms_warehouse_dir), mode="rw")
@@ -386,7 +397,7 @@ def jvm_spark(
     ]
     spark_packages = [
         _DELTA_SPARK_PACKAGE,
-        "org.apache.hadoop:hadoop-aws:3.4.2",
+        _hadoop_aws_package(),
         # Avro is a built-in but *external* datasource in Spark 2.4+: the runtime jar
         # must be on the classpath for `USING AVRO`.
         _AVRO_SPARK_PACKAGE,

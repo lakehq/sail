@@ -9,7 +9,7 @@ use super::super::arguments::optional_i64;
 use crate::spec::snapshots::{MAIN_BRANCH, SnapshotReference, SnapshotRetention};
 use crate::spec::{Snapshot, TableMetadata, TableRequirement, TableUpdate};
 
-pub(in crate::procedure) fn ancestors_output(
+pub(crate) fn ancestors_output(
     metadata: &TableMetadata,
     invocation: &LakeProcedureInvocation,
 ) -> Result<RecordBatch> {
@@ -37,13 +37,14 @@ pub(in crate::procedure) fn ancestors_output(
 }
 
 #[derive(Clone)]
-pub(in crate::procedure) enum SnapshotOperation {
+pub(crate) enum SnapshotOperation {
     RollbackToSnapshot(i64),
     RollbackToTimestamp(i64),
     SetCurrentSnapshot {
         snapshot_id: Option<i64>,
         reference: Option<String>,
     },
+    AlterReference(sail_common::spec::SnapshotReferenceOperation),
     FastForward {
         branch: String,
         to: String,
@@ -51,8 +52,9 @@ pub(in crate::procedure) enum SnapshotOperation {
 }
 
 pub(super) struct PreparedSnapshotOperation {
-    pub(super) requirement: TableRequirement,
-    pub(super) update: TableUpdate,
+    pub(super) requirements: Vec<TableRequirement>,
+    pub(super) updates: Vec<TableUpdate>,
+    pub(super) manifests: Vec<(String, Vec<u8>)>,
     pub(super) output: RecordBatch,
     pub(super) changed: bool,
 }
@@ -64,6 +66,9 @@ impl SnapshotOperation {
         schema: datafusion::arrow::datatypes::SchemaRef,
     ) -> Result<PreparedSnapshotOperation> {
         match self {
+            Self::AlterReference(operation) => {
+                super::reference::prepare_reference(metadata, operation, schema)
+            }
             Self::RollbackToSnapshot(snapshot_id) => {
                 let previous = required_current_snapshot(metadata)?;
                 snapshot(metadata, *snapshot_id)?;
@@ -148,8 +153,9 @@ impl SnapshotOperation {
                 };
                 let output = fast_forward_output(schema, branch, previous, target)?;
                 Ok(PreparedSnapshotOperation {
-                    requirement,
-                    update,
+                    requirements: vec![requirement],
+                    updates: vec![update],
+                    manifests: vec![],
                     output,
                     changed: previous != Some(target),
                 })
@@ -196,17 +202,18 @@ fn prepare_main_reference_update(
         .map(|reference| reference.retention.clone())
         .unwrap_or_else(default_branch_retention);
     Ok(PreparedSnapshotOperation {
-        requirement: TableRequirement::RefSnapshotIdMatch {
+        requirements: vec![TableRequirement::RefSnapshotIdMatch {
             r#ref: MAIN_BRANCH.to_string(),
             snapshot_id: previous,
-        },
-        update: TableUpdate::SetSnapshotRef {
+        }],
+        updates: vec![TableUpdate::SetSnapshotRef {
             ref_name: MAIN_BRANCH.to_string(),
             reference: SnapshotReference {
                 snapshot_id: target,
                 retention,
             },
-        },
+        }],
+        manifests: vec![],
         output,
         changed: previous != Some(target),
     })
@@ -415,8 +422,8 @@ mod tests {
         }
         .prepare(&metadata, set_current_procedure.schema())?;
         assert!(matches!(
-            prepared.update,
-            TableUpdate::SetSnapshotRef { reference, .. } if reference.snapshot_id == 4
+            prepared.updates.as_slice(),
+            [TableUpdate::SetSnapshotRef { reference, .. }] if reference.snapshot_id == 4
         ));
         Ok(())
     }
@@ -453,8 +460,8 @@ mod tests {
         }
         .prepare(&metadata, schema.clone())?;
         assert!(matches!(
-            prepared.update,
-            TableUpdate::SetSnapshotRef { reference, .. }
+            prepared.updates.as_slice(),
+            [TableUpdate::SetSnapshotRef { reference, .. }]
                 if reference.snapshot_id == 3 && reference.retention == retention
         ));
 

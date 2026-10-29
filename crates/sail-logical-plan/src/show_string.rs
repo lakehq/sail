@@ -36,11 +36,25 @@ pub enum ShowStringStyle {
 pub struct ShowStringFormat {
     style: ShowStringStyle,
     truncate: usize,
+    timezone: Option<Arc<str>>,
 }
 
 impl ShowStringFormat {
     pub fn new(style: ShowStringStyle, truncate: usize) -> Self {
-        Self { style, truncate }
+        Self {
+            style,
+            truncate,
+            timezone: None,
+        }
+    }
+
+    /// Renders timestamps with a timezone in `timezone`, such as Spark's session time zone.
+    pub fn with_timezone(self, timezone: Option<Arc<str>>) -> Self {
+        Self { timezone, ..self }
+    }
+
+    pub fn timezone(&self) -> Option<&Arc<str>> {
+        self.timezone.as_ref()
     }
 
     pub fn style(&self) -> ShowStringStyle {
@@ -62,7 +76,7 @@ impl ShowStringFormat {
     }
 
     fn get_formatters<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<ArrayFormatter<'a>>> {
-        let options = FormatOptions::default();
+        let options = FormatOptions::default().with_timezone(self.timezone.as_deref());
         Ok(batch
             .columns()
             .iter()

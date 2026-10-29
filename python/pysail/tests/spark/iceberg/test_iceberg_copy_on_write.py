@@ -8,10 +8,16 @@ from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
 from pyiceberg.types import LongType, NestedField
 
-from pysail.testing.spark.steps.iceberg import _current_snapshot, _find_latest_metadata, _latest_metadata_path
+from pysail.testing.spark.steps.iceberg import (
+    _assert_noop_snapshot,
+    _current_snapshot,
+    _find_latest_metadata,
+    _latest_metadata_path,
+)
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
+from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
 
 
 @pytest.mark.yamlsnapshot(group="plan")
@@ -185,7 +191,7 @@ def test_cow_empty_table_and_insert_only_merge(spark, tmp_path, operation, expli
     spark.sql(f"DROP TABLE IF EXISTS {name}")
     try:
         spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg LOCATION '{path.as_uri()}' {mode_property}")
-        metadata_path = _latest_metadata_path(path)
+        before = _find_latest_metadata(path)
         statements = {
             "delete": f"DELETE FROM {name} WHERE id = 1",
             "update": f"UPDATE {name} SET id = 2",
@@ -193,7 +199,8 @@ def test_cow_empty_table_and_insert_only_merge(spark, tmp_path, operation, expli
                         WHEN MATCHED THEN DELETE""",
         }
         spark.sql(statements[operation]).collect()
-        assert _latest_metadata_path(path) == metadata_path
+        _assert_noop_snapshot(before, _find_latest_metadata(path), operation)
+        assert spark.table(name).collect() == []
         assert list(path.rglob("*.parquet")) == []
         spark.sql(f"""MERGE INTO {name} AS t USING (SELECT 1L AS id) AS s ON t.id = s.id
                       WHEN NOT MATCHED THEN INSERT *""").collect()
@@ -214,7 +221,9 @@ def test_cow_applies_existing_equality_and_position_deletes(spark, tmp_path):
                                      'write.merge.mode' = 'merge-on-read')""")
         for rows in ["(1, 10), (2, 20)", "(3, 30), (4, 40)", "(5, 50), (6, 60)"]:
             spark.sql(f"INSERT INTO {name} VALUES {rows}")
-        table = StaticTable.from_metadata(str(_latest_metadata_path(path)))
+        table = StaticTable.from_metadata(
+            _latest_metadata_path(path).as_uri(), properties=pyiceberg_file_io_properties()
+        )
         _append_equality_delete_snapshot(table, pa.table({"id": [2, 3]}), [1])
         spark.sql(f"""MERGE INTO {name} AS t USING (SELECT 4L AS id) AS s ON t.id = s.id
                       WHEN MATCHED THEN DELETE""").collect()

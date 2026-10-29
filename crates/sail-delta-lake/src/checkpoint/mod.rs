@@ -1284,7 +1284,7 @@ async fn replay_commit_actions_with_compactions_for_state<S: ReplayActionState>(
                 }
                 commit_timestamps.insert(*version, commit_timestamp);
             }
-            ReplayEntry::Compaction(start, end, meta) => {
+            ReplayEntry::Compaction(end, meta) => {
                 let bytes = root_store.get(&meta.location).await?.bytes().await?;
                 // Compacted JSON files use the same ndjson format as regular commits.
                 // Use end_version for the "version" parameter in error messages.
@@ -1292,11 +1292,8 @@ async fn replay_commit_actions_with_compactions_for_state<S: ReplayActionState>(
                 for action in actions {
                     state.apply_replay_action(action);
                 }
-                // Use the compaction file's modification time as timestamp for the end version.
-                let timestamp = meta.last_modified.timestamp_millis();
-                for v in *start..=*end {
-                    commit_timestamps.insert(v, timestamp);
-                }
+                // A compaction's mtime is not a commit timestamp. Leave covered versions
+                // uncached so timestamp lookup uses the original commit or checksum.
             }
         }
     }
@@ -1338,8 +1335,8 @@ pub(crate) async fn replay_commit_header_actions_with_compactions(
 enum ReplayEntry<'a> {
     /// A single commit file for one version.
     Commit(i64, &'a ObjectMeta),
-    /// A compacted JSON file covering [start, end].
-    Compaction(i64, i64, &'a ObjectMeta),
+    /// A compacted JSON file and the last version it covers.
+    Compaction(i64, &'a ObjectMeta),
 }
 
 /// Build an ordered replay sequence by merging individual commits and compaction files.
@@ -1366,7 +1363,7 @@ fn build_replay_sequence<'a>(
 
     while version <= end_version {
         if let Some(&(comp_end, meta)) = compaction_map.get(&version) {
-            sequence.push(ReplayEntry::Compaction(version, comp_end, meta));
+            sequence.push(ReplayEntry::Compaction(comp_end, meta));
             version = comp_end.saturating_add(1);
             // Skip any individual commits that overlap with this compaction.
             while commit_idx < commit_entries.len() && commit_entries[commit_idx].0 < version {
@@ -2526,6 +2523,109 @@ mod tests {
                 .into_iter()
                 .map(|transaction| (transaction.app_id.clone(), transaction))
                 .collect::<HashMap<_, _>>()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn checkpoint_header_replays_compaction_before_commit() -> DeltaResult<()> {
+        assert_checkpoint_header_replays_mixed_tail(2, 3, 4).await
+    }
+
+    #[tokio::test]
+    async fn checkpoint_header_replays_commit_before_compaction() -> DeltaResult<()> {
+        assert_checkpoint_header_replays_mixed_tail(3, 4, 2).await
+    }
+
+    async fn assert_checkpoint_header_replays_mixed_tail(
+        compaction_start: i64,
+        compaction_end: i64,
+        commit_version: i64,
+    ) -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let base = ReplayedTableHeader {
+            version: 0,
+            protocol: Protocol::new(1, 2, None, None),
+            metadata: test_metadata([])?,
+            txns: Arc::default(),
+            domain_metadata: Arc::default(),
+            commit_timestamps: Arc::default(),
+        };
+        let checkpoint_rows = vec![
+            CheckpointActionRow {
+                protocol: Some(base.protocol.clone()),
+                ..Default::default()
+            },
+            CheckpointActionRow {
+                metadata: Some(base.metadata.clone()),
+                ..Default::default()
+            },
+        ];
+        put_parquet_batch(
+            store.clone(),
+            Path::from("_delta_log/00000000000000000001.checkpoint.parquet"),
+            encode_rows_for_test(&checkpoint_rows)?,
+        )
+        .await?;
+
+        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::DomainMetadata]));
+        let metadata = base
+            .metadata
+            .clone()
+            .with_description(Some("compacted metadata".to_string()));
+        let transaction = Transaction {
+            app_id: "compacted-writer".to_string(),
+            version: compaction_end,
+            last_updated: Some(10),
+        };
+        let domain = DomainMetadata {
+            domain: "test.compacted".to_string(),
+            configuration: r#"{"value":1}"#.to_string(),
+            removed: false,
+        };
+        put_actions(
+            &store,
+            Path::from(format!(
+                "_delta_log/{compaction_start:020}.{compaction_end:020}.compacted.json"
+            )),
+            &[
+                Action::Protocol(protocol.clone()),
+                Action::Metadata(metadata.clone()),
+                Action::Txn(transaction.clone()),
+                Action::DomainMetadata(domain.clone()),
+            ],
+        )
+        .await?;
+        put_commit(
+            &store,
+            commit_version,
+            &[Action::Add(Add {
+                path: "ordinary.parquet".to_string(),
+                ..Default::default()
+            })],
+        )
+        .await?;
+
+        let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
+        let log_store = default_logstore(store.clone(), store, &table_url, &StorageConfig);
+        // An older hint is required to select the incremental checkpoint header branch.
+        let header = load_replayed_table_header(4, log_store.as_ref(), Some(&base), None)
+            .await?
+            .ok_or_else(|| DeltaTableError::generic("checkpoint must produce a table header"))?;
+        assert_eq!(header.version, 4);
+        assert_eq!(header.protocol, protocol);
+        assert_eq!(header.metadata, metadata);
+        assert_eq!(
+            header.txns.as_ref(),
+            &HashMap::from([(transaction.app_id.clone(), transaction)])
+        );
+        assert_eq!(
+            header.domain_metadata.as_ref(),
+            &HashMap::from([(domain.domain.clone(), domain)])
+        );
+        assert_eq!(
+            header.commit_timestamps.keys().copied().collect::<Vec<_>>(),
+            vec![commit_version]
         );
         Ok(())
     }

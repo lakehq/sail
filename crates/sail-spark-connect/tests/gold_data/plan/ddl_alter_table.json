@@ -38,7 +38,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -55,7 +76,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -72,7 +114,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -89,7 +152,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -106,7 +190,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -123,7 +228,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -140,7 +266,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -157,7 +304,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -174,7 +342,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -191,7 +380,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -208,7 +418,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -225,7 +456,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -242,7 +494,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -259,7 +532,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -276,7 +570,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -293,7 +608,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -310,7 +646,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -327,7 +684,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -344,7 +722,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -361,7 +760,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -378,7 +798,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -395,7 +836,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -412,7 +874,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -429,7 +912,28 @@
                 "my_tab"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": "a",
+                        "default": "'abc'",
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -439,43 +943,43 @@
     {
       "input": "ALTER TABLE t DEFAULT COLLATION sr",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION sr_ci_ai",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode_ci",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode_ci_rtrim",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION utf8_binary",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION utf8_lcase",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'RENAME', 'PARTITION', 'ADD', 'DROP', 'ALTER', 'CHANGE', 'REPLACE', 'SET', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
@@ -488,7 +992,24 @@
                 "t1"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": false,
+                        "comment": null,
+                        "default": "42",
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -597,7 +1118,24 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -614,7 +1152,26 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": {
+                          "After": "y"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -631,7 +1188,24 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": "doc",
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -648,7 +1222,24 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -665,7 +1256,24 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": false,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -682,7 +1290,26 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x",
+                          "y",
+                          "z"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": "doc",
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -699,7 +1326,43 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x",
+                          "y",
+                          "z"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": "doc",
+                        "default": null,
+                        "position": null
+                      }
+                    },
+                    {
+                      "Add": {
+                        "path": [
+                          "a",
+                          "b"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -716,7 +1379,24 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": "doc",
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -733,7 +1413,24 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -750,7 +1447,24 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -767,7 +1481,40 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    },
+                    {
+                      "Add": {
+                        "path": [
+                          "y"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -790,7 +1537,22 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Nullability": {
+                        "path": [
+                          "a",
+                          "b",
+                          "c"
+                        ],
+                        "nullable": true
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -807,7 +1569,22 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Nullability": {
+                        "path": [
+                          "a",
+                          "b",
+                          "c"
+                        ],
+                        "nullable": false
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -878,7 +1655,22 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Comment": {
+                        "path": [
+                          "a",
+                          "b",
+                          "c"
+                        ],
+                        "comment": "new comment"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -895,7 +1687,22 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumns": {
+                  "changes": [
+                    {
+                      "Position": {
+                        "path": [
+                          "a",
+                          "b",
+                          "c"
+                        ],
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -985,7 +1792,30 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "replaceColumns": {
+                  "columns": [
+                    {
+                      "Add": {
+                        "path": [
+                          "a",
+                          "b",
+                          "c"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -1002,7 +1832,28 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "replaceColumns": {
+                  "columns": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": "x1",
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -1019,7 +1870,40 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "replaceColumns": {
+                  "columns": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": "x1",
+                        "default": null,
+                        "position": null
+                      }
+                    },
+                    {
+                      "Add": {
+                        "path": [
+                          "y"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": "y1",
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -1036,7 +1920,40 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "replaceColumns": {
+                  "columns": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": "x1",
+                        "default": null,
+                        "position": null
+                      }
+                    },
+                    {
+                      "Add": {
+                        "path": [
+                          "y"
+                        ],
+                        "data_type": "int32",
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -1054,7 +1971,28 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "replaceColumns": {
+                  "columns": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": "First"
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -1072,7 +2010,28 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "replaceColumns": {
+                  "columns": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": false,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }
@@ -1089,7 +2048,28 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "replaceColumns": {
+                  "columns": [
+                    {
+                      "Add": {
+                        "path": [
+                          "x"
+                        ],
+                        "data_type": {
+                          "configuredUtf8": {
+                            "utf8Type": "configured"
+                          }
+                        },
+                        "nullable": true,
+                        "comment": null,
+                        "default": null,
+                        "position": null
+                      }
+                    }
+                  ]
+                }
+              }
             },
             "planId": null
           }

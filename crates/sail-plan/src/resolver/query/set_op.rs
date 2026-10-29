@@ -1,18 +1,91 @@
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::expr::NullTreatment;
-use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
+use datafusion::optimizer::AnalyzerRule;
+use datafusion_common::{Column, DFSchema, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition, expr,
+    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFunctionDefinition,
+    expr,
 };
 use sail_common::spec;
+use sail_common_datafusion::type_coercion::binary_type_coercion::type_union_coercion;
+use sail_logical_optimizer::type_coercion::TypeCoercion;
 
 use crate::error::{PlanError, PlanResult};
+use crate::function::datetime_utils::{cast_to_common_timestamp_type, session_timestamp_targets};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
+    /// Align nested structs by name before UNION type coercion. The null parent
+    /// remains null rather than becoming a non-null struct of null children.
+    fn align_union_structs(
+        &self,
+        left: Expr,
+        left_type: &datafusion_common::arrow::datatypes::DataType,
+        right: Expr,
+        right_type: &datafusion_common::arrow::datatypes::DataType,
+        allow_missing: bool,
+    ) -> PlanResult<(Expr, Expr)> {
+        use datafusion_common::arrow::datatypes::DataType;
+        use datafusion_expr::{ScalarUDF, lit, when};
+        use sail_function::scalar::struct_function::StructFunction;
+        let (DataType::Struct(left_fields), DataType::Struct(right_fields)) =
+            (left_type, right_type)
+        else {
+            return Ok((left, right));
+        };
+        if !allow_missing {
+            return Ok((left, right));
+        }
+        let mut names = vec![];
+        let mut left_values = vec![];
+        let mut right_values = vec![];
+        let field_expr = |expr: &Expr, name: &str| {
+            datafusion_functions::core::get_field().call(vec![expr.clone(), lit(name.to_string())])
+        };
+        for field in left_fields {
+            names.push(field.name().clone());
+            let l = field_expr(&left, field.name());
+            if let Some(r) = right_fields
+                .iter()
+                .find(|r| self.merge_name_key(r.name()) == self.merge_name_key(field.name()))
+            {
+                let (l, r) = self.align_union_structs(
+                    l,
+                    field.data_type(),
+                    field_expr(&right, r.name()),
+                    r.data_type(),
+                    true,
+                )?;
+                left_values.push(l);
+                right_values.push(r);
+            } else {
+                left_values.push(l);
+                right_values.push(lit(ScalarValue::try_from(field.data_type())?));
+            }
+        }
+        for field in right_fields {
+            if !left_fields
+                .iter()
+                .any(|l| self.merge_name_key(l.name()) == self.merge_name_key(field.name()))
+            {
+                names.push(field.name().clone());
+                left_values.push(lit(ScalarValue::try_from(field.data_type())?));
+                right_values.push(field_expr(&right, field.name()));
+            }
+        }
+        let function = ScalarUDF::from(StructFunction::new(names));
+        Ok((
+            when(left.is_null(), lit(ScalarValue::Null)).otherwise(function.call(left_values))?,
+            when(right.is_null(), lit(ScalarValue::Null)).otherwise(function.call(right_values))?,
+        ))
+    }
+
     pub(super) async fn resolve_query_set_operation(
         &self,
         op: spec::SetOperation,
@@ -31,7 +104,6 @@ impl PlanResolver<'_> {
         let left = self.resolve_query_plan(*left, state).await?;
         let right = self.resolve_query_plan(*right, state).await?;
         match set_op_type {
-            SetOpType::Intersect => Ok(LogicalPlanBuilder::intersect(left, right, is_all)?),
             SetOpType::Union => {
                 let (left, right) = if by_name {
                     let left_names = Self::get_field_names(left.schema(), state)?;
@@ -43,18 +115,27 @@ impl PlanResolver<'_> {
                         .iter()
                         .enumerate()
                         .map(|(left_idx, left_name)| {
-                            match right_names
-                                .iter()
-                                .position(|right_name| left_name.eq_ignore_ascii_case(right_name))
-                            {
-                                Some(right_idx) => Ok((
-                                    Expr::Column(Column::from(
-                                        left.schema().qualified_field(left_idx),
-                                    )),
-                                    Expr::Column(Column::from(
-                                        right.schema().qualified_field(right_idx),
-                                    )),
-                                )),
+                            match right_names.iter().position(|right_name| {
+                                self.merge_name_key(left_name) == self.merge_name_key(right_name)
+                            }) {
+                                Some(right_idx) => {
+                                    let left_col =
+                                        Column::from(left.schema().qualified_field(left_idx));
+                                    let right_col =
+                                        Column::from(right.schema().qualified_field(right_idx));
+                                    let (left_expr, right_expr) = self.align_union_structs(
+                                        Expr::Column(left_col.clone()),
+                                        left.schema().field(left_idx).data_type(),
+                                        Expr::Column(right_col.clone()),
+                                        right.schema().field(right_idx).data_type(),
+                                        allow_missing_columns,
+                                    )?;
+                                    Ok((
+                                        left_expr.alias_qualified(left_col.relation, left_col.name),
+                                        right_expr
+                                            .alias_qualified(right_col.relation, right_col.name),
+                                    ))
+                                }
                                 None if allow_missing_columns => Ok((
                                     Expr::Column(Column::from(
                                         left.schema().qualified_field(left_idx),
@@ -76,9 +157,10 @@ impl PlanResolver<'_> {
                                 .into_iter()
                                 .enumerate()
                                 .filter(|(_, right_name)| {
-                                    !left_names
-                                        .iter()
-                                        .any(|left_name| left_name.eq_ignore_ascii_case(right_name))
+                                    !left_names.iter().any(|left_name| {
+                                        self.merge_name_key(left_name)
+                                            == self.merge_name_key(right_name)
+                                    })
                                 })
                                 .map(|(right_idx, right_name)| {
                                     (
@@ -104,6 +186,7 @@ impl PlanResolver<'_> {
                 } else {
                     (left, right)
                 };
+                let (left, right) = self.coerce_set_operation_timestamps(left, right)?;
                 // Spark Connect treats Union as a leaf for DataFrame plan IDs.
                 // WithCTE restores separately reachable definition bindings.
                 for field in left.schema().fields() {
@@ -117,7 +200,17 @@ impl PlanResolver<'_> {
                         .build()?)
                 }
             }
-            SetOpType::Except => {
+            SetOpType::Except | SetOpType::Intersect => {
+                // Set equality and multiplicity apply to coerced values. In
+                // particular, distinct integers may become the same float.
+                let config = self.ctx.state();
+                let left = TypeCoercion::new().analyze(left, config.config_options())?;
+                let right = TypeCoercion::new().analyze(right, config.config_options())?;
+                let join_type = if matches!(set_op_type, SetOpType::Intersect) {
+                    JoinType::LeftSemi
+                } else {
+                    JoinType::LeftAnti
+                };
                 let left_len = left.schema().fields().len();
                 let right_len = right.schema().fields().len();
 
@@ -126,6 +219,39 @@ impl PlanResolver<'_> {
                         "`EXCEPT ALL` must have the same number of columns. Left has {left_len} columns, right has {right_len} columns."
                     )));
                 }
+                let (left, right) = self.coerce_set_operation_timestamps(left, right)?;
+
+                let types = left
+                    .schema()
+                    .fields()
+                    .iter()
+                    .zip(right.schema().fields())
+                    .map(|(left, right)| {
+                        type_union_coercion(left.data_type(), right.data_type()).ok_or_else(|| {
+                            PlanError::analysis(format!(
+                                "incompatible set operation types: {} and {}",
+                                left.data_type(),
+                                right.data_type()
+                            ))
+                        })
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                let coerce = |plan: LogicalPlan| -> PlanResult<LogicalPlan> {
+                    let exprs = plan
+                        .schema()
+                        .columns()
+                        .into_iter()
+                        .zip(&types)
+                        .map(|(column, data_type)| {
+                            Ok(Expr::Column(column.clone())
+                                .cast_to(data_type, plan.schema())?
+                                .alias_qualified(column.relation, column.name))
+                        })
+                        .collect::<PlanResult<Vec<_>>>()?;
+                    Ok(LogicalPlanBuilder::from(plan).project(exprs)?.build()?)
+                };
+                let left = coerce(left)?;
+                let right = coerce(right)?;
 
                 let mut join_keys = left
                     .schema()
@@ -199,7 +325,7 @@ impl PlanResolver<'_> {
                     LogicalPlanBuilder::from(left)
                         .join_detailed(
                             right,
-                            JoinType::LeftAnti,
+                            join_type,
                             join_keys.into_iter().unzip(),
                             None,
                             NullEquality::NullEqualsNull,
@@ -211,7 +337,7 @@ impl PlanResolver<'_> {
                         .distinct()?
                         .join_detailed(
                             right,
-                            JoinType::LeftAnti,
+                            join_type,
                             join_keys.into_iter().unzip(),
                             None,
                             NullEquality::NullEqualsNull,
@@ -221,5 +347,54 @@ impl PlanResolver<'_> {
                 Ok(plan)
             }
         }
+    }
+
+    /// Spark's common type for TIMESTAMP_NTZ and TIMESTAMP columns of a set operation.
+    fn coerce_set_operation_timestamps(
+        &self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+    ) -> PlanResult<(LogicalPlan, LogicalPlan)> {
+        let left_schema = Arc::clone(left.schema());
+        let right_schema = Arc::clone(right.schema());
+        let timezone = &self.config.session_timezone_label();
+        let is_mix = |left: &DataType, right: &DataType| {
+            session_timestamp_targets(left, right, timezone).is_some()
+        };
+        if left_schema.fields().len() != right_schema.fields().len()
+            || !left_schema
+                .fields()
+                .iter()
+                .zip(right_schema.fields())
+                .any(|(left, right)| is_mix(left.data_type(), right.data_type()))
+        {
+            return Ok((left, right));
+        }
+        let coerce = |schema: &DFSchema, other: &DFSchema| {
+            schema
+                .iter()
+                .zip(other.fields())
+                .map(|((qualifier, field), other)| {
+                    let column = Expr::Column(Column::from((qualifier, field.as_ref())));
+                    match session_timestamp_targets(field.data_type(), other.data_type(), timezone)
+                    {
+                        Some((target, _)) => cast_to_common_timestamp_type(
+                            column,
+                            field.data_type(),
+                            &target,
+                            timezone,
+                        )
+                        .alias_qualified(qualifier.cloned(), field.name()),
+                        None => column,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let left_expressions = coerce(&left_schema, &right_schema);
+        let right_expressions = coerce(&right_schema, &left_schema);
+        Ok((
+            project(left, left_expressions)?,
+            project(right, right_expressions)?,
+        ))
     }
 }

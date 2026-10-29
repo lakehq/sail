@@ -1,6 +1,8 @@
 pub mod array;
 pub mod catalog;
+pub mod column_change;
 pub mod column_features;
+pub mod command;
 pub mod datasource;
 pub mod display;
 pub mod error;
@@ -17,10 +19,14 @@ pub mod logical_rewriter;
 pub mod metadata_aggregate;
 pub mod rename;
 pub mod scan;
+pub mod schema;
 pub mod schema_evolution;
 pub mod session;
 pub mod statistics;
 pub mod streaming;
+pub mod type_coercion;
 pub mod udf;
 pub mod utils;
 pub mod variant;
+
+pub const OPTIMIZER_CORRELATION_KEY_PREFIX: &str = "__sail_correlation_key";

@@ -6,7 +6,7 @@ pub mod l2_distance;
 pub mod norm;
 pub mod normalize;
 
-fn is_float_vector(data_type: &DataType) -> bool {
+pub(crate) fn is_float_vector(data_type: &DataType) -> bool {
     matches!(
         data_type,
         DataType::List(field) | DataType::LargeList(field)

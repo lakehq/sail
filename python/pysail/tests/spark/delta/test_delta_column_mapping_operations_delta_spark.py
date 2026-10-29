@@ -38,7 +38,6 @@ _VARIANTS = [
 # Queries that fail for reasons unrelated to column mapping. The value is the reason,
 # and whether the failure only happens on partitioned tables.
 _KNOWN_QUERY_FAILURES = {
-    "nvl_array_struct": ("type coercion fails on nested fields carrying field metadata", False),
     "filter_array_struct": (
         "a higher-order function over an array of structs in a filter cannot resolve the column",
         False,

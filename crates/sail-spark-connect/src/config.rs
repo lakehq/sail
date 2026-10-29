@@ -236,6 +236,19 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
 
     fn try_from(config: &SparkRuntimeConfig) -> SparkResult<Self> {
         let mut output = PlanConfig::new()?;
+        for key in [
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_RETENTION_DURATION_CHECK_ENABLED,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_VACUUM_RETENTION_WINDOW_IGNORE_ENABLED,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MIN_FILE_SIZE,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_FILE_SIZE,
+            SparkConfigKey::SPARK_DATABRICKS_DELTA_OPTIMIZE_MAX_DELETED_ROWS_RATIO,
+        ] {
+            if let Some(value) = config.get_option(key) {
+                output
+                    .lakehouse_options
+                    .push((key.to_string(), value.to_string()));
+            }
+        }
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_REDACTION_OPTIONS_REGEX) {
             output.redaction_options_regex = value.to_string();
         }
@@ -327,6 +340,20 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             };
         }
 
+        if let Some(value) =
+            config.get_option(SparkConfigKey::SPARK_SQL_SOURCES_PARTITION_OVERWRITE_MODE)
+        {
+            output.dynamic_partition_overwrite = match value.trim().to_ascii_uppercase().as_str() {
+                "STATIC" => false,
+                "DYNAMIC" => true,
+                _ => {
+                    return Err(SparkError::invalid(format!(
+                        "invalid partition overwrite mode: {value}"
+                    )));
+                }
+            };
+        }
+
         if let Some(value) = config.get_option(SparkConfigKey::SPARK_SQL_MAP_KEY_DEDUP_POLICY) {
             output.map_key_dedup_policy = match value.trim().to_ascii_uppercase().as_str() {
                 "EXCEPTION" => MapKeyDedupPolicy::Exception,
@@ -347,6 +374,27 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.cross_join_enabled = value;
         }
 
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_GROUP_BY_ALIASES)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.group_by_aliases = value;
+        }
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_GROUP_BY_ORDINAL)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.group_by_ordinal = value;
+        }
+        if let Some(value) = config
+            .get_option(SparkConfigKey::SPARK_SQL_ORDER_BY_ORDINAL)
+            .map(|x| x.trim().to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.order_by_ordinal = value;
+        }
         if let Some(value) = config
             .get_option(SparkConfigKey::SPARK_SQL_CASE_SENSITIVE)
             .map(|x| x.trim().to_lowercase().parse::<bool>())

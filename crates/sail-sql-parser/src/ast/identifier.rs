@@ -33,6 +33,7 @@ where
         Some(Token::Word { keyword, raw }) if matcher(keyword) => {
             let ident = Ident {
                 span: input.span_since(&before).into(),
+                raw: raw.to_string(),
                 value: raw.to_string(),
             };
             skip_whitespace(input);
@@ -46,6 +47,7 @@ where
             {
                 let output = Ident {
                     span: input.span_since(&before).into(),
+                    raw: raw.to_string(),
                     value: value.clone(),
                 };
                 skip_whitespace(input);
@@ -64,6 +66,8 @@ where
 #[derive(Debug, Clone)]
 pub struct Ident {
     pub span: TokenSpan,
+    /// Original token spelling, including quotes and escapes.
+    pub raw: String,
     pub value: String,
 }
 
@@ -91,7 +95,7 @@ impl TreeSyntax for Ident {
 
 impl TreeText for Ident {
     fn text(&self) -> String {
-        format!("{} ", self.value.clone())
+        format!("{} ", self.raw)
     }
 }
 

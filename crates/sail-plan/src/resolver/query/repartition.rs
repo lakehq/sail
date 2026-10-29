@@ -60,6 +60,7 @@ impl PlanResolver<'_> {
         let (expr, input) = self
             .resolve_expressions_with_missing_inputs(partition_expressions, input, state)
             .await?;
+        let (input, expr) = self.rewrite_partition_expressions(input, expr, state)?;
         let plan = LogicalPlan::Extension(Extension {
             node: Arc::new(ExplicitRepartitionNode::new(
                 Arc::new(input),

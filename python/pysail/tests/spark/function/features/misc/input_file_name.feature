@@ -39,7 +39,6 @@ Feature: input_file_name
 
   Rule: LIMIT
 
-    @sail-bug
     Scenario Outline: Input file metadata is materialized before LIMIT
       Given variable location for temporary directory input_file_metadata_limit
       Given statement template

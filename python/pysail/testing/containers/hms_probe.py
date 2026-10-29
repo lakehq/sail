@@ -13,7 +13,7 @@ _ITEM_COLUMNS = [("id", "int64", True, None), ("value", "utf8", True, None)]
 _HMS_CONTAINER_TMP = "/tmp"  # noqa: S108
 
 
-def _hms_catalog(uri: str, service_principal: str):
+def _hms_catalog(uri: str, service_principal: str, min_sasl_qop: str):
     from pysail import _native  # noqa: PLC0415
 
     return _native._catalog._hms.HmsCatalogProvider(  # noqa: SLF001
@@ -21,6 +21,7 @@ def _hms_catalog(uri: str, service_principal: str):
         [uri],
         auth="kerberos",
         kerberos_service_principal=service_principal,
+        min_sasl_qop=min_sasl_qop,
     )
 
 
@@ -39,12 +40,12 @@ def _wait_for_catalog(catalog, timeout: float = 240) -> None:
     raise TimeoutError(message)
 
 
-def _database_and_table_round_trip(database: str, uri: str, service_principal: str) -> None:
+def _database_and_table_round_trip(database: str, uri: str, service_principal: str, min_sasl_qop: str) -> None:
     if _DATABASE_PATTERN.fullmatch(database) is None:
         message = f"invalid test database name: {database!r}"
         raise ValueError(message)
 
-    catalog = _hms_catalog(uri, service_principal)
+    catalog = _hms_catalog(uri, service_principal, min_sasl_qop)
     namespace = [database]
     _wait_for_catalog(catalog)
     catalog.drop_database(namespace, if_exists=True, cascade=True)
@@ -78,8 +79,8 @@ def _database_and_table_round_trip(database: str, uri: str, service_principal: s
         catalog.drop_database(namespace, if_exists=True, cascade=True)
 
 
-def _assert_missing_credentials_rejected(uri: str, service_principal: str) -> None:
-    catalog = _hms_catalog(uri, service_principal)
+def _assert_missing_credentials_rejected(uri: str, service_principal: str, min_sasl_qop: str) -> None:
+    catalog = _hms_catalog(uri, service_principal, min_sasl_qop)
     try:
         catalog.list_databases()
     except Exception as error:
@@ -100,6 +101,7 @@ def main() -> None:
     parser.add_argument("--principal")
     parser.add_argument("--uri", required=True)
     parser.add_argument("--service-principal", required=True)
+    parser.add_argument("--min-sasl-qop", choices=("auth", "auth_int", "auth_conf"), default="auth")
     args = parser.parse_args()
 
     if args.case == "round-trip":
@@ -109,9 +111,9 @@ def main() -> None:
         if kinit is None:
             parser.error("kinit is required for the Kerberos HMS integration test")
         subprocess.run([kinit, "-kt", args.keytab, args.principal], check=True)
-        _database_and_table_round_trip(args.database, args.uri, args.service_principal)
+        _database_and_table_round_trip(args.database, args.uri, args.service_principal, args.min_sasl_qop)
     else:
-        _assert_missing_credentials_rejected(args.uri, args.service_principal)
+        _assert_missing_credentials_rejected(args.uri, args.service_principal, args.min_sasl_qop)
 
 
 if __name__ == "__main__":

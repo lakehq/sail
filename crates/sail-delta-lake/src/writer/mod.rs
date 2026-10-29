@@ -19,7 +19,7 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
 
-mod async_buffer;
+mod object_sink;
 mod partitioning;
 mod stats;
 pub(crate) mod variant_shredding;
@@ -27,14 +27,14 @@ pub(crate) mod variant_shredding;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use async_buffer::AsyncShareableBuffer;
-use bytes::Bytes;
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch, StructArray};
 use datafusion::arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
+use object_sink::ParquetObjectSink;
+use object_store::ObjectStore;
+use object_store::buffered::BufWriter;
 use object_store::path::Path;
-use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
@@ -338,8 +338,8 @@ pub struct PartitionWriter {
     object_store: Arc<dyn ObjectStore>,
     writer_id: Uuid,
     config: PartitionWriterConfig,
-    buffer: Option<AsyncShareableBuffer>,
-    arrow_writer: Option<AsyncArrowWriter<AsyncShareableBuffer>>,
+    current_path: Option<String>,
+    arrow_writer: Option<AsyncArrowWriter<ParquetObjectSink>>,
     physical_file_schema: ArrowSchemaRef,
     pending_batches: Vec<RecordBatch>,
     pending_rows: usize,
@@ -362,28 +362,13 @@ impl PartitionWriter {
         stats_excluded_columns: HashSet<String>,
     ) -> Result<Self, DeltaTableError> {
         let physical_file_schema = config.file_schema.clone();
-        let (buffer, arrow_writer, variant_shredding_initialized) = if config
-            .variant_shredding
-            .enabled
-        {
-            (None, None, false)
-        } else {
-            let buffer = AsyncShareableBuffer::default();
-            let arrow_writer = AsyncArrowWriter::try_new(
-                buffer.clone(),
-                physical_file_schema.clone(),
-                Some(config.writer_properties.clone()),
-            )
-            .map_err(|e| DeltaTableError::generic(format!("Failed to create arrow writer: {e}")))?;
-            (Some(buffer), Some(arrow_writer), true)
-        };
-
-        Ok(Self {
+        let variant_shredding_initialized = !config.variant_shredding.enabled;
+        let mut writer = Self {
             object_store,
             writer_id: Uuid::new_v4(),
             config,
-            buffer,
-            arrow_writer,
+            current_path: None,
+            arrow_writer: None,
             physical_file_schema,
             pending_batches: Vec::new(),
             pending_rows: 0,
@@ -395,7 +380,11 @@ impl PartitionWriter {
             stats_columns,
             stats_excluded_columns,
             repeated_null_counts: HashMap::new(),
-        })
+        };
+        if variant_shredding_initialized {
+            writer.reset_writer()?;
+        }
+        Ok(writer)
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
@@ -433,7 +422,7 @@ impl PartitionWriter {
     }
 
     async fn write_physical_batch(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        if self.arrow_writer.is_none() && self.buffer.is_none() {
+        if self.arrow_writer.is_none() {
             self.physical_file_schema = batch.schema();
             self.reset_writer()?;
         }
@@ -458,17 +447,9 @@ impl PartitionWriter {
             self.accumulate_repeated_null_counts(&slice)?;
 
             // Check if need to flush after writing the slice
-            let buffer_len = if let Some(buffer) = self.buffer.as_ref() {
-                buffer.len().await
-            } else {
-                0
-            };
-            let in_progress_size = if let Some(writer) = self.arrow_writer.as_ref() {
-                writer.in_progress_size()
-            } else {
-                0
-            };
-            let estimated_size: u64 = buffer_len as u64 + in_progress_size as u64;
+            let estimated_size = self.arrow_writer.as_ref().map_or(0, |writer| {
+                writer.bytes_written() as u64 + writer.in_progress_size() as u64
+            });
 
             if estimated_size >= self.config.target_file_size {
                 self.flush_open_writer().await?;
@@ -628,44 +609,31 @@ impl PartitionWriter {
     }
 
     async fn flush_open_writer(&mut self) -> Result<(), DeltaTableError> {
-        if self.arrow_writer.is_none() && self.buffer.is_none() {
+        if self.arrow_writer.is_none() {
             return Ok(());
         }
 
-        let writer = self
+        let mut writer = self
             .arrow_writer
             .take()
             .ok_or_else(|| DeltaTableError::generic("Arrow writer not available".to_string()))?;
-        let buffer = self
-            .buffer
+        let relative_path = self
+            .current_path
             .take()
-            .ok_or_else(|| DeltaTableError::generic("Buffer not available".to_string()))?;
+            .ok_or_else(|| DeltaTableError::generic("File path not available".to_string()))?;
 
-        let metadata = writer
-            .close()
-            .await
-            .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
-
-        // Skip empty files
-        if metadata.file_metadata().num_rows() == 0 {
+        // Do not publish an empty object when closing a freshly reset writer.
+        if writer.in_progress_rows() == 0 && writer.flushed_row_groups().is_empty() {
             self.reset_writer()?;
             return Ok(());
         }
 
-        let buffer_data = match buffer.into_inner().await {
-            Some(buffer) => Bytes::from(buffer),
-            None => return Ok(()), // Nothing to write
-        };
-
-        // Generate file path, returning both relative and full paths
-        let (relative_path, full_path) = self.next_data_path();
-        let file_size = buffer_data.len() as i64;
-
-        // Write to object store
-        self.object_store
-            .put(&full_path, buffer_data.into())
+        let metadata = writer
+            .finish()
             .await
-            .map_err(|e| DeltaTableError::generic(format!("Failed to write file: {e}")))?;
+            .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
+        let file_size =
+            i64::try_from(writer.bytes_written()).map_err(DeltaTableError::generic_err)?;
 
         // Create Add action with statistics
         let add_action = self.create_add_action(&relative_path, file_size, &metadata)?;
@@ -738,14 +706,15 @@ impl PartitionWriter {
 
     /// Reset the writer for the next file
     fn reset_writer(&mut self) -> Result<(), DeltaTableError> {
-        let buffer = AsyncShareableBuffer::default();
+        let (relative_path, full_path) = self.next_data_path();
+        let output = ParquetObjectSink::new(BufWriter::new(self.object_store.clone(), full_path));
         let arrow_writer = AsyncArrowWriter::try_new(
-            buffer.clone(),
+            output,
             self.physical_file_schema.clone(),
             Some(self.config.writer_properties.clone()),
         )
         .map_err(|e| DeltaTableError::generic(format!("Failed to create new arrow writer: {e}")))?;
-        self.buffer = Some(buffer);
+        self.current_path = Some(relative_path);
         self.arrow_writer = Some(arrow_writer);
         self.repeated_null_counts.clear();
         Ok(())

@@ -104,11 +104,12 @@ pub fn uuid_json_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
     ))
 }
 
-pub fn delta_log_file_path(table_root_path: &str, filename: &str) -> Path {
-    Path::from(format!(
-        "{}{}{}{}{}",
-        table_root_path, DELIMITER, DELTA_LOG_DIR, DELIMITER, filename
-    ))
+pub fn delta_log_file_path(table_root_path: &Path, filename: &str) -> Path {
+    filename
+        .split(DELIMITER)
+        .fold(table_root_path.clone().join(DELTA_LOG_DIR), |path, part| {
+            path.join(part)
+        })
 }
 
 pub fn parse_version_prefix(filename: &str) -> Option<i64> {

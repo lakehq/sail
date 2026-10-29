@@ -225,12 +225,12 @@ SPARK_42_DATAFRAME_COLUMN_MARK = pytest.mark.skipif(
         pytest.param(
             "visible-using-key",
             [Row(a=2), Row(a=3)],
-            marks=[SPARK_42_DATAFRAME_COLUMN_MARK, _sail_bug("The visible USING key is not the left key attribute")],
+            marks=SPARK_42_DATAFRAME_COLUMN_MARK,
         ),
         pytest.param(
             "nested-hidden-using-key",
             [Row(a=1, e=7)],
-            marks=[SPARK_42_DATAFRAME_COLUMN_MARK, _sail_bug("Hidden USING keys do not survive another join")],
+            marks=SPARK_42_DATAFRAME_COLUMN_MARK,
         ),
         pytest.param(
             "direct-join-child",

@@ -1478,11 +1478,6 @@ def test_filter_missing_lambda_fields_preserve_staged_bindings(spark, predicate_
 
 
 @pytest.mark.parametrize("subset", [None, ["key"]], ids=["distinct", "drop-duplicates-subset"])
-@pytest.mark.xfail(
-    not is_jvm_spark(),
-    reason="Sail lowers DataFrame deduplication to Distinct, which cannot expose missing attributes",
-    strict=True,
-)
 def test_filter_missing_attribute_through_dataframe_distinct(filter_source, subset):
     projected = filter_source.select("key", "value")
     projected = projected.distinct() if subset is None else projected.dropDuplicates(subset)
@@ -1944,13 +1939,14 @@ def test_filter_empty_with_query_preserves_resolution_boundary(spark, with_cte, 
 
 
 @pytest.mark.timeout(30)
-def test_filter_nested_correlated_subquery_schema(spark):
+@pytest.mark.parametrize("predicate", ["EXISTS ({query})", "1 IN ({query})"])
+def test_filter_nested_correlated_subquery_schema(spark, predicate):
     # Check analysis separately from execution, which also decorrelates the subqueries.
     query = ""
     for level in range(20, 0, -1):
-        nested = f" AND EXISTS ({query})" if query else ""
+        nested = f" AND {predicate.format(query=query)}" if query else ""
         query = f"SELECT 1 FROM VALUES (1) t{level}(id) WHERE t{level}.id = t{level - 1}.id{nested}"  # noqa: S608
-    query = f"SELECT * FROM VALUES (1) t0(id) WHERE EXISTS ({query})"  # noqa: S608
+    query = f"SELECT * FROM VALUES (1) t0(id) WHERE {predicate.format(query=query)}"  # noqa: S608
 
     assert spark.sql(query).schema == StructType([StructField("id", IntegerType(), False)])
 

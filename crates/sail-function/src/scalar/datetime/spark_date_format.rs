@@ -554,13 +554,20 @@ fn format_timestamp_value(
     match tz {
         Some(tz_str) => {
             let tz = tz_str
-                .parse::<chrono_tz::Tz>()
+                .parse::<Tz>()
                 .map_err(|e| exec_datafusion_err!("Invalid timezone '{}': {}", tz_str, e))?;
-            let datetime = tz.from_utc_datetime(&naive_datetime);
+            let offset = tz.offset_from_utc_datetime(&naive_datetime).fix();
+            // The wall-clock time can be out of Chrono's range near its limits.
+            let datetime = naive_datetime.checked_add_offset(offset).ok_or_else(|| {
+                exec_datafusion_err!(
+                    "spark_date_format: cannot convert timestamp value {} to datetime",
+                    value
+                )
+            })?;
             format.format(DateTimeFormatInput {
-                datetime: datetime.naive_local(),
+                datetime,
                 timezone: Some(TimeZoneDisplay {
-                    offset: datetime.offset().fix(),
+                    offset,
                     name: Some(tz_str),
                 }),
                 zone_id: Some(tz_str),
@@ -744,4 +751,28 @@ fn format_timestamp_array_nanosecond(
         .collect::<Result<Vec<_>>>()?;
 
     Ok(StringArray::from(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_timestamp_value_wall_clock_out_of_range() -> Result<()> {
+        let format = DateTimeFormat::for_formatting("yyyy-MM-dd HH:mm")?;
+        // +262142-12-31 23:59:59.999999 UTC, the last instant Chrono represents.
+        let value = 8_210_266_876_799_999_999;
+        let los_angeles: Arc<str> = Arc::from("America/Los_Angeles");
+        assert_eq!(
+            format_timestamp_value(value, &TimeUnit::Microsecond, Some(&los_angeles), &format)?,
+            "262142-12-31 15:59"
+        );
+        // The wall-clock time is past Chrono's range, which is an error rather than a panic.
+        let shanghai: Arc<str> = Arc::from("Asia/Shanghai");
+        assert!(
+            format_timestamp_value(value, &TimeUnit::Microsecond, Some(&shanghai), &format)
+                .is_err()
+        );
+        Ok(())
+    }
 }

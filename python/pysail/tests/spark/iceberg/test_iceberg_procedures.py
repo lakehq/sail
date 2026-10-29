@@ -285,7 +285,15 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
         ).collect()
         assert [row.snapshot_id for row in ancestors_from_middle] == list(reversed(snapshot_ids[:2]))
 
+        previous_file = _latest_metadata_file(table_path)
+        previous_metadata = _read_latest_metadata(table_path)
         rollback = spark.sql(f"CALL system.rollback_to_snapshot('{table_name}', {snapshot_ids[0]})").first()
+        rollback_metadata = _read_latest_metadata(table_path)
+        assert rollback_metadata["metadata-log"] == [
+            *previous_metadata["metadata-log"],
+            {"metadata-file": previous_file.as_uri(), "timestamp-ms": previous_metadata["last-updated-ms"]},
+        ]
+        assert rollback_metadata["table-uuid"] == previous_metadata["table-uuid"]
         assert rollback.previous_snapshot_id == snapshot_ids[2]
         assert rollback.current_snapshot_id == snapshot_ids[0]
         assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [1]
@@ -315,12 +323,8 @@ def test_iceberg_snapshot_procedures(spark, tmp_path):
         assert rollback_by_time.current_snapshot_id == snapshot_ids[1]
         assert [row.id for row in spark.table(table_name).orderBy("id").collect()] == [1, 2]
 
-        def add_branches(metadata):
-            refs = metadata.setdefault("refs", {})
-            refs["audit"] = {"snapshot-id": snapshot_ids[0], "type": "branch"}
-            refs["tip"] = {"snapshot-id": snapshot_ids[2], "type": "branch"}
-
-        _edit_latest_metadata(table_path, add_branches)
+        spark.sql(f"ALTER TABLE {table_name} CREATE BRANCH audit AS OF VERSION {snapshot_ids[0]}")
+        spark.sql(f"ALTER TABLE {table_name} CREATE BRANCH tip AS OF VERSION {snapshot_ids[2]}")
         forwarded = spark.sql(
             f"CALL system.fast_forward(table => '{table_name}', branch => 'audit', to => 'tip')"
         ).first()

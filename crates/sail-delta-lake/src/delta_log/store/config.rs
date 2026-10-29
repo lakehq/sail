@@ -37,7 +37,7 @@ impl StorageConfig {
         store: Arc<dyn ObjectStore>,
         table_root: &Url,
     ) -> DeltaResult<Arc<dyn ObjectStore>> {
-        let prefix = Path::parse(table_root.path())?;
+        let prefix = Path::from_url_path(table_root.path())?;
         if prefix.as_ref() == "/" || prefix.as_ref().is_empty() {
             return Ok(store);
         }

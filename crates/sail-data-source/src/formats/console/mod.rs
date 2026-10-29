@@ -47,6 +47,7 @@ impl DataSource for ConsoleDataSource {
             sort_order,
             options,
             lakehouse_table: _,
+            sql_insert: _,
         } = info;
         if !matches!(mode, SinkMode::Append) {
             return not_impl_err!("the console data source only supports append mode");

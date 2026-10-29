@@ -58,6 +58,18 @@ pub(crate) mod utils;
 ///   Such unit argument is accepted for terminal parsers or derived parsers without the
 ///   `parser(dependency = "...")` attribute.
 ///
+/// * `parser(backtrack)`
+///
+///   This can be specified for individual `Option<T>` fields. The parser first tries the
+///   field as present together with all remaining fields in the struct or variant. If that
+///   fails, it retries the remaining fields with this field absent. When both forms succeed,
+///   the present form wins. Unannotated optional fields retain their usual greedy behavior.
+///
+///   This can be combined with `parser(function = expr)`. The custom parser must still
+///   produce `Option<T>`. Backtracking does not extend beyond the enclosing struct or variant,
+///   so an explicit assertion field may be needed to check its boundary. Annotating multiple
+///   fields can increase parsing costs when several interpretations fail.
+///
 /// The `parser` attribute is not allowed for at the enum variant level.
 #[proc_macro_derive(TreeParser, attributes(parser))]
 pub fn derive_tree_parser(input: TokenStream) -> TokenStream {
