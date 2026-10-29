@@ -286,3 +286,27 @@ Feature: Set operation coercion preserves matching and Spark result types
       | NULL                          |
       | []                            |
       | ['2024-01-01 00:00:00', None] |
+
+  Scenario: Batched temporal coercion preserves null parents and unchanged fields
+    Given config spark.sql.ansi.enabled = false
+    Given config spark.sql.session.timeZone = America/New_York
+    When query
+      """
+      SELECT v FROM VALUES
+        (CAST(NULL AS STRUCT<a:TIMESTAMP,b:DATE,n:INT>)),
+        (named_struct('a', CAST(NULL AS TIMESTAMP), 'b', DATE '2024-01-01', 'n', 3)),
+        (named_struct('a', TIMESTAMP '2024-01-01 00:00:00', 'b', DATE '2024-01-01', 'n', 4)) t(v)
+      INTERSECT
+      SELECT v FROM VALUES
+        (CAST(NULL AS STRUCT<a:STRING,b:STRING,n:BIGINT>)),
+        (named_struct('a', CAST(NULL AS STRING), 'b', '2024-01-01', 'n', 3L)),
+        (named_struct('a', '2024-01-01 00:00:00', 'b', '2024-01-01', 'n', 4L)) t(v)
+      """
+    Then query column types
+      | column | type                               |
+      | v      | struct<a:string,b:string,n:bigint> |
+    Then query result collected
+      | v                                                 |
+      | NULL                                              |
+      | Row(a=None, b='2024-01-01', n=3)                  |
+      | Row(a='2024-01-01 00:00:00', b='2024-01-01', n=4) |
