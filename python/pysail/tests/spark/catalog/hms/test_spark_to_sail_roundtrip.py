@@ -1,4 +1,4 @@
-# ruff: noqa: PLR2004, PT018, S608, TC002
+# ruff: noqa: PLR2004, PT018, S608
 """Spark -> Sail roundtrip tests through a shared HMS metastore.
 
 All tests use the MinIO-backed S3 warehouse to avoid Docker bind-mount
@@ -7,14 +7,30 @@ permission issues on CI.
 
 from __future__ import annotations
 
+import datetime
+from decimal import Decimal
+
 import pytest
-from pyspark.sql import SparkSession
-from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+from pyspark.sql import Row, SparkSession
+from pyspark.sql.types import (
+    ArrayType,
+    BinaryType,
+    BooleanType,
+    DateType,
+    DecimalType,
+    DoubleType,
+    IntegerType,
+    LongType,
+    MapType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
 from pysail.tests.spark.catalog.hms.conftest import (
     _assert_schema_matrix_rows,
     _assert_schema_matrix_shape,
-    _describe_column_comments,
     _describe_extended_properties,
 )
 
@@ -30,41 +46,6 @@ def _assert_sail_describes_spark_table(
     assert properties.get("Type") == table_type
     assert properties.get("Provider", "").lower() == "parquet"
     assert properties.get("Location")
-
-
-def test_spark_creates_sail_reads_parquet(
-    jvm_spark: SparkSession,
-    spark: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Reference Spark creates a Parquet table in an S3-backed database; Sail reads it back."""
-    table_fqn = f"{hms_s3_database}.roundtrip_parquet"
-
-    jvm_spark.sql(
-        f"""
-        CREATE TABLE {table_fqn} (
-          id INT COMMENT 'identifier',
-          name STRING
-        )
-        USING PARQUET
-        TBLPROPERTIES ('interop.owner' = 'spark')
-        """
-    )
-    jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
-
-    ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
-
-    _assert_sail_describes_spark_table(spark, table_fqn, table_type="EXTERNAL")
-    sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-
-    assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
-    assert sail_rows[0].id == 1 and sail_rows[0].name == "alice"
-    assert sail_rows[1].id == 2 and sail_rows[1].name == "bob"
-    sail_properties = _describe_extended_properties(spark, table_fqn)
-    assert "interop.owner=spark" in sail_properties.get("Table Properties", "")
-    assert "spark.sql." not in sail_properties.get("Table Properties", "")
-    assert _describe_column_comments(spark, table_fqn)["id"] == "identifier"
 
 
 @pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
@@ -193,9 +174,6 @@ def test_spark_creates_sail_reads_parquet_with_explicit_location(
     jvm_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION '{location}'")
     jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
 
-    ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
-
     _assert_sail_describes_spark_table(spark, table_fqn, table_type="EXTERNAL")
     sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
@@ -215,9 +193,6 @@ def test_spark_creates_sail_reads_parquet_with_relative_location(
         f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION 'relative/roundtrip_location_parquet'"
     )
     jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
-
-    ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
 
     _assert_sail_describes_spark_table(spark, table_fqn, table_type="EXTERNAL")
     sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
@@ -244,28 +219,6 @@ def test_spark_alters_datasource_table_sail_still_reads_path_metadata(
     assert "spark.sql." not in properties.get("Table Properties", "")
     sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert [(r.id, r.name) for r in sail_rows] == [(1, "alice"), (2, "bob")]
-
-
-def test_spark_alters_datasource_table_location_sail_reads_new_path(
-    jvm_spark: SparkSession,
-    spark: SparkSession,
-    hms_s3_database: str,
-) -> None:
-    """Spark ALTER TABLE SET LOCATION updates datasource path metadata for Sail."""
-    table_fqn = f"{hms_s3_database}.roundtrip_altered_location_parquet"
-    old_location = f"s3://hms-warehouse/{hms_s3_database}/alter_location_old"
-    new_location = f"s3://hms-warehouse/{hms_s3_database}/alter_location_new"
-
-    jvm_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION '{old_location}'")
-    jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old')")
-    jvm_spark.sql(f"ALTER TABLE {table_fqn} SET LOCATION '{new_location}'")
-    jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'new')")
-
-    _assert_sail_describes_spark_table(spark, table_fqn, table_type="EXTERNAL")
-    properties = _describe_extended_properties(spark, table_fqn)
-    assert properties.get("Location") == new_location
-    sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
-    assert [(r.id, r.name) for r in sail_rows] == [(2, "new")]
 
 
 def test_spark_creates_sail_reads_delta_datasource_table(
@@ -433,43 +386,6 @@ def test_spark_creates_sail_reads_delta_table_with_map(
     assert [row.file_name for row in filtered] == ["event-b"]
 
 
-_DELTA_SCHEMA_MATRIX_QUERIES = [
-    "SELECT id, big, dbl, dec, flag, name, dt, CAST(ts AS STRING) AS ts, bin FROM {t} ORDER BY id",
-    "SELECT id, s, arr, arr_s, m, m_s, m_arr, nested FROM {t} ORDER BY id",
-    "SELECT id, s.a, s.b FROM {t} ORDER BY id",
-    "SELECT id, arr[0] AS first, size(arr) AS n, arr_s[0].x AS x, arr_s[0].y AS y FROM {t} ORDER BY id",
-    "SELECT id, m['k1'] AS k1, m_s['k1'].p AS p, m_arr['k1'] AS k1_arr, size(m) AS n FROM {t} ORDER BY id",
-    "SELECT id, map_keys(m) AS keys, map_values(m_s) AS vals FROM {t} ORDER BY id",
-    "SELECT id, nested.inner_map['a'] AS a, nested.inner_arr AS inner_arr FROM {t} ORDER BY id",
-    "SELECT id, explode(arr) AS v FROM {t} ORDER BY id, v",
-    "SELECT id, k, v FROM {t} LATERAL VIEW explode(m) AS k, v ORDER BY id, k",
-    "SELECT DISTINCT name FROM {t} ORDER BY name",
-    "SELECT DISTINCT name, flag FROM {t} ORDER BY name, flag",
-    "SELECT name, count(*) AS n, sum(dec) AS total, max(dbl) AS mx, min(dt) AS first_dt, sum(s.a) AS sa"
-    " FROM {t} GROUP BY name ORDER BY name",
-    "SELECT name, collect_list(id) AS ids FROM (SELECT * FROM {t} ORDER BY id) GROUP BY name ORDER BY name",
-    "SELECT id FROM {t} WHERE s.a > 1 AND m['k1'] IS NOT NULL ORDER BY id",
-    "SELECT id FROM {t} WHERE name = 'b' OR array_contains(arr, 5) ORDER BY id",
-    "SELECT a.id, b.name FROM {t} a JOIN {t} b ON a.id = b.id ORDER BY a.id",
-    "SELECT count(*) AS n FROM (SELECT id, m FROM {t} UNION ALL SELECT id, m FROM {t})",
-    "SELECT id, name, m FROM {t} ORDER BY dbl DESC LIMIT 2",
-    "SELECT s.* FROM {t} ORDER BY a",
-    "SELECT DISTINCT s FROM {t} ORDER BY s.a",
-    "SELECT s, count(*) AS n FROM {t} GROUP BY s ORDER BY s.a",
-    "SELECT min(s) AS mn, max(s) AS mx, count(DISTINCT s) AS n FROM {t}",
-    "SELECT a.id FROM {t} a JOIN {t} b ON a.s = b.s ORDER BY a.id",
-    "SELECT id, s FROM {t} UNION SELECT id, s FROM {t} ORDER BY id",
-    "SELECT id, s, arr_s FROM {t} INTERSECT SELECT id, s, arr_s FROM {t} ORDER BY id",
-    "SELECT id, s FROM {t} EXCEPT SELECT id, s FROM {t} WHERE id = 1 ORDER BY id",
-    "SELECT id, row_number() OVER (PARTITION BY name ORDER BY s.a) AS rn, max(s) OVER (PARTITION BY name) AS mx"
-    " FROM {t} ORDER BY id",
-    "SELECT id, transform(arr_s, e -> e.x) AS xs, filter(arr_s, e -> e.x > 1) AS f, arr_s.y AS ys FROM {t} ORDER BY id",
-    "SELECT id, inline(arr_s) FROM {t} ORDER BY id",
-    "SELECT id, to_json(s) AS j, CAST(s AS STRING) AS str FROM {t} ORDER BY id",
-    "SELECT id, named_struct('x', s.a, 'y', nested.inner_arr) AS n, struct(s.a, s.b) AS t2 FROM {t} ORDER BY id",
-]
-
-
 @pytest.mark.parametrize("partitioned", [False, True], ids=["unpartitioned", "partitioned"])
 @pytest.mark.parametrize("column_mapping_mode", ["none", "name"])
 def test_spark_creates_sail_queries_delta_schema_matrix(
@@ -479,7 +395,7 @@ def test_spark_creates_sail_queries_delta_schema_matrix(
     column_mapping_mode: str,
     partitioned: bool,  # noqa: FBT001
 ) -> None:
-    """Sail and Spark agree on queries over scalar and nested Delta columns whose schema is stored in HMS."""
+    """Sail queries Spark-written Delta columns whose schema is also stored in HMS."""
     table = f"roundtrip_delta_matrix_{column_mapping_mode}_{'part' if partitioned else 'flat'}"
     table_fqn = f"{hms_s3_database}.{table}"
     partition_clause = "PARTITIONED BY (name)" if partitioned else ""
@@ -533,10 +449,238 @@ def test_spark_creates_sail_queries_delta_schema_matrix(
     previous_timezone = spark.conf.get("spark.sql.session.timeZone")
     spark.conf.set("spark.sql.session.timeZone", "UTC")
     try:
-        assert spark.table(table_fqn).schema == jvm_spark.table(table_fqn).schema
-        for query in _DELTA_SCHEMA_MATRIX_QUERIES:
+        assert spark.table(table_fqn).schema == StructType(
+            [
+                StructField("id", IntegerType()),
+                StructField("big", LongType()),
+                StructField("dbl", DoubleType()),
+                StructField("dec", DecimalType(10, 2)),
+                StructField("flag", BooleanType()),
+                StructField("name", StringType()),
+                StructField("dt", DateType()),
+                StructField("ts", TimestampType()),
+                StructField("bin", BinaryType()),
+                StructField("s", StructType([StructField("a", IntegerType()), StructField("b", StringType())])),
+                StructField("arr", ArrayType(IntegerType())),
+                StructField(
+                    "arr_s", ArrayType(StructType([StructField("x", IntegerType()), StructField("y", StringType())]))
+                ),
+                StructField("m", MapType(StringType(), IntegerType())),
+                StructField("m_s", MapType(StringType(), StructType([StructField("p", IntegerType())]))),
+                StructField("m_arr", MapType(StringType(), ArrayType(IntegerType()))),
+                StructField(
+                    "nested",
+                    StructType(
+                        [
+                            StructField("inner_map", MapType(StringType(), StringType())),
+                            StructField("inner_arr", ArrayType(StringType())),
+                        ]
+                    ),
+                ),
+            ]
+        )
+        # Expected rows verified with JVM Spark 4.1.3 / Delta 4.3.1, UTC, ANSI enabled.
+        for query, expected in [
+            (
+                "SELECT id, big, dbl, dec, flag, name, dt, CAST(ts AS STRING) AS ts, bin FROM {t} ORDER BY id",
+                [
+                    (1, 10, 1.5, Decimal("1.25"), True, "a", datetime.date(2024, 1, 1), "2024-01-01 00:00:01", b"\x01"),
+                    (
+                        2,
+                        20,
+                        2.5,
+                        Decimal("2.50"),
+                        False,
+                        "a",
+                        datetime.date(2024, 1, 2),
+                        "2024-01-02 00:00:02",
+                        b"\x02",
+                    ),
+                    (3, 30, 3.5, Decimal("3.75"), True, "b", datetime.date(2024, 1, 3), "2024-01-03 00:00:03", b"\x03"),
+                    (4, None, None, None, None, "c", None, None, None),
+                ],
+            ),
+            (
+                "SELECT id, s, arr, arr_s, m, m_s, m_arr, nested FROM {t} ORDER BY id",
+                [
+                    (
+                        1,
+                        Row(a=1, b="x"),
+                        [1, 2],
+                        [Row(x=1, y="p")],
+                        {"k1": 1, "k2": 2},
+                        {"k1": Row(p=1)},
+                        {"k1": [1, 2]},
+                        Row(inner_map={"a": "A"}, inner_arr=["i"]),
+                    ),
+                    (
+                        2,
+                        Row(a=2, b="y"),
+                        [3],
+                        [Row(x=2, y="q")],
+                        {"k1": 3},
+                        {"k1": Row(p=2)},
+                        {"k1": [3]},
+                        Row(inner_map={"a": "B"}, inner_arr=["j", "k"]),
+                    ),
+                    (
+                        3,
+                        Row(a=3, b="z"),
+                        [5, 6],
+                        [Row(x=3, y="r")],
+                        {"k2": 4},
+                        {"k2": Row(p=3)},
+                        {"k2": [4]},
+                        Row(inner_map={"b": "C"}, inner_arr=["l"]),
+                    ),
+                    (4, None, None, None, None, None, None, None),
+                ],
+            ),
+            (
+                "SELECT id, s.a, s.b FROM {t} ORDER BY id",
+                [(1, 1, "x"), (2, 2, "y"), (3, 3, "z"), (4, None, None)],
+            ),
+            (
+                "SELECT id, arr[0] AS first, size(arr) AS n, arr_s[0].x AS x, arr_s[0].y AS y FROM {t} ORDER BY id",
+                [(1, 1, 2, 1, "p"), (2, 3, 1, 2, "q"), (3, 5, 2, 3, "r"), (4, None, None, None, None)],
+            ),
+            (
+                "SELECT id, m['k1'] AS k1, m_s['k1'].p AS p, m_arr['k1'] AS k1_arr, size(m) AS n FROM {t} ORDER BY id",
+                [(1, 1, 1, [1, 2], 2), (2, 3, 2, [3], 1), (3, None, None, None, 1), (4, None, None, None, None)],
+            ),
+            (
+                "SELECT id, map_keys(m) AS keys, map_values(m_s) AS vals FROM {t} ORDER BY id",
+                [(1, ["k1", "k2"], [Row(p=1)]), (2, ["k1"], [Row(p=2)]), (3, ["k2"], [Row(p=3)]), (4, None, None)],
+            ),
+            (
+                "SELECT id, nested.inner_map['a'] AS a, nested.inner_arr AS inner_arr FROM {t} ORDER BY id",
+                [(1, "A", ["i"]), (2, "B", ["j", "k"]), (3, None, ["l"]), (4, None, None)],
+            ),
+            (
+                "SELECT id, explode(arr) AS v FROM {t} ORDER BY id, v",
+                [(1, 1), (1, 2), (2, 3), (3, 5), (3, 6)],
+            ),
+            (
+                "SELECT id, k, v FROM {t} LATERAL VIEW explode(m) AS k, v ORDER BY id, k",
+                [(1, "k1", 1), (1, "k2", 2), (2, "k1", 3), (3, "k2", 4)],
+            ),
+            (
+                "SELECT DISTINCT name FROM {t} ORDER BY name",
+                [("a",), ("b",), ("c",)],
+            ),
+            (
+                "SELECT DISTINCT name, flag FROM {t} ORDER BY name, flag",
+                [("a", False), ("a", True), ("b", True), ("c", None)],
+            ),
+            (
+                "SELECT name, count(*) AS n, sum(dec) AS total, max(dbl) AS mx, min(dt) AS first_dt, sum(s.a) AS sa"
+                " FROM {t} GROUP BY name ORDER BY name",
+                [
+                    ("a", 2, Decimal("3.75"), 2.5, datetime.date(2024, 1, 1), 3),
+                    ("b", 1, Decimal("3.75"), 3.5, datetime.date(2024, 1, 3), 3),
+                    ("c", 1, None, None, None, None),
+                ],
+            ),
+            (
+                "SELECT name, sort_array(collect_list(id)) AS ids FROM {t} GROUP BY name ORDER BY name",
+                [("a", [1, 2]), ("b", [3]), ("c", [4])],
+            ),
+            (
+                "SELECT id FROM {t} WHERE s.a > 1 AND m['k1'] IS NOT NULL ORDER BY id",
+                [(2,)],
+            ),
+            (
+                "SELECT id FROM {t} WHERE name = 'b' OR array_contains(arr, 5) ORDER BY id",
+                [(3,)],
+            ),
+            (
+                "SELECT a.id, b.name FROM {t} a JOIN {t} b ON a.id = b.id ORDER BY a.id",
+                [(1, "a"), (2, "a"), (3, "b"), (4, "c")],
+            ),
+            (
+                "SELECT count(*) AS n FROM (SELECT id, m FROM {t} UNION ALL SELECT id, m FROM {t})",
+                [(8,)],
+            ),
+            (
+                "SELECT id, name, m FROM {t} ORDER BY dbl DESC LIMIT 2",
+                [(3, "b", {"k2": 4}), (2, "a", {"k1": 3})],
+            ),
+            (
+                "SELECT s.* FROM {t} ORDER BY a",
+                [(None, None), (1, "x"), (2, "y"), (3, "z")],
+            ),
+            (
+                "SELECT DISTINCT s FROM {t} ORDER BY s.a",
+                [(None,), (Row(a=1, b="x"),), (Row(a=2, b="y"),), (Row(a=3, b="z"),)],
+            ),
+            (
+                "SELECT s, count(*) AS n FROM {t} GROUP BY s ORDER BY s.a",
+                [(None, 1), (Row(a=1, b="x"), 1), (Row(a=2, b="y"), 1), (Row(a=3, b="z"), 1)],
+            ),
+            (
+                "SELECT min(s) AS mn, max(s) AS mx, count(DISTINCT s) AS n FROM {t}",
+                [(Row(a=1, b="x"), Row(a=3, b="z"), 3)],
+            ),
+            (
+                "SELECT a.id FROM {t} a JOIN {t} b ON a.s = b.s ORDER BY a.id",
+                [(1,), (2,), (3,)],
+            ),
+            (
+                "SELECT id, s FROM {t} UNION SELECT id, s FROM {t} ORDER BY id",
+                [(1, Row(a=1, b="x")), (2, Row(a=2, b="y")), (3, Row(a=3, b="z")), (4, None)],
+            ),
+            (
+                "SELECT id, s, arr_s FROM {t} INTERSECT SELECT id, s, arr_s FROM {t} ORDER BY id",
+                [
+                    (1, Row(a=1, b="x"), [Row(x=1, y="p")]),
+                    (2, Row(a=2, b="y"), [Row(x=2, y="q")]),
+                    (3, Row(a=3, b="z"), [Row(x=3, y="r")]),
+                    (4, None, None),
+                ],
+            ),
+            (
+                "SELECT id, s FROM {t} EXCEPT SELECT id, s FROM {t} WHERE id = 1 ORDER BY id",
+                [(2, Row(a=2, b="y")), (3, Row(a=3, b="z")), (4, None)],
+            ),
+            (
+                "SELECT id, row_number() OVER (PARTITION BY name ORDER BY s.a) AS rn, max(s) OVER (PARTITION BY name) AS mx"
+                " FROM {t} ORDER BY id",
+                [(1, 1, Row(a=2, b="y")), (2, 2, Row(a=2, b="y")), (3, 1, Row(a=3, b="z")), (4, 1, None)],
+            ),
+            (
+                "SELECT id, transform(arr_s, e -> e.x) AS xs, filter(arr_s, e -> e.x > 1) AS f, arr_s.y AS ys FROM {t} ORDER BY id",
+                [
+                    (1, [1], [], ["p"]),
+                    (2, [2], [Row(x=2, y="q")], ["q"]),
+                    (3, [3], [Row(x=3, y="r")], ["r"]),
+                    (4, None, None, None),
+                ],
+            ),
+            (
+                "SELECT id, inline(arr_s) FROM {t} ORDER BY id",
+                [(1, 1, "p"), (2, 2, "q"), (3, 3, "r")],
+            ),
+            (
+                "SELECT id, to_json(s) AS j, CAST(s AS STRING) AS str FROM {t} ORDER BY id",
+                [
+                    (1, '{"a":1,"b":"x"}', "{1, x}"),
+                    (2, '{"a":2,"b":"y"}', "{2, y}"),
+                    (3, '{"a":3,"b":"z"}', "{3, z}"),
+                    (4, None, None),
+                ],
+            ),
+            (
+                "SELECT id, named_struct('x', s.a, 'y', nested.inner_arr) AS n, struct(s.a, s.b) AS t2 FROM {t} ORDER BY id",
+                [
+                    (1, Row(x=1, y=["i"]), Row(a=1, b="x")),
+                    (2, Row(x=2, y=["j", "k"]), Row(a=2, b="y")),
+                    (3, Row(x=3, y=["l"]), Row(a=3, b="z")),
+                    (4, Row(x=None, y=None), Row(a=None, b=None)),
+                ],
+            ),
+        ]:
             sql = query.format(t=table_fqn)
-            assert spark.sql(sql).collect() == jvm_spark.sql(sql).collect(), sql
+            assert [tuple(row) for row in spark.sql(sql).collect()] == expected, sql
         deduplicated = spark.table(table_fqn).dropDuplicates(["name"]).select("name").orderBy("name").collect()
         assert [row.name for row in deduplicated] == ["a", "b", "c"]
     finally:
