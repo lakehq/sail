@@ -4526,7 +4526,7 @@ mod tests {
         .into_iter()
         .map(|data_type| {
             let mut schema = view_result().metadata.schemas[0].clone();
-            schema.fields[0].r#type = Box::new(serde_json::from_value(data_type).unwrap());
+            *schema.fields[0].r#type = serde_json::from_value(data_type).unwrap();
             schema
         })
         .collect()
