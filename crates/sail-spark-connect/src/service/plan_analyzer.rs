@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{Expr, InvariantLevel};
+use datafusion::optimizer::AnalyzerRule;
+use datafusion::optimizer::analyzer::function_rewrite::ApplyFunctionRewrites;
 use datafusion::prelude::SessionContext;
 use prost::Message;
 use sail_catalog::manager::CatalogManager;
@@ -43,12 +45,30 @@ async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc:
     let spark = ctx.extension::<SparkSession>()?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
     let NamedPlan {
-        plan,
+        mut plan,
         fields,
         field_metadata,
     } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
+    let session_state = ctx.state();
+    let analyzer = session_state.analyzer();
+    let config = session_state.config_options();
+    // Apply the same analysis rules as execution so coercion and UDF resolution
+    // determine the final schema. Do not validate executable invariants here:
+    // DataFusion recursively checks subqueries both explicitly and through
+    // apply_with_subqueries, making that validation exponential in nesting depth.
+    // Execution still performs its normal validation before optimization.
+    plan.check_invariants(InvariantLevel::Always)?;
+    if !analyzer.function_rewrites.is_empty() {
+        plan = ApplyFunctionRewrites::new(analyzer.function_rewrites.clone())
+            .analyze(plan, config.as_ref())?;
+    }
+    for rule in &analyzer.rules {
+        plan = rule
+            .analyze(plan, config.as_ref())
+            .map_err(|error| error.context(rule.name()))?;
+    }
     let schema = if let Some(fields) = fields {
         rename_schema_with_metadata(plan.schema().inner(), &fields, &field_metadata)?
     } else {

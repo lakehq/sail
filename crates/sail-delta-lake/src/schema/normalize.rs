@@ -103,9 +103,13 @@ fn transform_nested_fields(data_type: &DataType, transform: fn(&Field) -> Field)
             DataType::Struct(transformed_fields)
         }
         DataType::List(field) => DataType::List(Arc::new(transform(field.as_ref()))),
-        DataType::LargeList(field) => DataType::LargeList(Arc::new(transform(field.as_ref()))),
+        DataType::ListView(field) => DataType::ListView(Arc::new(transform(field.as_ref()))),
         DataType::FixedSizeList(field, size) => {
             DataType::FixedSizeList(Arc::new(transform(field.as_ref())), *size)
+        }
+        DataType::LargeList(field) => DataType::LargeList(Arc::new(transform(field.as_ref()))),
+        DataType::LargeListView(field) => {
+            DataType::LargeListView(Arc::new(transform(field.as_ref())))
         }
         DataType::Map(field, sorted) => DataType::Map(Arc::new(transform(field.as_ref())), *sorted),
         _ => data_type.clone(),

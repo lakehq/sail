@@ -51,20 +51,17 @@ impl OptimizerRule for DecorrelateLateralProjection {
             other => (None, other),
         };
 
-        let LogicalPlan::Projection(proj) = after_alias else {
-            return Ok(Transformed::no(plan));
-        };
-
-        // Only handle the case where OuterRef appears in the Projection exprs
-        // but NOT in deeper nodes (that case is for DecorrelateLateralJoin).
-        if !proj.expr.iter().any(contains_outer_ref) {
+        // Keep materialized alias dependencies as separate projections. Only
+        // correlation beneath this projection chain needs general decorrelation.
+        let mut right_base = after_alias;
+        let mut has_outer_ref = false;
+        while let LogicalPlan::Projection(projection) = right_base {
+            has_outer_ref |= projection.expr.iter().any(contains_outer_ref);
+            right_base = projection.input.as_ref();
+        }
+        if !has_outer_ref || !right_base.all_out_ref_exprs().is_empty() {
             return Ok(Transformed::no(plan));
         }
-        if !proj.input.all_out_ref_exprs().is_empty() {
-            return Ok(Transformed::no(plan));
-        }
-
-        let left_field_count = join.left.schema().fields().len();
 
         let LogicalPlan::Join(join) = plan else {
             unreachable!();
@@ -74,6 +71,7 @@ impl OptimizerRule for DecorrelateLateralProjection {
         let join_filter = join.filter;
 
         let left: LogicalPlan = Arc::unwrap_or_clone(join.left);
+        let left_schema = Arc::clone(left.schema());
 
         // Unwrap right: (Subquery ->) (SubqueryAlias ->) Projection
         let right_unwrapped = match Arc::unwrap_or_clone(join.right) {
@@ -85,53 +83,47 @@ impl OptimizerRule for DecorrelateLateralProjection {
             other => other,
         };
 
-        let LogicalPlan::Projection(proj) = right_inner else {
-            unreachable!();
-        };
-        let right_exprs = proj.expr;
-        let right_base = Arc::unwrap_or_clone(proj.input);
+        let mut projections = vec![];
+        let mut right_base = right_inner;
+        while let LogicalPlan::Projection(projection) = right_base {
+            projections.push(projection.expr);
+            right_base = Arc::unwrap_or_clone(projection.input);
+        }
 
-        let cross_join = LogicalPlanBuilder::from(left)
+        let mut projected = LogicalPlanBuilder::from(left)
             .cross_join(right_base)?
             .build()?;
 
-        let mut output_exprs: Vec<Expr> = Vec::new();
-
-        for col in cross_join
-            .schema()
-            .columns()
-            .into_iter()
-            .take(left_field_count)
-        {
-            output_exprs.push(Expr::Column(col));
-        }
-
-        for expr in right_exprs {
-            let replaced = expr
-                .transform(|e| match e {
-                    Expr::OuterReferenceColumn(_field, col) => {
-                        Ok(Transformed::yes(Expr::Column(col)))
+        while let Some(right_exprs) = projections.pop() {
+            let mut output_exprs = left_schema
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            for expr in right_exprs {
+                let replaced = expr
+                    .transform(|e| match e {
+                        Expr::OuterReferenceColumn(_field, col) if left_schema.has_column(&col) => {
+                            Ok(Transformed::yes(Expr::Column(col)))
+                        }
+                        _ => Ok(Transformed::no(e)),
+                    })
+                    .data()?;
+                // Qualify only the final right-side outputs, preserving both
+                // intermediate alias references and the left-side qualifiers.
+                let replaced = match (&subquery_alias, projections.is_empty(), replaced) {
+                    (Some(alias), true, Expr::Alias(mut a)) => {
+                        a.relation = Some(alias.clone());
+                        Expr::Alias(a)
                     }
-                    _ => Ok(Transformed::no(e)),
-                })
-                .data()?;
-            // If the original right side had a SubqueryAlias (e.g. `LATERAL (...) AS t`),
-            // set the alias relation so the output field gets the correct qualifier.
-            // This avoids wrapping the entire plan in SubqueryAlias which would
-            // change the qualifier of left-side columns too.
-            let replaced = match (&subquery_alias, replaced) {
-                (Some(alias), Expr::Alias(mut a)) => {
-                    a.relation = Some(alias.clone());
-                    Expr::Alias(a)
-                }
-                (_, other) => other,
-            };
-            output_exprs.push(replaced);
+                    (_, _, other) => other,
+                };
+                output_exprs.push(replaced);
+            }
+            projected = LogicalPlanBuilder::from(projected)
+                .project(output_exprs)?
+                .build()?;
         }
-
-        let projected = LogicalPlanBuilder::from(cross_join)
-            .project(output_exprs)?
-            .build()?;
 
         let result = if join_on.is_empty() && join_filter.is_none() {
             projected

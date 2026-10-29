@@ -38,6 +38,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -75,6 +78,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -167,6 +176,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -293,6 +308,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     SAME TEXT AS ABOVE
 
@@ -376,6 +394,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -553,7 +574,7 @@ data:
     RowLevelWrite: command=Delete, mode=MergeOnRead, target=delta_dv_explain, format=delta, condition=id = 2
 
     == Analyzed Logical Plan ==
-
+    num_affected_rows: Int64
     RowLevelWrite: command=Delete, mode=MergeOnRead, target=delta_dv_explain, format=delta, condition=id = 2
 
     == Optimized Logical Plan ==

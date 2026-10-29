@@ -16,7 +16,7 @@ use crate::table::{
     DeltaTable, catalog_managed_commit_context, create_logstore_with_object_store,
     load_catalog_managed_commits_for_snapshot,
 };
-use crate::transaction::CommitBuilder;
+use crate::transaction::{CommitBuilder, CommitProperties};
 
 pub(crate) async fn drop_check_constraint(
     ctx: &TaskContext,
@@ -485,16 +485,18 @@ pub(crate) async fn alter_columns(
     if snapshot.effective_column_mapping_mode() == ColumnMappingMode::None {
         validate_unmapped_names(updated.fields())?;
     }
-    let candidate =
-        preserve_schema_metadata(&current, &StructType::try_from(&updated)?, updated.fields())?;
     let (candidate, metadata) = crate::schema::manager::evolve_schema(
         &current,
-        &candidate,
+        &StructType::try_from(&updated)?,
         snapshot.metadata(),
         snapshot.effective_column_mapping_mode(),
     )
     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let mut metadata = metadata.with_partition_columns(partitions);
+    // Apply comment removals after column mapping has inherited existing metadata.
+    let candidate = preserve_schema_metadata(&current, &candidate, updated.fields())?;
+    let mut metadata = metadata
+        .with_schema(&candidate)?
+        .with_partition_columns(partitions);
     let mut properties = Vec::new();
     const STATS_COLUMNS: &str = "delta.dataSkippingStatsColumns";
     if let Some(value) = metadata.configuration().get(STATS_COLUMNS)
@@ -783,8 +785,9 @@ pub(crate) async fn commit(
     actions: Vec<CommitAction>,
     operation: DeltaOperation,
 ) -> Result<()> {
+    let commit_properties = CommitProperties::from_session_config(ctx.session_config())?;
     let Some(lakehouse) = catalog_managed_commit_context(lakehouse) else {
-        return CommitBuilder::default()
+        return CommitBuilder::from(commit_properties)
             .with_actions(actions)
             .build(Some(snapshot), log_store, operation)
             .await
@@ -807,7 +810,7 @@ pub(crate) async fn commit(
     };
     let coordinator = DeltaCatalogCommitCoordinator::new(ctx, lakehouse.catalog_table());
     let latest = coordinator.latest_table_version(lakehouse, &table).await?;
-    let staged = CommitBuilder::default()
+    let staged = CommitBuilder::from(commit_properties)
         .with_actions(actions.clone())
         .build(Some(snapshot), log_store.clone(), operation)
         .into_staged_commit_future_with_catalog_latest_version(latest)
@@ -862,6 +865,8 @@ fn preserve_schema_metadata(
                 field
                     .metadata
                     .insert("comment".into(), MetadataValue::String(comment.clone()));
+            } else {
+                field.metadata.remove("comment");
             }
             preserve_type_metadata(
                 old.map(|f| f.data_type()),

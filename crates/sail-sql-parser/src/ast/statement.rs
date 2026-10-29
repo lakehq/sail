@@ -17,16 +17,17 @@ use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Call, Cascade, Catalog,
     Catalogs, Change, Check, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns,
     Comment, Compute, Constraint, Cost, Create, Data, Database, Databases, Dbproperties, Default,
-    Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
-    Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
-    Function, Functions, Generated, Global, Identity, If, In, Increment, Inpath, Inputformat,
-    Insert, Interval, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map,
-    Matched, Merge, Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat,
-    Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename,
-    Replace, Reset, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted,
-    Source, Start, Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp,
-    Temporary, Terminated, Then, Time, To, Truncate, Type, Uncache, Unset, Update, Use, User,
-    Using, Values, Verbose, View, Views, When, With, Zone,
+    Defined, Delete, Delimited, Desc, Describe, Detail, Directory, Distributed, Drop, Dry, Escaped,
+    Evolution, Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format,
+    Formatted, From, Full, Function, Functions, Generated, Global, History, Hours, Identity, If,
+    In, Increment, Inpath, Inputformat, Insert, Interval, Into, Is, Items, Keys, Lazy, Like, Limit,
+    Lines, Lite, Load, Local, Location, Map, Matched, Merge, Name, Namespace, Namespaces, Noscan,
+    Not, Null, On, Optimize, Options, Or, Outputformat, Overwrite, Partition, Partitioned,
+    Partitions, Properties, Purge, Recover, Refresh, Rename, Replace, Reset, Restrict, Retain, Row,
+    Run, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start, Statistics,
+    Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time,
+    To, Truncate, Type, Uncache, Unset, Update, Use, User, Using, Vacuum, Values, Verbose, View,
+    Views, When, With, Zone, Zorder,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -65,6 +66,19 @@ pub enum Statement {
         name: ObjectName,
         #[parser(function = |(_, _, e, _), o| compose(e, o))]
         arguments: FunctionArgumentList,
+    },
+    Optimize {
+        optimize: Optimize,
+        target: Either<StringLiteral, ObjectName>,
+        full: Option<Full>,
+        #[parser(function = |(_, _, e, _), o| compose(e, o))]
+        predicate: Option<WhereClause>,
+        zorder: Option<ZOrderClause>,
+    },
+    Vacuum {
+        vacuum: Vacuum,
+        target: Either<StringLiteral, ObjectName>,
+        clauses: Vec<VacuumClause>,
     },
     SetCatalog {
         set: Set,
@@ -1297,6 +1311,15 @@ pub enum AnalyzeTableModifier {
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Query, Expr)")]
 pub enum DescribeItem {
+    DeltaDetail {
+        detail: Detail,
+        target: Either<StringLiteral, ObjectName>,
+    },
+    DeltaHistory {
+        history: History,
+        target: Either<StringLiteral, ObjectName>,
+        limit: Option<(Limit, IntegerLiteral)>,
+    },
     Function {
         function: Function,
         extended: Option<Extended>,
@@ -1369,4 +1392,27 @@ pub enum DescribeFunctionName {
 pub enum CommentValue {
     NotNull(StringLiteral),
     Null(Null),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum VacuumClause {
+    // TODO: Parse USING INVENTORY table/subquery inputs and pass them to VACUUM planning.
+    Retain(Retain, NumberLiteral, Hours),
+    DryRun(Dry, Run),
+    Mode(Either<Full, Lite>),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ZOrderClause {
+    pub zorder: Zorder,
+    pub by: By,
+    #[expect(clippy::type_complexity)]
+    pub columns: Either<
+        (
+            LeftParenthesis,
+            Sequence<ObjectName, Comma>,
+            RightParenthesis,
+        ),
+        Sequence<ObjectName, Comma>,
+    >,
 }

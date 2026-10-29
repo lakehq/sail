@@ -4,7 +4,6 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
-use datafusion::physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
@@ -24,19 +23,23 @@ use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::filter_pushdown::PostFilterPushdown;
 use crate::input_file_name::{
-    PushDownInputFileMetadata, RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
+    PushDownInputFileMetadata, PushDownStreamedJoinInputFileMetadata,
+    RewriteInputFileMetadataFallback, WrapInputFileMetadataSource,
 };
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
-use crate::projection_pushdown::LambdaSafeProjectionPushdown;
+use crate::offset::OffsetSafeRequirements;
+use crate::projection_pushdown::ContextSafeProjectionPushdown;
 use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
 
 mod barrier;
 mod collect_left;
+mod correlation_cast;
 mod explicit_repartition;
 mod filter_pushdown;
 mod input_file_name;
 mod join_reorder;
+mod offset;
 mod projection_pushdown;
 mod scan_partitions;
 mod select_semi_join_build_side;
@@ -62,6 +65,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(SelectSemiJoinBuildSide));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
+    rules.push(Arc::new(correlation_cast::OptimizeCorrelationCasts));
     rules.push(Arc::new(FilterPushdown::new()));
     // WindowTopN checks DataFusion's `enable_window_topn`, which defaults to false because
     // PartitionedTopKExec can regress memory and runtime for high-cardinality partition keys.
@@ -69,21 +73,22 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(WindowTopN::new()));
     rules.push(Arc::new(WrapInputFileMetadataSource::new()));
     rules.push(Arc::new(PushDownInputFileMetadata::new()));
-    rules.push(Arc::new(EnsureRequirements::new()));
+    rules.push(Arc::new(OffsetSafeRequirements));
     rules.push(Arc::new(scan_partitions::OptimizeScanPartitions));
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
-    rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));
+    rules.push(Arc::new(ContextSafeProjectionPushdown::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
     rules.push(Arc::new(LimitPushPastWindows::new()));
     rules.push(Arc::new(HashJoinBuffering::new()));
     rules.push(Arc::new(LimitPushdown::new()));
     rules.push(Arc::new(TopKRepartition::new()));
-    rules.push(Arc::new(LambdaSafeProjectionPushdown::new()));
+    rules.push(Arc::new(ContextSafeProjectionPushdown::new()));
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
     rules.push(Arc::new(PostFilterPushdown));
+    rules.push(Arc::new(PushDownStreamedJoinInputFileMetadata));
     rules.push(Arc::new(RewriteInputFileMetadataFallback::new()));
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
@@ -113,6 +118,13 @@ mod tests {
                 enable_join_reorder,
                 ..Default::default()
             });
+            let names: Vec<_> = optimizers.iter().map(|rule| rule.name()).collect();
+            assert!(names.windows(3).any(|rules| rules
+                == [
+                    PostFilterPushdown.name(),
+                    PushDownStreamedJoinInputFileMetadata.name(),
+                    RewriteInputFileMetadataFallback::new().name(),
+                ]));
             let actual_datafusion_optimizer_names: Vec<&str> = optimizers
                 .iter()
                 .map(|opt| opt.name())

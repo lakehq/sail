@@ -11,7 +11,7 @@ use crate::function::is_built_in_generator_function;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
-mod attribute;
+pub(super) mod attribute;
 mod cast;
 mod function;
 mod grouping;

@@ -153,6 +153,25 @@ impl<'a> SourceMetricColumn<'a> {
 }
 
 impl MergeRowMetrics {
+    fn try_new(schema: &Schema) -> Result<Self> {
+        // An operation-tagged stream carries exact metrics even when it emits no batches.
+        let uses_operation = match schema.column_with_name(OPERATION_COLUMN) {
+            Some((_, field)) => match field.data_type() {
+                DataType::Int32 | DataType::Int64 => true,
+                other => {
+                    return Err(DataFusionError::Plan(format!(
+                        "row-level operation column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                    )));
+                }
+            },
+            None => false,
+        };
+        Ok(Self {
+            uses_operation,
+            ..Default::default()
+        })
+    }
+
     fn add_operation_value(&mut self, value: i64, source_metric_count: Option<u64>) {
         match value {
             v if v == i64::from(RowLevelOperationType::Copy.as_i32()) => {
@@ -798,7 +817,7 @@ impl DeltaWriterExec {
                 variant_shredding,
             );
 
-            let writer_path = object_store::path::Path::from(table_url.path());
+            let writer_path = object_store::path::Path::from_url_path(table_url.path())?;
             let writer_path = if options.change_data {
                 writer_path.join("_change_data")
             } else {
@@ -824,7 +843,7 @@ impl DeltaWriterExec {
             let mut total_rows = 0u64;
             let mut data = stream;
             let mut write_time_ms: u64 = 0;
-            let mut merge_row_metrics = MergeRowMetrics::default();
+            let mut merge_row_metrics = MergeRowMetrics::try_new(data.schema().as_ref())?;
 
             while let Some(batch_result) = data.next().await {
                 let batch_start = Instant::now();
@@ -915,7 +934,15 @@ impl DeltaWriterExec {
                         tags: None,
                     }));
                 }
-                return encode_actions(actions, None);
+                let operation_metrics = Self::change_data_metrics(&actions)?;
+                return encode_actions(
+                    actions,
+                    Some(ExecCommitMeta {
+                        row_count: 0,
+                        operation: None,
+                        operation_metrics,
+                    }),
+                );
             }
 
             let num_added_files: u64 = add_actions.len() as u64;
@@ -1028,6 +1055,26 @@ impl DeltaWriterExec {
 }
 
 impl DeltaWriterExec {
+    fn change_data_metrics(actions: &[Action]) -> Result<OperationMetrics> {
+        let num_added_change_files = u64::try_from(actions.len())
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        let change_file_bytes = actions.iter().try_fold(0u64, |total, action| {
+            let Action::Cdc(action) = action else {
+                return internal_err!("expected only CDC actions in change data writer");
+            };
+            let size = u64::try_from(action.size)
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+            total.checked_add(size).ok_or_else(|| {
+                DataFusionError::Execution("Delta CDC file byte count overflow".into())
+            })
+        })?;
+        Ok(OperationMetrics {
+            num_added_change_files: Some(num_added_change_files),
+            change_file_bytes: Some(change_file_bytes),
+            ..Default::default()
+        })
+    }
+
     fn is_writer_metric_column(name: &str) -> bool {
         name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
     }
@@ -1337,6 +1384,34 @@ fn change_data_schema(schema: &SchemaRef) -> SchemaRef {
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    #[test]
+    fn change_data_metrics_count_files_without_data_rows() {
+        let actions = |sizes: &[i64]| {
+            sizes
+                .iter()
+                .map(|size| {
+                    crate::spec::Action::Cdc(crate::spec::AddCDCFile {
+                        path: "_change_data/test.parquet".into(),
+                        partition_values: Default::default(),
+                        size: *size,
+                        data_change: false,
+                        tags: None,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            super::DeltaWriterExec::change_data_metrics(&actions(&[10, 20])).unwrap(),
+            crate::transaction::OperationMetrics {
+                num_added_change_files: Some(2),
+                change_file_bytes: Some(30),
+                ..Default::default()
+            }
+        );
+        assert!(super::DeltaWriterExec::change_data_metrics(&actions(&[-1])).is_err());
+        assert!(super::DeltaWriterExec::change_data_metrics(&actions(&[i64::MAX; 3])).is_err());
+    }
+
     use std::collections::HashMap;
 
     use datafusion::arrow::array::{Array, ArrayRef, Int32Array, StructArray};
@@ -1351,6 +1426,34 @@ mod tests {
             Field::new(name, DataType::Int32, true)
                 .with_metadata(HashMap::from([(metadata_key.to_string(), id.to_string())])),
         )
+    }
+
+    #[test]
+    fn empty_operation_tagged_streams_preserve_known_zero_metrics() -> Result<()> {
+        for data_type in [DataType::Int32, DataType::Int64] {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                OPERATION_COLUMN,
+                data_type,
+                false,
+            )]));
+            let mut metrics = MergeRowMetrics::try_new(&schema)?;
+            assert!(metrics.uses_operation);
+            assert_eq!(
+                (metrics.updated, metrics.copied, metrics.deleted),
+                (0, 0, 0)
+            );
+            metrics.accumulate_batch(&RecordBatch::new_empty(schema))?;
+            assert!(metrics.uses_operation);
+            assert_eq!(
+                (metrics.updated, metrics.copied, metrics.deleted),
+                (0, 0, 0)
+            );
+        }
+        // Untagged metadata scans must retain unknown row counts, not exact zero.
+        assert!(!MergeRowMetrics::try_new(&Schema::empty())?.uses_operation);
+        let invalid = Schema::new(vec![Field::new(OPERATION_COLUMN, DataType::Utf8, false)]);
+        assert!(MergeRowMetrics::try_new(&invalid).is_err());
+        Ok(())
     }
 
     #[test]

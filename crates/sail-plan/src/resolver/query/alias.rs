@@ -23,9 +23,41 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+        let hidden = input
+            .schema()
+            .iter()
+            .map(|(qualifier, field)| {
+                Ok((
+                    state.get_field_info(field.name())?.is_hidden(),
+                    qualifier.cloned(),
+                ))
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let plan = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             Arc::new(input),
             self.resolve_table_reference(&spec::ObjectName::from(qualifier).child(alias))?,
+        )?);
+        if !hidden.iter().any(|(hidden, _)| *hidden) {
+            return Ok(plan);
+        }
+        // A DataFrame alias names its visible output. USING's hidden keys
+        // still belong to the original sides, not to the joined alias.
+        let exprs = plan
+            .schema()
+            .columns()
+            .into_iter()
+            .zip(hidden)
+            .map(|(column, (hidden, qualifier))| {
+                if hidden {
+                    Expr::Column(column.clone()).alias_qualified(qualifier, column.name)
+                } else {
+                    Expr::Column(column)
+                }
+            })
+            .collect();
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            exprs,
+            Arc::new(plan),
         )?))
     }
 

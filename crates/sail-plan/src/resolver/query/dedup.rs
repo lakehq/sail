@@ -12,6 +12,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_query_deduplicate(
         &self,
         deduplicate: spec::Deduplicate,
+        dataframe: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::Deduplicate {
@@ -47,7 +48,21 @@ impl PlanResolver<'_> {
                 Arc::new(input),
             )?)))
         } else if column_names.is_empty() && all_columns_as_keys {
-            Ok(LogicalPlan::Distinct(Distinct::All(Arc::new(input))))
+            if dataframe && !schema.fields().is_empty() {
+                let columns = schema
+                    .columns()
+                    .into_iter()
+                    .map(Expr::Column)
+                    .collect::<Vec<_>>();
+                Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn::try_new(
+                    columns.clone(),
+                    columns,
+                    None,
+                    Arc::new(input),
+                )?)))
+            } else {
+                Ok(LogicalPlan::Distinct(Distinct::All(Arc::new(input))))
+            }
         } else {
             Err(PlanError::invalid(
                 "must either specify deduplicate column names or use all columns as keys",

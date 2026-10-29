@@ -1,3 +1,4 @@
+import json
 from collections import Counter
 from itertools import pairwise
 from pathlib import Path
@@ -7,7 +8,11 @@ from urllib.request import url2pathname
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from pyspark.sql import Window
 from pyspark.sql import functions as F  # noqa: N812
+from pyspark.sql.types import ArrayType, LongType, StringType, StructField, StructType
+
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
 PARQUET_SPLIT_ROW_COUNT = 16_384
 PARQUET_SPLIT_ROW_GROUP_SIZE = 512
@@ -17,8 +22,12 @@ DATAFUSION_REPARTITION_FILE_MIN_SIZE = 1024 * 1024
 
 @pytest.fixture
 def parquet_metadata(spark, tmp_path):
+    return _parquet_metadata(spark, tmp_path, [("a.parquet", [1, 2]), ("b.parquet", [3, 4])])
+
+
+def _parquet_metadata(spark, tmp_path, groups):
     files = {}
-    for name, ids in [("a.parquet", [1, 2]), ("b.parquet", [3, 4])]:
+    for name, ids in groups:
         path = tmp_path / name
         pq.write_table(pa.table({"id": ids, "arr": [[value, value + 1] for value in ids]}), path)
         files.update({value: (path.as_uri(), 0, path.stat().st_size) for value in ids})
@@ -26,7 +35,8 @@ def parquet_metadata(spark, tmp_path):
 
 
 @pytest.mark.parametrize("boundary", ["lambda", "coalesce", "union", "union_coalesce"])
-def test_input_file_metadata_survives_projection_boundaries(spark, parquet_metadata, boundary):
+@pytest.mark.parametrize("limited", [False, True])
+def test_input_file_metadata_survives_projection_boundaries(spark, parquet_metadata, boundary, limited):
     dataframe, expected = parquet_metadata
     if boundary == "lambda":
         dataframe = dataframe.selectExpr("id", "transform(arr, x -> x + id) AS arr")
@@ -38,16 +48,579 @@ def test_input_file_metadata_survives_projection_boundaries(spark, parquet_metad
         if boundary == "union_coalesce":
             dataframe = dataframe.coalesce(1)
 
-    rows = dataframe.select(
-        "*",
+    dataframe = dataframe.select("*", *_metadata_columns())
+    rows = _assert_metadata_rows(
+        dataframe.limit(3) if limited else dataframe, expected, 3 if limited else len(expected)
+    )
+    if boundary == "lambda":
+        assert all(row.arr == [2 * row.id, 2 * row.id + 1] for row in rows)
+
+
+# Limit/offset and expression contracts verified with Spark 4.0.4 (ANSI, UTC).
+# File URIs and lengths come from independently written artifacts, not query results.
+METADATA_SCHEMA = StructType(
+    [
+        StructField("file_name", StringType(), False),
+        StructField("block_start", LongType(), False),
+        StructField("block_length", LongType(), False),
+    ]
+)
+
+
+def _metadata_columns():
+    return [
         F.input_file_name().alias("file_name"),
         F.input_file_block_start().alias("block_start"),
         F.input_file_block_length().alias("block_length"),
-    ).collect()
+    ]
 
-    assert {row.id: (row.file_name, row.block_start, row.block_length) for row in rows} == expected
-    if boundary == "lambda":
-        assert {row.id: row.arr for row in rows} == {value: [2 * value, 2 * value + 1] for value in expected}
+
+def _assert_metadata_rows(dataframe, expected, count, *, nullable=False):
+    schema = StructType([StructField(field.name, field.dataType, nullable) for field in METADATA_SCHEMA])
+    assert StructType([dataframe.schema[field.name] for field in schema]) == schema
+    rows = dataframe.collect()
+    assert len(rows) == count
+    assert len({row.id for row in rows}) == count
+    for row in rows:
+        assert (row.file_name, row.block_start, row.block_length) == expected[row.id]
+    return rows
+
+
+@pytest.mark.parametrize("api", ["sql", "dataframe"])
+@pytest.mark.parametrize("limit", [0, 1, 3, 9])
+@pytest.mark.parametrize("select_after", [False, True])
+def test_input_file_metadata_limit(spark, parquet_metadata, api, limit, select_after):
+    dataframe, files = parquet_metadata
+    if api == "sql":
+        dataframe.createOrReplaceTempView("input_file_limit")
+        try:
+            source = (
+                f"(SELECT * FROM input_file_limit LIMIT {limit})"  # noqa: S608
+                if select_after
+                else "input_file_limit"
+            )
+            suffix = "" if select_after else f" LIMIT {limit}"
+            dataframe = spark.sql(
+                "SELECT id, input_file_name() AS file_name, input_file_block_start() AS block_start, "  # noqa: S608
+                f"input_file_block_length() AS block_length FROM {source}{suffix}"
+            )
+            schema = dataframe.schema
+            _assert_metadata_rows(
+                dataframe, dict.fromkeys(files, ("", -1, -1)) if select_after else files, min(limit, len(files))
+            )
+        finally:
+            spark.catalog.dropTempView("input_file_limit")
+    else:
+        dataframe = (
+            dataframe.limit(limit).select("id", *_metadata_columns())
+            if select_after
+            else dataframe.select("id", *_metadata_columns()).limit(limit)
+        )
+        schema = dataframe.schema
+        _assert_metadata_rows(
+            dataframe, dict.fromkeys(files, ("", -1, -1)) if select_after else files, min(limit, len(files))
+        )
+    assert schema == StructType([StructField("id", LongType(), True), *METADATA_SCHEMA])
+
+
+@pytest.mark.parametrize(
+    ("boundary", "placement", "count"),
+    [
+        ("limit", "before", 1),
+        ("limit", "between", 1),
+        ("limit", "after", 1),
+        ("offset", "before", 1),
+        ("offset", "between", 1),
+        ("offset", "after", 1),
+        ("exhausted", "before", 0),
+        ("exhausted", "after", 0),
+    ],
+)
+def test_input_file_metadata_nested_limits_offsets(parquet_metadata, boundary, placement, count):
+    dataframe, files = parquet_metadata
+    if placement == "before":
+        dataframe = dataframe.select("id", *_metadata_columns())
+    dataframe = dataframe.limit(3) if boundary == "limit" else dataframe.offset(9 if boundary == "exhausted" else 1)
+    if placement == "between":
+        dataframe = dataframe.select("id", *_metadata_columns())
+    dataframe = dataframe.limit(1) if boundary == "limit" else dataframe.offset(1).limit(1)
+    if placement == "after":
+        dataframe = dataframe.select("id", *_metadata_columns())
+    _assert_metadata_rows(dataframe, files if placement == "before" else dict.fromkeys(files, ("", -1, -1)), count)
+
+
+@pytest.mark.parametrize(("distinct", "limit"), [(False, 3), (True, 9), (True, 1)])
+def test_input_file_metadata_only_limit(parquet_metadata, distinct, limit):
+    dataframe, files = parquet_metadata
+    dataframe = dataframe.select(*_metadata_columns())
+    if distinct:
+        dataframe = dataframe.distinct()
+    dataframe = dataframe.limit(limit)
+    assert dataframe.schema == METADATA_SCHEMA
+    actual = Counter(tuple(row) for row in dataframe.collect())
+    expected = Counter(set(files.values())) if distinct else Counter(files.values())
+    assert sum(actual.values()) == min(limit, sum(expected.values()))
+    assert actual <= expected
+
+
+def test_input_file_metadata_nested_expressions_limit(parquet_metadata):
+    dataframe, files = parquet_metadata
+    dataframe = dataframe.select(
+        "id",
+        F.struct(*_metadata_columns()).alias("bundle"),
+        F.array(F.input_file_name(), F.input_file_name()).alias("duplicate"),
+        F.concat(F.input_file_name(), F.lit(":"), F.input_file_block_length().cast("string")).alias("label"),
+    ).limit(2)
+    assert dataframe.schema == StructType(
+        [
+            StructField("id", LongType(), True),
+            StructField("bundle", METADATA_SCHEMA, False),
+            StructField("duplicate", ArrayType(StringType(), False), False),
+            StructField("label", StringType(), False),
+        ]
+    )
+    rows = dataframe.collect()
+    assert len(rows) == len({row.id for row in rows}) == 2  # noqa: PLR2004
+    for row in rows:
+        name, start, length = files[row.id]
+        assert tuple(row.bundle) == (name, start, length)
+        assert row.duplicate == [name, name]
+        assert row.label == f"{name}:{length}"
+
+
+def test_input_file_metadata_filename_filter_limit(parquet_metadata):
+    dataframe, files = parquet_metadata
+    dataframe = dataframe.where(F.input_file_name() == files[1][0]).select("id", *_metadata_columns()).limit(1)
+    _assert_metadata_rows(dataframe, {key: files[key] for key in [1, 2]}, 1)
+
+
+# Semantic ports of Spark test_functions.test_input_file_name_udf and
+# test_udf.test_udf_with_input_file_name; extended to all three metadata functions.
+@pytest.mark.parametrize("receiving", [False, True])
+@pytest.mark.parametrize("limited", [False, True])
+def test_input_file_metadata_python_udf(parquet_metadata, receiving, limited):
+    dataframe, files = parquet_metadata
+    if receiving:
+        string_identity = F.udf(lambda value: value, "string")
+        long_identity = F.udf(lambda value: value, "long")
+        dataframe = dataframe.select(
+            "id",
+            string_identity(F.input_file_name()).alias("file_name"),
+            long_identity(F.input_file_block_start()).alias("block_start"),
+            long_identity(F.input_file_block_length()).alias("block_length"),
+        )
+    else:
+        sibling = F.udf(lambda value: value + 10, "long")
+        dataframe = dataframe.select("id", sibling("id").alias("sibling"), *_metadata_columns())
+        assert dataframe.schema["sibling"] == StructField("sibling", LongType(), True)
+    rows = _assert_metadata_rows(
+        dataframe.limit(1) if limited else dataframe, files, 1 if limited else 4, nullable=receiving
+    )
+    if not receiving:
+        assert all(row.sibling == row.id + 10 for row in rows)
+
+
+@pytest.mark.parametrize("empty", ["parquet", "csv", "filter"])
+def test_input_file_metadata_empty_and_state_reset(spark, tmp_path, parquet_metadata, empty):
+    dataframe, files = parquet_metadata
+    # Spark test_input_file_name_reset_for_rdd, adapted to a Connect-compatible scan.
+    _assert_metadata_rows(dataframe.select("id", *_metadata_columns()), files, 4)
+    defaults = dict.fromkeys(range(3), ("", -1, -1))
+    _assert_metadata_rows(spark.range(3).select("id", *_metadata_columns()), defaults, 3)
+    if empty == "parquet":
+        path = tmp_path / "empty.parquet"
+        pq.write_table(pa.table({"id": pa.array([], type=pa.int64())}), path)
+        dataframe = spark.read.parquet(str(path))
+    elif empty == "csv":
+        path = tmp_path / "empty-csv"
+        path.mkdir()
+        dataframe = spark.read.schema("id long").csv(str(path))
+    else:
+        dataframe = dataframe.where("id < 0")
+    _assert_metadata_rows(dataframe.select("id", *_metadata_columns()).limit(1), {}, 0)
+    _assert_metadata_rows(spark.range(3).select("id", *_metadata_columns()).limit(1), defaults, 1)
+
+
+@pytest.mark.parametrize("file_format", ["csv", "json", "text", "binaryFile", "avro", "arrow"])
+def test_input_file_metadata_reader_limit(spark, tmp_path, file_format):
+    path = tmp_path / f"rows.{file_format}"
+    reader = spark.read.format(file_format)
+    if file_format == "csv":
+        path.write_text("1\n2\n", encoding="utf-8")
+        reader = reader.schema("id long")
+    elif file_format == "json":
+        path.write_text('{"id": 1}\n{"id": 2}\n', encoding="utf-8")
+        reader = reader.schema("id long")
+    elif file_format in ["text", "binaryFile"]:
+        path.write_bytes(b"first\nsecond\n")
+    elif file_format == "arrow":
+        table = pa.table({"id": [1, 2]})
+        with pa.OSFile(str(path), "wb") as sink, pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+    else:
+        # Minimal Avro OCF, null codec, two long records; no optional writer dependency.
+        def encode_long(value):
+            value <<= 1
+            result = bytearray()
+            while value > 127:  # noqa: PLR2004
+                result.append((value & 127) | 128)
+                value >>= 7
+            return bytes([*result, value])
+
+        def encode_bytes(value):
+            return encode_long(len(value)) + value
+
+        schema = json.dumps({"type": "record", "name": "row", "fields": [{"name": "id", "type": "long"}]}).encode()
+        metadata = encode_long(1) + encode_bytes(b"avro.schema") + encode_bytes(schema) + encode_long(0)
+        sync = b"input-file-smoke"
+        assert len(sync) == 16  # noqa: PLR2004
+        records = encode_long(1) + encode_long(2)
+        path.write_bytes(b"Obj\x01" + metadata + sync + encode_long(2) + encode_long(len(records)) + records + sync)
+    # Spark 4.0.4 verified CSV/JSON/text/binaryFile. Avro's module was unavailable,
+    # and Arrow is unsupported there; those expectations use only the file artifact.
+    dataframe = reader.load(str(path)).select(*_metadata_columns()).limit(1)
+    assert dataframe.schema == METADATA_SCHEMA
+    assert [tuple(row) for row in dataframe.collect()] == [(path.as_uri(), 0, path.stat().st_size)]
+
+
+@pytest.mark.parametrize("select_after", [False, True])
+def test_input_file_metadata_topk(parquet_metadata, select_after):
+    dataframe, files = parquet_metadata
+    if not select_after:
+        dataframe = dataframe.select("id", *_metadata_columns())
+    dataframe = dataframe.orderBy("id").limit(3)
+    if select_after:
+        dataframe = dataframe.select("id", *_metadata_columns())
+    rows = _assert_metadata_rows(dataframe, dict.fromkeys(files, ("", -1, -1)) if select_after else files, 3)
+    assert [row.id for row in rows] == [1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    ("expression", "string_result"),
+    [
+        ("concat(input_file_name(), ':', cast(x + y AS STRING))", True),
+        ("input_file_block_start() + x + y", False),
+        ("input_file_block_length() + x + y", False),
+    ],
+)
+def test_input_file_metadata_after_sort_narrow_projection(spark, tmp_path, expression, string_result):
+    # Three scan columns and two projected columns exercise narrowing across Sort.
+    path = tmp_path / "three-columns.parquet"
+    pq.write_table(pa.table({"id": [1, 2], "x": [10, 20], "y": [100, 200]}), path)
+    dataframe = spark.read.parquet(str(path)).orderBy("id").selectExpr("id", f"{expression} AS value")
+    assert dataframe.schema == StructType(
+        [
+            StructField("id", LongType(), True),
+            StructField("value", StringType() if string_result else LongType(), True),
+        ]
+    )
+    assert [tuple(row) for row in dataframe.collect()] == [
+        (key, f":{110 * key}" if string_result else 110 * key - 1) for key in [1, 2]
+    ]
+
+
+@pytest.mark.parametrize("select_after", [False, True])
+@pytest.mark.parametrize("lateral_alias", [False, True])
+def test_input_file_metadata_sql_window_siblings(spark, parquet_metadata, select_after, lateral_alias):
+    dataframe, files = parquet_metadata
+    dataframe.createOrReplaceTempView("input_file_window")
+    metadata = (
+        "input_file_name() AS file_name, input_file_block_start() AS block_start, "
+        "input_file_block_length() AS block_length"
+    )
+    lateral = "rn + 1 AS next_rn, " if lateral_alias else ""
+    try:
+        query = (
+            f"SELECT id, rn, {lateral}{metadata} FROM "  # noqa: S608
+            "(SELECT id, row_number() OVER (ORDER BY id) AS rn FROM input_file_window) q"
+            if select_after
+            else f"SELECT id, row_number() OVER (ORDER BY id) AS rn, {lateral}{metadata} FROM input_file_window"  # noqa: S608
+        )
+        dataframe = spark.sql(query)
+        assert dataframe.schema["rn"].dataType.simpleString() == "int"
+        assert not dataframe.schema["rn"].nullable
+        rows = _assert_metadata_rows(dataframe, dict.fromkeys(files, ("", -1, -1)) if select_after else files, 4)
+        assert {row.id: row.rn for row in rows} == {key: key for key in files}
+        if lateral_alias:
+            assert {row.id: row.next_rn for row in rows} == {key: key + 1 for key in files}
+    finally:
+        spark.catalog.dropTempView("input_file_window")
+
+
+# These projection boundaries were verified with Spark 4.0.4 (ANSI, UTC).
+@pytest.mark.parametrize("projection", ["withColumns", "successive", "keys", "multiple", "collision", "aggregate"])
+def test_input_file_metadata_dataframe_window_siblings(parquet_metadata, projection):
+    dataframe, files = parquet_metadata
+    window = Window.orderBy("id")
+    if projection == "aggregate":
+        dataframe = dataframe.groupBy("id").count()
+    if projection == "collision":
+        dataframe = dataframe.withColumn("__sail_input_file_metadata_0", F.col("id") * 100)
+    if projection == "keys":
+        window = Window.partitionBy(
+            F.input_file_name(), F.input_file_block_start(), F.input_file_block_length()
+        ).orderBy("id")
+    expressions = {"rn": F.row_number().over(window)}
+    if projection == "multiple":
+        expressions["reverse_rn"] = F.row_number().over(Window.orderBy(F.desc("id")))
+    if projection == "successive":
+        dataframe = dataframe.withColumn("rn", expressions["rn"])
+        for name, expression in zip(METADATA_SCHEMA.fieldNames(), _metadata_columns(), strict=True):
+            dataframe = dataframe.withColumn(name, expression)
+    else:
+        expressions.update(zip(METADATA_SCHEMA.fieldNames(), _metadata_columns(), strict=True))
+        dataframe = dataframe.withColumns(expressions)
+    expected = dict.fromkeys(files, ("", -1, -1)) if projection in ["successive", "aggregate"] else files
+    rows = _assert_metadata_rows(dataframe, expected, len(files))
+    for row in rows:
+        assert row.rn == ((row.id - 1) % 2 + 1 if projection == "keys" else row.id)
+        if projection == "multiple":
+            assert row.reverse_rn == len(files) + 1 - row.id
+        if projection == "collision":
+            assert row["__sail_input_file_metadata_0"] == row.id * 100
+
+
+def test_input_file_metadata_nested_window_free_siblings(parquet_metadata):
+    dataframe, files = parquet_metadata
+    rows = dataframe.select(
+        "id",
+        F.row_number().over(Window.orderBy("id")).alias("rn"),
+        F.struct(*_metadata_columns()).alias("bundle"),
+        F.transform(
+            "arr",
+            lambda value: F.struct(
+                F.concat(F.input_file_name(), F.lit(":"), value.cast("string")).alias("name"),
+                (F.input_file_block_start() + value).alias("start"),
+                (F.input_file_block_length() + value).alias("length"),
+            ),
+        ).alias("mapped"),
+    ).collect()
+    assert {row.id: row.rn for row in rows} == {key: key for key in files}
+    for row in rows:
+        name, start, length = files[row.id]
+        assert tuple(row.bundle) == files[row.id]
+        assert [tuple(value) for value in row.mapped] == [
+            (f"{name}:{value}", start + value, length + value) for value in [row.id, row.id + 1]
+        ]
+
+
+@pytest.mark.parametrize("lateral_alias", [False, True])
+def test_input_file_metadata_combined_with_window_uses_defaults(parquet_metadata, lateral_alias):
+    dataframe, files = parquet_metadata
+    window = "row_number() OVER (ORDER BY id)"
+    extra = [f"{window} AS rn", "rn AS reused_rn"] if lateral_alias else []
+    value = "reused_rn" if lateral_alias else window
+    rows = (
+        dataframe.selectExpr(
+            "id",
+            *extra,
+            f"concat(input_file_name(), ':', cast({value} AS STRING)) AS name",
+            f"input_file_block_start() + {value} AS start",
+            f"input_file_block_length() + {value} AS length",
+        )
+        .select("id", "name", "start", "length")
+        .collect()
+    )
+    assert sorted(tuple(row) for row in rows) == [(key, f":{key}", key - 1, key - 1) for key in files]
+
+
+def test_input_file_metadata_join_predicate_error_precedes_multiple_sources(spark, parquet_metadata):
+    dataframe, _ = parquet_metadata
+    dataframe.createOrReplaceTempView("input_file_join")
+    try:
+        with pytest.raises(Exception, match="INVALID_NON_DETERMINISTIC_EXPRESSIONS"):
+            spark.sql(
+                "SELECT l.id, input_file_name(), input_file_block_start(), input_file_block_length() "
+                "FROM input_file_join l JOIN input_file_join r ON l.id = r.id "
+                "AND input_file_name() != 'never' "
+                "AND input_file_block_start() < 0 AND input_file_block_length() < 0"
+            ).collect()
+    finally:
+        spark.catalog.dropTempView("input_file_join")
+
+
+@pytest.mark.parametrize(
+    "predicate", ["input_file_name() != 'never'", "input_file_block_start() < 0", "input_file_block_length() < 0"]
+)
+@pytest.mark.parametrize("comparison", ["l.id = r.id", "l.id < r.id"])
+def test_input_file_metadata_rejected_in_join_predicate(spark, predicate, comparison):
+    with pytest.raises(Exception, match="INVALID_NON_DETERMINISTIC_EXPRESSIONS"):
+        spark.sql(
+            "SELECT l.id AS lid, r.id AS rid FROM range(1, 5) l JOIN range(1, 5) r "  # noqa: S608
+            f"ON {comparison} AND {predicate}"
+        ).collect()
+
+
+@pytest.fixture
+def streamed_join_input(tmp_path):
+    # Keep the file probe in the same execution context; an optimizer-inserted
+    # exchange at normal parallelism is deliberately not a streamed-file contract.
+    with (
+        spark_connect_server({"SAIL_EXECUTION__DEFAULT_PARALLELISM": "1"}) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        spark = sessions.create()
+        dataframe, files = _parquet_metadata(spark, tmp_path, [("a.parquet", [101, 103]), ("b.parquet", [105, 107])])
+        dataframe.createOrReplaceTempView("input_file_streamed_join")
+        yield spark, dataframe, files
+
+
+# Spark 4.0.4, AQE off, one partition, non-file broadcast build. Spark's
+# right semi/anti oracle reverses the SQL operands to left semi/anti. Sail
+# uses no hints. Expected triples are independent Parquet URI/stat values.
+@pytest.mark.parametrize(
+    "context", ["inner", "right", "right_semi", "right_anti", "duplicates", "fetch", "cross", "full"]
+)
+def test_input_file_metadata_streamed_join(streamed_join_input, context):
+    spark, _, files = streamed_join_input
+    source = "range(101,104) r"
+    operator = {"right": "RIGHT", "right_semi": "RIGHT SEMI", "right_anti": "RIGHT ANTI", "full": "FULL"}.get(
+        context, "INNER"
+    )
+    predicate = "r.id=t.id"
+    rid = "r.id"
+    pairs = [(101, 101), (103, 103)]
+    if context == "right":
+        pairs += [(None, 105), (None, 107)]
+    elif context in ["right_semi", "right_anti"]:
+        rid = "CAST(NULL AS BIGINT)"
+        pairs = [(None, key) for key in ([101, 103] if context == "right_semi" else [105, 107])]
+    elif context == "duplicates":
+        source = (
+            "(SELECT CAST(101 AS BIGINT) AS id UNION ALL SELECT CAST(101 AS BIGINT) AS id "
+            "UNION ALL SELECT CAST(103 AS BIGINT) AS id) r"
+        )
+        pairs.append((101, 101))
+    elif context == "cross":
+        source = "range(101,102) r"
+        pairs = [(101, key) for key in files]
+    elif context == "full":
+        predicate = "r.id=t.id OR (r.id=101 AND t.id=105)"
+        pairs += [(101, 105), (None, 107), (102, None)]
+    join = (
+        f"{source} CROSS JOIN input_file_streamed_join t"
+        if context == "cross"
+        else f"{source} {operator} JOIN input_file_streamed_join t ON {predicate}"
+    )
+    suffix = " LIMIT 1" if context == "fetch" else ""
+    dataframe = spark.sql(
+        f"SELECT {rid} AS rid,t.id AS fileid,input_file_name() AS file_name,"  # noqa: S608
+        "input_file_block_start() AS block_start,input_file_block_length() AS block_length "
+        f"FROM {join}{suffix}"
+    )
+    assert dataframe.schema == StructType(
+        [
+            StructField("rid", LongType(), context in ["right", "right_semi", "right_anti", "full"]),
+            StructField("fileid", LongType(), True),
+            *METADATA_SCHEMA,
+        ]
+    )
+    expected = Counter((rid, fileid, *files.get(fileid, ("", -1, -1))) for rid, fileid in pairs)
+    actual = Counter(tuple(row) for row in dataframe.collect())
+    if context == "fetch":
+        assert sum(actual.values()) == 1
+        assert actual <= expected
+    else:
+        assert actual == expected
+
+
+@pytest.mark.parametrize(
+    ("extra_column", "retain_id"),
+    [
+        pytest.param("extra", False, id="narrowed"),
+        pytest.param("x", False, id="lambda-name-collision"),
+        pytest.param("extra", True, id="repeated-computed-column"),
+    ],
+)
+@pytest.mark.parametrize("with_metadata", [False, True], ids=["control", "metadata"])
+def test_input_file_metadata_streamed_join_narrowed_lambda(
+    streamed_join_input, tmp_path, extra_column, retain_id, with_metadata
+):
+    spark, _, _ = streamed_join_input
+    path = tmp_path / "narrowed.parquet"
+    pq.write_table(pa.table({"id": [101, 103], "arr": [[1, 2], [3, 4]], extra_column: [800, 900]}), path)
+    spark.read.parquet(str(path)).createOrReplaceTempView("input_file_narrowed_probe")
+    # Spark 4.0.4: narrowing must preserve both the captured computed column and
+    # the lambda parameter, even when a raw field has the parameter's name.
+    selected_id = "t.id, " if retain_id else ""
+    probe_id = "id, " if retain_id else ""
+    metadata = (
+        ", input_file_name() AS file_name, input_file_block_start() AS block_start, "
+        "input_file_block_length() AS block_length"
+        if with_metadata
+        else ""
+    )
+    try:
+        dataframe = spark.sql(
+            f"SELECT {selected_id}t.mapped{metadata} FROM range(101,102) r CROSS JOIN "  # noqa: S608
+            f"(SELECT {probe_id}transform(arr, x -> x + id) AS mapped "
+            f"FROM (SELECT id + {extra_column} AS id, arr FROM input_file_narrowed_probe) q) t"
+        )
+        rows = dataframe.collect()
+        assert sorted(row.mapped for row in rows) == [[902, 903], [1006, 1007]]
+        if retain_id:
+            # Selecting id again must not strand metadata when merging the full
+            # projection would duplicate the source's id + extra expression.
+            assert {row.id: row.mapped for row in rows} == {901: [902, 903], 1003: [1006, 1007]}
+        if with_metadata:
+            assert StructType([dataframe.schema[field.name] for field in METADATA_SCHEMA]) == METADATA_SCHEMA
+            assert all(
+                (row.file_name, row.block_start, row.block_length) == (path.as_uri(), 0, path.stat().st_size)
+                for row in rows
+            )
+    finally:
+        spark.catalog.dropTempView("input_file_narrowed_probe")
+
+
+def test_input_file_metadata_filtered_file_build_uses_defaults(streamed_join_input):
+    spark, _, _ = streamed_join_input
+    dataframe = spark.sql(
+        "SELECT t.id AS fileid,input_file_name() AS file_name,input_file_block_start() AS block_start,"
+        "input_file_block_length() AS block_length FROM range(101,104) r "
+        "JOIN input_file_streamed_join t ON r.id=t.id WHERE t.id=103"
+    )
+    assert dataframe.schema == StructType([StructField("fileid", LongType(), True), *METADATA_SCHEMA])
+    assert [tuple(row) for row in dataframe.collect()] == [(103, "", -1, -1)]
+
+
+@pytest.mark.parametrize("boundary", ["full_join", "probe_repartition"])
+def test_input_file_metadata_join_preserves_materialized_values(streamed_join_input, boundary):
+    spark, dataframe, files = streamed_join_input
+    dataframe = dataframe.select("id", *_metadata_columns())
+    if boundary == "probe_repartition":
+        dataframe = dataframe.repartition(2)
+    dataframe.createOrReplaceTempView("input_file_materialized_join")
+    predicate = "r.id=t.id"
+    pairs = [(101, 101), (103, 103)]
+    if boundary == "full_join":
+        predicate += " OR (r.id=101 AND t.id=105)"
+        pairs += [(101, 105), (None, 107), (102, None)]
+    join_type = "FULL" if boundary == "full_join" else "INNER"
+    dataframe = spark.sql(
+        "SELECT r.id AS rid,t.id AS fileid,t.file_name AS pre_file_name,"  # noqa: S608
+        "t.block_start AS pre_block_start,t.block_length AS pre_block_length,"
+        "input_file_name() AS file_name,input_file_block_start() AS block_start,"
+        "input_file_block_length() AS block_length FROM range(101,104) r "
+        f"{join_type} JOIN input_file_materialized_join t ON {predicate}"
+    )
+    assert dataframe.schema == StructType(
+        [
+            StructField("rid", LongType(), boundary == "full_join"),
+            StructField("fileid", LongType(), True),
+            *[StructField(f"pre_{field.name}", field.dataType, boundary == "full_join") for field in METADATA_SCHEMA],
+            *METADATA_SCHEMA,
+        ]
+    )
+    expected = Counter(
+        (
+            rid,
+            fileid,
+            *files.get(fileid, (None, None, None)),
+            *(files[fileid] if boundary == "full_join" and fileid is not None else ("", -1, -1)),
+        )
+        for rid, fileid in pairs
+    )
+    assert Counter(tuple(row) for row in dataframe.collect()) == expected
 
 
 def test_input_file_metadata_inside_lambda(parquet_metadata):
@@ -401,7 +974,7 @@ def test_input_file_metadata_restores_delta_columns(spark, tmp_path, column_mapp
 
 
 # Ported from Spark 3 (3.5.9): pyspark/sql/tests/test_udf.py, BaseUDFTestsMixin.test_udf_with_input_file_name
-# and the `input_file_name` doctest; `first()` and `limit()` put a limit above the projection.
+# and the `input_file_name` doctest; `first()` puts a limit above the projection.
 @pytest.mark.parametrize("fmt", ["parquet", "json", "text"])
 def test_input_file_name_with_limit(spark, tmp_path, fmt):
     location = tmp_path / fmt
@@ -410,7 +983,7 @@ def test_input_file_name_with_limit(spark, tmp_path, fmt):
     identity = F.udf(lambda path: path, "string")
 
     first = dataframe.select(F.input_file_name().alias("file_name")).first()
-    limited = dataframe.limit(2).select(identity(F.input_file_name()).alias("file_name")).collect()
+    first_udf = dataframe.select(identity(F.input_file_name()).alias("file_name")).first()
 
     assert first.file_name.startswith("file:")
-    assert [row.file_name for row in limited] == [first.file_name, first.file_name]
+    assert first_udf.file_name == first.file_name

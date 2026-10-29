@@ -127,9 +127,9 @@ impl Metadata {
         }
     }
 
-    pub fn with_description(self, description: String) -> Metadata {
+    pub fn with_description(self, description: Option<String>) -> Metadata {
         Metadata {
-            description: Some(description),
+            description,
             ..self
         }
     }

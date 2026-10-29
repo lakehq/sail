@@ -309,9 +309,9 @@
   description: |
     Whether rows with fewer columns should be allowed.
     If true, when parsing a row that has fewer columns than the schema requires, the
-    missing columns are filled with null values.
+    missing columns are filled with null values. The columns are only filled in the `PERMISSIVE` mode.
   default:
-    value: "false"
+    value: "true"
     parser: crate::options::parsers::parse_bool
   supported: true
   rust_type: bool
@@ -639,22 +639,26 @@
         `column_name_of_corrupt_record`, and sets malformed fields to null.
       - `DROPMALFORMED`: Ignores the whole corrupted records. This mode is unsupported in the CSV built-in functions.
       - `FAILFAST`: Throws an exception when it meets corrupted records.
+    An unknown mode is treated as `PERMISSIVE`.
+    Sail only uses the mode for rows that have fewer columns than the schema requires. Such rows are
+    read with nulls in the `PERMISSIVE` mode and fail the read in the other modes, so `DROPMALFORMED`
+    behaves as `FAILFAST`.
   default:
     value: "PERMISSIVE"
-    parser: crate::options::parsers::parse_string
-  supported: false
-  rust_type: String
+    parser: crate::options::parsers::parse_parse_mode
+  supported: true
+  rust_type: crate::options::ParseMode
   scopes:
     - read
   origins:
     - type: option
       keys:
         - mode
-      parser: crate::options::parsers::parse_string
+      parser: crate::options::parsers::parse_parse_mode
     - type: table_property
       keys:
         - option.mode
-      parser: crate::options::parsers::parse_string
+      parser: crate::options::parsers::parse_parse_mode
 
 - key: column_name_of_corrupt_record
   description: |

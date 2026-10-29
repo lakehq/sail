@@ -39,6 +39,10 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+use crate::function::datetime_utils::{
+    coerce_timestamp_ntz_values, session_timestamp_interval_arithmetic,
+    session_timestamp_subtraction,
+};
 use crate::function::scalar::conditional::coerce_decimal_to_spark_wider_type;
 
 fn add_day_time_interval_to_string(
@@ -94,6 +98,18 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && let Some(expr) = session_timestamp_interval_arithmetic(
+                &left,
+                left_type,
+                Operator::Plus,
+                &right,
+                right_type,
+                &function_context.plan_config.session_timezone_label(),
+            )
+        {
+            return Ok(expr);
+        }
         let (left, right) =
             narrow_integer_literal_with_decimal(left, &left_type, right, &right_type);
         Ok(match (left_type, right_type) {
@@ -173,6 +189,29 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
         );
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && let Some(expr) = session_timestamp_interval_arithmetic(
+                &left,
+                left_type,
+                Operator::Minus,
+                &right,
+                right_type,
+                &function_context.plan_config.session_timezone_label(),
+            )
+        {
+            return Ok(expr);
+        }
+        if let (Ok(left_type), Ok(right_type)) = (&left_type, &right_type)
+            && let Some(expr) = session_timestamp_subtraction(
+                &left,
+                left_type,
+                &right,
+                right_type,
+                &function_context.plan_config.session_timezone_label(),
+            )
+        {
+            return Ok(expr);
+        }
         let (left, right) =
             narrow_integer_literal_with_decimal(left, &left_type, right, &right_type);
         Ok(match (left_type, right_type) {
@@ -434,6 +473,11 @@ fn extremum(input: ScalarFunctionInput, function: fn(Vec<Expr>) -> Expr) -> Plan
         arguments,
         function_context,
     } = input;
+    let arguments = coerce_timestamp_ntz_values(
+        arguments,
+        function_context.schema,
+        &function_context.plan_config.session_timezone_label(),
+    )?;
     let arguments = coerce_decimal_to_spark_wider_type(arguments, function_context.schema)?;
     Ok(function(arguments))
 }

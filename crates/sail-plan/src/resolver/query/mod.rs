@@ -134,7 +134,8 @@ impl PlanResolver<'_> {
                 self.apply_table_sample(plan, sample, state).await?
             }
             QueryNode::Deduplicate(deduplicate) => {
-                self.resolve_query_deduplicate(deduplicate, state).await?
+                self.resolve_query_deduplicate(deduplicate, plan_id.is_some(), state)
+                    .await?
             }
             QueryNode::Range(range) => self.resolve_query_range(range, state).await?,
             QueryNode::SubqueryAlias {

@@ -1,6 +1,7 @@
 pub mod array;
 pub mod array_struct_field;
 pub mod collection;
+pub mod correlation_cast;
 pub mod csv;
 pub mod datetime;
 pub mod drop_struct_field;

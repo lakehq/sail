@@ -63,8 +63,13 @@ pub(super) struct PlanResolverStateConfig {
 
 #[derive(Debug, Default)]
 pub(super) enum AggregateState {
+    Lateral {
+        projections: Vec<NamedExpr>,
+    },
     /// The expressions in the `GROUP BY` clause is being resolved.
-    Grouping { projections: Vec<NamedExpr> },
+    Grouping {
+        projections: Vec<NamedExpr>,
+    },
     /// The expressions in the `HAVING` clause is being resolved.
     Having {
         projections: Vec<NamedExpr>,
@@ -78,6 +83,7 @@ pub(super) enum AggregateState {
 #[derive(Debug)]
 pub(super) struct PlanResolverState {
     next_id: usize,
+    next_lateral_id: usize,
     next_origin: usize,
     /// Multipart relation names represented by opaque DataFusion qualifiers.
     relation_names: HashMap<TableReference, Vec<String>>,
@@ -129,6 +135,7 @@ impl PlanResolverState {
     pub fn new() -> Self {
         Self {
             next_id: 0,
+            next_lateral_id: 0,
             next_origin: 0,
             relation_names: HashMap::new(),
             fields: HashMap::new(),
@@ -179,6 +186,31 @@ impl PlanResolverState {
         let id = self.next_id;
         self.next_id += 1;
         format!("#{id}")
+    }
+
+    /// Reserve a typed lateral binding without consuming output field IDs.
+    /// Most select lists never use these bindings, so keep their namespace separate.
+    pub fn register_lateral_field(&mut self, source: Option<&str>) -> PlanResult<String> {
+        let (origin, plan_ids) = match source {
+            Some(source) => {
+                let info = self.get_field_info(source)?;
+                (info.origin, info.plan_ids.clone())
+            }
+            None => (self.next_origin(), HashSet::new()),
+        };
+        let field_id = format!("#lateral{}", self.next_lateral_id);
+        self.next_lateral_id += 1;
+        self.fields.insert(
+            field_id.clone(),
+            FieldInfo {
+                plan_ids,
+                origin,
+                name: String::new(),
+                // Temporary bindings must not participate in wildcard expansion.
+                hidden: true,
+            },
+        );
+        Ok(field_id)
     }
 
     /// Returns a new attribute identity.
@@ -357,6 +389,13 @@ impl PlanResolverState {
         MissingInputScope {
             state: self,
             previous,
+        }
+    }
+
+    pub fn get_lateral_projections(&self) -> &[NamedExpr] {
+        match &self.aggregate_state {
+            AggregateState::Lateral { projections } => projections,
+            _ => &[],
         }
     }
 
@@ -582,6 +621,7 @@ impl Drop for MissingInputScope<'_> {
 pub(crate) struct QueryScope<'a> {
     state: &'a mut PlanResolverState,
     previous_outer_query_schema: Option<DFSchemaRef>,
+    previous_aggregate_state: AggregateState,
 }
 
 impl<'a> QueryScope<'a> {
@@ -591,9 +631,12 @@ impl<'a> QueryScope<'a> {
         // directly recovered inputs become visible to correlation in either order.
         let schema = PlanResolver::local_schema(&schema, state);
         let previous_outer_query_schema = state.outer_query_schema.replace(schema);
+        // Select aliases and grouping bindings belong to their own query scope.
+        let previous_aggregate_state = std::mem::take(&mut state.aggregate_state);
         Self {
             state,
             previous_outer_query_schema,
+            previous_aggregate_state,
         }
     }
 
@@ -605,6 +648,7 @@ impl<'a> QueryScope<'a> {
 impl Drop for QueryScope<'_> {
     fn drop(&mut self) {
         self.state.outer_query_schema = self.previous_outer_query_schema.take();
+        self.state.aggregate_state = std::mem::take(&mut self.previous_aggregate_state);
     }
 }
 

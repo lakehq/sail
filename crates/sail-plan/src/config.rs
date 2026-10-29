@@ -1,7 +1,9 @@
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;
@@ -30,6 +32,8 @@ pub enum MapKeyDedupPolicy {
 pub struct PlanConfig {
     /// The time zone of the session.
     pub session_timezone: Arc<str>,
+    /// Format-specific runtime settings forwarded to lakehouse procedure planning.
+    pub lakehouse_options: Vec<(String, String)>,
     /// The locale of the session.
     pub session_locale: Arc<str>,
     /// The default timestamp type.
@@ -57,6 +61,9 @@ pub struct PlanConfig {
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
     /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
     pub case_sensitive: bool,
+    pub group_by_aliases: bool,
+    pub group_by_ordinal: bool,
+    pub order_by_ordinal: bool,
     /// Default for partition overwrite writes; operation options take precedence.
     pub dynamic_partition_overwrite: bool,
     /// Patterns used to redact sensitive table property keys and values.
@@ -83,12 +90,24 @@ impl PlanConfig {
             ..Default::default()
         })
     }
+
+    /// The time zone label of the TIMESTAMP values that Sail creates in the session time zone.
+    /// The session time zone is spelled as Spark accepts it, which Arrow may not parse.
+    pub fn session_timezone_label(&self) -> Arc<str> {
+        match arrow_timezone_label(&self.session_timezone) {
+            Cow::Borrowed(label) if label == self.session_timezone.as_ref() => {
+                Arc::clone(&self.session_timezone)
+            }
+            label => Arc::from(label.as_ref()),
+        }
+    }
 }
 
 impl Default for PlanConfig {
     fn default() -> Self {
         Self {
             session_timezone: Arc::from("UTC"),
+            lakehouse_options: vec![],
             session_locale: Arc::from("en-US"),
             default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
@@ -103,6 +122,9 @@ impl Default for PlanConfig {
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
             case_sensitive: false,
+            group_by_aliases: true,
+            group_by_ordinal: true,
+            order_by_ordinal: true,
             dynamic_partition_overwrite: false,
             redaction_options_regex: "(?i)url".to_string(),
             redaction_regex: "(?i)secret|password|token|access[.]?key".to_string(),

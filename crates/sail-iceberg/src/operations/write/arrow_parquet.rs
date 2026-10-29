@@ -53,7 +53,10 @@ impl AsyncFileWriter for ParquetObjectSink {
             let output = self.output.as_mut().ok_or_else(|| {
                 ParquetError::General("Iceberg Parquet sink is closed".to_string())
             })?;
-            output.write_all(&bytes).await.map_err(ParquetError::from)
+            output
+                .put(bytes)
+                .await
+                .map_err(|error| ParquetError::External(Box::new(error)))
         })
     }
 

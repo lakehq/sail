@@ -35,6 +35,37 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         session: &dyn Session,
         _planning_ctx: &PhysicalPlanningContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(node) = node
+            .as_any()
+            .downcast_ref::<crate::procedure::DeltaMaintenanceNode>()
+        {
+            let predicate = node
+                .predicate
+                .as_ref()
+                .map(|predicate| {
+                    Ok::<_, datafusion_common::DataFusionError>(
+                        crate::procedure::DeltaMaintenancePredicate {
+                            schema: predicate.schema.clone(),
+                            expr: session.create_physical_expr(
+                                predicate.expr.clone(),
+                                &datafusion_common::DFSchema::try_from(predicate.schema.clone())?,
+                            )?,
+                        },
+                    )
+                })
+                .transpose()?;
+            let exec = if node.call.invocation.procedure.name == "optimize" {
+                crate::procedure::optimize::plan(session, node, predicate).await?
+            } else {
+                crate::procedure::DeltaMaintenanceExec::try_new(
+                    node.call.clone(),
+                    node.options.clone(),
+                    predicate,
+                )?
+            };
+            return Ok(Some(Arc::new(exec)));
+        }
+
         if let Some(node) = node.as_any().downcast_ref::<DeltaWriteNode>() {
             let [logical_input] = logical_inputs else {
                 return datafusion_common::internal_err!(

@@ -6,6 +6,7 @@ use datafusion::catalog::Session;
 use datafusion::execution::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
@@ -20,6 +21,8 @@ use crate::lakerelation::LakeRelationProvider;
 pub struct LakeSourceMetadata {
     pub schema: SchemaRef,
     pub properties: Vec<(String, String)>,
+    /// Authoritative partitioning when available, including `Some(vec![])` for unpartitioned tables.
+    pub partition_by: Option<Vec<CatalogPartitionField>>,
 }
 
 /// A column definition used when catalog DDL asks a lake source to create
@@ -176,6 +179,7 @@ pub trait LakeSource: DataSource {
         Ok(LakeSourceMetadata {
             schema: self.infer_schema(ctx, info).await?,
             properties: vec![],
+            partition_by: None,
         })
     }
 
@@ -194,9 +198,10 @@ pub trait LakeSource: DataSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<RuntimeEnv>,
+        config: &SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
-        let _ = (runtime_env, info);
+        let _ = (runtime_env, config, info);
         Ok(LakeSourceCreateTableResult::default())
     }
 

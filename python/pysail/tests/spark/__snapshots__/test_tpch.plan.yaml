@@ -47,9 +47,9 @@ data:
                       ProjectionExec: expr=[_0@0 as #21, _1@1 as #22, _2@2 as #23]
                         DataSourceExec: partitions=1, partition_sizes=[1]
               ProjectionExec: expr=[min(partsupp.#31)@1 as #47, #28@0 as #28]
-                AggregateExec: mode=FinalPartitioned, gby=[#28@0 as #28], aggr=[min(partsupp.#31)]
+                AggregateExec: mode=FinalPartitioned, gby=[#28@0 as #28], aggr=[min(#31) as min(partsupp.#31)]
                   RepartitionExec: partitioning=Hash([#28@0], 4), input_partitions=4
-                    AggregateExec: mode=Partial, gby=[#28@0 as #28], aggr=[min(partsupp.#31)]
+                    AggregateExec: mode=Partial, gby=[#28@0 as #28], aggr=[min(#31) as min(partsupp.#31)]
                       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#44@0, #42@2)], projection=[#28@1, #31@2]
                         ProjectionExec: expr=[_0@0 as #44]
                           FilterExec: _1@1 = ASIA, projection=[_0@0]
@@ -497,9 +497,9 @@ data:
                   ProjectionExec: expr=[_1@0 as #1, _4@1 as #4, _5@2 as #5]
                     DataSourceExec: partitions=1, partition_sizes=[1]
                 ProjectionExec: expr=[0.2 * CAST(avg(lineitem.#29)@1 AS Decimal128(8, 6)) as #41, #26@0 as #26]
-                  AggregateExec: mode=FinalPartitioned, gby=[#26@0 as #26], aggr=[avg(lineitem.#29)]
+                  AggregateExec: mode=FinalPartitioned, gby=[#26@0 as #26], aggr=[avg(#29) as avg(lineitem.#29)]
                     RepartitionExec: partitioning=Hash([#26@0], 4), input_partitions=1
-                      AggregateExec: mode=Partial, gby=[#26@0 as #26], aggr=[avg(lineitem.#29)]
+                      AggregateExec: mode=Partial, gby=[#26@0 as #26], aggr=[avg(#29) as avg(lineitem.#29)]
                         ProjectionExec: expr=[_1@0 as #26, _4@1 as #29]
                           DataSourceExec: partitions=1, partition_sizes=[1]
 ---
@@ -573,9 +573,9 @@ data:
                     ProjectionExec: expr=[_0@0 as #11, _1@1 as #12, _2@2 as #13]
                       DataSourceExec: partitions=1, partition_sizes=[1]
                   ProjectionExec: expr=[CAST(0.5 * sum(lineitem.#30)@2 AS Decimal128(23, 3)) as #42, #27@0 as #27, #28@1 as #28]
-                    AggregateExec: mode=FinalPartitioned, gby=[#27@0 as #27, #28@1 as #28], aggr=[sum(lineitem.#30)]
+                    AggregateExec: mode=FinalPartitioned, gby=[#27@0 as #27, #28@1 as #28], aggr=[sum(#30) as sum(lineitem.#30)]
                       RepartitionExec: partitioning=Hash([#27@0, #28@1], 4), input_partitions=4
-                        AggregateExec: mode=Partial, gby=[#27@0 as #27, #28@1 as #28], aggr=[sum(lineitem.#30)]
+                        AggregateExec: mode=Partial, gby=[#27@0 as #27, #28@1 as #28], aggr=[sum(#30) as sum(lineitem.#30)]
                           RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                             ProjectionExec: expr=[_1@0 as #27, _2@1 as #28, _4@2 as #30]
                               FilterExec: _10@3 >= 1993-01-01 AND _10@3 < 1994-01-01, projection=[_1@0, _2@1, _4@2]
