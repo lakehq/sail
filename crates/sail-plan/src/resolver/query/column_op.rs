@@ -16,7 +16,6 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
-use crate::resolver::tree::window::WindowRewriter;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_to_df(
@@ -249,7 +248,7 @@ impl PlanResolver<'_> {
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
-        let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
+        let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let mut expr = self.rewrite_named_expressions(expr, state)?;
         // Spark preserves qualifiers only on untouched columns. Keep them on the

@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{Alias, FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, Projection};
 use sail_common::spec;
+use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 
@@ -40,7 +41,7 @@ impl PlanResolver<'_> {
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
-        let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
+        let (input, expr) = self.rewrite_window_projection(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let has_aggregate = expr.iter().any(|e| {
             e.expr
@@ -167,6 +168,81 @@ impl PlanResolver<'_> {
             }
         }
         Ok((input, projected))
+    }
+
+    /// Materialize metadata from this SELECT layer before lowering its windows.
+    pub(super) fn rewrite_window_projection(
+        &self,
+        mut input: LogicalPlan,
+        mut expressions: Vec<NamedExpr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
+        let mut has_window = false;
+        for named in &expressions {
+            if named
+                .expr
+                .exists(|expr| Ok(matches!(expr, Expr::WindowFunction(_))))?
+            {
+                has_window = true;
+                break;
+            }
+        }
+        if !has_window {
+            return Ok((input, expressions));
+        }
+
+        let mut metadata: Vec<(Expr, String)> = Vec::new();
+        for named in &mut expressions {
+            let mut extract_metadata = |expr: Expr| {
+                let Expr::ScalarFunction(function) = &expr else {
+                    return Ok(Transformed::no(expr));
+                };
+                if !is_input_file_metadata_function(&function.func) {
+                    return Ok(Transformed::no(expr));
+                }
+                let id = match metadata.iter().find(|(candidate, _)| candidate == &expr) {
+                    Some((_, id)) => id.clone(),
+                    None => {
+                        let id = state.next_field_id();
+                        metadata.push((expr, id.clone()));
+                        id
+                    }
+                };
+                // Internal IDs are not registered user fields. An alias prevents
+                // rewrite_named_expressions from treating them as identity fields.
+                Ok(Transformed::yes(
+                    Expr::Column(Column::new_unqualified(&id)).alias(id),
+                ))
+            };
+            let expr = named.expr.clone();
+            named.expr = if expr.exists(|expr| Ok(matches!(expr, Expr::WindowFunction(_))))? {
+                // Metadata combined with a window result stays above that window.
+                // Only its arguments and keys are evaluated in the input context.
+                expr.transform_up(|expr| {
+                    if matches!(expr, Expr::WindowFunction(_)) {
+                        expr.transform_up(&mut extract_metadata)
+                    } else {
+                        Ok(Transformed::no(expr))
+                    }
+                })?
+                .data
+            } else {
+                // Regular siblings include nested lambda bodies, but Expr traversal
+                // never enters independent subquery plans.
+                expr.transform_up(&mut extract_metadata)?.data
+            };
+        }
+        if !metadata.is_empty() {
+            let projection = input
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .chain(metadata.into_iter().map(|(expr, id)| expr.alias(id)))
+                .collect();
+            input = LogicalPlan::Projection(Projection::try_new(projection, Arc::new(input))?);
+        }
+        self.rewrite_projection::<WindowRewriter>(input, expressions, state)
     }
 
     pub(super) fn rewrite_projection<'s, T>(
@@ -353,5 +429,214 @@ impl PlanResolver<'_> {
             Arc::new(input),
             schema,
         )?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::functions::expr_fn::{coalesce, input_file_name};
+    use datafusion::functions_aggregate::sum::sum_udaf;
+    use datafusion::functions_window::row_number::row_number_udwf;
+    use datafusion::prelude::SessionContext;
+    use datafusion_expr::expr::{Lambda, WindowFunction};
+    use datafusion_expr::{LogicalPlanBuilder, ScalarUDF, col, lit, scalar_subquery};
+    use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
+
+    use super::*;
+    use crate::config::PlanConfig;
+
+    fn input(state: &mut PlanResolverState) -> PlanResult<LogicalPlan> {
+        let id = state.register_field_name("id");
+        Ok(LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1_i64).alias(id)])?
+            .build()?)
+    }
+
+    fn has_metadata(expr: &Expr) -> datafusion_common::Result<bool> {
+        expr.exists(|expr| {
+            Ok(matches!(expr, Expr::ScalarFunction(function)
+            if is_input_file_metadata_function(&function.func)))
+        })
+    }
+
+    #[test]
+    fn materializes_window_siblings_arguments_and_keys_once() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let input = input(&mut state)?;
+        let name = coalesce(vec![input_file_name(), lit("")]);
+        let start = ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![]);
+        let length = ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![]);
+        let mut window = WindowFunction::new(sum_udaf(), vec![start.clone()]);
+        window.params.partition_by = vec![name.clone()];
+        window.params.order_by = vec![length.clone().sort(true, true)];
+        let expressions = vec![
+            NamedExpr::new(vec!["total".into()], Expr::WindowFunction(Box::new(window))),
+            NamedExpr::new(vec!["name".into()], name.clone())
+                .with_metadata(vec![("comment".into(), "file".into())]),
+            NamedExpr::new(vec!["start".into()], start),
+            NamedExpr::new(vec!["length".into()], length + lit(1_i64)),
+            NamedExpr::new(vec!["again".into()], name),
+        ];
+        let original = expressions.clone();
+        let (plan, expressions) =
+            resolver.rewrite_window_projection(input.clone(), expressions, &mut state)?;
+        for (actual, expected) in expressions.iter().zip(&original) {
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(actual.metadata, expected.metadata);
+            assert!(!has_metadata(&actual.expr)?);
+        }
+        let LogicalPlan::Window(window) = &plan else {
+            return Err(PlanError::internal("expected window"));
+        };
+        assert!(!has_metadata(&window.window_expr[0])?);
+        let LogicalPlan::Projection(projection) = window.input.as_ref() else {
+            return Err(PlanError::internal("expected metadata projection"));
+        };
+        assert_eq!(projection.input.as_ref(), &input);
+        assert_eq!(projection.expr.len(), input.schema().fields().len() + 3);
+        let projected = resolver.rewrite_named_expressions(expressions, &mut state)?;
+        let result = Projection::try_new(projected, Arc::new(plan))?;
+        assert_eq!(result.schema.fields().len(), original.len());
+        assert_eq!(
+            result.schema.field(1).metadata().get("comment"),
+            Some(&"file".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn keeps_metadata_combined_with_window_results_above_window() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        for metadata in [
+            input_file_name(),
+            ScalarUDF::from(InputFileBlockStartFunc::new()).call(vec![]),
+            ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![]),
+        ] {
+            for metadata_in_keys in [false, true] {
+                let mut state = PlanResolverState::new();
+                let input = input(&mut state)?;
+                let mut function = WindowFunction::new(row_number_udwf(), vec![]);
+                if metadata_in_keys {
+                    function.params.partition_by = vec![metadata.clone()];
+                }
+                let combined = metadata
+                    .clone()
+                    .is_not_null()
+                    .and(Expr::WindowFunction(Box::new(function)).gt(lit(0_u64)));
+                let (plan, expressions) = resolver.rewrite_window_projection(
+                    input.clone(),
+                    vec![NamedExpr::new(vec!["combined".into()], combined)],
+                    &mut state,
+                )?;
+                assert!(has_metadata(&expressions[0].expr)?);
+                let LogicalPlan::Window(window) = plan else {
+                    return Err(PlanError::internal("expected window"));
+                };
+                assert!(!has_metadata(&window.window_expr[0])?);
+                if metadata_in_keys {
+                    let LogicalPlan::Projection(projection) = window.input.as_ref() else {
+                        return Err(PlanError::internal("expected metadata projection"));
+                    };
+                    assert_eq!(projection.input.as_ref(), &input);
+                    assert_eq!(projection.expr.len(), input.schema().fields().len() + 1);
+                } else {
+                    assert_eq!(window.input.as_ref(), &input);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn traverses_nested_lambdas_but_not_subquery_plans() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let input = input(&mut state)?;
+        let nested = Expr::Lambda(Lambda::new(
+            vec!["x".into()],
+            Expr::Lambda(Lambda::new(vec!["y".into()], input_file_name())),
+        ));
+        let subquery = scalar_subquery(Arc::new(
+            LogicalPlanBuilder::empty(false)
+                .project(vec![
+                    ScalarUDF::from(InputFileBlockLengthFunc::new()).call(vec![]),
+                ])?
+                .build()?,
+        ));
+        let expressions = vec![
+            NamedExpr::new(
+                vec!["rn".into()],
+                Expr::WindowFunction(Box::new(WindowFunction::new(row_number_udwf(), vec![]))),
+            ),
+            NamedExpr::new(vec!["nested".into()], nested),
+            NamedExpr::new(vec!["subquery".into()], subquery.clone()),
+        ];
+        let (plan, expressions) =
+            resolver.rewrite_window_projection(input, expressions, &mut state)?;
+        assert!(!has_metadata(&expressions[1].expr)?);
+        assert_eq!(expressions[2].expr, subquery);
+        let LogicalPlan::Window(window) = plan else {
+            return Err(PlanError::internal("expected window"));
+        };
+        let LogicalPlan::Projection(projection) = window.input.as_ref() else {
+            return Err(PlanError::internal("expected metadata projection"));
+        };
+        assert_eq!(projection.expr.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn projection_after_window_keeps_its_original_layer() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let input = input(&mut state)?;
+        let (window, _) = resolver.rewrite_window_projection(
+            input,
+            vec![NamedExpr::new(
+                vec!["rn".into()],
+                Expr::WindowFunction(Box::new(WindowFunction::new(row_number_udwf(), vec![]))),
+            )],
+            &mut state,
+        )?;
+        let expressions = vec![NamedExpr::new(vec!["name".into()], input_file_name())];
+        let (plan, actual) =
+            resolver.rewrite_window_projection(window.clone(), expressions.clone(), &mut state)?;
+        assert_eq!(plan, window);
+        assert_eq!(actual, expressions);
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_window_projection_stays_above_aggregation() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let input = input(&mut state)?;
+        let id = input.schema().field(0).name().clone();
+        let aggregate = LogicalPlanBuilder::from(input)
+            .aggregate(vec![col(id)], Vec::<Expr>::new())?
+            .build()?;
+        let expressions = vec![
+            NamedExpr::new(
+                vec!["rn".into()],
+                Expr::WindowFunction(Box::new(WindowFunction::new(row_number_udwf(), vec![]))),
+            ),
+            NamedExpr::new(vec!["name".into()], input_file_name()),
+        ];
+        let (plan, _) =
+            resolver.rewrite_window_projection(aggregate.clone(), expressions, &mut state)?;
+        let LogicalPlan::Window(window) = plan else {
+            return Err(PlanError::internal("expected window"));
+        };
+        let LogicalPlan::Projection(projection) = window.input.as_ref() else {
+            return Err(PlanError::internal("expected metadata projection"));
+        };
+        assert_eq!(projection.input.as_ref(), &aggregate);
+        Ok(())
     }
 }
