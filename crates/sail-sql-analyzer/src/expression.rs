@@ -1061,10 +1061,15 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 Ok(function)
             }
         }
-        AtomExpr::Wildcard(_) => Ok(spec::Expr::UnresolvedStar {
+        AtomExpr::Wildcard(_, except) => Ok(spec::Expr::UnresolvedStar {
             target: None,
             plan_id: None,
-            wildcard_options: Default::default(),
+            wildcard_options: spec::WildcardOptions {
+                except_columns: except.map(|(_, _, names, _)| {
+                    names.into_items().map(|name| name.value.into()).collect()
+                }),
+                ..Default::default()
+            },
         }),
         AtomExpr::StringLiteral(head, tail) => from_ast_string_literal(head, tail),
         AtomExpr::NumberLiteral(value) => from_ast_number_literal(value),

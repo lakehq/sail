@@ -1017,6 +1017,9 @@
                     "sequence": [
                       {
                         "nonTerminal": "Operator(Asterisk)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Except), Operator(LeftParenthesis), Sequence(Identifier, Operator(Comma)), Operator(RightParenthesis)))"
                       }
                     ]
                   },
@@ -8432,6 +8435,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Keyword(Except), Operator(LeftParenthesis), Sequence(Identifier, Operator(Comma)), Operator(RightParenthesis)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Except), Operator(LeftParenthesis), Sequence(Identifier, Operator(Comma)), Operator(RightParenthesis))"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Keyword(For), Box(Expression)))",
               "node": {
                 "optional": {
@@ -12191,6 +12202,25 @@
                   },
                   {
                     "nonTerminal": "StringLiteral"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Keyword(Except), Operator(LeftParenthesis), Sequence(Identifier, Operator(Comma)), Operator(RightParenthesis))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Except)"
+                  },
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(Identifier, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
                   }
                 ]
               }

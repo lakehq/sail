@@ -10,13 +10,16 @@ data:
     initial_logical_plan:
     Barrier
       DeltaWrite: options=DeltaWriteNodeOptions { output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
-        Projection: CASE WHEN Boolean(true) THEN id ELSE Int64(NULL) END AS id
-          Projection: #1 AS id
+        Projection: CASE WHEN Boolean(true) THEN range.id ELSE Int64(NULL) END AS id
+          Projection: range.#1 AS id
             Projection: range.#0 AS #1
               Projection: range.id AS #0
                 TableScan: range
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_grouping_function:
@@ -49,8 +52,8 @@ data:
     logical_plan after simplify_expressions:
     Barrier
       DeltaWrite: options=DeltaWriteNodeOptions { output: Empty, path: "<tmp>/distributed_delta_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [] }, OptionList { items: [("path", "<tmp>/distributed_delta_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_delta_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("<tmp>/distributed_delta_commit") }, operation: Write, format: Delta, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_delta_commit:Delta:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }) }
-        Projection: id AS id
-          Projection: #1 AS id
+        Projection: range.id AS id
+          Projection: range.#1 AS id
             Projection: range.#0 AS #1
               Projection: range.id AS #0
                 TableScan: range
@@ -62,6 +65,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -149,6 +158,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -400,13 +415,16 @@ data:
     initial_logical_plan:
     Barrier
       IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false }
-        Projection: CASE WHEN Boolean(true) THEN id ELSE Int64(NULL) END AS id
-          Projection: #1 AS id
+        Projection: CASE WHEN Boolean(true) THEN range.id ELSE Int64(NULL) END AS id
+          Projection: range.#1 AS id
             Projection: range.#0 AS #1
               Projection: range.id AS #0
                 TableScan: range
 
     logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_subquery_aliases:
     SAME TEXT AS ABOVE
 
     logical_plan after resolve_grouping_function:
@@ -439,8 +457,8 @@ data:
     logical_plan after simplify_expressions:
     Barrier
       IcebergWrite: options=IcebergWriteNodeOptions { output: Empty, path: "file://<tmp>/distributed_iceberg_commit", mode: Append, partition_by: [], bucket_by: None, sort_order: [], options: [TablePropertyList { items: [("metadata_location", "file://<tmp>/distributed_iceberg_commit/metadata/v1.metadata.json")] }, OptionList { items: [("path", "file://<tmp>/distributed_iceberg_commit")] }], lakehouse_table: Some(LakehouseExecutionContext { catalog_provider_id: CatalogProviderId("sail"), catalog_table: ["distributed_iceberg_commit"], table_identity: CatalogTableIdentity { table_id: None, table_uri: Some("file://<tmp>/distributed_iceberg_commit") }, operation: Write, format: Iceberg, authority: CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }, pointer: StorageDiscovery, commit: Filesystem, scan: ClientLakeSource, access_session: None, rest_session: None, versioned_catalog: None, cross_format: None, governance: None, capability_fingerprint: CapabilityFingerprint("sail:distributed_iceberg_commit:Iceberg:CatalogRegistered { lifecycle: External, pointer: StorageDiscovery, commit: Filesystem }") }), planned_metadata_location: None, defer_commit: false, target_file_size: None, preserve_input_partitions: false }
-        Projection: id AS id
-          Projection: #1 AS id
+        Projection: range.id AS id
+          Projection: range.#1 AS id
             Projection: range.#0 AS #1
               Projection: range.id AS #0
                 TableScan: range
@@ -452,6 +470,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -539,6 +563,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -806,6 +836,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -857,6 +890,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -946,6 +985,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -1305,6 +1350,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -1380,6 +1428,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -1539,6 +1593,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -2030,6 +2090,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -2081,6 +2144,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -2179,6 +2248,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -2537,6 +2612,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -2588,6 +2666,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -2677,6 +2761,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:

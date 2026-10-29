@@ -27,10 +27,26 @@ impl PlanResolver<'_> {
         // Resolve the right side in a new query scope so that column references
         // to the left side are treated as outer references (OuterReferenceColumn).
         let right = {
-            let mut scope = state.enter_query_scope(left.schema().clone());
+            let schema = if left.schema().fields().is_empty() {
+                state
+                    .get_outer_query_schema()
+                    .cloned()
+                    .unwrap_or_else(|| left.schema().clone())
+            } else {
+                left.schema().clone()
+            };
+            let mut scope = state.enter_query_scope(schema);
             self.resolve_query_plan(right, scope.state()).await?
         };
 
+        // FROM LATERAL (...) without a preceding relation has a one-row,
+        // zero-column left input. Preserve the enclosing correlation scope.
+        if matches!(&left, LogicalPlan::EmptyRelation(empty) if empty.produce_one_row && empty.schema.fields().is_empty())
+            && matches!(join_type, spec::JoinType::Inner | spec::JoinType::Cross)
+            && join_condition.is_none()
+        {
+            return Ok(right);
+        }
         let outer_ref_columns = right.all_out_ref_exprs();
 
         // If the right plan contains outer references deeper than the top-level
@@ -88,7 +104,11 @@ impl PlanResolver<'_> {
                 LogicalPlanBuilder::from(left).cross_join(right)?.build()?
             } else {
                 LogicalPlanBuilder::from(left)
-                    .join_on(right, df_join_type, condition)?
+                    .join_on(
+                        right,
+                        df_join_type,
+                        Some(condition.unwrap_or_else(|| datafusion_expr::lit(true))),
+                    )?
                     .build()?
             };
 

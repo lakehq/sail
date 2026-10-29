@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
@@ -15,6 +15,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::attribute::qualifier_matches;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::exists::ExistsRewriter;
@@ -22,6 +23,14 @@ use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
+
+/// Resolved expressions and the stable fields used by later aliases in the list.
+pub(super) struct LateralExpressions {
+    pub expressions: Vec<Option<NamedExpr>>,
+    pub deferred: Vec<(usize, spec::Expr)>,
+    pub columns: Vec<Column>,
+    pub schema: DFSchemaRef,
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_project(
@@ -34,8 +43,7 @@ impl PlanResolver<'_> {
             Some(x) => self.resolve_query_plan_with_hidden_fields(x, state).await?,
             None => self.resolve_query_empty(true)?,
         };
-        let schema = input.schema();
-        let expr = self.resolve_named_expressions(expr, schema, state).await?;
+        let (input, expr) = self.resolve_projection_list(input, expr, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
@@ -63,20 +71,273 @@ impl PlanResolver<'_> {
         }
     }
 
+    /// Resolve aliases left to right, with input attributes taking precedence.
+    /// Scalar aliases are materialized so nondeterministic expressions are evaluated once.
+    pub(super) async fn resolve_projection_list(
+        &self,
+        mut input: LogicalPlan,
+        expressions: Vec<spec::Expr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
+        let LateralExpressions {
+            expressions,
+            columns,
+            ..
+        } = self
+            .resolve_lateral_expressions(expressions, &input, false, state)
+            .await?;
+        let mut expressions = expressions
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| PlanError::internal("unexpected deferred projection"))?;
+        if columns.is_empty() {
+            return Ok((input, expressions));
+        }
+        let aggregates = datafusion_expr::utils::find_aggregate_exprs(
+            &expressions
+                .iter()
+                .map(|named| named.expr.clone())
+                .collect::<Vec<_>>(),
+        );
+        // Resolve once: resolving a scalar subquery again gives its fields new
+        // identities, so its enclosing aggregate would no longer match here.
+        if !aggregates.is_empty() {
+            input = self.rewrite_aggregate(
+                input,
+                aggregates
+                    .iter()
+                    .map(|expr| NamedExpr::new(vec![String::new()], expr.clone()))
+                    .collect(),
+                vec![],
+                None,
+                false,
+                state,
+            )?;
+            let aggregate_columns = input.schema().columns();
+            for named in &mut expressions {
+                named.expr = named
+                    .expr
+                    .clone()
+                    .transform_down(|expr| {
+                        Ok(
+                            match aggregates.iter().position(|aggregate| aggregate == &expr) {
+                                Some(index) => {
+                                    Transformed::yes(Expr::Column(aggregate_columns[index].clone()))
+                                }
+                                None => Transformed::no(expr),
+                            },
+                        )
+                    })?
+                    .data;
+            }
+        }
+        self.materialize_lateral_expressions(input, expressions, columns, state)
+    }
+
+    /// Resolve dependencies using typed columns, retaining each expression for
+    /// materialization instead of resolving subqueries twice or inlining aliases.
+    #[expect(deprecated)]
+    pub(super) async fn resolve_lateral_expressions(
+        &self,
+        expressions: Vec<spec::Expr>,
+        input: &LogicalPlan,
+        defer_unresolved: bool,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LateralExpressions> {
+        let mut schema = Arc::clone(input.schema());
+        let mut aliases = vec![];
+        let mut resolved = vec![];
+        let mut columns = vec![];
+        let mut lateral_columns = HashSet::new();
+        let input_columns = input.schema().columns().into_iter().collect::<HashSet<_>>();
+        let mut deferred = vec![];
+        let mut has_dependencies = false;
+        let mut has_multi_alias = false;
+        for expression in expressions {
+            let named = {
+                let mut scope =
+                    state.enter_aggregate_scope(crate::resolver::state::AggregateState::Lateral {
+                        projections: aliases.clone(),
+                    });
+                self.resolve_named_expression(expression.clone(), &schema, scope.state())
+                    .await
+            };
+            let named = match named {
+                Ok(named) => named,
+                Err(_) if defer_unresolved => {
+                    deferred.push((resolved.len(), expression));
+                    resolved.push(None);
+                    let column = Column::new_unqualified(state.register_lateral_field(None)?);
+                    lateral_columns.insert(column.clone());
+                    columns.push(column);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let expanded = if matches!(named.expr, Expr::Wildcard { .. }) {
+                self.rewrite_wildcard(input.clone(), vec![named], state)?.1
+            } else {
+                vec![named]
+            };
+            let expanded = self.rewrite_multi_expr(expanded)?;
+            for named in expanded {
+                has_dependencies |= named
+                    .expr
+                    .column_refs()
+                    .iter()
+                    .any(|c| lateral_columns.contains(*c));
+                has_multi_alias |= named.name.len() != 1;
+                for aggregate in
+                    datafusion_expr::utils::find_aggregate_exprs(std::slice::from_ref(&named.expr))
+                {
+                    if aggregate
+                        .column_refs()
+                        .iter()
+                        .any(|column| lateral_columns.contains(*column))
+                    {
+                        return Err(PlanError::analysis(
+                            "lateral column alias in aggregate function is not supported",
+                        ));
+                    }
+                }
+                let (qualifier, name) = if let Expr::Column(column) = &named.expr {
+                    (
+                        column.relation.clone(),
+                        state.register_lateral_field(Some(column.name()))?,
+                    )
+                } else {
+                    (None, state.register_lateral_field(None)?)
+                };
+                let column = Column::new(qualifier.clone(), &name);
+                lateral_columns.insert(column.clone());
+                columns.push(column.clone());
+                // An unchanged visible input name already has precedence over
+                // lateral aliases. In particular, a wide wildcard needs no copy
+                // of the growing schema for each of its expanded columns.
+                if let Expr::Column(source) = &named.expr
+                    && input_columns.contains(source)
+                    && let [name] = named.name.as_slice()
+                    && let info = state.get_field_info(source.name())?
+                    && !info.is_hidden()
+                    && self.merge_name_key(name) == self.merge_name_key(info.name())
+                {
+                    resolved.push(Some(named));
+                    continue;
+                }
+                // Generators and expressions awaiting type analysis need no staged
+                // field unless a later expression actually references their alias.
+                let field = match named.expr.to_field(&schema) {
+                    Ok((_, field)) if named.name.len() == 1 => field,
+                    _ => {
+                        resolved.push(Some(named));
+                        continue;
+                    }
+                };
+                let mut fields = schema
+                    .iter()
+                    .map(|(q, f)| (q.cloned(), Arc::clone(f)))
+                    .collect::<Vec<_>>();
+                fields.push((
+                    qualifier.clone(),
+                    Arc::new(field.as_ref().clone().with_name(&name)),
+                ));
+                schema = Arc::new(DFSchema::new_with_metadata(
+                    fields,
+                    schema.metadata().clone(),
+                )?);
+                aliases.push(NamedExpr {
+                    expr: Expr::Column(column.clone()),
+                    ..named.clone()
+                });
+                resolved.push(Some(named));
+            }
+        }
+        if has_dependencies && has_multi_alias {
+            return Err(PlanError::analysis(
+                "unsupported lateral alias with generator",
+            ));
+        }
+        if !has_dependencies {
+            columns.clear();
+            schema = Arc::clone(input.schema());
+        }
+        Ok(LateralExpressions {
+            expressions: resolved,
+            deferred,
+            columns,
+            schema,
+        })
+    }
+
+    /// Stage aliases after their input (including aggregation) has been computed.
+    pub(super) fn materialize_lateral_expressions(
+        &self,
+        input: LogicalPlan,
+        expressions: Vec<NamedExpr>,
+        columns: Vec<Column>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
+        // Siblings share the original input context even when lateral aliases
+        // require staging their expressions across separate projections.
+        let (mut input, expressions) =
+            self.materialize_window_input_file_metadata(input, expressions, &columns, state)?;
+        let mut resolved = vec![];
+        for (named, column) in expressions.into_iter().zip(columns) {
+            // A grouping key may already have materialized this alias below
+            // the aggregate and carried it into the aggregate output.
+            if input.schema().has_column(&column)
+                && named.expr.clone().unalias() == Expr::Column(column.clone())
+            {
+                resolved.push(named);
+                continue;
+            }
+            let (next, named) =
+                self.rewrite_projection::<MonotonicIdRewriter>(input, vec![named], state)?;
+            let (next, named) =
+                self.rewrite_projection::<SparkPartitionIdRewriter>(next, named, state)?;
+            let (next, named) = self.rewrite_projection::<ExplodeRewriter>(next, named, state)?;
+            let (next, named) = self.rewrite_projection::<WindowRewriter>(next, named, state)?;
+            let (next, named) = self.rewrite_projection::<ExistsRewriter>(next, named, state)?;
+            input = next;
+            let named = named.one()?;
+            let mut exprs = input
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect::<Vec<_>>();
+            exprs.push(
+                named
+                    .expr
+                    .alias_qualified(column.relation.clone(), &column.name),
+            );
+            input = LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(input))?);
+            resolved.push(NamedExpr {
+                expr: Expr::Column(column),
+                ..named
+            });
+        }
+        Ok((input, resolved))
+    }
+
     pub(super) fn rewrite_wildcard(
         &self,
         input: LogicalPlan,
         expr: Vec<NamedExpr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
-        fn to_named_expr(expr: Expr, state: &PlanResolverState) -> PlanResult<Option<NamedExpr>> {
+        fn to_named_expr(
+            expr: Expr,
+            qualified: bool,
+            state: &PlanResolverState,
+        ) -> PlanResult<Option<NamedExpr>> {
             let Expr::Column(column) = expr else {
                 return Err(PlanError::invalid(
                     "column expected for expanded wildcard expression",
                 ));
             };
             let info = state.get_field_info(column.name())?;
-            if info.is_hidden() {
+            if info.is_hidden() && !qualified {
                 return Ok(None);
             }
             Ok(Some(NamedExpr::new(
@@ -141,7 +402,7 @@ impl PlanResolver<'_> {
                     options,
                 } => {
                     for e in expand_wildcard(schema, &input, Some(&options))? {
-                        projected.extend(to_named_expr(e, state)?)
+                        projected.extend(to_named_expr(e, false, state)?)
                     }
                     expand_outer_wildcard(None, schema, state, &mut projected)?;
                 }
@@ -150,15 +411,53 @@ impl PlanResolver<'_> {
                     qualifier: Some(qualifier),
                     options,
                 } => {
-                    let qualifier_in_input = schema
+                    let parts = state
+                        .relation_name(&qualifier)
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect();
+                    let qualifiers = schema
                         .iter()
-                        .any(|(q, _)| q.is_some_and(|q| *q == qualifier));
-                    if qualifier_in_input {
-                        for e in expand_qualified_wildcard(&qualifier, schema, Some(&options))? {
-                            projected.extend(to_named_expr(e, state)?)
+                        .filter_map(|(q, _)| q)
+                        .filter(|q| {
+                            qualifier_matches(
+                                Some(&parts),
+                                Some(q),
+                                self.config.case_sensitive,
+                                state,
+                            )
+                        })
+                        .cloned()
+                        .collect::<std::collections::HashSet<_>>();
+                    if !qualifiers.is_empty() {
+                        let expanded = qualifiers
+                            .iter()
+                            .map(|qualifier| {
+                                expand_qualified_wildcard(qualifier, schema, Some(&options))
+                            })
+                            .collect::<datafusion_common::Result<Vec<_>>>()?
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>();
+                        // Walk the schema to preserve source column order.
+                        for (q, field) in schema.iter() {
+                            if expanded.contains(&Expr::Column(Column::from((q, field)))) {
+                                projected.extend(to_named_expr(
+                                    Expr::Column(Column::from((q, field))),
+                                    true,
+                                    state,
+                                )?);
+                            }
+                        }
+                    } else {
+                        let before = projected.len();
+                        expand_outer_wildcard(Some(&qualifier), schema, state, &mut projected)?;
+                        if projected.len() == before {
+                            return Err(PlanError::analysis(format!(
+                                "cannot resolve wildcard: {qualifier}.*"
+                            )));
                         }
                     }
-                    expand_outer_wildcard(Some(&qualifier), schema, state, &mut projected)?;
                 }
                 _ => projected.push(NamedExpr {
                     name,
@@ -173,8 +472,20 @@ impl PlanResolver<'_> {
     /// Materialize metadata from this SELECT layer before lowering its windows.
     pub(super) fn rewrite_window_projection(
         &self,
+        input: LogicalPlan,
+        expressions: Vec<NamedExpr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
+        let (input, expressions) =
+            self.materialize_window_input_file_metadata(input, expressions, &[], state)?;
+        self.rewrite_projection::<WindowRewriter>(input, expressions, state)
+    }
+
+    fn materialize_window_input_file_metadata(
+        &self,
         mut input: LogicalPlan,
         mut expressions: Vec<NamedExpr>,
+        lateral_columns: &[Column],
         state: &mut PlanResolverState,
     ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>)> {
         let mut has_window = false;
@@ -192,7 +503,8 @@ impl PlanResolver<'_> {
         }
 
         let mut metadata: Vec<(Expr, String)> = Vec::new();
-        for named in &mut expressions {
+        let mut window_aliases = HashSet::new();
+        for (index, named) in expressions.iter_mut().enumerate() {
             let mut extract_metadata = |expr: Expr| {
                 let Expr::ScalarFunction(function) = &expr else {
                     return Ok(Transformed::no(expr));
@@ -215,9 +527,19 @@ impl PlanResolver<'_> {
                 ))
             };
             let expr = named.expr.clone();
-            named.expr = if expr.exists(|expr| Ok(matches!(expr, Expr::WindowFunction(_))))? {
+            let depends_on_window = expr
+                .exists(|expr| Ok(matches!(expr, Expr::WindowFunction(_))))?
+                || expr
+                    .column_refs()
+                    .iter()
+                    .any(|column| window_aliases.contains(*column));
+            if depends_on_window && let Some(column) = lateral_columns.get(index) {
+                window_aliases.insert(column.clone());
+            }
+            named.expr = if depends_on_window {
                 // Metadata combined with a window result stays above that window.
-                // Only its arguments and keys are evaluated in the input context.
+                // This also applies through lateral alias chains. Only window
+                // arguments and keys are evaluated in the input context.
                 expr.transform_up(|expr| {
                     if matches!(expr, Expr::WindowFunction(_)) {
                         expr.transform_up(&mut extract_metadata)
@@ -242,7 +564,7 @@ impl PlanResolver<'_> {
                 .collect();
             input = LogicalPlan::Projection(Projection::try_new(projection, Arc::new(input))?);
         }
-        self.rewrite_projection::<WindowRewriter>(input, expressions, state)
+        Ok((input, expressions))
     }
 
     pub(super) fn rewrite_projection<'s, T>(
@@ -364,12 +686,20 @@ impl PlanResolver<'_> {
                 } else {
                     state.register_field_name(name)
                 };
+                let qualifier = if let Expr::Column(column) = &expr {
+                    column
+                        .relation
+                        .clone()
+                        .filter(|relation| relation.table() != datafusion_expr::UNNAMED_TABLE)
+                } else {
+                    None
+                };
                 if !metadata.is_empty() {
                     let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                     let field_metadata = Some(FieldMetadata::from(metadata_map));
                     Ok(expr.alias_with_metadata(field_id, field_metadata))
                 } else {
-                    Ok(expr.alias(field_id))
+                    Ok(expr.alias_qualified(qualifier, field_id))
                 }
             })
             .collect()

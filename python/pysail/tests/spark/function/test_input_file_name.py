@@ -320,25 +320,29 @@ def test_input_file_metadata_after_sort_narrow_projection(spark, tmp_path, expre
 
 
 @pytest.mark.parametrize("select_after", [False, True])
-def test_input_file_metadata_sql_window_siblings(spark, parquet_metadata, select_after):
+@pytest.mark.parametrize("lateral_alias", [False, True])
+def test_input_file_metadata_sql_window_siblings(spark, parquet_metadata, select_after, lateral_alias):
     dataframe, files = parquet_metadata
     dataframe.createOrReplaceTempView("input_file_window")
     metadata = (
         "input_file_name() AS file_name, input_file_block_start() AS block_start, "
         "input_file_block_length() AS block_length"
     )
+    lateral = "rn + 1 AS next_rn, " if lateral_alias else ""
     try:
         query = (
-            f"SELECT id, rn, {metadata} FROM "  # noqa: S608
+            f"SELECT id, rn, {lateral}{metadata} FROM "  # noqa: S608
             "(SELECT id, row_number() OVER (ORDER BY id) AS rn FROM input_file_window) q"
             if select_after
-            else f"SELECT id, row_number() OVER (ORDER BY id) AS rn, {metadata} FROM input_file_window"  # noqa: S608
+            else f"SELECT id, row_number() OVER (ORDER BY id) AS rn, {lateral}{metadata} FROM input_file_window"  # noqa: S608
         )
         dataframe = spark.sql(query)
         assert dataframe.schema["rn"].dataType.simpleString() == "int"
         assert not dataframe.schema["rn"].nullable
         rows = _assert_metadata_rows(dataframe, dict.fromkeys(files, ("", -1, -1)) if select_after else files, 4)
         assert {row.id: row.rn for row in rows} == {key: key for key in files}
+        if lateral_alias:
+            assert {row.id: row.next_rn for row in rows} == {key: key + 1 for key in files}
     finally:
         spark.catalog.dropTempView("input_file_window")
 
@@ -400,14 +404,23 @@ def test_input_file_metadata_nested_window_free_siblings(parquet_metadata):
         ]
 
 
-def test_input_file_metadata_combined_with_window_uses_defaults(parquet_metadata):
+@pytest.mark.parametrize("lateral_alias", [False, True])
+def test_input_file_metadata_combined_with_window_uses_defaults(parquet_metadata, lateral_alias):
     dataframe, files = parquet_metadata
-    rows = dataframe.selectExpr(
-        "id",
-        "concat(input_file_name(), ':', cast(row_number() OVER (ORDER BY id) AS STRING)) AS name",
-        "input_file_block_start() + row_number() OVER (ORDER BY id) AS start",
-        "input_file_block_length() + row_number() OVER (ORDER BY id) AS length",
-    ).collect()
+    window = "row_number() OVER (ORDER BY id)"
+    extra = [f"{window} AS rn", "rn AS reused_rn"] if lateral_alias else []
+    value = "reused_rn" if lateral_alias else window
+    rows = (
+        dataframe.selectExpr(
+            "id",
+            *extra,
+            f"concat(input_file_name(), ':', cast({value} AS STRING)) AS name",
+            f"input_file_block_start() + {value} AS start",
+            f"input_file_block_length() + {value} AS length",
+        )
+        .select("id", "name", "start", "length")
+        .collect()
+    )
     assert sorted(tuple(row) for row in rows) == [(key, f":{key}", key - 1, key - 1) for key in files]
 
 

@@ -187,6 +187,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -286,6 +289,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -552,6 +561,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:

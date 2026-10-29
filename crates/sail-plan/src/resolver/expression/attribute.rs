@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
-use datafusion_expr::{ScalarUDF, col, expr, lit};
+use datafusion_expr::{ExprSchemable, ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
@@ -59,9 +59,15 @@ impl PlanResolver<'_> {
             }
             return Ok(NamedExpr::new(vec![display], expr));
         }
-        if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_grouping_for_having())?
-        {
+        if let Some((name, expr)) = self.resolve_aggregate_field(
+            &name,
+            &state
+                .get_grouping_for_having()
+                .iter()
+                .filter(|e| !matches!(e.expr, expr::Expr::GroupingSet(_)))
+                .cloned()
+                .collect::<Vec<_>>(),
+        )? {
             return Ok(NamedExpr::new(vec![name], expr));
         }
         if let Some((name, expr)) =
@@ -93,8 +99,26 @@ impl PlanResolver<'_> {
         if let FieldResolution::Resolved(name, expr) = local {
             return Ok(NamedExpr::new(vec![name], expr));
         }
-        if let Some((name, expr)) =
-            self.resolve_aggregate_field(&name, state.get_projections_for_grouping())?
+        if plan_id.is_none()
+            && matches!(local, FieldResolution::Missing)
+            && let [root, inner @ ..] = name.parts()
+            && let Some((_, expr)) = self.resolve_aggregate_field(
+                &spec::ObjectName::from(vec![root.clone()]),
+                state.get_lateral_projections(),
+            )?
+        {
+            let data_type = expr.get_type(schema)?;
+            let expr = self
+                .resolve_potentially_nested_field(expr, &data_type, inner)?
+                .ok_or_else(|| {
+                    PlanError::analysis(format!("cannot resolve lateral alias: {name:?}"))
+                })?;
+            let display = inner.last().unwrap_or(root).as_ref().to_string();
+            return Ok(NamedExpr::new(vec![display], expr));
+        }
+        if self.config.group_by_aliases
+            && let Some((name, expr)) =
+                self.resolve_aggregate_field(&name, state.get_projections_for_grouping())?
         {
             return Ok(NamedExpr::new(vec![name], expr));
         }
@@ -334,7 +358,7 @@ impl PlanResolver<'_> {
                 return None;
             }
             let info = state.get_field_info(field.name()).ok()?;
-            (!info.is_hidden()
+            ((!info.is_hidden() || qualifier.is_some())
                 && info.matches(root, plan_id)
                 && (!self.config.case_sensitive || info.name() == root))
                 .then_some((field_qualifier, field, info))
@@ -406,7 +430,7 @@ impl PlanResolver<'_> {
                     name: agg, expr, ..
                 } = expr;
                 match agg.as_slice() {
-                    [agg] if agg.eq_ignore_ascii_case(name.as_ref()) => {
+                    [agg] if self.merge_name_key(agg) == self.merge_name_key(name.as_ref()) => {
                         Some((name.as_ref().to_string(), expr.clone()))
                     }
                     _ => None,
@@ -434,7 +458,7 @@ impl PlanResolver<'_> {
         let mut candidates = schema
             .iter()
             .filter_map(|(qualifier, field)| {
-                if qualifier.is_some() {
+                if qualifier.is_some() && plan_id.is_none() {
                     return None;
                 }
                 let Ok(info) = state.get_field_info(field.name()) else {
@@ -443,10 +467,12 @@ impl PlanResolver<'_> {
                 if !info.is_hidden() {
                     return None;
                 }
-                if info.matches(name.as_ref(), plan_id) {
+                if info.matches(name.as_ref(), plan_id)
+                    && (!self.config.case_sensitive || info.name() == name.as_ref())
+                {
                     Some((
                         name.as_ref().to_string(),
-                        expr::Expr::Column(Column::new_unqualified(field.name())),
+                        expr::Expr::Column(Column::new(qualifier.cloned(), field.name())),
                     ))
                 } else {
                     None
@@ -467,41 +493,31 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<Option<(String, expr::Expr)>> {
-        let candidates = Self::generate_qualified_field_candidates(name.parts());
-        let mut candidates = schema
-            .iter()
-            .flat_map(|(qualifier, field)| {
-                let Ok(info) = state.get_field_info(field.name()) else {
-                    return vec![];
-                };
-                if info.is_hidden() {
-                    return vec![];
-                }
-                candidates
-                    .iter()
-                    .filter(|(q, name)| {
-                        qualifier_matches(q.as_ref(), qualifier, self.config.case_sensitive, state)
-                            && info.matches(name.as_ref(), None)
-                            && (!self.config.case_sensitive || info.name() == name.as_ref())
-                    })
-                    .map(|(_, name)| {
-                        (
-                            name.as_ref().to_string(),
-                            expr::Expr::OuterReferenceColumn(
-                                field.clone(),
-                                Column::new(qualifier.cloned(), field.name()),
-                            ),
-                        )
-                    })
-                    .collect()
-            })
-            .collect::<Vec<_>>();
-        if candidates.len() > 1 {
-            return Err(PlanError::AnalysisError(format!(
-                "ambiguous outer attribute: {name:?}"
-            )));
+        for (q, root, inner) in Self::generate_qualified_nested_field_candidates(name.parts()).rev()
+        {
+            let mut fields =
+                self.matching_root_fields(schema, q.as_ref(), root.as_ref(), None, state);
+            let Some((qualifier, field, info)) = fields.next() else {
+                continue;
+            };
+            if fields.any(|(other_qualifier, _, other)| {
+                other_qualifier != qualifier || other.origin() != info.origin()
+            }) {
+                return Err(PlanError::analysis(format!(
+                    "ambiguous outer attribute: {name:?}"
+                )));
+            }
+            let outer = expr::Expr::OuterReferenceColumn(
+                field.clone(),
+                Column::new(qualifier.cloned(), field.name()),
+            );
+            return self
+                .resolve_potentially_nested_field(outer, field.data_type(), inner)
+                .map(|expr| {
+                    expr.map(|expr| (inner.last().unwrap_or(root).as_ref().to_string(), expr))
+                });
         }
-        Ok(candidates.pop())
+        Ok(None)
     }
 
     fn resolve_potentially_nested_field<T: AsRef<str>>(
@@ -554,23 +570,6 @@ impl PlanResolver<'_> {
         }
     }
 
-    fn generate_qualified_field_candidates<T: AsRef<str>>(
-        name: &[T],
-    ) -> Vec<(Option<Vec<String>>, &T)> {
-        match name.split_last() {
-            Some((field, qualifier)) => vec![(
-                (!qualifier.is_empty()).then(|| {
-                    qualifier
-                        .iter()
-                        .map(|part| part.as_ref().to_string())
-                        .collect()
-                }),
-                field,
-            )],
-            None => vec![],
-        }
-    }
-
     fn generate_qualified_nested_field_candidates<T: AsRef<str>>(
         name: &[T],
     ) -> impl DoubleEndedIterator<Item = (Option<Vec<String>>, &T, &[T])> {
@@ -587,7 +586,7 @@ impl PlanResolver<'_> {
 }
 
 /// A qualifier matches a suffix of the relation name, including multipart namespaces.
-pub(super) fn qualifier_matches(
+pub(in crate::resolver) fn qualifier_matches(
     qualifier: Option<&Vec<String>>,
     target: Option<&TableReference>,
     case_sensitive: bool,

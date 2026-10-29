@@ -4,13 +4,17 @@ use datafusion::optimizer::push_down_limit::PushDownLimit as DataFusionPushDownL
 use datafusion::optimizer::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
+mod correlated_limit;
+mod deduplicate;
 mod input_file_metadata;
 mod lateral_join;
 mod resolve_lambda_variables;
 mod rewrite_binary_grouping;
 mod scalar_iterator_udf;
+mod scalar_subquery_domain;
 mod scalar_subquery_keys;
 mod session_timestamp;
+mod subquery_aliases;
 pub mod type_coercion;
 
 use input_file_metadata::PushDownLimit;
@@ -28,8 +32,10 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
         function_rewrites: _,
         rules: built_in_rules,
     } = Analyzer::default();
-    let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
-        vec![Arc::new(ResolveLambdaVariables)];
+    let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
+        Arc::new(ResolveLambdaVariables),
+        Arc::new(subquery_aliases::NormalizeSubqueryAliases),
+    ];
     rules.extend(built_in_rules.into_iter().map(|rule| {
         if rule.name() == datafusion::optimizer::analyzer::type_coercion::TypeCoercion::new().name()
         {
@@ -54,7 +60,18 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
     for rule in rules {
+        if rule.name() == deduplicate::SimplifyDeduplicate::default().name() {
+            custom.push(Arc::new(deduplicate::SimplifyDeduplicate::default()));
+            continue;
+        }
         if rule.name() == ScalarSubqueryToJoin::new().name() {
+            // SimplifyExpressions must first fold LIMIT/OFFSET casts into
+            // literals. Decorrelate before limit pushdown can turn the sort
+            // into a global top-k or scalar-subquery conversion consumes it.
+            custom.push(Arc::new(correlated_limit::DecorrelateLimit));
+            custom.push(Arc::new(
+                scalar_subquery_domain::NormalizeScalarSubqueryDomain,
+            ));
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
         }
         if rule.name() == DataFusionPushDownLimit::new().name() {

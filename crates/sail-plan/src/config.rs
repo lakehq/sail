@@ -61,6 +61,9 @@ pub struct PlanConfig {
     /// Whether identifiers (e.g. column names) are matched case-sensitively.
     /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
     pub case_sensitive: bool,
+    pub group_by_aliases: bool,
+    pub group_by_ordinal: bool,
+    pub order_by_ordinal: bool,
     /// Default for partition overwrite writes; operation options take precedence.
     pub dynamic_partition_overwrite: bool,
     /// Patterns used to redact sensitive table property keys and values.
@@ -119,6 +122,9 @@ impl Default for PlanConfig {
             map_key_dedup_policy: MapKeyDedupPolicy::Exception,
             cross_join_enabled: true,
             case_sensitive: false,
+            group_by_aliases: true,
+            group_by_ordinal: true,
+            order_by_ordinal: true,
             dynamic_partition_overwrite: false,
             redaction_options_regex: "(?i)url".to_string(),
             redaction_regex: "(?i)secret|password|token|access[.]?key".to_string(),
