@@ -1,8 +1,8 @@
 use chumsky::Parser;
 use chumsky::extra::ParserExtra;
-use chumsky::input::{Input, InputRef, ValueInput};
+use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
-use chumsky::prelude::{custom, end};
+use chumsky::prelude::end;
 use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
@@ -27,7 +27,7 @@ use crate::ast::keywords::{
     Run, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start, Statistics,
     Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time,
     To, Truncate, Type, Uncache, Unset, Update, Use, User, Using, Vacuum, Values, Verbose, View,
-    Views, When, Where, With, Zone, Zorder,
+    Views, When, With, Zone, Zorder,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -42,7 +42,7 @@ use crate::common::Sequence;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Token, TokenLabel};
-use crate::tree::{SyntaxDescriptor, TreeParser, TreeSyntax, TreeText};
+use crate::tree::TreeParser;
 
 /// Parse a statement terminator: a semicolon or the end of input.
 pub(crate) fn statement_end<'a, I, E>(
@@ -72,7 +72,7 @@ pub enum Statement {
         target: Either<StringLiteral, ObjectName>,
         full: Option<Full>,
         #[parser(function = |(_, _, e, _), o| compose(e, o))]
-        predicate: Option<OptimizeWhereClause>,
+        predicate: Option<WhereClause>,
         zorder: Option<ZOrderClause>,
     },
     Vacuum {
@@ -1400,82 +1400,6 @@ pub enum VacuumClause {
     Retain(Retain, NumberLiteral, Hours),
     DryRun(Dry, Run),
     Mode(Either<Full, Lite>),
-}
-
-#[derive(Debug, Clone)]
-pub struct OptimizeWhereClause {
-    pub r#where: Where,
-    pub condition: Expr,
-    pub condition_sql: String,
-}
-
-impl<'a, I, E, P> TreeParser<'a, I, E, P> for OptimizeWhereClause
-where
-    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-    I::Span: std::convert::Into<TokenSpan>,
-    E: ParserExtra<'a, I> + 'a,
-    E::Error: LabelError<'a, I, TokenLabel>,
-    P: Parser<'a, I, Expr, E> + Clone + 'a,
-{
-    fn parser(expr: P, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
-        Where::parser((), options)
-            .then(custom(move |input: &mut InputRef<'a, '_, I, E>| {
-                let start = input.save();
-                let condition = input.parse(expr.clone())?;
-                let end = input.save();
-                input.rewind(start);
-
-                // Keep the original SQL for the procedure's later predicate parsing.
-                // The expression parser, not keyword matching, determines the boundary.
-                let mut condition_sql = String::new();
-                while input.cursor() < *end.cursor() {
-                    match input.next() {
-                        Some(
-                            Token::Word { raw, .. }
-                            | Token::String { raw, .. }
-                            | Token::SingleLineComment { raw }
-                            | Token::MultiLineComment { raw },
-                        ) => condition_sql.push_str(raw),
-                        Some(Token::Punctuation(p)) => condition_sql.push(p.to_char()),
-                        Some(Token::Space { count }) => {
-                            condition_sql.push_str(&" ".repeat(count));
-                        }
-                        Some(Token::Tab { count }) => {
-                            condition_sql.push_str(&"\t".repeat(count));
-                        }
-                        Some(Token::LineFeed { count }) => {
-                            condition_sql.push_str(&"\n".repeat(count));
-                        }
-                        Some(Token::CarriageReturn { count }) => {
-                            condition_sql.push_str(&"\r".repeat(count));
-                        }
-                        None => break,
-                    }
-                }
-                input.rewind(end);
-                Ok((condition, condition_sql.trim().to_string()))
-            }))
-            .map(|(r#where, (condition, condition_sql))| Self {
-                r#where,
-                condition,
-                condition_sql,
-            })
-    }
-}
-
-impl TreeSyntax for OptimizeWhereClause {
-    fn syntax() -> SyntaxDescriptor {
-        SyntaxDescriptor {
-            name: "OptimizeWhereClause".to_string(),
-            ..WhereClause::syntax()
-        }
-    }
-}
-
-impl TreeText for OptimizeWhereClause {
-    fn text(&self) -> String {
-        format!("{}{}", self.r#where.text(), self.condition.text())
-    }
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
