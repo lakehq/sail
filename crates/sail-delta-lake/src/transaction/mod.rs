@@ -24,6 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
+use datafusion::prelude::SessionConfig;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
@@ -39,6 +40,7 @@ use crate::delta_log::{
     CommitOrBytes, LogStoreRef, ObjectStoreRef, resolve_effective_protocol_and_metadata,
     resolve_version_timestamp,
 };
+use crate::options::session_user_metadata;
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
@@ -1066,6 +1068,11 @@ impl Default for CommitProperties {
 }
 
 impl CommitProperties {
+    /// Captures current session metadata for this commit and its retries.
+    pub(crate) fn from_session_config(config: &SessionConfig) -> datafusion_common::Result<Self> {
+        Ok(Self::default().with_user_metadata(session_user_metadata(config)?))
+    }
+
     /// Attach operation metrics that will be merged into the Delta log `commitInfo` action
     /// under the `operationMetrics` key.
     pub(crate) fn with_operation_metrics(

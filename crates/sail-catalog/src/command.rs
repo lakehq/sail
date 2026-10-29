@@ -1147,6 +1147,7 @@ async fn materialize_lake_source_create_metadata<C: SessionExtensionAccessor>(
     lake_source
         .create_table_metadata(
             ctx.runtime_env(),
+            &ctx.session_config(),
             LakeSourceCreateTableInfo {
                 path: location,
                 columns: columns
