@@ -238,7 +238,7 @@ use sail_function::scalar::misc::theta_sketch::{
     ThetaUnionFunction,
 };
 use sail_function::scalar::misc::version::SparkVersion;
-use sail_function::scalar::mixed_numeric::MixedNumeric;
+use sail_function::scalar::mixed_numeric::{MixedNumeric, MixedNumericPredicate};
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
@@ -3846,6 +3846,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })?;
                 Ok(Arc::new(ScalarUDF::from(function)))
             }
+            name if MixedNumericPredicate::from_name(name).is_some() => {
+                let function = MixedNumericPredicate::from_name(name).ok_or_else(|| {
+                    datafusion::common::internal_datafusion_err!(
+                        "invalid mixed numeric predicate {name}"
+                    )
+                })?;
+                Ok(Arc::new(ScalarUDF::from(function)))
+            }
             "correlation_cast" => Ok(Arc::new(ScalarUDF::from(CorrelationCast::new()))),
             "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
@@ -4053,6 +4061,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<CoalesceFunc>()
             || node_inner.is::<NormalizeFloatKeys>()
             || node_inner.is::<MixedNumeric>()
+            || node_inner.is::<MixedNumericPredicate>()
             || node_inner.is::<CorrelationCast>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
@@ -7798,6 +7807,34 @@ mod tests {
             let decoded = round_trip_udf(ScalarUDF::from(function))?;
             downcast_udf::<MixedNumeric>(&decoded, "MixedNumeric")?;
             assert_eq!(decoded.name(), name);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_mixed_numeric_predicates() -> Result<()> {
+        use datafusion::logical_expr::Operator;
+
+        for arithmetic in [Operator::Plus, Operator::Minus, Operator::Multiply] {
+            for comparison in [
+                Operator::Eq,
+                Operator::NotEq,
+                Operator::Lt,
+                Operator::LtEq,
+                Operator::Gt,
+                Operator::GtEq,
+            ] {
+                let function =
+                    MixedNumericPredicate::new(arithmetic, comparison).ok_or_else(|| {
+                        datafusion::common::internal_datafusion_err!(
+                            "unsupported predicate test operator"
+                        )
+                    })?;
+                let name = function.name().to_owned();
+                let decoded = round_trip_udf(ScalarUDF::from(function))?;
+                downcast_udf::<MixedNumericPredicate>(&decoded, "MixedNumericPredicate")?;
+                assert_eq!(decoded.name(), name);
+            }
         }
         Ok(())
     }
