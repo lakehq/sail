@@ -757,6 +757,111 @@ impl IcebergRestCatalogProvider {
         })
     }
 
+    async fn load_view_result(
+        &self,
+        database: &Namespace,
+        view: &str,
+    ) -> CatalogResult<crate::r#gen::LoadViewResult> {
+        let catalog_config = self.resolved_catalog_config().await?;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let view_name = view.to_string();
+        self.with_auth_retry(|client| {
+            let prefix = prefix.clone();
+            let namespace = namespace.clone();
+            let view_name = view_name.clone();
+            async move { client.load_view(prefix, namespace, view_name).await }
+        })
+        .await?
+        .map(|response| response.inner)
+        .map_err(|e| match e.status().map(|status| status.as_u16()) {
+            Some(405 | 501) => CatalogError::NotSupported("get view".to_string()),
+            Some(404) => CatalogError::NotFound(
+                CatalogObject::View,
+                format!(
+                    "{}.{}",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(view)
+                ),
+            ),
+            Some(401) => CatalogError::Unauthorized(format!("Failed to load view: {e}")),
+            Some(403) => CatalogError::Forbidden(format!("Failed to load view: {e}")),
+            Some(429) => CatalogError::RateLimited(format!("Failed to load view: {e}")),
+            _ => CatalogError::External(format!(
+                "Failed to load view {}.{}: {e}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(view)
+            )),
+        })
+    }
+
+    async fn replace_view(
+        &self,
+        database: &Namespace,
+        view: &str,
+        metadata: &crate::r#gen::ViewMetadata,
+        request: crate::r#gen::CreateViewRequest,
+    ) -> CatalogResult<TableStatus> {
+        let request = replace_view_request(metadata, request)?;
+        let catalog_config = self.resolved_catalog_config().await?;
+        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
+        let namespace = catalog_config.namespace_string(database)?;
+        let view_name = view.to_string();
+        let unknown = |error: String| {
+            CatalogError::CommitStateUnknown(
+                format!(
+                    "Iceberg REST view replacement for {}.{} may have succeeded: {error}. Check the view state before retrying",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(view)
+                )
+                .into(),
+            )
+        };
+        let response = self
+            .with_auth_retry(|client| {
+                let prefix = prefix.clone();
+                let namespace = namespace.clone();
+                let view_name = view_name.clone();
+                let request = request.clone();
+                async move {
+                    client
+                        .replace_view(prefix, namespace, view_name, request)
+                        .await
+                }
+            })
+            .await?
+            .map_err(|error| {
+                if Self::commit_state_is_unknown(&error) {
+                    return unknown(error.to_string());
+                }
+                let message = format!("Failed to replace view: {error}");
+                match error.status().map(|status| status.as_u16()) {
+                    Some(404) => CatalogError::NotFound(
+                        CatalogObject::View,
+                        format!(
+                            "{}.{}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(view)
+                        ),
+                    ),
+                    Some(409) => CatalogError::Conflict(message),
+                    Some(400) => CatalogError::CommitRejected(message),
+                    Some(401) => CatalogError::Unauthorized(message),
+                    Some(403) => CatalogError::Forbidden(message),
+                    Some(405 | 501) => CatalogError::NotSupported(message),
+                    Some(429) => CatalogError::RateLimited(message),
+                    _ => CatalogError::External(message),
+                }
+            })?;
+        // A successful commit can still return metadata that we cannot interpret.
+        // Do not report that as a definite failure or retry the mutation.
+        validate_view_metadata(&response.inner.metadata)
+            .and_then(|()| {
+                Self::load_view_result_to_status(&self.name, database, view, response.inner)
+            })
+            .map_err(|error| unknown(error.to_string()))
+    }
+
     fn load_view_result_to_status(
         catalog: &str,
         database: &Namespace,
@@ -1689,18 +1794,18 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties,
         } = options;
 
-        if (if_not_exists || replace)
-            && let Ok(existing) = self.get_view(database, view).await
-        {
-            if if_not_exists {
-                return Ok(existing);
+        let existing = if if_not_exists || replace {
+            match self.load_view_result(database, view).await {
+                Ok(existing) if if_not_exists => {
+                    return Self::load_view_result_to_status(&self.name, database, view, existing);
+                }
+                Ok(existing) => Some(existing),
+                Err(CatalogError::NotFound(CatalogObject::View, _)) => None,
+                Err(error) => return Err(error),
             }
-            if replace {
-                return Err(CatalogError::NotSupported(
-                    "Replace view is not supported yet".to_string(),
-                ));
-            }
-        }
+        } else {
+            None
+        };
 
         let mut fields = Vec::new();
         for col in columns.iter() {
@@ -1745,7 +1850,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .unwrap_or(0);
 
         let view_version = crate::r#gen::ViewVersion {
-            version_id: 1, // FIXME: When `replace` is supported and used, this should be a new version id.
+            version_id: 1,
             timestamp_ms,
             schema_id: -1,
             summary: HashMap::new(),
@@ -1788,6 +1893,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties: props,
         };
 
+        if let Some(existing) = existing {
+            return self
+                .replace_view(database, view, &existing.metadata, request)
+                .await;
+        }
+
         let prefix = catalog_config.prefix().map(ToOwned::to_owned);
         let namespace = catalog_config.namespace_string(database)?;
         let result = self
@@ -1805,42 +1916,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
-        let catalog_config = self.resolved_catalog_config().await?;
-        let prefix = catalog_config.prefix().map(ToOwned::to_owned);
-        let namespace = catalog_config.namespace_string(database)?;
-        let view_name = view.to_string();
-        let result = self
-            .with_auth_retry(|client| {
-                let prefix = prefix.clone();
-                let namespace = namespace.clone();
-                let view_name = view_name.clone();
-                async move { client.load_view(prefix, namespace, view_name).await }
-            })
-            .await?
-            .map(|response| response.inner)
-            .map_err(|e| match e {
-                e if matches!(
-                    e.status(),
-                    Some(reqwest::StatusCode::METHOD_NOT_ALLOWED)
-                        | Some(reqwest::StatusCode::NOT_IMPLEMENTED)
-                ) =>
-                {
-                    CatalogError::NotSupported("get view".to_string())
-                }
-                e if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => CatalogError::NotFound(
-                    CatalogObject::View,
-                    format!(
-                        "{}.{}",
-                        quote_namespace_if_needed(database),
-                        quote_name_if_needed(view)
-                    ),
-                ),
-                _ => CatalogError::External(format!(
-                    "Failed to load view {}.{}: {e}",
-                    quote_namespace_if_needed(database),
-                    quote_name_if_needed(view)
-                )),
-            })?;
+        let result = self.load_view_result(database, view).await?;
         Self::load_view_result_to_status(&self.name, database, view, result)
     }
 
@@ -1934,6 +2010,233 @@ where
         } else {
             items.last()
         }
+    })
+}
+
+fn validate_view_metadata(metadata: &crate::r#gen::ViewMetadata) -> CatalogResult<()> {
+    let version = metadata
+        .versions
+        .iter()
+        .find(|version| version.version_id == metadata.current_version_id)
+        .ok_or_else(|| CatalogError::External("View current version is missing".to_string()))?;
+    if !metadata
+        .schemas
+        .iter()
+        .any(|schema| schema.schema_id == Some(version.schema_id))
+    {
+        return Err(CatalogError::External(
+            "View current schema is missing".to_string(),
+        ));
+    }
+    if version.representations.is_empty() {
+        return Err(CatalogError::External(
+            "View SQL representation is missing".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+// Normalize only valid decimal type spellings, not arbitrary strings or a round-trip
+// of the whole schema, which could discard metadata not understood by Sail's types.
+fn normalize_view_type(data_type: &mut crate::r#gen::Type) {
+    use crate::r#gen::Type;
+
+    match data_type {
+        Type::PrimitiveType(primitive) => {
+            let spelling = primitive.0.to_ascii_lowercase();
+            let Some((precision, scale)) = spelling
+                .strip_prefix("decimal(")
+                .and_then(|s| s.strip_suffix(')'))
+                .and_then(|s| s.split_once(','))
+            else {
+                return;
+            };
+            let parse_parameter = |s: &str| -> Option<u32> {
+                let s = s.trim_ascii();
+                if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                s.parse().ok()
+            };
+            if let (Some(precision), Some(scale)) =
+                (parse_parameter(precision), parse_parameter(scale))
+                && (1..=38).contains(&precision)
+                && scale <= precision
+            {
+                primitive.0 =
+                    sail_iceberg::spec::types::PrimitiveType::Decimal { precision, scale }
+                        .to_string();
+            }
+        }
+        Type::StructType(struct_type) => {
+            for field in &mut struct_type.fields {
+                normalize_view_type(&mut field.r#type);
+            }
+        }
+        Type::ListType(list) => normalize_view_type(&mut list.element),
+        Type::MapType(map) => {
+            normalize_view_type(&mut map.key);
+            normalize_view_type(&mut map.value);
+        }
+    }
+}
+
+/// Iceberg schema identity includes field IDs, types, nullability, docs and identifiers,
+/// but not the schema ID. Identifier IDs are a set; absent and empty are equivalent.
+fn view_schema_key(schema: &crate::r#gen::Schema) -> CatalogResult<serde_json::Value> {
+    let mut schema = schema.clone();
+    schema.schema_id = None;
+    let mut identifiers = schema.identifier_field_ids.take().unwrap_or_default();
+    identifiers.sort_unstable();
+    identifiers.dedup();
+    schema.identifier_field_ids = Some(identifiers);
+    for field in &mut schema.fields {
+        normalize_view_type(&mut field.r#type);
+    }
+    serde_json::to_value(schema).map_err(|error| CatalogError::External(error.to_string()))
+}
+
+fn replace_view_request(
+    metadata: &crate::r#gen::ViewMetadata,
+    request: crate::r#gen::CreateViewRequest,
+) -> CatalogResult<crate::r#gen::CommitViewRequest> {
+    use crate::r#gen::{ViewRepresentation, ViewRequirement, ViewUpdate};
+
+    validate_view_metadata(metadata)?;
+    let crate::r#gen::CreateViewRequest {
+        mut schema,
+        mut view_version,
+        location,
+        properties,
+        name: _,
+    } = request;
+    let current = metadata
+        .versions
+        .iter()
+        .find(|version| version.version_id == metadata.current_version_id)
+        .ok_or_else(|| CatalogError::External("View current version is missing".to_string()))?;
+    let drop_dialect_allowed = properties
+        .get("replace.drop-dialect.allowed")
+        .or_else(|| {
+            metadata
+                .properties
+                .as_ref()?
+                .get("replace.drop-dialect.allowed")
+        })
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    if !drop_dialect_allowed
+        && current
+            .representations
+            .iter()
+            .any(|representation| match representation {
+                ViewRepresentation::SqlViewRepresentation(sql) => {
+                    !sql.dialect.eq_ignore_ascii_case("spark")
+                }
+            })
+    {
+        return Err(CatalogError::InvalidArgument(
+            "Cannot replace view due to loss of view dialects (replace.drop-dialect.allowed=false)"
+                .to_string(),
+        ));
+    }
+
+    let mut updates = Vec::new();
+    let schema_key = view_schema_key(&schema)?;
+    let mut schema_id = None;
+    for existing in &metadata.schemas {
+        if view_schema_key(existing)? == schema_key {
+            schema_id = existing.schema_id;
+            break;
+        }
+    }
+    let new_schema = schema_id.is_none();
+    let schema_id = match schema_id {
+        Some(id) => id,
+        None => metadata
+            .schemas
+            .iter()
+            .filter_map(|schema| schema.schema_id)
+            .max()
+            .unwrap_or(-1)
+            .checked_add(1)
+            .ok_or_else(|| CatalogError::InvalidArgument("View schema ID overflow".to_string()))?,
+    };
+    if new_schema {
+        schema.schema_id = Some(schema_id);
+        updates.push(ViewUpdate::AddSchema {
+            schema,
+            last_column_id: None,
+        });
+    }
+
+    // Match ViewMetadata.Builder's equivalence, including summaries but excluding
+    // timestamps and IDs. Reusing a retained version must not use LAST_ADDED.
+    let representations = serde_json::to_value(&view_version.representations)
+        .map_err(|error| CatalogError::External(error.to_string()))?;
+    let mut version_id = None;
+    for existing in &metadata.versions {
+        if existing.schema_id == schema_id
+            && existing.summary == view_version.summary
+            && existing.default_catalog == view_version.default_catalog
+            && existing.default_namespace.0 == view_version.default_namespace.0
+            && serde_json::to_value(&existing.representations)
+                .map_err(|error| CatalogError::External(error.to_string()))?
+                == representations
+        {
+            version_id = Some(existing.version_id);
+            break;
+        }
+    }
+    let version_id = match version_id {
+        Some(id) => id,
+        None => {
+            view_version.version_id = metadata
+                .versions
+                .iter()
+                .map(|version| version.version_id)
+                .max()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| {
+                    CatalogError::InvalidArgument("View version ID overflow".to_string())
+                })?;
+            view_version.schema_id = if new_schema { -1 } else { schema_id };
+            updates.push(ViewUpdate::AddViewVersion { view_version });
+            -1
+        }
+    };
+    updates.push(ViewUpdate::SetCurrentViewVersion {
+        view_version_id: version_id,
+    });
+
+    // This reserved Spark property stores pre-alias query names, which are not
+    // available here. Spark's Iceberg resolver projects by ordinal when it is absent.
+    // Do not retain stale query names or replace them with potentially different aliases.
+    const QUERY_COLUMN_NAMES: &str = "spark.query-column-names";
+    if metadata
+        .properties
+        .as_ref()
+        .is_some_and(|props| props.contains_key(QUERY_COLUMN_NAMES))
+        && !properties.contains_key(QUERY_COLUMN_NAMES)
+    {
+        updates.push(ViewUpdate::RemoveProperties {
+            removals: vec![QUERY_COLUMN_NAMES.to_string()],
+        });
+    }
+    if !properties.is_empty() {
+        updates.push(ViewUpdate::SetProperties {
+            updates: properties,
+        });
+    }
+    if let Some(location) = location {
+        updates.push(ViewUpdate::SetLocation { location });
+    }
+    Ok(crate::r#gen::CommitViewRequest {
+        identifier: None,
+        requirements: Some(vec![ViewRequirement::AssertViewUuid {
+            uuid: metadata.view_uuid.clone(),
+        }]),
+        updates,
     })
 }
 
@@ -3937,6 +4240,757 @@ mod tests {
         assert!(!serialized.contains("session-token-secret"));
         assert!(!serialized.contains("AKIA-SECRET"));
         assert!(!serialized.contains("storage-secret"));
+    }
+
+    fn view_result() -> crate::r#gen::LoadViewResult {
+        serde_json::from_value(serde_json::json!({
+            "metadata-location": "s3://bucket/view/metadata/v1.json",
+            "metadata": {
+                "view-uuid": "87654321-4321-4321-4321-210987654321",
+                "format-version": 1,
+                "location": "s3://bucket/view",
+                "current-version-id": 7,
+                "versions": [{
+                    "version-id": 7, "timestamp-ms": 1234567890000_i64, "schema-id": 4,
+                    "summary": {}, "default-namespace": ["db1"],
+                    "representations": [{"type": "sql", "sql": "SELECT 1 AS x", "dialect": "spark"}]
+                }],
+                "schemas": [{
+                    "type": "struct", "schema-id": 4, "identifier-field-ids": [],
+                    "fields": [{"id": 1, "name": "x", "type": "long", "required": true}]
+                }],
+                "properties": {"comment": "keep comment", "owner": "keep owner"},
+                "version-log": [{"version-id": 7, "timestamp-ms": 1234567890000_i64}]
+            }
+        }))
+        .unwrap()
+    }
+
+    fn view_options(definition: &str) -> CreateViewOptions {
+        CreateViewOptions {
+            columns: vec![CreateViewColumnOptions {
+                name: "x".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+            }],
+            definition: definition.to_string(),
+            replace: true,
+            if_not_exists: false,
+            comment: None,
+            properties: vec![],
+        }
+    }
+
+    async fn view_mutations(ctx: &TestContext) -> Vec<Request> {
+        ctx.server
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.method != "GET")
+            .collect()
+    }
+
+    fn view_commit(request: &Request) -> crate::r#gen::CommitViewRequest {
+        assert_eq!(request.method, "POST");
+        let commit: crate::r#gen::CommitViewRequest =
+            serde_json::from_slice(&request.body).unwrap();
+        assert!(commit.identifier.is_none());
+        assert!(
+            matches!(commit.requirements.as_deref(), Some([crate::r#gen::ViewRequirement::AssertViewUuid { uuid }])
+            if uuid == "87654321-4321-4321-4321-210987654321")
+        );
+        commit
+    }
+
+    #[tokio::test]
+    async fn test_replace_view_named_commit_preserves_identity_and_uses_response() {
+        use crate::r#gen::ViewUpdate;
+        for prefix in [None, Some("warehouse")] {
+            let mut ctx = TestContext::new(Some("lake")).await;
+            if let Some(prefix) = prefix {
+                ctx.catalog
+                    .options
+                    .properties
+                    .insert(REST_CATALOG_PROP_PREFIX.to_string(), prefix.to_string());
+            }
+            ctx.catalog.options.properties.insert(
+                REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
+                "-".to_string(),
+            );
+            let namespace =
+                Namespace::try_from(vec!["db1".to_string(), "nested".to_string()]).unwrap();
+            let url = format!(
+                "/v1{}/namespaces/db1%2Dnested/views/view1",
+                prefix.map(|s| format!("/{s}")).unwrap_or_default()
+            );
+            let original = view_result();
+            let mut committed = original.clone();
+            committed.metadata_location = "s3://bucket/view/metadata/v2.json".to_string();
+            let mut version = committed.metadata.versions[0].clone();
+            version.version_id = 8;
+            version.default_namespace =
+                Box::new(vec!["db1".to_string(), "nested".to_string()].into());
+            version.representations =
+                vec![crate::r#gen::ViewRepresentation::SqlViewRepresentation(
+                    Box::new(crate::r#gen::SqlViewRepresentation {
+                        r#type: "sql".to_string(),
+                        sql: "SELECT 2 AS x".to_string(),
+                        dialect: "spark".to_string(),
+                    }),
+                )];
+            committed.metadata.versions.push(version);
+            committed.metadata.current_version_id = 8;
+            ctx.mock_get_json(&url, serde_json::to_value(original).unwrap())
+                .await;
+            Mock::given(method("POST"))
+                .and(path(&url))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&committed))
+                .expect(1)
+                .mount(&ctx.server)
+                .await;
+            let status = ctx
+                .catalog
+                .create_view(&namespace, "view1", view_options("SELECT 2 AS x"))
+                .await
+                .unwrap();
+            let TableKind::View {
+                definition,
+                comment,
+                properties,
+                ..
+            } = status.kind
+            else {
+                panic!("expected view")
+            };
+            assert_eq!(definition, "SELECT 2 AS x");
+            assert_eq!(comment.as_deref(), Some("keep comment"));
+            assert!(properties.contains(&(
+                METADATA_LOCATION_KEY.to_string(),
+                committed.metadata_location
+            )));
+            assert!(properties.contains(&("owner".to_string(), "keep owner".to_string())));
+            let mutations = view_mutations(&ctx).await;
+            assert_eq!(mutations.len(), 1);
+            assert_eq!(mutations[0].url.path(), url);
+            let commit = view_commit(&mutations[0]);
+            let [
+                ViewUpdate::AddViewVersion { view_version },
+                ViewUpdate::SetCurrentViewVersion { view_version_id },
+            ] = commit.updates.as_slice()
+            else {
+                panic!("unexpected updates: {:?}", commit.updates)
+            };
+            assert_eq!(view_version.version_id, 8);
+            assert_eq!(view_version.schema_id, 4);
+            assert_eq!(view_version.default_namespace.0, ["db1", "nested"]);
+            assert!(view_version.default_catalog.is_none());
+            assert_eq!(*view_version_id, -1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_or_replace_view_missing_and_if_not_exists_precedence() {
+        for exists in [false, true] {
+            for if_not_exists in [false, true] {
+                let ctx = TestContext::new(None).await;
+                let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+                let result = view_result();
+                Mock::given(method("GET"))
+                    .and(path(ctx.path("/namespaces/db1/views/view1")))
+                    .respond_with(if exists {
+                        ResponseTemplate::new(200).set_body_json(&result)
+                    } else {
+                        ResponseTemplate::new(404)
+                    })
+                    .expect(1)
+                    .mount(&ctx.server)
+                    .await;
+                let endpoint = if exists {
+                    "/namespaces/db1/views/view1"
+                } else {
+                    "/namespaces/db1/views"
+                };
+                Mock::given(method("POST"))
+                    .and(path(ctx.path(endpoint)))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(&result))
+                    .expect(if exists && if_not_exists { 0 } else { 1 })
+                    .mount(&ctx.server)
+                    .await;
+                let mut options = view_options("SELECT 2 AS x");
+                options.if_not_exists = if_not_exists;
+                ctx.catalog
+                    .create_view(&namespace, "view1", options)
+                    .await
+                    .unwrap();
+                let mutations = view_mutations(&ctx).await;
+                assert_eq!(mutations.len(), usize::from(!(exists && if_not_exists)));
+                if !exists {
+                    let create: crate::r#gen::CreateViewRequest =
+                        serde_json::from_slice(&mutations[0].body).unwrap();
+                    assert_eq!(create.name, "view1");
+                    assert_eq!(create.view_version.version_id, 1);
+                    assert_eq!(create.view_version.schema_id, -1);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_view_load_errors_never_create() {
+        for status in [400, 401, 403, 405, 429, 500, 501] {
+            let ctx = TestContext::new(None).await;
+            Mock::given(method("GET"))
+                .and(path(ctx.path("/namespaces/db1/views/view1")))
+                .respond_with(ResponseTemplate::new(status))
+                .expect(if status == 401 { 2 } else { 1 })
+                .mount(&ctx.server)
+                .await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let error = ctx
+                .catalog
+                .create_view(&namespace, "view1", view_options("SELECT 2 AS x"))
+                .await
+                .unwrap_err();
+            match status {
+                401 => assert!(matches!(error, CatalogError::Unauthorized(_))),
+                403 => assert!(matches!(error, CatalogError::Forbidden(_))),
+                405 | 501 => assert!(matches!(error, CatalogError::NotSupported(_))),
+                429 => assert!(matches!(error, CatalogError::RateLimited(_))),
+                _ => assert!(matches!(error, CatalogError::External(_))),
+            }
+            assert!(view_mutations(&ctx).await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_view_reuses_current_and_historical_versions() {
+        use crate::r#gen::ViewUpdate;
+        for historical in [false, true] {
+            let ctx = TestContext::new(None).await;
+            let mut result = view_result();
+            if historical {
+                let mut current = result.metadata.versions[0].clone();
+                current.version_id = 12;
+                current
+                    .summary
+                    .insert("engine".to_string(), "different".to_string());
+                result.metadata.versions.push(current);
+                result.metadata.current_version_id = 12;
+            }
+            ctx.mock_get_json(
+                &ctx.path("/namespaces/db1/views/view1"),
+                serde_json::to_value(&result).unwrap(),
+            )
+            .await;
+            ctx.mock_post_json(
+                &ctx.path("/namespaces/db1/views/view1"),
+                serde_json::to_value(result).unwrap(),
+            )
+            .await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            ctx.catalog
+                .create_view(&namespace, "view1", view_options("SELECT 1 AS x"))
+                .await
+                .unwrap();
+            let mutations = view_mutations(&ctx).await;
+            assert_eq!(mutations.len(), 1);
+            let commit = view_commit(&mutations[0]);
+            assert!(matches!(
+                commit.updates.as_slice(),
+                [ViewUpdate::SetCurrentViewVersion { view_version_id: 7 }]
+            ));
+        }
+    }
+
+    fn decimal_view_schemas(primitive: &str) -> Vec<crate::r#gen::Schema> {
+        [
+            serde_json::json!(primitive),
+            serde_json::json!({"type": "struct", "fields": [
+                {"id": 2, "name": "amount", "required": true, "type": primitive}
+            ]}),
+            serde_json::json!({"type": "list", "element-id": 2, "element-required": false,
+                "element": primitive}),
+            serde_json::json!({"type": "map", "key-id": 2, "key": primitive,
+                "value-id": 3, "value-required": false, "value": primitive}),
+            serde_json::json!({"type": "struct", "fields": [
+                {"id": 2, "name": "items", "required": true, "type": {
+                    "type": "list", "element-id": 3, "element-required": false, "element": {
+                        "type": "map", "key-id": 4, "key": "string", "value-id": 5,
+                        "value-required": false, "value": primitive
+                    }
+                }}
+            ]}),
+        ]
+        .into_iter()
+        .map(|data_type| {
+            let mut schema = view_result().metadata.schemas[0].clone();
+            *schema.fields[0].r#type = serde_json::from_value(data_type).unwrap();
+            schema
+        })
+        .collect()
+    }
+
+    #[test]
+    fn test_view_schema_key_normalizes_decimal_types_only() {
+        for spelling in ["decimal(10, 2)", "decimal( 10 , 2 )", "DECIMAL(10,2)"] {
+            for (canonical, mut equivalent) in decimal_view_schemas("decimal(10,2)")
+                .into_iter()
+                .zip(decimal_view_schemas(spelling))
+            {
+                equivalent.schema_id = Some(19);
+                equivalent.identifier_field_ids = None;
+                assert_eq!(
+                    view_schema_key(&canonical).unwrap(),
+                    view_schema_key(&equivalent).unwrap()
+                );
+            }
+        }
+        // Do not let a permissive primitive parser turn malformed types into valid ones.
+        for spelling in [
+            "decimal(11,2)",
+            "decimal(10,3)",
+            "decimal(1 0,2)",
+            "decimal(10,2",
+            "decimal(decimal(10,2))",
+            "decimal(10,2))",
+            "decimal(10,2,3)",
+            "decimal(+10,2)",
+            "decimal(0,0)",
+            "decimal(39,2)",
+            "decimal(10,11)",
+            "decimal(4294967296,2)",
+            "future-type(10, 2)",
+        ] {
+            for (canonical, different) in decimal_view_schemas("decimal(10,2)")
+                .into_iter()
+                .zip(decimal_view_schemas(spelling))
+            {
+                assert_ne!(
+                    view_schema_key(&canonical).unwrap(),
+                    view_schema_key(&different).unwrap()
+                );
+                let mut unchanged = different.clone();
+                unchanged.schema_id = None;
+                assert_eq!(
+                    view_schema_key(&different).unwrap(),
+                    serde_json::to_value(unchanged).unwrap()
+                );
+            }
+        }
+        for spelling in [
+            "decimal(0, 0)",
+            "decimal(39, 2)",
+            "decimal(10, 11)",
+            "geometry(bad, extra)",
+        ] {
+            let schema = decimal_view_schemas(spelling).remove(0);
+            assert_eq!(
+                view_schema_key(&schema).unwrap()["fields"][0]["type"],
+                spelling
+            );
+        }
+    }
+
+    #[test]
+    fn test_view_schema_key_preserves_field_metadata() {
+        let schema: crate::r#gen::Schema = serde_json::from_value(serde_json::json!({
+            "type": "struct", "schema-id": 4, "identifier-field-ids": [2, 1],
+            "fields": [{"id": 1, "name": "decimal(10, 2)", "required": true,
+                "type": "decimal(10, 2)", "doc": "decimal(10, 2)",
+                "initial-default": "1.00", "write-default": "2.00"}]
+        }))
+        .unwrap();
+        let key = view_schema_key(&schema).unwrap();
+        let mut expected = serde_json::to_value(&schema).unwrap();
+        expected.as_object_mut().unwrap().remove("schema-id");
+        expected["identifier-field-ids"] = serde_json::json!([1, 2]);
+        expected["fields"][0]["type"] = serde_json::json!("decimal(10,2)");
+        assert_eq!(key, expected);
+        for (attribute, value) in [
+            ("id", serde_json::json!(2)),
+            ("name", serde_json::json!("decimal(10,2)")),
+            ("required", serde_json::json!(false)),
+            ("doc", serde_json::json!("decimal(10,2)")),
+            ("initial-default", serde_json::json!("3.00")),
+            ("write-default", serde_json::json!("3.00")),
+        ] {
+            let mut changed = serde_json::to_value(&schema).unwrap();
+            changed["fields"][0][attribute] = value;
+            let changed = serde_json::from_value(changed).unwrap();
+            assert_ne!(key, view_schema_key(&changed).unwrap(), "{attribute}");
+        }
+        let mut identifiers = schema.clone();
+        identifiers.identifier_field_ids = Some(vec![1, 2, 1]);
+        assert_eq!(key, view_schema_key(&identifiers).unwrap());
+        identifiers.identifier_field_ids = Some(vec![1]);
+        assert_ne!(key, view_schema_key(&identifiers).unwrap());
+
+        for (index, attributes) in [
+            (
+                2,
+                vec![
+                    ("element-id", serde_json::json!(9)),
+                    ("element-required", serde_json::json!(true)),
+                ],
+            ),
+            (
+                3,
+                vec![
+                    ("key-id", serde_json::json!(9)),
+                    ("value-id", serde_json::json!(9)),
+                    ("value-required", serde_json::json!(true)),
+                    ("key", serde_json::json!("decimal(11,2)")),
+                ],
+            ),
+        ] {
+            let schema = decimal_view_schemas("decimal(10, 2)").remove(index);
+            for (attribute, value) in attributes {
+                let mut changed = serde_json::to_value(&schema).unwrap();
+                changed["fields"][0]["type"][attribute] = value;
+                let changed = serde_json::from_value(changed).unwrap();
+                assert_ne!(
+                    view_schema_key(&schema).unwrap(),
+                    view_schema_key(&changed).unwrap(),
+                    "{attribute}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_replace_view_decimal_schema_updates() {
+        use crate::r#gen::ViewUpdate;
+        for (spelling, new_schema) in [
+            ("decimal(10,2)", false),
+            ("decimal(11,2)", true),
+            ("decimal(10,3)", true),
+        ] {
+            for (existing, requested) in decimal_view_schemas("decimal(10, 2)")
+                .into_iter()
+                .zip(decimal_view_schemas(spelling))
+            {
+                let mut result = view_result();
+                result.metadata.schemas = vec![existing];
+                let mut version = result.metadata.versions[0].clone();
+                version.representations = serde_json::from_value(serde_json::json!([
+                    {"type": "sql", "dialect": "spark", "sql": "SELECT 2 AS x"}
+                ]))
+                .unwrap();
+                let request = crate::r#gen::CreateViewRequest {
+                    name: "view1".to_string(),
+                    schema: Box::new(requested),
+                    view_version: Box::new(version),
+                    location: None,
+                    properties: HashMap::new(),
+                };
+                let commit = replace_view_request(&result.metadata, request).unwrap();
+                let updates = if new_schema {
+                    let ViewUpdate::AddSchema { schema, .. } = &commit.updates[0] else {
+                        panic!("changed decimal must add a schema")
+                    };
+                    assert_eq!(schema.schema_id, Some(5));
+                    &commit.updates[1..]
+                } else {
+                    commit.updates.as_slice()
+                };
+                let [
+                    ViewUpdate::AddViewVersion { view_version },
+                    ViewUpdate::SetCurrentViewVersion { view_version_id },
+                ] = updates
+                else {
+                    panic!("unexpected updates: {:?}", commit.updates)
+                };
+                assert_eq!(view_version.schema_id, if new_schema { -1 } else { 4 });
+                assert_eq!(*view_version_id, -1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_view_nested_schema_and_property_deltas() {
+        use crate::r#gen::ViewUpdate;
+        let ctx = TestContext::new(None).await;
+        let mut result = view_result();
+        result
+            .metadata
+            .properties
+            .as_mut()
+            .unwrap()
+            .insert("spark.query-column-names".to_string(), "old".to_string());
+        let mut old_schema = result.metadata.schemas[0].clone();
+        old_schema.schema_id = Some(19);
+        old_schema.fields[0].name = "older".to_string();
+        result.metadata.schemas.push(old_schema);
+        let mut old_version = result.metadata.versions[0].clone();
+        old_version.version_id = 25;
+        old_version.schema_id = 19;
+        result.metadata.versions.push(old_version);
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db1/views/view1"),
+            serde_json::to_value(&result).unwrap(),
+        )
+        .await;
+        ctx.mock_post_json(
+            &ctx.path("/namespaces/db1/views/view1"),
+            serde_json::to_value(result).unwrap(),
+        )
+        .await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let mut options = view_options("SELECT named_struct('items', array(2)) AS x");
+        options.columns[0].data_type = DataType::Struct(
+            vec![Arc::new(Field::new(
+                "items",
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+                true,
+            ))]
+            .into(),
+        );
+        options.comment = Some("new comment".to_string());
+        options.properties = vec![
+            ("path".to_string(), "  s3://bucket/new  ".to_string()),
+            ("owner".to_string(), "new owner".to_string()),
+        ];
+        ctx.catalog
+            .create_view(&namespace, "view1", options)
+            .await
+            .unwrap();
+        let mutations = view_mutations(&ctx).await;
+        assert_eq!(mutations.len(), 1);
+        let commit = view_commit(&mutations[0]);
+        let [
+            ViewUpdate::AddSchema {
+                schema,
+                last_column_id,
+            },
+            ViewUpdate::AddViewVersion { view_version },
+            ViewUpdate::SetCurrentViewVersion { view_version_id },
+            ViewUpdate::RemoveProperties { removals },
+            ViewUpdate::SetProperties { updates },
+            ViewUpdate::SetLocation { location },
+        ] = commit.updates.as_slice()
+        else {
+            panic!("unexpected updates: {:?}", commit.updates)
+        };
+        assert_eq!(schema.schema_id, Some(20));
+        assert!(last_column_id.is_none());
+        assert_eq!(
+            serde_json::to_value(&schema.fields).unwrap(),
+            serde_json::json!([
+                {"id": 1, "name": "x", "required": true, "type": {"type": "struct", "fields": [
+                    {"id": 2, "name": "items", "required": false, "type": {"type": "list", "element-id": 3, "element": "int", "element-required": false}}
+                ]}}
+            ])
+        );
+        assert_eq!(view_version.version_id, 26);
+        assert_eq!(view_version.schema_id, -1);
+        assert_eq!(*view_version_id, -1);
+        assert_eq!(removals, &["spark.query-column-names"]);
+        assert_eq!(
+            updates,
+            &HashMap::from([
+                ("path".to_string(), "  s3://bucket/new  ".to_string()),
+                ("location".to_string(), "s3://bucket/new".to_string()),
+                ("owner".to_string(), "new owner".to_string()),
+                ("comment".to_string(), "new comment".to_string()),
+            ])
+        );
+        assert_eq!(location, "s3://bucket/new");
+    }
+
+    #[tokio::test]
+    async fn test_replace_view_dialect_loss_requires_effective_permission() {
+        for (stored, supplied, allowed) in [
+            (None, None, false),
+            (Some("true"), None, true),
+            (None, Some("true"), true),
+            (Some("true"), Some("false"), false),
+        ] {
+            let ctx = TestContext::new(None).await;
+            let mut result = view_result();
+            result.metadata.versions[0].representations.push(
+                crate::r#gen::ViewRepresentation::SqlViewRepresentation(Box::new(
+                    crate::r#gen::SqlViewRepresentation {
+                        r#type: "sql".to_string(),
+                        sql: "SELECT 1 AS x".to_string(),
+                        dialect: "trino".to_string(),
+                    },
+                )),
+            );
+            if let Some(stored) = stored {
+                result.metadata.properties.as_mut().unwrap().insert(
+                    "replace.drop-dialect.allowed".to_string(),
+                    stored.to_string(),
+                );
+            }
+            ctx.mock_get_json(
+                &ctx.path("/namespaces/db1/views/view1"),
+                serde_json::to_value(&result).unwrap(),
+            )
+            .await;
+            ctx.mock_post_json(
+                &ctx.path("/namespaces/db1/views/view1"),
+                serde_json::to_value(result).unwrap(),
+            )
+            .await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let mut options = view_options("SELECT 2 AS x");
+            if let Some(supplied) = supplied {
+                options.properties.push((
+                    "replace.drop-dialect.allowed".to_string(),
+                    supplied.to_string(),
+                ));
+            }
+            let result = ctx.catalog.create_view(&namespace, "view1", options).await;
+            if allowed {
+                result.unwrap();
+            } else {
+                assert!(matches!(result, Err(CatalogError::InvalidArgument(_))));
+            }
+            let mutations = view_mutations(&ctx).await;
+            assert_eq!(mutations.len(), usize::from(allowed));
+            if allowed {
+                let commit = view_commit(&mutations[0]);
+                let crate::r#gen::ViewUpdate::AddViewVersion { view_version } = &commit.updates[0]
+                else {
+                    panic!("expected version")
+                };
+                assert_eq!(view_version.representations.len(), 1);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_view_id_overflow_rejected_before_commit() {
+        for schema_overflow in [false, true] {
+            let ctx = TestContext::new(None).await;
+            let mut result = view_result();
+            if schema_overflow {
+                result.metadata.schemas[0].schema_id = Some(i32::MAX);
+                result.metadata.versions[0].schema_id = i32::MAX;
+            } else {
+                result.metadata.versions[0].version_id = i32::MAX;
+                result.metadata.current_version_id = i32::MAX;
+            }
+            ctx.mock_get_json(
+                &ctx.path("/namespaces/db1/views/view1"),
+                serde_json::to_value(result).unwrap(),
+            )
+            .await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let mut options = view_options("SELECT 'new' AS x");
+            options.columns[0].data_type = DataType::Utf8;
+            let error = ctx
+                .catalog
+                .create_view(&namespace, "view1", options)
+                .await
+                .unwrap_err();
+            assert!(matches!(error, CatalogError::InvalidArgument(_)));
+            assert!(view_mutations(&ctx).await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_view_commit_failures_do_not_retry_or_create() {
+        for status in [400, 401, 403, 404, 405, 409, 429, 500, 501, 502, 503, 504] {
+            let ctx = TestContext::new(None).await;
+            ctx.mock_get_json(
+                &ctx.path("/namespaces/db1/views/view1"),
+                serde_json::to_value(view_result()).unwrap(),
+            )
+            .await;
+            Mock::given(method("POST")).and(path(ctx.path("/namespaces/db1/views/view1")))
+                .respond_with(ResponseTemplate::new(status).set_body_json(serde_json::json!({
+                    "error": {"code": status, "type": if status == 400 { "ViewUuidMismatch" } else { "TestError" }, "message": "rejected"}
+                })))
+                .expect(if status == 401 { 2 } else { 1 }).mount(&ctx.server).await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let error = ctx
+                .catalog
+                .create_view(&namespace, "view1", view_options("SELECT 2 AS x"))
+                .await
+                .unwrap_err();
+            match status {
+                400 => assert!(matches!(error, CatalogError::CommitRejected(_))),
+                401 => assert!(matches!(error, CatalogError::Unauthorized(_))),
+                403 => assert!(matches!(error, CatalogError::Forbidden(_))),
+                404 => assert!(matches!(
+                    error,
+                    CatalogError::NotFound(CatalogObject::View, _)
+                )),
+                405 | 501 => assert!(matches!(error, CatalogError::NotSupported(_))),
+                409 => assert!(matches!(error, CatalogError::Conflict(_))),
+                429 => assert!(matches!(error, CatalogError::RateLimited(_))),
+                _ => assert!(matches!(error, CatalogError::CommitStateUnknown(_))),
+            }
+            let mutations = view_mutations(&ctx).await;
+            assert_eq!(mutations.len(), if status == 401 { 2 } else { 1 });
+            for request in mutations {
+                view_commit(&request);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_replace_view_malformed_and_lost_success_are_unknown() {
+        for failure in [
+            "json",
+            "conversion",
+            "missing-version",
+            "missing-schema",
+            "timeout",
+        ] {
+            let mut ctx = TestContext::new(None).await;
+            let original = view_result();
+            ctx.mock_get_json(
+                &ctx.path("/namespaces/db1/views/view1"),
+                serde_json::to_value(&original).unwrap(),
+            )
+            .await;
+            let mut response = serde_json::to_value(original).unwrap();
+            match failure {
+                "conversion" => {
+                    response["metadata"]["schemas"][0]["fields"][0]["type"] =
+                        serde_json::json!("not-an-iceberg-type")
+                }
+                "missing-version" => response["metadata"]["versions"] = serde_json::json!([]),
+                "missing-schema" => response["metadata"]["schemas"] = serde_json::json!([]),
+                _ => {}
+            }
+            let template = if failure == "json" {
+                ResponseTemplate::new(200).set_body_string("{")
+            } else if failure == "timeout" {
+                ctx.catalog.http_client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_millis(100))
+                    .build()
+                    .unwrap();
+                ResponseTemplate::new(200)
+                    .set_body_json(response)
+                    .set_delay(std::time::Duration::from_millis(500))
+            } else {
+                ResponseTemplate::new(200).set_body_json(response)
+            };
+            Mock::given(method("POST"))
+                .and(path(ctx.path("/namespaces/db1/views/view1")))
+                .respond_with(template)
+                .expect(1)
+                .mount(&ctx.server)
+                .await;
+            let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+            let error = ctx
+                .catalog
+                .create_view(&namespace, "view1", view_options("SELECT 2 AS x"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, CatalogError::CommitStateUnknown(_)),
+                "{failure}: {error:?}"
+            );
+            let mutations = view_mutations(&ctx).await;
+            assert_eq!(mutations.len(), 1);
+            view_commit(&mutations[0]);
+        }
     }
 
     async fn test_get_view_impl(name: Option<&str>) {
