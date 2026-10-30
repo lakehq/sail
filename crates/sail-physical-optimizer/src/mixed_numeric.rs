@@ -190,12 +190,11 @@ fn input(
             _ => None,
         });
     }
-    if let Some(literal) = expr.downcast_ref::<Literal>() {
-        if matches!(literal.value(), datafusion::common::ScalarValue::Float64(value)
+    if let Some(literal) = expr.downcast_ref::<Literal>()
+        && matches!(literal.value(), datafusion::common::ScalarValue::Float64(value)
             if value.is_none_or(f64::is_finite))
-        {
-            return Ok(Some((Arc::clone(expr), false)));
-        }
+    {
+        return Ok(Some((Arc::clone(expr), false)));
     }
     Ok(None)
 }
