@@ -172,7 +172,7 @@ pub(crate) fn handle_config_get(
     let pairs = pairs.into_iter().map(Into::into).collect();
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
-        server_side_session_id: spark.session_id().to_string(),
+        server_side_session_id: spark.server_session_id().to_string(),
         pairs,
         warnings,
     })
@@ -206,7 +206,7 @@ pub(crate) fn handle_config_set(
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
-        server_side_session_id: spark.session_id().to_string(),
+        server_side_session_id: spark.server_session_id().to_string(),
         pairs: Vec::new(),
         warnings,
     })
@@ -223,7 +223,7 @@ pub(crate) fn handle_config_get_with_default(
     let pairs = pairs.into_iter().map(Into::into).collect();
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
-        server_side_session_id: spark.session_id().to_string(),
+        server_side_session_id: spark.server_session_id().to_string(),
         pairs,
         warnings,
     })
@@ -239,7 +239,7 @@ pub(crate) fn handle_config_get_option(
     let pairs = pairs.into_iter().map(Into::into).collect();
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
-        server_side_session_id: spark.session_id().to_string(),
+        server_side_session_id: spark.server_session_id().to_string(),
         pairs,
         warnings,
     })
@@ -255,7 +255,7 @@ pub(crate) fn handle_config_get_all(
     let pairs = kv.into_iter().map(Into::into).collect();
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
-        server_side_session_id: spark.session_id().to_string(),
+        server_side_session_id: spark.server_session_id().to_string(),
         pairs,
         warnings,
     })
@@ -286,7 +286,7 @@ pub(crate) fn handle_config_unset(
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
-        server_side_session_id: spark.session_id().to_string(),
+        server_side_session_id: spark.server_session_id().to_string(),
         pairs: Vec::new(),
         warnings,
     })
@@ -311,7 +311,7 @@ pub(crate) fn handle_config_is_modifiable(
         .collect::<SparkResult<Vec<_>>>()?;
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
-        server_side_session_id: spark.session_id().to_string(),
+        server_side_session_id: spark.server_session_id().to_string(),
         pairs,
         warnings,
     })

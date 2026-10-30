@@ -52,6 +52,7 @@ impl ServerSessionMutator for SparkSessionMutator {
         let spark = Arc::new(
             SparkSession::try_new(
                 info.session_id.clone(),
+                info.client_session_id.clone(),
                 info.user_id.clone(),
                 SparkSessionOptions {
                     execution_heartbeat_interval: Duration::from_secs(

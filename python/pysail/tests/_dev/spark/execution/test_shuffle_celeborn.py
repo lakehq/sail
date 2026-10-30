@@ -89,7 +89,7 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
         time.sleep(2)
         return value
 
-    session_id = spark.session_id
+    session_id = spark._client._server_session_id  # noqa: SLF001
     assert _application_shuffle_ids(celeborn_master, session_id) == []
 
     with ThreadPoolExecutor(max_workers=1) as executor:

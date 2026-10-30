@@ -2,6 +2,7 @@ use chrono::Utc;
 use datafusion::prelude::SessionContext;
 use fastrace::Span;
 use fastrace::collector::SpanContext;
+use fastrace::local::LocalSpan;
 use log::{info, warn};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_common::actor::{ActorAction, ActorContext};
@@ -20,7 +21,7 @@ use crate::error::{SessionError, SessionResult};
 use crate::session_factory::{ServerSessionInfo, SessionJobRunnerInfo};
 use crate::session_manager::SessionManagerMessage;
 use crate::session_manager::actor::SessionManagerActor;
-use crate::session_manager::session::{ServerSession, ServerSessionState};
+use crate::session_manager::session::{ServerSession, ServerSessionState, SessionKey};
 
 impl SessionManagerActor {
     pub(super) fn handle_get_driver(
@@ -35,11 +36,18 @@ impl SessionManagerActor {
     pub(super) fn handle_get_or_create_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        session_id: String,
+        client_session_id: String,
         user_id: String,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
+        let session_key = SessionKey {
+            user_id,
+            client_session_id,
+        };
+        if let Some(session_id) = self.session_ids.get(&session_key).cloned()
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            LocalSpan::add_property(|| (SpanAttribute::SESSION_ID, session_id.clone()));
             let context = match &mut session.state {
                 ServerSessionState::Running { context, .. } => Some(context.clone()),
                 ServerSessionState::Creating { waiters, .. } => {
@@ -52,23 +60,25 @@ impl SessionManagerActor {
                 self.schedule_idle_session_probe(ctx, session_id, &context);
                 let _ = result.send(Ok(context));
             } else {
-                let _ = result.send(Err(SessionError::invalid(format!(
-                    "session {session_id} is not running"
-                ))));
+                let _ = result.send(Err(SessionError::NotRunning(session_key.client_session_id)));
             }
             return ActorAction::Continue;
         }
 
-        // TODO: The session ID is used in various storage paths, so it is assumed to be unique
-        //   across all session managers, and it should contain only valid characters for a
-        //   path segment. Right now the session ID is generated as a UUID by the Spark client,
-        //   so this is true in practice, but we may still want some validation here.
-        info!("creating session {session_id}");
+        let session_id = uuid::Uuid::new_v4().to_string();
+        LocalSpan::add_property(|| (SpanAttribute::SESSION_ID, session_id.clone()));
+        info!("creating session {session_key}:{session_id}");
         let span = Span::root(
             "SessionManagerActor::create_session_context",
             SpanContext::random(),
         )
-        .with_property(|| (SpanAttribute::SESSION_ID, session_id.clone()));
+        .with_property(|| (SpanAttribute::SESSION_ID, session_id.clone()))
+        .with_property(|| {
+            (
+                SpanAttribute::SESSION_CLIENT_SESSION_ID,
+                session_key.client_session_id.clone(),
+            )
+        });
         let _guard = span.set_local_parent();
         let driver_id = match self.driver_id_generator.generate() {
             Ok(driver_id) => driver_id,
@@ -98,13 +108,15 @@ impl SessionManagerActor {
             && let Err(e) = self.drivers.insert(driver_id, driver.clone())
         {
             let session = ServerSession {
+                session_key: session_key.clone(),
                 state: ServerSessionState::Failed,
             };
             let status = session.state.status().to_string();
-            self.sessions.insert(session_id.clone(), session);
+            self.insert_session(session_id.clone(), session);
             self.event_reporter.report(SystemEvent::SessionCreated {
                 session_id,
-                user_id,
+                client_session_id: session_key.client_session_id,
+                user_id: session_key.user_id,
                 status,
                 created_at: Utc::now(),
             });
@@ -119,7 +131,8 @@ impl SessionManagerActor {
         }
         let info = ServerSessionInfo {
             session_id: session_id.clone(),
-            user_id: user_id.clone(),
+            client_session_id: session_key.client_session_id.clone(),
+            user_id: session_key.user_id.clone(),
             session_manager: ctx.handle().clone(),
             job_runner: Some(runner),
         };
@@ -136,13 +149,15 @@ impl SessionManagerActor {
                     });
                 }
                 let session = ServerSession {
+                    session_key: session_key.clone(),
                     state: ServerSessionState::Failed,
                 };
                 let status = session.state.status().to_string();
-                self.sessions.insert(session_id.clone(), session);
+                self.insert_session(session_id.clone(), session);
                 self.event_reporter.report(SystemEvent::SessionCreated {
                     session_id,
-                    user_id,
+                    client_session_id: session_key.client_session_id,
+                    user_id: session_key.user_id,
                     status,
                     created_at: Utc::now(),
                 });
@@ -150,9 +165,10 @@ impl SessionManagerActor {
                 return ActorAction::Continue;
             }
         };
-        self.sessions.insert(
+        self.insert_session(
             session_id.clone(),
             ServerSession {
+                session_key,
                 state: ServerSessionState::Creating {
                     driver_id: registered_driver_id,
                     waiters: vec![result],
@@ -161,7 +177,6 @@ impl SessionManagerActor {
         );
         let message = move |activation| SessionManagerMessage::CompleteSessionCreation {
             session_id,
-            user_id,
             context,
             driver_id: registered_driver_id,
             activation,
@@ -184,7 +199,6 @@ impl SessionManagerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         session_id: String,
-        user_id: String,
         context: SessionContext,
         driver_id: Option<DriverId>,
         activation: ExecutionResult<()>,
@@ -211,7 +225,8 @@ impl SessionManagerActor {
                 };
                 self.event_reporter.report(SystemEvent::SessionCreated {
                     session_id: session_id.clone(),
-                    user_id,
+                    client_session_id: session.session_key.client_session_id.clone(),
+                    user_id: session.session_key.user_id.clone(),
                     status: session.state.status().to_string(),
                     created_at: Utc::now(),
                 });
@@ -233,7 +248,8 @@ impl SessionManagerActor {
                 session.state = ServerSessionState::Failed;
                 self.event_reporter.report(SystemEvent::SessionCreated {
                     session_id,
-                    user_id,
+                    client_session_id: session.session_key.client_session_id.clone(),
+                    user_id: session.session_key.user_id.clone(),
                     status: session.state.status().to_string(),
                     created_at: Utc::now(),
                 });
@@ -258,7 +274,7 @@ impl SessionManagerActor {
         {
             ctx.send_with_delay(
                 SessionManagerMessage::ProbeIdleSession {
-                    session_id: session_id.clone(),
+                    session_id,
                     instant: active_at,
                 },
                 self.options.session_timeout,
@@ -297,13 +313,20 @@ impl SessionManagerActor {
     pub(super) fn handle_delete_session(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        session_id: String,
-        result: oneshot::Sender<SessionResult<()>>,
+        client_session_id: String,
+        user_id: String,
+        result: oneshot::Sender<SessionResult<String>>,
     ) -> ActorAction {
-        let session = self.sessions.get_mut(&session_id);
-        let output = if let Some(session) = session {
+        let session_key = SessionKey {
+            user_id,
+            client_session_id,
+        };
+        let output = if let Some(session_id) = self.session_ids.get(&session_key).cloned()
+            && let Some(session) = self.sessions.get_mut(&session_id)
+        {
+            LocalSpan::add_property(|| (SpanAttribute::SESSION_ID, session_id.clone()));
             if let ServerSessionState::Running { context, driver_id } = &mut session.state {
-                info!("removing session {session_id}");
+                info!("removing session {session_key}:{session_id}");
                 Self::delete_session(ctx, session_id.clone(), context);
                 if let Some(driver_id) = *driver_id {
                     self.drivers.remove(driver_id);
@@ -315,16 +338,12 @@ impl SessionManagerActor {
                     status,
                     updated_at: Utc::now(),
                 });
-                Ok(())
+                Ok(session_id)
             } else {
-                Err(SessionError::invalid(format!(
-                    "session {session_id} is not running"
-                )))
+                Err(SessionError::NotRunning(session_key.client_session_id))
             }
         } else {
-            Err(SessionError::invalid(format!(
-                "session not found: {session_id}"
-            )))
+            Err(SessionError::NotFound(session_key.client_session_id))
         };
         let _ = result.send(output);
         ActorAction::Continue
