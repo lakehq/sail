@@ -421,10 +421,20 @@ mod tests {
                                 return internal_err!("expected fused predicate");
                             };
                             assert!(function.fun().inner().is::<MixedNumericPredicate>());
-                            assert_eq!(
-                                original.return_field(&schema)?,
-                                result.data.return_field(&schema)?
-                            );
+                            // Binary expression names follow their rewritten children; public aliases stay fixed.
+                            let original_field = original.return_field(&schema)?;
+                            let result_field = result.data.return_field(&schema)?;
+                            assert_eq!(original_field.data_type(), result_field.data_type());
+                            assert_eq!(original_field.is_nullable(), result_field.is_nullable());
+                            assert_eq!(original_field.metadata(), result_field.metadata());
+                            let projection: Arc<dyn ExecutionPlan> =
+                                Arc::new(ProjectionExec::try_new(
+                                    vec![ProjectionExpr::new(Arc::clone(&original), "matched")],
+                                    source(nullable),
+                                )?);
+                            let rewritten =
+                                specialize(Arc::clone(&projection), &ConfigOptions::default())?;
+                            assert_eq!(projection.schema(), rewritten.schema());
                             assert_eq!(
                                 original
                                     .evaluate(&batch)?
