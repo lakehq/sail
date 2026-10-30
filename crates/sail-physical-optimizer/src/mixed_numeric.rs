@@ -11,7 +11,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use sail_function::scalar::mixed_numeric::MixedNumeric;
+use sail_function::scalar::mixed_numeric::{MixedNumeric, MixedNumericPredicate};
 
 use crate::correlation_cast::same_properties;
 
@@ -133,6 +133,9 @@ fn rewrite_expr(
         let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
             return Ok(Transformed::no(expr));
         };
+        if let Some(result) = fuse_predicate(binary, &expr, schema, config)? {
+            return Ok(Transformed::yes(result));
+        }
         let Some(function) = MixedNumeric::new(*binary.op()) else {
             return Ok(Transformed::no(expr));
         };
@@ -163,6 +166,52 @@ fn rewrite_expr(
         ));
         Ok(Transformed::yes(result))
     })
+}
+
+fn fuse_predicate(
+    binary: &BinaryExpr,
+    expr: &Arc<dyn PhysicalExpr>,
+    schema: &Schema,
+    config: &Arc<ConfigOptions>,
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    let (arithmetic, literal, comparison) = if binary.right().is::<Literal>() {
+        (binary.left(), binary.right(), *binary.op())
+    } else if binary.left().is::<Literal>() {
+        let Some(comparison) = binary.op().swap() else {
+            return Ok(None);
+        };
+        (binary.right(), binary.left(), comparison)
+    } else {
+        return Ok(None);
+    };
+    let Some(arithmetic) = arithmetic.downcast_ref::<ScalarFunctionExpr>() else {
+        return Ok(None);
+    };
+    let Some(function) = arithmetic.fun().inner().downcast_ref::<MixedNumeric>() else {
+        return Ok(None);
+    };
+    if literal.data_type(schema)? != DataType::Float64
+        || expr.data_type(schema)? != DataType::Boolean
+    {
+        return Ok(None);
+    }
+    let Some(function) = MixedNumericPredicate::new(function.operator(), comparison) else {
+        return Ok(None);
+    };
+    let field = expr.return_field(schema)?;
+    if !field.metadata().is_empty() {
+        return Ok(None);
+    }
+    let mut arguments = arithmetic.args().to_vec();
+    arguments.push(Arc::clone(literal));
+    let function = Arc::new(ScalarUDF::from(function));
+    Ok(Some(Arc::new(ScalarFunctionExpr::new(
+        function.name(),
+        Arc::clone(&function),
+        arguments,
+        field,
+        Arc::clone(config),
+    ))))
 }
 
 fn input(
@@ -297,10 +346,10 @@ mod tests {
         assert_eq!(filter.default_selectivity(), 37);
         assert_eq!(filter.batch_size(), 123);
         assert_eq!(filter.fetch(), Some(7));
-        let Some(binary) = filter.predicate().downcast_ref::<BinaryExpr>() else {
-            return internal_err!("expected comparison");
+        let Some(function) = filter.predicate().downcast_ref::<ScalarFunctionExpr>() else {
+            return internal_err!("expected fused comparison");
         };
-        assert!(binary.left().is::<ScalarFunctionExpr>());
+        assert!(function.fun().inner().is::<MixedNumericPredicate>());
         let batch = RecordBatch::try_new(
             filter.input().schema(),
             vec![
@@ -312,6 +361,86 @@ mod tests {
             predicate.evaluate(&batch)?.into_array(2)?.as_ref(),
             filter.predicate().evaluate(&batch)?.into_array(2)?.as_ref()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_comparisons_fuse_in_both_literal_positions() -> Result<()> {
+        for nullable in [false, true] {
+            let schema = source(nullable).schema();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Float32Array::from(vec![
+                        Some(-0.0),
+                        Some(f32::INFINITY),
+                        Some(f32::NEG_INFINITY),
+                        Some(f32::from_bits(0xffc0_1234)),
+                        Some(16_777_216.0),
+                        (!nullable).then_some(3.0),
+                    ])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![1, 0, 0, 1, 16_777_217, 2])) as ArrayRef,
+                ],
+            )?;
+            for operation in [Operator::Plus, Operator::Minus, Operator::Multiply] {
+                for comparison in [
+                    Operator::Eq,
+                    Operator::NotEq,
+                    Operator::Lt,
+                    Operator::LtEq,
+                    Operator::Gt,
+                    Operator::GtEq,
+                ] {
+                    for threshold in [Some(-0.0), Some(100.0), None] {
+                        for literal_left in [false, true] {
+                            let Some(arithmetic) = arithmetic(DataType::Float64)
+                                .downcast_ref::<BinaryExpr>()
+                                .cloned()
+                            else {
+                                return internal_err!("expected arithmetic");
+                            };
+                            let value: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+                                Arc::clone(arithmetic.left()),
+                                operation,
+                                Arc::clone(arithmetic.right()),
+                            ));
+                            let literal: Arc<dyn PhysicalExpr> =
+                                Arc::new(Literal::new(ScalarValue::Float64(threshold)));
+                            let (left, right) = if literal_left {
+                                (literal, value)
+                            } else {
+                                (value, literal)
+                            };
+                            let original: Arc<dyn PhysicalExpr> =
+                                Arc::new(BinaryExpr::new(left, comparison, right));
+                            let result =
+                                rewrite_expr(Arc::clone(&original), &schema, &Arc::default())?;
+                            assert!(result.transformed);
+                            let Some(function) = result.data.downcast_ref::<ScalarFunctionExpr>()
+                            else {
+                                return internal_err!("expected fused predicate");
+                            };
+                            assert!(function.fun().inner().is::<MixedNumericPredicate>());
+                            assert_eq!(
+                                original.return_field(&schema)?,
+                                result.data.return_field(&schema)?
+                            );
+                            assert_eq!(
+                                original
+                                    .evaluate(&batch)?
+                                    .into_array(batch.num_rows())?
+                                    .as_ref(),
+                                result
+                                    .data
+                                    .evaluate(&batch)?
+                                    .into_array(batch.num_rows())?
+                                    .as_ref()
+                            );
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
