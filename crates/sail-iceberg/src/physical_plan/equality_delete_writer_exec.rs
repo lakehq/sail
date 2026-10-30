@@ -272,6 +272,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 skip_empty_commit: false,
                 requirements,
                 table_properties: writer_config.table_properties().to_vec(),
+                snapshot_properties: Default::default(),
                 lakehouse_table,
                 schema: None,
                 partition_spec: None,

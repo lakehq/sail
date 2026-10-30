@@ -465,6 +465,7 @@ impl PlanResolver<'_> {
                             identity: None,
                         })
                         .collect();
+                    let is_iceberg = write_format.eq_ignore_ascii_case("iceberg");
                     // TODO: Revisit passing write options as table properties.
                     let properties: Vec<(String, String)> = sink_info
                         .options
@@ -476,6 +477,9 @@ impl PlanResolver<'_> {
                                 .filter_map(|(k, v)| {
                                     if !k.eq_ignore_ascii_case("path")
                                         && !k.eq_ignore_ascii_case("location")
+                                        && !(is_iceberg
+                                            && k.to_ascii_lowercase()
+                                                .starts_with("snapshot-property."))
                                     {
                                         Some((format!("option.{k}"), v))
                                     } else {

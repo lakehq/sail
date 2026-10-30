@@ -40,6 +40,7 @@ pub struct CommitMeta {
     pub skip_empty_commit: bool,
     pub requirements: Vec<TableRequirement>,
     pub table_properties: Vec<(String, String)>,
+    pub snapshot_properties: BTreeMap<String, String>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub schema: Option<IcebergSchema>,
     pub partition_spec: Option<PartitionSpec>,
@@ -56,6 +57,8 @@ pub struct CommitMetaAction {
     pub requirements_json: String,
     /// Table properties are applied only when bootstrapping new table metadata.
     pub table_properties_json: String,
+    /// Per-write annotations, independent of persistent table properties.
+    pub snapshot_properties_json: String,
     pub lakehouse_table_json: Option<String>,
     /// Optional Iceberg Schema JSON (rare) to avoid huge Arrow schema.
     pub schema_json: Option<String>,
@@ -551,6 +554,8 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let table_properties_json = serde_json::to_string(&meta.table_properties)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let snapshot_properties_json = serde_json::to_string(&meta.snapshot_properties)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let lakehouse_table_json = meta
         .lakehouse_table
         .as_ref()
@@ -579,6 +584,7 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
             skip_empty_commit: meta.skip_empty_commit,
             requirements_json,
             table_properties_json,
+            snapshot_properties_json,
             lakehouse_table_json,
             schema_json,
             partition_spec_json,
@@ -614,6 +620,8 @@ pub fn decode_actions_and_meta_from_batch(
                 let table_properties: Vec<(String, String)> =
                     serde_json::from_str(&m.table_properties_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let snapshot_properties = serde_json::from_str(&m.snapshot_properties_json)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let lakehouse_table: Option<LakehouseExecutionContext> = m
                     .lakehouse_table_json
                     .as_deref()
@@ -640,6 +648,7 @@ pub fn decode_actions_and_meta_from_batch(
                     skip_empty_commit: m.skip_empty_commit,
                     requirements,
                     table_properties,
+                    snapshot_properties,
                     lakehouse_table,
                     schema,
                     partition_spec,
@@ -664,6 +673,10 @@ mod tests {
         let first = CommitMeta {
             table_uri: "file:///table/".to_string(),
             row_count: 100,
+            snapshot_properties: BTreeMap::from([
+                ("run.id".to_string(), "CaseValue".to_string()),
+                ("empty".to_string(), "".to_string()),
+            ]),
             removed_data_file_paths: vec!["data/old.parquet".to_string()],
             skip_empty_commit: true,
             ..Default::default()
@@ -744,6 +757,7 @@ mod tests {
             skip_empty_commit: true,
             requirements: vec![TableRequirement::NotExist],
             table_properties: vec![],
+            snapshot_properties: BTreeMap::from([("run-id".into(), "first".into())]),
             lakehouse_table: None,
             schema: None,
             partition_spec: None,

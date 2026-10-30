@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use datafusion_common::{DataFusionError, Result};
 use parquet::basic::{Compression, GzipLevel, ZstdLevel};
@@ -54,6 +54,8 @@ pub struct IcebergWriterExecOptions {
     pub write_data_path: Option<String>,
     pub write_folder_storage_path: Option<String>,
     pub table_properties: Vec<(String, String)>,
+    #[serde(default)]
+    pub snapshot_properties: BTreeMap<String, String>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub shred_variants: bool,
     pub shred_variants_explicit: bool,
@@ -75,6 +77,7 @@ impl Default for IcebergWriterExecOptions {
             write_data_path: None,
             write_folder_storage_path: None,
             table_properties: vec![],
+            snapshot_properties: BTreeMap::new(),
             lakehouse_table: None,
             shred_variants: false,
             shred_variants_explicit: false,
@@ -98,6 +101,7 @@ impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
             write_data_path: options.write_data_path,
             write_folder_storage_path: options.write_folder_storage_path,
             table_properties: vec![],
+            snapshot_properties: options.snapshot_properties,
             lakehouse_table: None,
             shred_variants: options.shred_variants,
             shred_variants_explicit: false,
@@ -303,4 +307,32 @@ fn parse_usize_property(key: &str, value: &str) -> Result<usize> {
             "invalid Iceberg table property {key} value: {value}"
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn snapshot_properties_json_defaults_and_roundtrips() {
+        let options = IcebergWriterExecOptions {
+            snapshot_properties: BTreeMap::from([
+                ("run.id".into(), "CaseValue".into()),
+                ("empty".into(), "".into()),
+            ]),
+            ..Default::default()
+        };
+        let mut value = serde_json::to_value(&options).expect("writer options JSON");
+        let decoded: IcebergWriterExecOptions =
+            serde_json::from_value(value.clone()).expect("roundtrip");
+        assert_eq!(decoded.snapshot_properties, options.snapshot_properties);
+        value
+            .as_object_mut()
+            .expect("JSON object")
+            .remove("snapshot_properties");
+        let decoded: IcebergWriterExecOptions =
+            serde_json::from_value(value).expect("older options");
+        assert!(decoded.snapshot_properties.is_empty());
+    }
 }

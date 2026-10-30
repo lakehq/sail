@@ -794,6 +794,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 updates: vec![],
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
+                snapshot_properties: commit_meta.snapshot_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
                 snapshot_update_kind,
                 schema: commit_meta.schema,
@@ -1250,6 +1251,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     Some(store_ctx.clone()),
                     Some(manifest_meta),
                 )
+                .with_snapshot_properties(commit_info.snapshot_properties.clone())
                 .with_action_summary_properties(
                     commit_info
                         .action_summary
@@ -1575,6 +1577,7 @@ mod tests {
                 skip_empty_commit: false,
                 requirements: vec![],
                 table_properties,
+                snapshot_properties: Default::default(),
                 lakehouse_table: None,
                 schema: Some(evolved_schema),
                 partition_spec: None,
@@ -1970,6 +1973,42 @@ mod tests {
     }
 
     #[test]
+    fn partition_snapshot_properties_must_match_even_for_empty_partitions() {
+        let first = CommitMeta {
+            row_count: 1,
+            snapshot_properties: std::collections::BTreeMap::from([(
+                "run-id".to_string(),
+                "first".to_string(),
+            )]),
+            ..Default::default()
+        };
+        let mut accumulated = Some(first.clone());
+        let empty = CommitMeta {
+            row_count: 0,
+            ..first.clone()
+        };
+        IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, empty)
+            .expect("matching empty partition");
+        assert_eq!(accumulated, Some(first.clone()));
+        for properties in [
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::from([("run-id".into(), "other".into())]),
+            std::collections::BTreeMap::from([("another-key".into(), "first".into())]),
+        ] {
+            let incompatible = CommitMeta {
+                row_count: 0,
+                snapshot_properties: properties,
+                ..first.clone()
+            };
+            assert!(
+                IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, incompatible)
+                    .is_err()
+            );
+            assert_eq!(accumulated, Some(first.clone()));
+        }
+    }
+
+    #[test]
     fn commit_aggregates_action_summaries_before_comparing_metadata() -> Result<()> {
         use crate::operation_metrics::{IcebergActionSummary, IcebergOperation};
         let mut first_summary = IcebergActionSummary::new(IcebergOperation::Insert);
@@ -2015,6 +2054,156 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_annotations_coexist_with_action_metrics_across_bootstrap_and_append() {
+        use crate::operation_metrics::{IcebergActionSummary, IcebergOperation};
+
+        for existing_empty_table in [false, true] {
+            futures::executor::block_on(async {
+                let table_url = Url::parse("file:///tmp/annotated-metrics/").expect("table URL");
+                let memory = Arc::new(object_store::memory::InMemory::new());
+                let store: Arc<dyn ObjectStore> = memory.clone();
+                let store_ctx =
+                    StoreContext::new(store.clone(), &table_url).expect("store context");
+                let iceberg_schema = IcebergSchema::builder()
+                    .with_fields([Arc::new(NestedField::required(
+                        1,
+                        "id",
+                        Type::Primitive(PrimitiveType::Long),
+                    ))])
+                    .build()
+                    .expect("schema");
+                let table_properties = vec![
+                    ("format-version".to_string(), "2".to_string()),
+                    ("run-id".to_string(), "table-value".to_string()),
+                ];
+                if existing_empty_table {
+                    crate::operations::bootstrap::bootstrap_empty_table_metadata(
+                        &table_url,
+                        &store_ctx,
+                        iceberg_schema.clone(),
+                        PartitionSpec::unpartitioned_spec(),
+                        &table_properties,
+                        NewTableMetadataStyle::Hadoop,
+                    )
+                    .await
+                    .expect("empty table metadata");
+                }
+                let context = SessionContext::new();
+                context.runtime_env().register_object_store(
+                    &Url::parse("file:///").expect("file store URL"),
+                    memory,
+                );
+                let mut previous_snapshot = None;
+                for write_index in 1..=2 {
+                    let snapshot_properties = if write_index == 1 {
+                        std::collections::BTreeMap::from([
+                            ("run-id".to_string(), "write-value".to_string()),
+                            ("empty".to_string(), String::new()),
+                            (
+                                "spark.insert.num-inserted-rows".to_string(),
+                                "999".to_string(),
+                            ),
+                        ])
+                    } else {
+                        Default::default()
+                    };
+                    let mut actions = Vec::new();
+                    for (partition, rows) in [1, 0, 2].into_iter().enumerate() {
+                        let batch = RecordBatch::try_new(
+                            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+                            vec![Arc::new(Int64Array::from(vec![1; rows]))],
+                        )
+                        .expect("writer input");
+                        let mut action_summary =
+                            IcebergActionSummary::new(IcebergOperation::Insert);
+                        action_summary
+                            .add_batch(&batch, None)
+                            .expect("action summary");
+                        if rows > 0 {
+                            let path = format!("{table_url}data/{write_index}-{partition}.parquet");
+                            actions.push(
+                                encode_add_data_files(vec![DataFile {
+                                    partition: vec![],
+                                    record_count: rows as u64,
+                                    ..partitioned_data_file(&path, 0, 0)
+                                }])
+                                .expect("data file action"),
+                            );
+                        }
+                        actions.push(
+                            encode_commit_meta(CommitMeta {
+                                table_uri: table_url.to_string(),
+                                row_count: rows as u64,
+                                action_summary: Some(action_summary),
+                                table_properties: table_properties.clone(),
+                                snapshot_properties: snapshot_properties.clone(),
+                                schema: Some(iceberg_schema.clone()),
+                                partition_spec: Some(PartitionSpec::unpartitioned_spec()),
+                                ..Default::default()
+                            })
+                            .expect("commit metadata action"),
+                        );
+                    }
+                    let input = MemorySourceConfig::try_new_exec(
+                        &[actions],
+                        iceberg_action_schema().expect("action schema"),
+                        None,
+                    )
+                    .expect("memory input");
+                    let commit = IcebergCommitExec::new(
+                        input,
+                        table_url.clone(),
+                        None,
+                        SnapshotUpdateKind::FastAppend,
+                    );
+                    let output = commit
+                        .execute(0, context.task_ctx())
+                        .expect("commit stream")
+                        .try_collect::<Vec<_>>()
+                        .await
+                        .expect("commit");
+                    assert_eq!(output.len(), 1);
+                    assert_eq!(output[0].column(0).as_ref(), &Int64Array::from(vec![3]));
+                    let location = crate::table::find_latest_metadata_file(&store, &table_url)
+                        .await
+                        .expect("metadata location");
+                    let bytes = load_metadata_file_bytes(&store, &location)
+                        .await
+                        .expect("metadata bytes");
+                    let metadata = TableMetadata::from_json(&bytes).expect("metadata");
+                    assert_eq!(
+                        metadata.properties,
+                        HashMap::from([("run-id".to_string(), "table-value".to_string()),])
+                    );
+                    let snapshot = metadata.current_snapshot().expect("current snapshot");
+                    assert_eq!(snapshot.summary().operation, Operation::Append);
+                    let properties = &snapshot.summary().additional_properties;
+                    assert_eq!(properties["spark.insert.num-inserted-rows"], "3");
+                    assert_eq!(properties["added-records"], "3");
+                    assert_eq!(properties["total-records"], (3 * write_index).to_string());
+                    assert_eq!(properties["added-data-files"], "2");
+                    assert_eq!(
+                        properties["total-data-files"],
+                        (2 * write_index).to_string()
+                    );
+                    assert_eq!(
+                        properties.get("run-id").map(String::as_str),
+                        (write_index == 1).then_some("write-value")
+                    );
+                    assert_eq!(
+                        properties.get("empty").map(String::as_str),
+                        (write_index == 1).then_some("")
+                    );
+                    if let Some(previous) = &previous_snapshot {
+                        assert!(metadata.snapshots.contains(previous));
+                    }
+                    previous_snapshot = Some(snapshot.clone());
+                }
+            });
+        }
+    }
+
+    #[test]
     fn empty_predicate_overwrite_validates_expected_snapshot() {
         for skip_empty_commit in [false, true] {
             futures::executor::block_on(async {
@@ -2053,6 +2242,7 @@ mod tests {
                     skip_empty_commit,
                     requirements: vec![],
                     table_properties,
+                    snapshot_properties: Default::default(),
                     lakehouse_table: None,
                     schema: None,
                     partition_spec: None,
@@ -2329,6 +2519,10 @@ mod tests {
                         skip_empty_commit: false,
                         requirements: vec![],
                         table_properties,
+                        snapshot_properties: std::collections::BTreeMap::from([
+                            ("run-id".into(), "retry-value".into()),
+                            ("empty".into(), "".into()),
+                        ]),
                         lakehouse_table: None,
                         schema: None,
                         partition_spec: None,
@@ -2367,6 +2561,34 @@ mod tests {
 
             assert_eq!(batch.num_rows(), 1);
             assert!(conflict_store.fault_injected.load(Ordering::SeqCst));
+            let committed_bytes = store_ctx
+                .prefixed
+                .get(&Path::from("metadata/v3.metadata.json"))
+                .await
+                .expect("committed metadata")
+                .bytes()
+                .await
+                .expect("metadata bytes");
+            let committed = TableMetadata::from_json(&committed_bytes).expect("metadata JSON");
+            let summary = &committed
+                .current_snapshot()
+                .expect("current snapshot")
+                .summary
+                .additional_properties;
+            assert_eq!(
+                summary.get("run-id").map(String::as_str),
+                Some("retry-value")
+            );
+            assert_eq!(summary.get("empty").map(String::as_str), Some(""));
+            assert_eq!(summary.get("added-records").map(String::as_str), Some("1"));
+            assert_eq!(
+                committed
+                    .snapshots
+                    .iter()
+                    .find(|snapshot| snapshot.snapshot_id() == 17),
+                Some(&current_snapshot)
+            );
+            assert!(!committed.properties.contains_key("run-id"));
             let metadata_prefix = Path::from("tmp/commit-conflict/metadata");
             let metadata_objects = memory
                 .list(Some(&metadata_prefix))
