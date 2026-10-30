@@ -143,6 +143,18 @@ pub(crate) async fn collect_live_files<T: Send>(
     concurrency: usize,
     select: impl Fn(DataFile) -> Result<Option<T>> + Sync,
 ) -> Result<Vec<T>> {
+    collect_live_entries(store, metadata, concurrency, |entry| {
+        select(entry.data_file)
+    })
+    .await
+}
+
+pub(crate) async fn collect_live_entries<T: Send>(
+    store: &StoreContext,
+    metadata: &TableMetadata,
+    concurrency: usize,
+    select: impl Fn(ManifestEntry) -> Result<Option<T>> + Sync,
+) -> Result<Vec<T>> {
     let manifests = scan_manifests(
         store,
         metadata,
@@ -162,7 +174,7 @@ pub(crate) async fn collect_live_files<T: Send>(
                     .await?
                     .into_iter()
                     .filter(|entry| selection.matches(entry))
-                    .filter_map(|entry| select(entry.data_file).transpose())
+                    .filter_map(|entry| select(entry).transpose())
                     .collect::<Result<Vec<_>>>()
             }
         })

@@ -2,7 +2,6 @@
 """Iceberg action summaries count affected rows separately from storage records."""
 
 import pytest
-from pyspark.errors import UnsupportedOperationException
 from pyspark.sql.types import StructType
 
 from pysail.testing.spark.steps.iceberg import _current_snapshot, _find_latest_metadata
@@ -544,16 +543,6 @@ def test_rewrite_procedure_does_not_publish_action_metrics(spark, tmp_path, metr
     table, _ = metrics_table
     _seed(spark, table, tmp_path)
     statement = f"CALL system.rewrite_data_files('{table}', options => map('rewrite-all', 'true'))"
-    before = _find_latest_metadata(tmp_path)
-    if before["format-version"] == 3:  # noqa: PLR2004
-        # v3 rewriting is explicitly unsupported; rejection must not publish a summary.
-        files = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
-        with pytest.raises(UnsupportedOperationException, match="v3 row-lineage preservation"):
-            spark.sql(statement)
-        assert _find_latest_metadata(tmp_path) == before
-        assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == files
-        assert spark.table(table).orderBy("id").collect() == list(BASE)
-        return
     result = spark.sql(statement).first()
     assert result.rewritten_data_files_count == 1
     metadata = _find_latest_metadata(tmp_path)

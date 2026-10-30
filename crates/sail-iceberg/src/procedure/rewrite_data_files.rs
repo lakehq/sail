@@ -17,9 +17,9 @@ use crate::lake_source::{
     IcebergLakeSource, IcebergReadPurpose, IcebergWriteNode, IcebergWriteNodeOptions,
     load_iceberg_read_table,
 };
-use crate::physical_plan::file_tasks_exec::IcebergFileTask;
+use crate::physical_plan::file_tasks_exec::{IcebergFileTask, RewriteScanContext};
 use crate::spec::{DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, Snapshot};
-use crate::table::files::{balance_by_size, collect_live_files};
+use crate::table::files::{balance_by_size, collect_live_entries};
 
 const DEFAULT_TARGET_FILE_SIZE: u64 = 512 * 1024 * 1024;
 const DEFAULT_MIN_INPUT_FILES: usize = 5;
@@ -29,6 +29,7 @@ const DEFAULT_MAX_CONCURRENT_FILE_GROUPS: usize = 5;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct RewriteDataFilesPlan {
     expected_snapshot_id: Option<i64>,
+    starting_sequence_number: Option<i64>,
     removed_data_file_paths: Vec<String>,
     rewritten_data_files_count: i32,
     rewritten_bytes_count: i64,
@@ -37,6 +38,10 @@ pub struct RewriteDataFilesPlan {
 impl RewriteDataFilesPlan {
     pub fn expected_snapshot_id(&self) -> Option<i64> {
         self.expected_snapshot_id
+    }
+
+    pub fn starting_sequence_number(&self) -> Option<i64> {
+        self.starting_sequence_number
     }
 
     pub fn removed_data_file_paths(&self) -> &[String] {
@@ -185,40 +190,92 @@ pub(super) async fn plan_rewrite_data_files(
     let current_snapshot = metadata.current_snapshot();
     let expected_snapshot_id = current_snapshot.map(Snapshot::snapshot_id);
     let rewrite_options = rewrite_options(call, &metadata.properties)?;
-    let live_files = collect_live_files(
+    let delete_index = if let Some(snapshot) = current_snapshot {
+        let manifests = crate::io::load_manifest_list_with_version(
+            table.store_context(),
+            snapshot.manifest_list(),
+            metadata.format_version,
+        )
+        .await?;
+        crate::io::load_delete_file_index(
+            &metadata.partition_specs,
+            metadata.format_version,
+            table.store_context(),
+            &manifests,
+        )
+        .await?
+    } else {
+        Default::default()
+    };
+    let name_mapping = metadata
+        .properties
+        .get(crate::spec::name_mapping::DEFAULT_SCHEMA_NAME_MAPPING)
+        .map(|mapping| serde_json::from_str(mapping))
+        .transpose()
+        .map_err(|error| {
+            datafusion_common::plan_datafusion_err!("Invalid Iceberg name mapping: {error}")
+        })?;
+    let preserve_lineage = metadata.format_version == FormatVersion::V3;
+    let live_files = collect_live_entries(
         table.store_context(),
         metadata,
         session.config().target_partitions(),
-        |file| {
-            let defaults = IdentityPartitionDefaults::from_file(
-                &file,
-                &metadata.partition_specs,
+        |entry| {
+            if entry.data_file.content != DataContentType::Data {
+                return Ok(None);
+            }
+            let sequence = entry.sequence_number.ok_or_else(|| {
+                datafusion_common::plan_datafusion_err!("Missing Iceberg data sequence number")
+            })?;
+            let deletes = delete_index.for_data_file(&entry.data_file, sequence);
+            let read_schema = crate::equality_schema::equality_read_schema(
                 current_schema,
+                &metadata.schemas,
+                deletes
+                    .equality
+                    .iter()
+                    .flat_map(|delete| delete.data_file.equality_ids.iter().copied()),
             )?;
-            let mut file = RewriteFile::from(file);
+            let defaults = IdentityPartitionDefaults::from_file(
+                &entry.data_file,
+                &metadata.partition_specs,
+                &read_schema,
+            )?;
+            let scan_context = if preserve_lineage || !deletes.is_empty() {
+                let mut arrow_schema = iceberg_schema_to_arrow(&read_schema)?;
+                if let Some(mapping) = &name_mapping {
+                    arrow_schema = apply_name_mapping(&arrow_schema, mapping)?;
+                }
+                if preserve_lineage {
+                    arrow_schema = crate::row_lineage::append_lineage_fields(&arrow_schema)?;
+                }
+                Some(
+                    serde_json::to_string(&RewriteScanContext {
+                        read_schema: arrow_schema,
+                        iceberg_schema: read_schema,
+                        positional_deletes: deletes.positional,
+                        equality_deletes: deletes.equality,
+                        first_row_id: entry.data_file.first_row_id,
+                        data_sequence_number: sequence,
+                        preserve_lineage,
+                    })
+                    .map_err(|error| {
+                        datafusion_common::DataFusionError::External(Box::new(error))
+                    })?,
+                )
+            } else {
+                None
+            };
+            let mut file = RewriteFile::from(entry.data_file);
             file.identity_partition_defaults = defaults;
+            file.rewrite_scan_context = scan_context;
             Ok(Some(file))
         },
     )
     .await?;
-    let active_delete_files = live_files
-        .iter()
-        .filter(|file| !matches!(file.content, DataContentType::Data))
-        .count();
 
     let mut groups = select_file_groups(&live_files, &rewrite_options)?;
     let selected_files = groups.iter().flatten().collect::<Vec<_>>();
-
-    if !selected_files.is_empty() && active_delete_files > 0 {
-        return not_impl_err!(
-            "rewrite_data_files does not yet support tables with active delete files"
-        );
-    }
-    if !selected_files.is_empty() && matches!(metadata.format_version, FormatVersion::V3) {
-        return not_impl_err!(
-            "rewrite_data_files does not yet support Iceberg v3 row-lineage preservation"
-        );
-    }
 
     let selected_data_file_paths = selected_files
         .iter()
@@ -233,6 +290,11 @@ pub(super) async fn plan_rewrite_data_files(
     })?;
     let plan = RewriteDataFilesPlan {
         expected_snapshot_id,
+        // V3 upgraded files have null lineage. Use the new commit's data/file sequence so
+        // readers inheriting either sequence agree. Native V3 lineage is materialized.
+        // Strict snapshot CAS (no rebase) makes advancing this sequence safe for deletes.
+        starting_sequence_number: (!preserve_lineage)
+            .then(|| current_snapshot.map_or(0, Snapshot::sequence_number)),
         removed_data_file_paths: selected_data_file_paths.clone(),
         rewritten_data_files_count: i32::try_from(selected_files.len()).map_err(|error| {
             datafusion_common::DataFusionError::Plan(format!(
@@ -255,14 +317,11 @@ pub(super) async fn plan_rewrite_data_files(
         |index| groups[*index].iter().map(|file| file.size).sum(),
     );
     let mut arrow_schema = iceberg_schema_to_arrow(current_schema)?;
-    if let Some(mapping) = metadata
-        .properties
-        .get(crate::spec::name_mapping::DEFAULT_SCHEMA_NAME_MAPPING)
-    {
-        let mapping = serde_json::from_str(mapping).map_err(|error| {
-            datafusion_common::plan_datafusion_err!("Invalid Iceberg name mapping: {error}")
-        })?;
-        arrow_schema = apply_name_mapping(&arrow_schema, &mapping)?;
+    if let Some(mapping) = &name_mapping {
+        arrow_schema = apply_name_mapping(&arrow_schema, mapping)?;
+    }
+    if preserve_lineage {
+        arrow_schema = crate::row_lineage::append_lineage_fields(&arrow_schema)?;
     }
     let scan_schema = Arc::new(DFSchema::try_from(arrow_schema)?);
     let scan = LogicalPlan::Extension(Extension {
@@ -289,6 +348,7 @@ pub(super) async fn plan_rewrite_data_files(
                 defer_commit: true,
                 target_file_size: Some(rewrite_options.target_file_size),
                 preserve_input_partitions: true,
+                rewrite_lineage: preserve_lineage,
             },
         )?),
     });
@@ -344,6 +404,7 @@ struct RewriteFile {
     file_size_in_bytes: u64,
     partition_spec_id: i32,
     identity_partition_defaults: IdentityPartitionDefaults,
+    rewrite_scan_context: Option<String>,
 }
 
 impl From<DataFile> for RewriteFile {
@@ -357,6 +418,7 @@ impl From<DataFile> for RewriteFile {
             file_size_in_bytes: file.file_size_in_bytes,
             partition_spec_id: file.partition_spec_id,
             identity_partition_defaults: Default::default(),
+            rewrite_scan_context: None,
         }
     }
 }
@@ -508,6 +570,7 @@ fn rewrite_groups(
                 records: file.record_count,
                 spec_id: file.partition_spec_id,
                 identity_partition_defaults: file.identity_partition_defaults.clone(),
+                rewrite_scan_context: file.rewrite_scan_context.clone(),
             });
     }
     let mut groups: Vec<Vec<IcebergFileTask>> = Vec::new();
@@ -581,6 +644,7 @@ mod tests {
             file_size_in_bytes: size,
             partition_spec_id: 0,
             identity_partition_defaults: Default::default(),
+            rewrite_scan_context: None,
         }
     }
 

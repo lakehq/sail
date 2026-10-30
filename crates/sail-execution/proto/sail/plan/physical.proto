@@ -1117,6 +1117,8 @@ message IcebergRewriteDataFilesOutput {
   bytes schema = 1;
   int32 rewritten_data_files_count = 2;
   int64 rewritten_bytes_count = 3;
+  // V2 pins the starting data sequence; V3 inherits the new commit sequence.
+  optional int64 starting_sequence_number = 4;
 }
 
 message IcebergManifestScanExecNode {
