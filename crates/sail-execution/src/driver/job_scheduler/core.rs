@@ -13,6 +13,7 @@ use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_system_store::SystemEvent;
+use sail_system_store::types::TaskOutputStatistics;
 use sail_telemetry::events::SystemEventReporter;
 
 use crate::driver::DriverActor;
@@ -95,6 +96,9 @@ impl JobScheduler {
                     mode: stage.mode.to_string(),
                     distribution: stage.distribution.to_string(),
                     placement: stage.placement.to_string(),
+                    plan: DisplayableExecutionPlan::new(stage.plan.as_ref())
+                        .indent(true)
+                        .to_string(),
                     status: descriptor.state.status().to_string(),
                     created_at: Utc::now(),
                 });
@@ -137,6 +141,33 @@ impl JobScheduler {
             status: attempt.state.status().to_string(),
             updated_at: Utc::now(),
         });
+    }
+
+    pub fn record_task_output(&mut self, key: &TaskKey, statistics: TaskOutputStatistics) {
+        let Some(job) = self.jobs.get_mut(&key.job_id) else {
+            return;
+        };
+        let Some(stage) = job.graph.stages().get(key.stage) else {
+            return;
+        };
+        let channels = stage.distribution.channels();
+        let Some(task) = job
+            .stages
+            .get_mut(key.stage)
+            .and_then(|s| s.tasks.get_mut(key.partition))
+        else {
+            return;
+        };
+        if task.record_output(key.attempt, channels, &statistics) {
+            self.event_reporter.report(SystemEvent::TaskOutputRecorded {
+                session_id: self.options.session_id.clone(),
+                job_id: u64::from(key.job_id),
+                stage: key.stage as u64,
+                partition: key.partition as u64,
+                attempt: key.attempt as u64,
+                statistics,
+            });
+        }
     }
 
     pub fn get_task_state(&self, key: &TaskKey) -> Option<TaskState> {
@@ -424,6 +455,7 @@ impl JobScheduler {
                     messages: vec![],
                     cause: None,
                     job_output_fetched: false,
+                    output_statistics: None,
                 });
                 event_reporter.report(SystemEvent::TaskCreated {
                     session_id: session_id.to_string(),
@@ -1312,6 +1344,7 @@ mod tests {
             messages: vec![],
             cause,
             job_output_fetched: false,
+            output_statistics: None,
         };
         for _ in 0..2 {
             job.stages[0].tasks[0].attempts.push(attempt(
@@ -1397,6 +1430,7 @@ mod tests {
             messages: vec![],
             cause: None,
             job_output_fetched: false,
+            output_statistics: None,
         };
         for stage in &mut job.stages {
             for task in &mut stage.tasks {

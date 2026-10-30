@@ -1,4 +1,5 @@
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_system_store::types::TaskOutputStatistics;
 use tonic::Request;
 
 use crate::driver::r#gen::celeborn_lifecycle_manager_service_client::CelebornLifecycleManagerServiceClient;
@@ -248,6 +249,7 @@ impl DriverClient {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        output_statistics: Option<TaskOutputStatistics>,
         sequence: u64,
     ) -> ExecutionResult<()> {
         let cause = cause
@@ -266,6 +268,7 @@ impl DriverClient {
             status: r#gen::TaskStatus::from(status) as i32,
             message,
             cause,
+            output_statistics: output_statistics.map(Into::into),
             sequence,
         });
         let response = self.inner.get().await?.report_task_status(request).await?;
