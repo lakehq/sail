@@ -14,6 +14,7 @@ mod scalar_iterator_udf;
 mod scalar_subquery_domain;
 mod scalar_subquery_keys;
 mod session_timestamp;
+mod simplify_expressions;
 mod subquery_aliases;
 pub mod type_coercion;
 
@@ -60,6 +61,12 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
     for rule in rules {
+        if rule.name() == simplify_expressions::SimplifyExpressions::default().name() {
+            custom.push(Arc::new(
+                simplify_expressions::SimplifyExpressions::default(),
+            ));
+            continue;
+        }
         if rule.name() == deduplicate::SimplifyDeduplicate::default().name() {
             custom.push(Arc::new(deduplicate::SimplifyDeduplicate::default()));
             continue;
