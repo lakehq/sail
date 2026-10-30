@@ -294,8 +294,8 @@ def test_cast_correlation_respects_null_validity(spark, shape, request):
         assert _computed_correlation_cast(_optimized_plan(spark, query))
         with pytest.raises((IllegalArgumentException, SparkRuntimeException), match=r"(?i)utf.?8"):
             spark.sql(
-                f"SELECT (SELECT count(*) FROM optimizer_visible_bad_keys i WHERE CAST(i.k AS {target})=o.k) "
-                f"AS n FROM VALUES ({key}) AS o(k)"  # noqa: S608
+                f"""SELECT (SELECT count(*) FROM optimizer_visible_bad_keys i WHERE CAST(i.k AS {target})=o.k)
+                AS n FROM VALUES ({key}) AS o(k)"""  # noqa: S608
             ).collect()
         request.applymarker(
             pytest.mark.xfail(
