@@ -91,7 +91,7 @@ def test_mixed_arithmetic_count_filter_and_sum_shapes(spark, ansi):
         assert frame.first()[0] == 310.0  # noqa: PLR2004
         assert frame.schema[0].dataType.simpleString() == "double"
         if not is_jvm_spark():
-            assert ("mixed_numeric_add(" in _physical_plan(spark, count_query)) is ansi
+            assert ("mixed_numeric_add_gt(" in _physical_plan(spark, count_query)) is ansi
             # The Rust aggregate test inspects actual SUM arguments; its display keeps the original name.
             table, execution_schema = _to_table(frame)
             assert execution_schema == frame.schema
