@@ -72,7 +72,7 @@ def test_mixed_arithmetic_preserves_double_precision_and_nonansi_float(spark, an
         if not is_jvm_spark():
             # Isolate each operation so common-subexpression extraction cannot materialize its casts first.
             for operation, operator in [("add", "+"), ("subtract", "-"), ("multiply", "*")]:
-                plan = _physical_plan(spark, f"SELECT {k}{operator}{g} AS value FROM followup_mixed")
+                plan = _physical_plan(spark, f"SELECT {k}{operator}{g} AS value FROM followup_mixed")  # noqa: S608
                 assert (f"mixed_numeric_{operation}(" in plan) is use_double
 
 
@@ -144,7 +144,7 @@ def test_float_decimal_correlation_groups_by_rounded_value(spark, ansi, source, 
         expected = [(0, 2), (1, 1), (2, None)]
     else:
         predicate = "FROM followup_decimal_inner i WHERE CAST(i.k AS DECIMAL(12,2))=o.k"
-        outputs = f"(SELECT count(*) {predicate}) AS n,(SELECT sum(v) {predicate}) AS total"  # noqa: S608
+        outputs = f"(SELECT count(*) {predicate}) AS n,(SELECT sum(v) {predicate}) AS total"
         expected = [(0, 2, 30), (1, 1, 40), (2, 0, None)]
     query = f"SELECT o.seq,{outputs} FROM followup_decimal_outer o ORDER BY o.seq"  # noqa: S608
     with (
@@ -239,7 +239,7 @@ def test_float_integer_correlation_merges_truncation_classes(spark, ansi, window
         expected = [(0, 2), (1, 2), (2, 4), (3, None)]
     else:
         predicate = "FROM followup_narrow_inner i WHERE CAST(i.k AS INT)=o.k"
-        outputs = f"(SELECT count(*) {predicate}),(SELECT sum(v) {predicate})"  # noqa: S608
+        outputs = f"(SELECT count(*) {predicate}),(SELECT sum(v) {predicate})"
         expected = [(0, 2, 30), (1, 2, 70), (2, 4, 260), (3, 0, None)]
     query = f"SELECT o.seq,{outputs} FROM followup_narrow_outer o ORDER BY o.seq"  # noqa: S608
     with (
