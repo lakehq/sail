@@ -16,6 +16,7 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
+use sail_common_datafusion::type_coercion::binary_type_coercion::comparison_coercion;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMapZipWith {
@@ -60,9 +61,15 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         let (left, right, _lambda) = map_zip_args(self.name(), fields)?;
         let (left_key, left_value, _) = map_fields(self.name(), left)?;
         let (right_key, _right_value, _) = map_fields(self.name(), right)?;
-        same_key_type(self.name(), &left_key, &right_key)?;
+        let key_type = common_map_key_type(self.name(), &left_key, &right_key)?;
         Ok(LambdaParametersProgress::Complete(vec![vec![
-            Arc::new(left_key.as_ref().clone().with_nullable(false)),
+            Arc::new(
+                left_key
+                    .as_ref()
+                    .clone()
+                    .with_data_type(key_type)
+                    .with_nullable(false),
+            ),
             Arc::new(left_value.as_ref().clone().with_nullable(true)),
             Arc::new(
                 map_fields(self.name(), right)?
@@ -78,9 +85,9 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         let (left, right, lambda) = map_zip_args(self.name(), args.arg_fields)?;
         let (left_key, _, _) = map_fields(self.name(), left)?;
         let (right_key, _, _) = map_fields(self.name(), right)?;
-        same_key_type(self.name(), &left_key, &right_key)?;
+        let key_type = common_map_key_type(self.name(), &left_key, &right_key)?;
         let fields = Fields::from(vec![
-            Field::new(SAIL_MAP_KEY_FIELD_NAME, left_key.data_type().clone(), false),
+            Field::new(SAIL_MAP_KEY_FIELD_NAME, key_type, false),
             Field::new(
                 SAIL_MAP_VALUE_FIELD_NAME,
                 lambda.data_type().clone(),
@@ -156,8 +163,11 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         };
         let (left_key, _, _) = map_fields_from_type(self.name(), left, "first")?;
         let (right_key, _, _) = map_fields_from_type(self.name(), right, "second")?;
-        same_key_type(self.name(), &left_key, &right_key)?;
-        Ok(vec![left.clone(), right.clone()])
+        let key_type = common_map_key_type(self.name(), &left_key, &right_key)?;
+        Ok(vec![
+            map_type_with_key_type(self.name(), left, &key_type)?,
+            map_type_with_key_type(self.name(), right, &key_type)?,
+        ])
     }
 }
 
@@ -201,15 +211,38 @@ fn map_fields_from_type(
     Ok((Arc::clone(key), Arc::clone(value), *ordered))
 }
 
-fn same_key_type(name: &str, left: &FieldRef, right: &FieldRef) -> Result<()> {
-    if left.data_type() != right.data_type() {
-        return plan_err!(
-            "{name} expected maps with the same key type, got {} and {}",
+fn common_map_key_type(name: &str, left: &FieldRef, right: &FieldRef) -> Result<DataType> {
+    comparison_coercion(left.data_type(), right.data_type()).ok_or_else(|| {
+        datafusion_common::DataFusionError::Plan(format!(
+            "{name} expected maps with compatible key types, got {} and {}",
             left.data_type(),
             right.data_type()
-        );
-    }
-    Ok(())
+        ))
+    })
+}
+
+fn map_type_with_key_type(
+    name: &str,
+    data_type: &DataType,
+    key_type: &DataType,
+) -> Result<DataType> {
+    let (key, value, ordered) = map_fields_from_type(name, data_type, "argument")?;
+    let DataType::Map(entries, _) = data_type else {
+        return plan_err!("{name} expected a map argument, got {data_type}");
+    };
+    let key = Arc::new(
+        key.as_ref()
+            .clone()
+            .with_data_type(key_type.clone())
+            .with_nullable(false),
+    );
+    let entries = Arc::new(
+        entries
+            .as_ref()
+            .clone()
+            .with_data_type(DataType::Struct(Fields::from(vec![key, value]))),
+    );
+    Ok(DataType::Map(entries, ordered))
 }
 
 struct MapLambdaInputs {
