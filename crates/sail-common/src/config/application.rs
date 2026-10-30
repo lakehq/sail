@@ -595,6 +595,7 @@ pub struct ParquetConfig {
     pub reorder_filters: bool,
     pub schema_force_view_types: bool,
     pub binary_as_string: bool,
+    pub trust_sorting_columns: bool,
     pub max_predicate_cache_size: usize,
     pub data_page_size_limit: usize,
     pub write_batch_size: usize,

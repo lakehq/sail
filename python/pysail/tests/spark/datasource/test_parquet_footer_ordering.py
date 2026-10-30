@@ -443,7 +443,7 @@ def _xfail_reason(case: Case) -> str | None:
     ):
         return "Sail panics on a sorting column index outside the file schema"
     if not case.truthful and _satisfies(case.footers[0], case.query):
-        return "Sail trusts footer sorting_columns and skips the sort even when the data is not in that order"
+        return "With trustSortingColumns, Sail skips the sort even when the data is not in the declared order"
     return None
 
 
@@ -483,14 +483,12 @@ def _write(case: Case, root) -> str:
     return str(path)
 
 
-@pytest.mark.parametrize("case", _params())
-def test_parquet_footer_ordering(spark, tmp_path, case: Case):
-    path = _write(case, tmp_path)
+def _assert_ordered(spark, case: Case, source: str) -> str:
     select = case.select or list(case.columns)
     columns = ", ".join(_sql_column(c) for c in select)
     where = f"WHERE {case.where[0]}" if case.where else ""
     limit = f"LIMIT {case.limit}" if case.limit is not None else ""
-    query = f"SELECT {columns} FROM parquet.`{path}` {where} ORDER BY {_sql_order(case.query)} {limit}"
+    query = f"SELECT {columns} FROM {source} {where} ORDER BY {_sql_order(case.query)} {limit}"
 
     rows = [row for f in case.files for row in f]
     if case.where:
@@ -509,7 +507,23 @@ def test_parquet_footer_ordering(spark, tmp_path, case: Case):
         chunk = actual[start : start + len(expected)]
         assert sorted(chunk, key=repr) == sorted(expected, key=repr), f"rows {start}..{start + len(expected)}"
         start += len(expected)
+    return query
 
+
+@pytest.mark.parametrize("case", _params())
+def test_parquet_footer_ordering_trusted(spark, tmp_path, case: Case):
+    path = _write(case, tmp_path)
+    spark.read.option("trustSortingColumns", "true").parquet(path).createOrReplaceTempView("footer_ordering")
+    query = _assert_ordered(spark, case, "footer_ordering")
     if case.expect_no_sort and not is_jvm_spark():
         plan = spark.sql(f"EXPLAIN {query}").first()[0]
         assert "SortExec" not in plan
+
+
+@pytest.mark.parametrize("case", [pytest.param(c, id=c.id) for c in _footer_shape_cases()])
+def test_parquet_footer_ordering_ignored_by_default(spark, tmp_path, case: Case):
+    path = _write(case, tmp_path)
+    query = _assert_ordered(spark, case, f"parquet.`{path}`")
+    if case.expect_no_sort and not is_jvm_spark():
+        plan = spark.sql(f"EXPLAIN {query}").first()[0]
+        assert "SortExec" in plan
