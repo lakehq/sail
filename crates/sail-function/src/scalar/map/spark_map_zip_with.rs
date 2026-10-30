@@ -12,7 +12,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::cast::as_map_array;
 use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
-    ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    ColumnarValue, Expr, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
@@ -51,6 +51,20 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
 
     fn signature(&self) -> &HigherOrderSignature {
         &self.signature
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
+    }
+
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        let [left, right, lambda] = args else {
+            return None;
+        };
+        Some((vec![left, right], vec![lambda]))
     }
 
     fn lambda_parameters(
@@ -120,14 +134,6 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
             right_map,
             args.return_field.data_type(),
         )?;
-        let key_param = || Ok(Arc::clone(&inputs.keys));
-        let left_param = || Ok(Arc::clone(&inputs.left_values));
-        let right_param = || Ok(Arc::clone(&inputs.right_values));
-        let params: [&dyn Fn() -> Result<ArrayRef>; 3] = [&key_param, &left_param, &right_param];
-        let output_values = lambda
-            .evaluate(&params, |arrays| repeat_captures(arrays, &inputs.offsets))?
-            .into_array(inputs.keys.len())?;
-
         let DataType::Map(entries_field, ordered) = args.return_field.data_type() else {
             return exec_err!(
                 "{} expected map return type, got {}",
@@ -137,6 +143,17 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         };
         let DataType::Struct(fields) = entries_field.data_type() else {
             return exec_err!("{} expected map entries struct", self.name());
+        };
+        let key_param = || Ok(Arc::clone(&inputs.keys));
+        let left_param = || Ok(Arc::clone(&inputs.left_values));
+        let right_param = || Ok(Arc::clone(&inputs.right_values));
+        let params: [&dyn Fn() -> Result<ArrayRef>; 3] = [&key_param, &left_param, &right_param];
+        let output_values = if inputs.keys.is_empty() {
+            new_empty_array(fields[1].data_type())
+        } else {
+            lambda
+                .evaluate(&params, |arrays| repeat_captures(arrays, &inputs.offsets))?
+                .into_array(inputs.keys.len())?
         };
         let values = if output_values.data_type() == fields[1].data_type() {
             output_values
