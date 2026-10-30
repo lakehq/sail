@@ -51,6 +51,7 @@ const sailLogo = withBase("/sail.svg");
 
 .platform-button:hover {
   background: #1d4ed8;
+  color: #ffffff;
 }
 
 .platform-button:focus-visible {
@@ -74,5 +75,6 @@ const sailLogo = withBase("/sail.svg");
 
 .dark .platform-button:hover {
   background: #eff6ff;
+  color: #172554;
 }
 </style>
