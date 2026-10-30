@@ -109,6 +109,17 @@ Feature: zip_with higher-order function
         | result |
         | NULL   |
 
+    Scenario: Empty and NULL arrays skip lambda evaluation when there are no elements
+      When query
+        """
+        SELECT zip_with(array_value, CAST(array() AS ARRAY<INT>), (x, y) -> CAST(raise_error('boom') AS INT)) AS result
+        FROM VALUES (CAST(NULL AS ARRAY<INT>)), (CAST(array() AS ARRAY<INT>)) AS t(array_value)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | []     |
+
   Rule: Lambda arity errors
 
     Scenario Outline: Reject a lambda with incorrect arity
