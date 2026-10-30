@@ -581,19 +581,19 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
 }
 
 fn zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let arguments = input.arguments;
-    arguments.three()?;
+    let (left, right, lambda) = input.arguments.three()?;
+    expect_lambda_arity("zip_with", &lambda, 2)?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_ARRAY_ZIP_WITH_UDF),
-        arguments,
+        vec![left, right, lambda],
     )))
 }
 
 fn map_zip_with(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let arguments = input.arguments;
-    arguments.three()?;
+    let (left, right, lambda) = input.arguments.three()?;
+    expect_lambda_arity("map_zip_with", &lambda, 3)?;
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_MAP_ZIP_WITH_UDF),
-        arguments,
+        vec![left, right, lambda],
     )))
 }
