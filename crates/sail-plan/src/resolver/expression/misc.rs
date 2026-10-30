@@ -5,17 +5,16 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchemaRef, ScalarValue, plan_datafusion_err};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, when};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions::expr_fn as datafusion_fn;
-use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
+use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array_item::SparkArrayItem;
 use sail_function::scalar::drop_struct_field::DropStructField;
-use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -343,7 +342,13 @@ impl PlanResolver<'_> {
             return Ok(NamedExpr::new(vec![result_name], result_expr));
         }
 
-        // For other types (List, Struct), extraction must be a literal.
+        if is_list_type(&data_type) {
+            return self
+                .resolve_expression_array_item(name.one()?, expr, extraction, schema, state)
+                .await;
+        }
+
+        // For other types (Struct), extraction must be a literal.
         // SQL dot selectors are represented as literals; an attribute selector
         // is a column expression and cannot select a struct field.
         let extraction = match extraction {
@@ -362,17 +367,7 @@ impl PlanResolver<'_> {
                 }
             }
             _ => {
-                // Array-index validation preserves the resolved array binding in Spark.
-                if !matches!(
-                    data_type,
-                    DataType::List(_)
-                        | DataType::LargeList(_)
-                        | DataType::FixedSizeList(_, _)
-                        | DataType::ListView(_)
-                        | DataType::LargeListView(_)
-                ) {
-                    discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
-                }
+                discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
                 return Err(PlanError::invalid("extraction must be a literal"));
             }
         };
@@ -390,46 +385,6 @@ impl PlanResolver<'_> {
             }
         };
         let expr = match data_type {
-            DataType::List(field)
-            | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _)
-            | DataType::ListView(field)
-            | DataType::LargeListView(field) => {
-                let ScalarValue::Int64(index) = extraction.cast_to(&DataType::Int64)? else {
-                    return Err(PlanError::AnalysisError(format!(
-                        "invalid extraction value for array: {extraction}"
-                    )));
-                };
-                let index_expr = lit(ScalarValue::Int64(index));
-                let element = array_element(
-                    expr.clone(),
-                    lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
-                );
-                if self.config.ansi_mode {
-                    let length = cast(array_length(expr.clone()), DataType::Int64);
-                    let message = datafusion_fn::concat(vec![
-                        lit("[INVALID_ARRAY_INDEX] The index "),
-                        cast(index_expr, DataType::Utf8),
-                        lit(" is out of bounds. The array has "),
-                        cast(length.clone(), DataType::Utf8),
-                        lit(
-                            " elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead.",
-                        ),
-                    ]);
-                    let error = cast(
-                        ScalarUDF::from(RaiseError::new()).call(vec![message]),
-                        field.data_type().clone(),
-                    );
-                    let out_of_bounds = match index {
-                        Some(index) if index < 0 => expr.is_not_null(),
-                        Some(index) => expr.is_not_null().and(length.lt_eq(lit(index))),
-                        None => lit(false),
-                    };
-                    when(out_of_bounds, error).otherwise(element)?
-                } else {
-                    element
-                }
-            }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
                     discard_failed_missing_input(&expr, child_is_attribute_path, schema, state);
@@ -453,6 +408,47 @@ impl PlanResolver<'_> {
                 )));
             }
         };
+        Ok(NamedExpr::new(vec![name], expr))
+    }
+
+    /// Resolves `array[index]` as Spark's `GetArrayItem`: a zero-based integral index,
+    /// which may be any expression. A `BIGINT` index is narrowed to `INT` by wrapping.
+    /// `SparkArrayItem` evaluates the array and the index once per row.
+    async fn resolve_expression_array_item(
+        &self,
+        array_name: String,
+        array: expr::Expr,
+        extraction: spec::Expr,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<NamedExpr> {
+        let (index_name, index) = match extraction {
+            spec::Expr::Literal(literal) => {
+                let value = self.resolve_literal(literal, state)?;
+                let service = self.ctx.extension::<PlanService>()?;
+                let name = service
+                    .plan_formatter()
+                    .literal_to_string(&value, &self.config.session_timezone)?;
+                (name, lit(value))
+            }
+            extraction => {
+                let NamedExpr { name, expr, .. } = self
+                    .resolve_named_expression(extraction, schema, state)
+                    .await?;
+                (name.one()?, expr)
+            }
+        };
+        let name = format!("{array_name}[{index_name}]");
+        let index_type = index.get_type(schema)?;
+        let is_integral = index_type.is_integer() || index_type == DataType::Null;
+        if !is_integral {
+            return Err(PlanError::AnalysisError(format!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"{name}\" due to data type mismatch: the index requires the \"INTEGRAL\" type, however \"{index_name}\" has the type \"{index_type}\"."
+            )));
+        }
+        let index = narrow_array_index(cast(index, DataType::Int64), &index_type);
+        let expr =
+            ScalarUDF::from(SparkArrayItem::new(self.config.ansi_mode)).call(vec![array, index]);
         Ok(NamedExpr::new(vec![name], expr))
     }
 
@@ -537,4 +533,25 @@ impl PlanResolver<'_> {
         };
         Ok(expr.transform(rewrite).data()?)
     }
+}
+
+fn is_list_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+    )
+}
+
+/// Spark narrows a `BIGINT` array index to `INT` by keeping its low 32 bits.
+fn narrow_array_index(index: expr::Expr, index_type: &DataType) -> expr::Expr {
+    const INT_RANGE: i64 = 1 << 32;
+    const INT_OFFSET: i64 = 1 << 31;
+    let is_wider_than_int = matches!(
+        index_type,
+        DataType::Int64 | DataType::UInt32 | DataType::UInt64
+    );
+    if !is_wider_than_int {
+        return index;
+    }
+    (index % lit(INT_RANGE) + lit(INT_RANGE + INT_OFFSET)) % lit(INT_RANGE) - lit(INT_OFFSET)
 }

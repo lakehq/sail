@@ -63,8 +63,6 @@ Feature: array output schema
          |    |-- element: integer (containsNull = true)
         """
 
-  # Existing array-index bugs retained after reverting the PR implementation.
-  @sail-bug
   Rule: Array subscripts require integral types
 
     Scenario Outline: Non-integral array subscript <index> is rejected with ANSI <ansi>
@@ -157,6 +155,9 @@ Feature: array output schema
         | 0.5D  | true  |
         | 0.5D  | false |
 
+    # Sail types `CASE WHEN ... THEN 0 ELSE 0.5 END` as INT instead of widening it to a
+    # fractional type, so the subscript type check never sees a non-integral index.
+    @sail-bug
     Scenario Outline: Projected subscript columns widened to <value> are rejected with ANSI <ansi>
       Given config spark.sql.ansi.enabled = <ansi>
       When query

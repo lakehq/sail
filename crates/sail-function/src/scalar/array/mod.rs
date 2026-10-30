@@ -8,6 +8,7 @@ pub mod spark_array_compact;
 pub mod spark_array_exists;
 pub mod spark_array_filter;
 pub mod spark_array_forall;
+pub mod spark_array_item;
 pub mod spark_array_item_with_position;
 pub mod spark_array_min_max;
 pub mod spark_array_sort;

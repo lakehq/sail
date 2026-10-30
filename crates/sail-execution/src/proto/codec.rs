@@ -163,6 +163,7 @@ use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
+use sail_function::scalar::array::spark_array_item::SparkArrayItem;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
@@ -3759,6 +3760,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkPmod(r#gen::SparkPmodUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkPmod::new(ansi_mode))));
             }
+            UdfKind::SparkArrayItem(r#gen::SparkArrayItemUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkArrayItem::new(ansi_mode))));
+            }
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNegative::new(ansi_mode))));
             }
@@ -4351,6 +4355,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkPmod>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkPmod(r#gen::SparkPmodUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkArrayItem>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkArrayItem(r#gen::SparkArrayItemUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkNegative>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode })
