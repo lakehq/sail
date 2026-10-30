@@ -1,23 +1,25 @@
 import pytest
 from pyspark.sql import Row
 from pyspark.sql.types import ArrayType, LongType, MapType, StructType
-from pyspark.testing.objects import PythonOnlyPoint, PythonOnlyUDT
+
+from pysail.tests.spark.dataframe.udt import PythonPoint, PythonPointUDT
 
 
 def test_udt_column_is_kept_in_parquet(spark, tmp_path):
     path = str(tmp_path / "points")
-    spark.createDataFrame([Row(label=1.0, point=PythonOnlyPoint(1.0, 2.0))]).write.parquet(path)
+    spark.createDataFrame([Row(label=1.0, point=PythonPoint(1.0, 2.0))]).write.parquet(path)
     df = spark.read.parquet(path)
-    assert df.schema["point"].dataType == PythonOnlyUDT()
-    assert df.head().point == PythonOnlyPoint(1.0, 2.0)
+    assert df.schema["point"].dataType == PythonPointUDT()
+    point = df.head().point
+    assert (point.x, point.y) == (1.0, 2.0)
 
 
 @pytest.mark.parametrize(
     ("udt_type", "value"),
     [
-        (ArrayType(PythonOnlyUDT()), [PythonOnlyPoint(1.0, 2.0)]),
-        (MapType(LongType(), PythonOnlyUDT()), {1: PythonOnlyPoint(3.0, 4.0)}),
-        (StructType().add("p", PythonOnlyUDT()), (PythonOnlyPoint(5.0, 6.0),)),
+        (ArrayType(PythonPointUDT()), [PythonPoint(1.0, 2.0)]),
+        (MapType(LongType(), PythonPointUDT()), {1: PythonPoint(3.0, 4.0)}),
+        (StructType().add("p", PythonPointUDT()), (PythonPoint(5.0, 6.0),)),
     ],
     ids=["array", "map", "struct"],
 )
