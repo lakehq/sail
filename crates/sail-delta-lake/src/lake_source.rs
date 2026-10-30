@@ -11,6 +11,7 @@ use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion_expr::expr::Sort;
+use datafusion_expr::utils::split_conjunction;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::catalog::delta::{
@@ -25,24 +26,28 @@ use sail_common_datafusion::column_features::{
 };
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
-    BucketBy, CATALOG_TABLE_OPTION, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode,
-    SourceInfo, create_sort_order, find_path_in_options,
+    BucketBy, CATALOG_TABLE_OPTION, DataSource, DeltaCheckConstraintExpr, DeltaConstraintViolation,
+    OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, create_sort_order,
+    find_path_in_options,
 };
 use sail_common_datafusion::lakesource::{
     LakeSource, LakeSourceAlterTableOperation, LakeSourceCreateTableColumn,
     LakeSourceCreateTableInfo, LakeSourceCreateTableResult, LakeSourceMetadata, RowLevelOperation,
 };
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_table_url;
+use sail_logical_plan::check_constraints::apply_delta_check_constraint_filter;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
 use crate::datasource::actions::adds_to_remove_actions;
 use crate::delta_log::StorageConfig;
 use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
+use crate::options::session_replace_where_constraint_check;
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
 use crate::schema::manager::{canonicalize_partition_columns, is_check_constraint_property};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
@@ -119,7 +124,7 @@ impl DataSource for DeltaLakeSource {
         infer_delta_logical_schema(ctx, table_url, schema, options, lakehouse_table).await
     }
 
-    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Delta table options");
         };
@@ -139,6 +144,20 @@ impl DataSource for DeltaLakeSource {
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for Delta format");
         }
+        // Capture the session setting in the incoming plan, before the writer adds
+        // retained old rows or CDF branches. Workers only execute the assertion.
+        let input = match &mode {
+            SinkMode::OverwriteIf { condition }
+                if session_replace_where_constraint_check(ctx.config())? =>
+            {
+                apply_delta_check_constraint_filter(
+                    input,
+                    &replace_where_constraints(condition),
+                    None,
+                )?
+            }
+            _ => input,
+        };
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(DeltaWriteNode::new(
                 Arc::new(input),
@@ -159,6 +178,24 @@ impl DataSource for DeltaLakeSource {
             )),
         }))
     }
+}
+
+fn replace_where_constraints(condition: &ExprWithSource) -> Vec<DeltaCheckConstraintExpr> {
+    // Delta's extractConstraints ignores constant-only top-level conjuncts, not
+    // constants nested within column-bearing expressions (such as OR).
+    split_conjunction(&condition.expr)
+        .into_iter()
+        .filter(|expr| expr.any_column_refs())
+        .map(|expr| DeltaCheckConstraintExpr {
+            name: "replaceWhere".to_string(),
+            expression: condition
+                .source
+                .clone()
+                .unwrap_or_else(|| condition.expr.to_string()),
+            expr: expr.clone(),
+            violation: DeltaConstraintViolation::ReplaceWhere,
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -1936,7 +1973,48 @@ pub fn split_delta_write_options_and_table_properties(
 
 #[cfg(test)]
 mod tests {
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{col, lit};
+
     use super::*;
+
+    #[test]
+    fn replace_where_selects_only_column_bearing_conjuncts() {
+        let column = col("p").eq(lit(1));
+        let null = lit(ScalarValue::Boolean(None));
+        for (expr, expected) in [
+            (lit(true), vec![]),
+            (lit(false), vec![]),
+            (null.clone(), vec![]),
+            (column.clone().and(lit(false)), vec![column.clone()]),
+            (lit(false).and(column.clone()), vec![column.clone()]),
+            (column.clone().and(null.clone()), vec![column.clone()]),
+            (
+                column.clone().or(null.clone()),
+                vec![column.clone().or(null)],
+            ),
+            (
+                column.clone().and(col("v").gt(lit(0))),
+                vec![column, col("v").gt(lit(0))],
+            ),
+        ] {
+            let condition = ExprWithSource::new(expr, Some("original predicate".to_string()));
+            let constraints = replace_where_constraints(&condition);
+            assert_eq!(
+                constraints
+                    .iter()
+                    .map(|c| c.expr.clone())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(
+                constraints
+                    .iter()
+                    .all(|c| c.expression == "original predicate"
+                        && c.violation == DeltaConstraintViolation::ReplaceWhere)
+            );
+        }
+    }
 
     #[test]
     fn test_split_delta_write_options_and_table_properties() -> Result<()> {

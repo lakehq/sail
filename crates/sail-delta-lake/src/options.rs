@@ -30,6 +30,27 @@ pub(crate) mod parsers {
 }
 
 const USER_METADATA_CONFIG: &str = "spark.databricks.delta.commitInfo.userMetadata";
+const REPLACE_WHERE_CHECK_CONFIG: &str =
+    "spark.databricks.delta.replaceWhere.constraintCheck.enabled";
+
+pub(crate) fn session_replace_where_constraint_check(
+    config: &SessionConfig,
+) -> datafusion_common::Result<bool> {
+    let value = match config.get_extension::<SessionConfigService>() {
+        Some(service) => service.get_option(REPLACE_WHERE_CHECK_CONFIG)?,
+        None => None,
+    };
+    value
+        .map(|value| {
+            value.to_ascii_lowercase().parse::<bool>().map_err(|_| {
+                datafusion_common::DataFusionError::Plan(format!(
+                    "{REPLACE_WHERE_CHECK_CONFIG} must be a boolean, got: {value}"
+                ))
+            })
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(true))
+}
 
 pub(crate) fn session_user_metadata(
     config: &SessionConfig,
@@ -113,11 +134,12 @@ mod tests {
         value: Mutex<Option<String>>,
         reads: AtomicUsize,
         fail: bool,
+        key: Option<&'static str>,
     }
 
     impl SessionConfigProvider for Provider {
         fn get_options(&self, keys: &[&str]) -> Result<Vec<Option<String>>> {
-            assert_eq!(keys, &[USER_METADATA_CONFIG]);
+            assert_eq!(keys, &[self.key.unwrap_or(USER_METADATA_CONFIG)]);
             self.reads.fetch_add(1, Ordering::SeqCst);
             if self.fail {
                 return Err(DataFusionError::Plan("provider failed".to_string()));
@@ -138,6 +160,108 @@ mod tests {
         OptionLayer::OptionList {
             items: vec![(key.to_string(), value.to_string())],
         }
+    }
+
+    #[test]
+    fn replace_where_check_defaults_and_errors() {
+        assert!(session_replace_where_constraint_check(&SessionConfig::new()).unwrap());
+        let provider = Arc::new(Provider {
+            key: Some(REPLACE_WHERE_CHECK_CONFIG),
+            ..Default::default()
+        });
+        let state = state(provider.clone());
+        for (value, expected) in [
+            (None, true),
+            (Some("true"), true),
+            (Some("FALSE"), false),
+            (Some("false"), false),
+            (Some("TRUE"), true),
+        ] {
+            *provider.value.lock().unwrap() = value.map(str::to_string);
+            assert_eq!(
+                session_replace_where_constraint_check(state.config()).unwrap(),
+                expected
+            );
+        }
+        for value in ["", "1", "yes"] {
+            *provider.value.lock().unwrap() = Some(value.to_string());
+            assert!(matches!(
+                session_replace_where_constraint_check(state.config()),
+                Err(DataFusionError::Plan(_))
+            ));
+        }
+        let failing = state_with_failing_replace_where_provider();
+        assert!(matches!(
+            session_replace_where_constraint_check(failing.config()),
+            Err(DataFusionError::Plan(message)) if message == "provider failed"
+        ));
+    }
+
+    fn state_with_failing_replace_where_provider() -> SessionState {
+        state(Arc::new(Provider {
+            key: Some(REPLACE_WHERE_CHECK_CONFIG),
+            fail: true,
+            ..Default::default()
+        }))
+    }
+
+    #[tokio::test]
+    async fn replace_where_check_is_captured_in_the_incoming_plan() -> Result<()> {
+        use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, col, lit};
+        use sail_common_datafusion::datasource::{DataSource, SinkInfo, SinkMode};
+        use sail_common_datafusion::logical_expr::ExprWithSource;
+
+        use crate::lake_source::DeltaLakeSource;
+
+        let provider = Arc::new(Provider {
+            key: Some(REPLACE_WHERE_CHECK_CONFIG),
+            ..Default::default()
+        });
+        let state = state(provider.clone());
+        let input = LogicalPlanBuilder::empty(false)
+            .project(vec![lit(1).alias("p")])?
+            .build()?;
+        let info = SinkInfo {
+            input: input.clone(),
+            mode: SinkMode::OverwriteIf {
+                condition: Box::new(ExprWithSource::new(col("p").eq(lit(1)), None)),
+            },
+            partition_by: vec![],
+            bucket_by: None,
+            sort_order: vec![],
+            options: vec![OptionLayer::OptionList {
+                items: vec![
+                    ("path".to_string(), "/unused".to_string()),
+                    (REPLACE_WHERE_CHECK_CONFIG.to_string(), "false".to_string()),
+                ],
+            }],
+            lakehouse_table: None,
+        };
+        let checked = DeltaLakeSource.create_writer(&state, info.clone()).await?;
+        *provider.value.lock().unwrap() = Some("false".to_string());
+        let unchecked = DeltaLakeSource.create_writer(&state, info.clone()).await?;
+        *provider.value.lock().unwrap() = Some("true".to_string());
+        assert!(matches!(checked.inputs()[0], LogicalPlan::Filter(_)));
+        assert_eq!(unchecked.inputs()[0], &input);
+        assert_eq!(provider.reads.load(Ordering::SeqCst), 2);
+        // A non-conditional write must not consult this setting.
+        let append = SinkInfo {
+            mode: SinkMode::Append,
+            ..info.clone()
+        };
+        assert!(
+            DeltaLakeSource
+                .create_writer(&state_with_failing_replace_where_provider(), append)
+                .await
+                .is_ok()
+        );
+        assert!(
+            DeltaLakeSource
+                .create_writer(&state_with_failing_replace_where_provider(), info)
+                .await
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -10,7 +11,8 @@ from pyspark.sql.types import Row
 
 from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.files import assert_file_lifecycle, get_data_files
-from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.testing.spark.utils.jvm import classic_spark_mode
+from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
 
 
 @pytest.fixture(scope="module")
@@ -408,6 +410,340 @@ def test_delta_io_overwrite_mode(spark, delta_test_data, tmp_path):
     assert_frame_equal(result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False)
 
 
+REPLACE_WHERE_CHECK = "spark.databricks.delta.replaceWhere.constraintCheck.enabled"
+
+
+@pytest.fixture
+def replace_where_check(spark, request):
+    previous = spark.conf.get(REPLACE_WHERE_CHECK, None)
+    value = getattr(request, "param", None)
+    if value is None:
+        spark.conf.unset(REPLACE_WHERE_CHECK)
+    else:
+        spark.conf.set(REPLACE_WHERE_CHECK, value)
+    try:
+        yield
+    finally:
+        if previous is None:
+            spark.conf.unset(REPLACE_WHERE_CHECK)
+        else:
+            spark.conf.set(REPLACE_WHERE_CHECK, previous)
+
+
+def _delta_commits(path):
+    return {file.name: file.read_bytes() for file in sorted((path / "_delta_log").glob("*.json"))}
+
+
+def _delta_metadata(path):
+    return next(
+        action["metaData"]
+        for commit in reversed(list(_delta_commits(path).values()))
+        for line in commit.splitlines()
+        if "metaData" in (action := json.loads(line))
+    )
+
+
+def _conditional_overwrite(spark, frame, path, table, api, predicate):
+    writer = frame.write.format("delta").mode("overwrite").option("replaceWhere", predicate)
+    if api == "path":
+        writer.save(str(path))
+    elif api == "sink":
+        writer.option("path", str(path)).save()
+    elif api == "table":
+        writer.saveAsTable(table)
+    elif api == "v2":
+        frame.writeTo(table).overwrite(F.expr(predicate))
+    else:
+        view = f"{table}_input"
+        frame.createOrReplaceTempView(view)
+        try:
+            spark.sql(f"INSERT INTO {table} REPLACE WHERE {predicate} SELECT * FROM {view}")  # noqa: S608
+        finally:
+            spark.catalog.dropTempView(view)
+
+
+@pytest.mark.parametrize("api", ["table", "path", "sink", "v2", "sql"])
+@pytest.mark.parametrize("partitioned", [False, True], ids=["data", "partition"])
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_conditional_overwrite_validates_input(spark, tmp_path, api, partitioned):
+    path = tmp_path / "conditional_input"
+    table = "delta_conditional_input"
+    partition = "PARTITIONED BY (p)" if partitioned else ""
+    spark.sql(
+        f"CREATE TABLE {table} (p INT, v INT) USING DELTA {partition} LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        spark.sql("INSERT INTO delta_conditional_input VALUES (NULL, 0), (1, 10), (2, 11)")
+        before = _delta_commits(path)
+        initial = spark.table(table).orderBy("v").collect()
+        # A matching row must not hide an invalid row in the same input.
+        invalid = spark.createDataFrame([(1, 20), (2, 21)], "p INT, v INT")
+        with pytest.raises(Exception, match="DELTA_REPLACE_WHERE_MISMATCH"):
+            _conditional_overwrite(spark, invalid, path, table, api, "p = 1")
+        assert _delta_commits(path) == before
+        assert spark.table(table).orderBy("v").collect() == initial
+
+        valid = spark.createDataFrame([(1, 20)], "p INT, v INT")
+        _conditional_overwrite(spark, valid, path, table, api, "p = 1")
+        assert spark.table(table).orderBy("v").collect() == [(None, 0), (2, 11), (1, 20)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    ("predicate", "incoming", "expected", "error"),
+    [
+        ("p = 1", [], [(None, 0), (2, 11)], None),
+        ("p = 1", [(None, 20)], None, "DELTA_REPLACE_WHERE_MISMATCH"),
+        ("p IS NULL", [(None, 20)], [(1, 10), (2, 11), (None, 20)], None),
+        ("p = 1 OR NULL", [(2, 20)], None, "DELTA_REPLACE_WHERE_MISMATCH"),
+        ("true", [(1, 20)], [(1, 20)], None),
+        ("false", [(1, 20)], [(None, 0), (1, 10), (2, 11), (1, 20)], None),
+        ("p = 1 AND false", [(1, 20)], [(None, 0), (1, 10), (2, 11), (1, 20)], None),
+        ("false AND p = 1", [(2, 20)], None, "DELTA_REPLACE_WHERE_MISMATCH"),
+        ("p = 1 AND NULL", [(1, 20)], [(None, 0), (1, 10), (2, 11), (1, 20)], None),
+    ],
+    ids=["empty", "null-input", "is-null", "or-null", "true", "false", "and-false", "and-invalid", "and-null"],
+)
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_replace_where_constraint_selection(spark, tmp_path, predicate, incoming, expected, error):
+    # Constraint extraction selects column-bearing conjuncts.
+    path = tmp_path / "constraint_selection"
+    initial = [(None, 0), (1, 10), (2, 11)]
+    spark.createDataFrame(initial, "p INT, v INT").write.format("delta").save(str(path))
+    before = _delta_commits(path)
+    frame = spark.createDataFrame(incoming, "p INT, v INT")
+    if error:
+        with pytest.raises(Exception, match=error):
+            _conditional_overwrite(spark, frame, path, None, "path", predicate)
+        assert _delta_commits(path) == before
+        expected = initial
+    else:
+        _conditional_overwrite(spark, frame, path, None, "path", predicate)
+    assert spark.read.format("delta").load(str(path)).orderBy("v").collect() == expected
+
+
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_save_as_table_replace_where_preserves_metadata(spark, tmp_path):
+    path = tmp_path / "table_identity"
+    table = "delta_replace_where_identity"
+    spark.sql(
+        f"CREATE TABLE {table} (p INT NOT NULL, v INT) USING DELTA PARTITIONED BY (p) "
+        f"LOCATION '{escape_sql_string_literal(str(path))}' TBLPROPERTIES ('owner.tag' = 'retained')"
+    )
+    try:
+        spark.sql("INSERT INTO delta_replace_where_identity VALUES (1, 10), (2, 11)")
+        metadata = _delta_metadata(path)
+        schema = spark.table(table).schema
+        description = spark.sql(f"DESCRIBE TABLE EXTENDED {table}").collect()
+        # Reordered columns exercise saveAsTable's name-based matching.
+        frame = spark.createDataFrame([(20, 1)], "v INT, p INT")
+        frame.write.format("DELTA").mode("overwrite").option("RePlAcEwHeRe", "p = 1").saveAsTable(table)
+        assert spark.table(table).orderBy("v").collect() == [(2, 11), (1, 20)]
+        assert spark.table(table).schema == schema
+        assert spark.sql(f"DESCRIBE TABLE EXTENDED {table}").collect() == description
+        assert _delta_metadata(path) == metadata
+
+        before = _delta_commits(path)
+        for frame, options, partition in [
+            (spark.createDataFrame([(None, 21)], "p INT, v INT"), {}, None),
+            (spark.createDataFrame([(1, 21)], "p INT, v INT"), {}, "v"),
+            (spark.createDataFrame([(1, 21)], "p INT, v INT"), {"partitionOverwriteMode": "dynamic"}, None),
+        ]:
+            writer = frame.write.format("delta").mode("overwrite").option("replaceWhere", "p = 1").options(**options)
+            if partition:
+                writer = writer.partitionBy(partition)
+            with pytest.raises(Exception, match=r"(?i)(null|partition)"):
+                writer.saveAsTable(table)
+            assert _delta_commits(path) == before
+            assert spark.table(table).schema == schema
+            assert _delta_metadata(path) == metadata
+        assert spark.table(table).orderBy("v").collect() == [(2, 11), (1, 20)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize(
+    ("existing", "provider", "predicate", "method"),
+    [
+        (None, "delta", "p = 1", "saveAsTable"),
+        ("parquet", "parquet", "p = 1", "saveAsTable"),
+        ("delta", "parquet", "p = 1", "saveAsTable"),
+        ("delta", "delta", None, "saveAsTable"),
+        ("delta", "delta", "p = 1", "insertInto"),
+    ],
+    ids=["create", "non-delta", "provider-replacement", "ordinary-overwrite", "insert-into"],
+)
+def test_delta_io_v1_overwrite_intent_boundaries(spark, tmp_path, existing, provider, predicate, method):
+    path = tmp_path / "overwrite_intent"
+    table = "delta_overwrite_intent"
+    try:
+        if existing:
+            spark.sql(
+                f"CREATE TABLE {table} (p INT, v INT) USING {existing} LOCATION '{escape_sql_string_literal(str(path))}'"
+            )
+            spark.sql("INSERT INTO delta_overwrite_intent VALUES (1, 10), (2, 11)")
+        writer = spark.createDataFrame([(2, 20)], "p INT, v INT").write.format(provider).mode("overwrite")
+        if predicate:
+            writer = writer.option("replaceWhere", predicate)
+        if not existing:
+            writer = writer.option("path", str(path))
+        getattr(writer, method)(table)
+        assert spark.table(table).collect() == [(2, 20)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_replace_where_check_switch(spark, tmp_path):
+    path = tmp_path / "check_switch"
+    table = "delta_replace_where_check_switch"
+    spark.sql(
+        f"CREATE TABLE {table} (p INT NOT NULL, v INT) USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        spark.sql(f"ALTER TABLE {table} ADD CONSTRAINT positive CHECK (v >= 0)")
+        spark.sql("INSERT INTO delta_replace_where_check_switch VALUES (1, 10), (2, 11)")
+        outside = spark.createDataFrame([(2, 20)], "p INT, v INT")
+        for setting in [None, "true", "false", "true"]:
+            if setting is None:
+                spark.conf.unset(REPLACE_WHERE_CHECK)
+            else:
+                spark.conf.set(REPLACE_WHERE_CHECK, setting)
+            writer = outside.write.format("delta").mode("overwrite").option("replaceWhere", "p = 1")
+            # This is a session setting, not a per-write option.
+            writer = writer.option(REPLACE_WHERE_CHECK, "false")
+            before = _delta_commits(path)
+            if setting == "false":
+                writer.saveAsTable(table)
+                assert spark.table(table).orderBy("v").collect() == [(2, 11), (2, 20)]
+                for rows, schema, error in [
+                    ([(None, 30)], "p INT, v INT", "NOT_NULL"),
+                    ([(2, -1)], "p INT, v INT", "CONSTRAINT"),
+                    ([(2,)], "p INT", "DELTA_VIOLATE_CONSTRAINT_WITH_VALUES"),
+                ]:
+                    before_failure = _delta_commits(path)
+                    with pytest.raises(Exception, match=error):
+                        _conditional_overwrite(
+                            spark, spark.createDataFrame(rows, schema), path, table, "table", "p = 1"
+                        )
+                    assert _delta_commits(path) == before_failure
+            else:
+                with pytest.raises(Exception, match="DELTA_REPLACE_WHERE_MISMATCH"):
+                    writer.saveAsTable(table)
+                assert _delta_commits(path) == before
+        assert REPLACE_WHERE_CHECK not in _delta_metadata(path)["configuration"]
+        before = _delta_commits(path)
+
+        def overwrite_with_invalid_setting():
+            spark.conf.set(REPLACE_WHERE_CHECK, "not-a-boolean")
+            _conditional_overwrite(spark, outside, path, table, "v2", "p = 1")
+
+        with pytest.raises(Exception, match="boolean"):
+            overwrite_with_invalid_setting()
+        assert _delta_commits(path) == before
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("replace_where_check", [None, "false"], indirect=True)
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_save_as_table_replace_where_rejects_extra_columns(spark, tmp_path):
+    path = tmp_path / "extra_columns"
+    table = "delta_replace_where_extra_columns"
+    spark.sql(
+        f"CREATE TABLE {table} (p INT NOT NULL, v INT) USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'"
+    )
+    try:
+        spark.sql("INSERT INTO delta_replace_where_extra_columns VALUES (1, 10), (2, 11)")
+        before = _delta_commits(path)
+        with pytest.raises(Exception, match=r"(?i)(schema|column)"):
+            spark.createDataFrame([(1, 20, 30)], "p INT, v INT, extra INT").write.format("delta").mode(
+                "overwrite"
+            ).option("replaceWhere", "p = 1").option("overwriteSchema", "true").saveAsTable(table)
+        assert _delta_commits(path) == before
+        assert spark.table(table).orderBy("v").collect() == [(1, 10), (2, 11)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.parametrize("api", ["path", "table"])
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_replace_where_late_failure_does_not_commit(spark, tmp_path, api):
+    path = tmp_path / "late_failure"
+    table = "delta_replace_where_late_failure"
+    spark.sql(f"CREATE TABLE {table} (p INT, v INT) USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'")
+    try:
+        spark.sql("INSERT INTO delta_replace_where_late_failure VALUES (1, 10), (2, 11)")
+        before = _delta_commits(path)
+        active_files = {file: file.read_bytes() for file in path.rglob("*.parquet")}
+        frame = spark.range(0, 50000, 1, 4).selectExpr(
+            "CASE WHEN id = 49999 THEN 2 ELSE 1 END AS p", "CAST(id AS INT) AS v"
+        )
+        with pytest.raises(Exception, match="DELTA_REPLACE_WHERE_MISMATCH"):
+            _conditional_overwrite(spark, frame, path, table, api, "p = 1")
+        assert _delta_commits(path) == before
+        assert all(file.read_bytes() == contents for file, contents in active_files.items())
+        assert spark.read.format("delta").load(str(path)).orderBy("v").collect() == [(1, 10), (2, 11)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+@pytest.mark.integration
+@pytest.mark.usefixtures("replace_where_check")
+def test_delta_io_replace_where_cross_engine_lifecycle(delta_jvm_spark, spark, tmp_path):
+    path = tmp_path / "mapped_replace_where"
+    table = "delta_mapped_replace_where"
+    jvm_table = f"delta.`{escape_sql_identifier(str(path))}`"
+    delta_jvm_spark.sql(
+        f"CREATE TABLE {jvm_table} (p INT, v INT) USING DELTA PARTITIONED BY (p) "
+        "TBLPROPERTIES ('delta.columnMapping.mode' = 'name', 'delta.enableChangeDataFeed' = 'true')"
+    )
+    # The generated path in jvm_table is escaped as a SQL identifier above.
+    delta_jvm_spark.sql(f"INSERT INTO {jvm_table} VALUES (NULL, 0), (1, 10), (2, 11)")  # noqa: S608
+    spark.sql(f"CREATE TABLE {table} USING DELTA LOCATION '{escape_sql_string_literal(str(path))}'")
+    try:
+        metadata = _delta_metadata(path)
+        incoming = spark.createDataFrame([(1, 20)], "p INT, v INT")
+        _conditional_overwrite(spark, incoming, path, table, "table", "p = 1")
+        with classic_spark_mode():
+            assert delta_jvm_spark.read.format("delta").load(str(path)).orderBy("v").collect() == [
+                (None, 0),
+                (2, 11),
+                (1, 20),
+            ]
+            delta_jvm_spark.createDataFrame([(2, 21)], "p INT, v INT").writeTo(jvm_table).overwrite(F.expr("p = 2"))
+        expected = [(None, 0), (1, 20), (2, 21)]
+        for engine in [spark, delta_jvm_spark]:
+            with classic_spark_mode() if engine is delta_jvm_spark else nullcontext():
+                assert engine.read.format("delta").load(str(path)).orderBy("v").collect() == expected
+                before = _delta_commits(path)
+                with pytest.raises(Exception, match="DELTA_REPLACE_WHERE_MISMATCH"):
+                    engine.createDataFrame([(1, 30), (None, 31)], "p INT, v INT").write.format("delta").mode(
+                        "overwrite"
+                    ).option("replaceWhere", "p = 1").save(str(path))
+                assert _delta_commits(path) == before
+                changes = (
+                    engine.read.format("delta")
+                    .option("readChangeFeed", "true")
+                    .option("startingVersion", 2)
+                    .option("endingVersion", 3)
+                    .load(str(path))
+                    .select("p", "v", "_change_type", "_commit_version")
+                    .orderBy("_commit_version", "v")
+                    .collect()
+                )
+                assert changes == [
+                    (1, 10, "delete", 2),
+                    (1, 20, "insert", 2),
+                    (2, 11, "delete", 3),
+                    (2, 21, "insert", 3),
+                ]
+        assert _delta_metadata(path) == metadata
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 def test_delta_io_overwrite_partitions_with_replace_where(spark, tmp_path):
     """Test Delta Lake overwrite with replaceWhere option."""
     delta_path = tmp_path / "delta_replace_where"
@@ -474,6 +810,8 @@ def test_delta_io_conditional_overwrite_rejects_nondeterministic_predicates(spar
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+@pytest.mark.parametrize("replace_where_check", ["false"], indirect=True)
+@pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_overwrite_partitions_with_v2_api(spark, tmp_path):
     """Test Delta Lake overwrite with a condition using the V2 API."""
     delta_path = tmp_path / "delta_condition_v2"
@@ -518,6 +856,8 @@ def test_delta_io_overwrite_partitions_with_v2_api(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+@pytest.mark.parametrize("replace_where_check", ["false"], indirect=True)
+@pytest.mark.usefixtures("replace_where_check")
 def test_delta_io_overwrite_partitions_with_sql_condition(spark, tmp_path):
     """Test Delta Lake overwrite with a complex condition using SQL REPLACE WHERE."""
     delta_path = tmp_path / "delta_condition_sql"
