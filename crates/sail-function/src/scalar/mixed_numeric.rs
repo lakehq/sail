@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray, new_null_array};
+use arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray, new_null_array};
 use arrow::compute::binary;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
@@ -54,7 +54,7 @@ impl MixedNumeric {
     }
 }
 
-/// Fuse an existing mixed DOUBLE operation with a comparison to a scalar literal.
+/// Execute mixed DOUBLE arithmetic followed by Arrow's comparison to a scalar literal.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MixedNumericPredicate {
     arithmetic: Operator,
@@ -114,12 +114,15 @@ impl MixedNumericPredicate {
         right: &ColumnarValue,
         threshold: Option<f64>,
     ) -> Result<ColumnarValue> {
-        match self.arithmetic {
-            Operator::Plus => predicate::<0>(left, right, threshold, self.comparison),
-            Operator::Minus => predicate::<1>(left, right, threshold, self.comparison),
-            Operator::Multiply => predicate::<2>(left, right, threshold, self.comparison),
-            _ => internal_err!("unsupported mixed numeric predicate arithmetic"),
-        }
+        let value = match self.arithmetic {
+            Operator::Plus => evaluate::<0>(left, right)?,
+            Operator::Minus => evaluate::<1>(left, right)?,
+            Operator::Multiply => evaluate::<2>(left, right)?,
+            _ => return internal_err!("unsupported mixed numeric predicate arithmetic"),
+        };
+        let threshold = ColumnarValue::Scalar(ScalarValue::Float64(threshold));
+        // Reuse DataFusion's zero normalization and Arrow's specialized comparisons.
+        datafusion::physical_expr_common::datum::apply_cmp(self.comparison, &value, &threshold)
     }
 }
 
@@ -156,147 +159,6 @@ impl ScalarUDFImpl for MixedNumericPredicate {
         }
         self.evaluate(left, right, *threshold)
     }
-}
-
-fn predicate<const OP: u8>(
-    left: &ColumnarValue,
-    right: &ColumnarValue,
-    threshold: Option<f64>,
-    comparison: Operator,
-) -> Result<ColumnarValue> {
-    let len = match (left, right) {
-        (ColumnarValue::Array(array), _) | (_, ColumnarValue::Array(array)) => Some(array.len()),
-        _ => None,
-    };
-    let Some(threshold) = threshold else {
-        return Ok(match len {
-            Some(len) => ColumnarValue::Array(new_null_array(&DataType::Boolean, len)),
-            None => ColumnarValue::Scalar(ScalarValue::Boolean(None)),
-        });
-    };
-    let threshold = if threshold == 0.0 { 0.0 } else { threshold };
-    let compare = |left: f64, right: f64| {
-        // DataFusion normalizes signed zeros before Arrow's NaN-payload-aware total order.
-        let value = operation::<OP>(left, right);
-        let value = if value == 0.0 { 0.0 } else { value };
-        let ordering = value.total_cmp(&threshold);
-        match comparison {
-            Operator::Eq => ordering.is_eq(),
-            Operator::NotEq => !ordering.is_eq(),
-            Operator::Lt => ordering.is_lt(),
-            Operator::LtEq => !ordering.is_gt(),
-            Operator::Gt => ordering.is_gt(),
-            Operator::GtEq => !ordering.is_lt(),
-            _ => unreachable!("constructor checks comparison"),
-        }
-    };
-    match (left, right) {
-        (ColumnarValue::Array(left), ColumnarValue::Array(right)) => {
-            if left.len() != right.len() {
-                return internal_err!("mixed numeric predicate operand lengths differ");
-            }
-            macro_rules! apply {
-                ($ty:ty) => {
-                    predicate_right(left.as_primitive::<$ty>(), right, &compare)
-                };
-            }
-            Ok(ColumnarValue::Array(match left.data_type() {
-                DataType::Float32 => apply!(Float32Type)?,
-                DataType::Float64 => apply!(Float64Type)?,
-                DataType::Int8 => apply!(Int8Type)?,
-                DataType::Int16 => apply!(Int16Type)?,
-                DataType::Int32 => apply!(Int32Type)?,
-                DataType::Int64 => apply!(Int64Type)?,
-                DataType::UInt8 => apply!(UInt8Type)?,
-                DataType::UInt16 => apply!(UInt16Type)?,
-                DataType::UInt32 => apply!(UInt32Type)?,
-                DataType::UInt64 => apply!(UInt64Type)?,
-                data_type => {
-                    return internal_err!("unsupported mixed numeric array type: {data_type}");
-                }
-            }))
-        }
-        (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) => {
-            predicate_scalar(array, scalar, compare)
-        }
-        (ColumnarValue::Scalar(scalar), ColumnarValue::Array(array)) => {
-            predicate_scalar(array, scalar, |value, scalar| compare(scalar, value))
-        }
-        (ColumnarValue::Scalar(left), ColumnarValue::Scalar(right)) => {
-            Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
-                scalar_double(left)?
-                    .zip(scalar_double(right)?)
-                    .map(|(left, right)| compare(left, right)),
-            )))
-        }
-    }
-}
-
-fn predicate_right<L, F>(
-    left: &PrimitiveArray<L>,
-    right: &ArrayRef,
-    compare: &F,
-) -> Result<ArrayRef>
-where
-    L: ArrowPrimitiveType,
-    L::Native: Widen,
-    F: Fn(f64, f64) -> bool,
-{
-    macro_rules! apply {
-        ($ty:ty) => {
-            Arc::new(BooleanArray::from_binary(
-                left,
-                right.as_primitive::<$ty>(),
-                |left, right| compare(left.to_double(), right.to_double()),
-            )) as ArrayRef
-        };
-    }
-    Ok(match right.data_type() {
-        DataType::Float32 => apply!(Float32Type),
-        DataType::Float64 => apply!(Float64Type),
-        DataType::Int8 => apply!(Int8Type),
-        DataType::Int16 => apply!(Int16Type),
-        DataType::Int32 => apply!(Int32Type),
-        DataType::Int64 => apply!(Int64Type),
-        DataType::UInt8 => apply!(UInt8Type),
-        DataType::UInt16 => apply!(UInt16Type),
-        DataType::UInt32 => apply!(UInt32Type),
-        DataType::UInt64 => apply!(UInt64Type),
-        data_type => return internal_err!("unsupported mixed numeric array type: {data_type}"),
-    })
-}
-
-fn predicate_scalar<F>(array: &ArrayRef, scalar: &ScalarValue, compare: F) -> Result<ColumnarValue>
-where
-    F: Fn(f64, f64) -> bool,
-{
-    let Some(scalar) = scalar_double(scalar)? else {
-        return Ok(ColumnarValue::Array(new_null_array(
-            &DataType::Boolean,
-            array.len(),
-        )));
-    };
-    macro_rules! apply {
-        ($ty:ty) => {
-            Arc::new(BooleanArray::from_unary(
-                array.as_primitive::<$ty>(),
-                |value| compare(value.to_double(), scalar),
-            )) as ArrayRef
-        };
-    }
-    Ok(ColumnarValue::Array(match array.data_type() {
-        DataType::Float32 => apply!(Float32Type),
-        DataType::Float64 => apply!(Float64Type),
-        DataType::Int8 => apply!(Int8Type),
-        DataType::Int16 => apply!(Int16Type),
-        DataType::Int32 => apply!(Int32Type),
-        DataType::Int64 => apply!(Int64Type),
-        DataType::UInt8 => apply!(UInt8Type),
-        DataType::UInt16 => apply!(UInt16Type),
-        DataType::UInt32 => apply!(UInt32Type),
-        DataType::UInt64 => apply!(UInt64Type),
-        data_type => return internal_err!("unsupported mixed numeric array type: {data_type}"),
-    }))
 }
 
 impl ScalarUDFImpl for MixedNumeric {
