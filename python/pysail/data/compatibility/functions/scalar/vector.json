@@ -1,0 +1,32 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "vector_cosine_similarity",
+    "status": "supported",
+    "note": "This is Spark SQL only (not available in PySpark)."
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "vector_inner_product",
+    "status": "supported",
+    "note": "This is Spark SQL only (not available in PySpark)."
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "vector_l2_distance",
+    "status": "supported",
+    "note": "This is Spark SQL only (not available in PySpark)."
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "vector_norm",
+    "status": "supported",
+    "note": "This is Spark SQL only (not available in PySpark)."
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "vector_normalize",
+    "status": "supported",
+    "note": "This is Spark SQL only (not available in PySpark)."
+  }
+]
