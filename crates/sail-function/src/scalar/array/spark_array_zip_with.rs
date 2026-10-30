@@ -5,7 +5,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, GenericListArray, LargeListArray, ListArray, OffsetSizeTrait, new_null_array,
+    Array, ArrayRef, GenericListArray, LargeListArray, ListArray, OffsetSizeTrait, new_empty_array,
+    new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, concat, take_arrays};
@@ -13,7 +14,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
-    ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+    ColumnarValue, Expr, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
@@ -50,6 +51,20 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
 
     fn signature(&self) -> &HigherOrderSignature {
         &self.signature
+    }
+
+    fn short_circuits(&self) -> bool {
+        true
+    }
+
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        let [left, right, lambda] = args else {
+            return None;
+        };
+        Some((vec![left, right], vec![lambda]))
     }
 
     fn lambda_parameters(
@@ -128,11 +143,15 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         let left_param = || Ok(Arc::clone(&left_values));
         let right_param = || Ok(Arc::clone(&right_values));
         let params: [&dyn Fn() -> Result<ArrayRef>; 2] = [&left_param, &right_param];
-        let output = lambda
-            .evaluate(&params, |arrays| {
-                Ok(take_arrays(arrays, &row_numbers, None)?)
-            })?
-            .into_array(left_values.len())?;
+        let output = if left_values.is_empty() {
+            new_empty_array(element_field.data_type())
+        } else {
+            lambda
+                .evaluate(&params, |arrays| {
+                    Ok(take_arrays(arrays, &row_numbers, None)?)
+                })?
+                .into_array(left_values.len())?
+        };
         let output = if output.data_type() == element_field.data_type() {
             output
         } else {
