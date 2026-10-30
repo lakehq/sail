@@ -251,6 +251,7 @@ fn zip_row_numbers(offsets: &OffsetBuffer<i32>) -> datafusion::arrow::array::UIn
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::Int32Array;
 

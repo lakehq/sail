@@ -107,19 +107,19 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         let right_array = right.to_array(args.number_rows)?;
         let left_map = as_map_array(&left_array)?;
         let right_map = as_map_array(&right_array)?;
-        let (keys, left_values, right_values, offsets, nulls) = build_lambda_inputs(
+        let inputs = build_lambda_inputs(
             self.name(),
             left_map,
             right_map,
             args.return_field.data_type(),
         )?;
-        let key_param = || Ok(Arc::clone(&keys));
-        let left_param = || Ok(Arc::clone(&left_values));
-        let right_param = || Ok(Arc::clone(&right_values));
+        let key_param = || Ok(Arc::clone(&inputs.keys));
+        let left_param = || Ok(Arc::clone(&inputs.left_values));
+        let right_param = || Ok(Arc::clone(&inputs.right_values));
         let params: [&dyn Fn() -> Result<ArrayRef>; 3] = [&key_param, &left_param, &right_param];
         let output_values = lambda
-            .evaluate(&params, |arrays| repeat_captures(arrays, &offsets))?
-            .into_array(keys.len())?;
+            .evaluate(&params, |arrays| repeat_captures(arrays, &inputs.offsets))?
+            .into_array(inputs.keys.len())?;
 
         let DataType::Map(entries_field, ordered) = args.return_field.data_type() else {
             return exec_err!(
@@ -136,12 +136,12 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         } else {
             cast(&output_values, fields[1].data_type())?
         };
-        let entries = StructArray::try_new(fields.clone(), vec![keys, values], None)?;
+        let entries = StructArray::try_new(fields.clone(), vec![inputs.keys, values], None)?;
         Ok(ColumnarValue::Array(Arc::new(MapArray::try_new(
             Arc::clone(entries_field),
-            offsets,
+            inputs.offsets,
             entries,
-            nulls,
+            inputs.nulls,
             *ordered,
         )?)))
     }
@@ -212,18 +212,20 @@ fn same_key_type(name: &str, left: &FieldRef, right: &FieldRef) -> Result<()> {
     Ok(())
 }
 
+struct MapLambdaInputs {
+    keys: ArrayRef,
+    left_values: ArrayRef,
+    right_values: ArrayRef,
+    offsets: OffsetBuffer<i32>,
+    nulls: Option<NullBuffer>,
+}
+
 fn build_lambda_inputs(
     name: &str,
     left: &MapArray,
     right: &MapArray,
     return_type: &DataType,
-) -> Result<(
-    ArrayRef,
-    ArrayRef,
-    ArrayRef,
-    OffsetBuffer<i32>,
-    Option<NullBuffer>,
-)> {
+) -> Result<MapLambdaInputs> {
     let left_rows = left.offsets().len() - 1;
     let right_rows = right.offsets().len() - 1;
     if left_rows != right_rows {
@@ -306,13 +308,13 @@ fn build_lambda_inputs(
         offsets.push(current);
     }
 
-    Ok((
-        scalar_values_to_array(keys, &key_type)?,
-        scalar_values_to_array(left_values, &left_value_type)?,
-        scalar_values_to_array(right_values, &right_value_type)?,
-        OffsetBuffer::new(offsets.into()),
-        Some(NullBuffer::from(nulls)),
-    ))
+    Ok(MapLambdaInputs {
+        keys: scalar_values_to_array(keys, &key_type)?,
+        left_values: scalar_values_to_array(left_values, &left_value_type)?,
+        right_values: scalar_values_to_array(right_values, &right_value_type)?,
+        offsets: OffsetBuffer::new(offsets.into()),
+        nulls: Some(NullBuffer::from(nulls)),
+    })
 }
 
 fn scalar_values_to_array(values: Vec<ScalarValue>, data_type: &DataType) -> Result<ArrayRef> {
@@ -363,6 +365,7 @@ fn offsets_to_row_indices(offsets: &OffsetBuffer<i32>) -> datafusion::arrow::arr
 }
 
 #[cfg(test)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{Int32Array, StringArray};
 
@@ -414,21 +417,28 @@ mod tests {
     fn builds_union_inputs_with_typed_nulls() -> Result<()> {
         let left = string_i32_map(vec!["a", "b"], vec![1, 2], vec![2]);
         let right = string_i32_map(vec!["b", "c"], vec![3, 4], vec![2]);
-        let (keys, left_values, right_values, offsets, nulls) =
-            build_lambda_inputs("map_zip_with", &left, &right, &return_type())?;
+        let inputs = build_lambda_inputs("map_zip_with", &left, &right, &return_type())?;
 
-        assert_eq!(offsets.as_ref(), &[0, 3]);
-        assert_eq!(nulls.unwrap().iter().collect::<Vec<_>>(), vec![true]);
+        assert_eq!(inputs.offsets.as_ref(), &[0, 3]);
+        assert_eq!(inputs.nulls.unwrap().iter().collect::<Vec<_>>(), vec![true]);
         assert_eq!(
-            keys.as_any().downcast_ref::<StringArray>().unwrap(),
+            inputs.keys.as_any().downcast_ref::<StringArray>().unwrap(),
             &StringArray::from(vec!["a", "b", "c"])
         );
         assert_eq!(
-            left_values.as_any().downcast_ref::<Int32Array>().unwrap(),
+            inputs
+                .left_values
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap(),
             &Int32Array::from(vec![Some(1), Some(2), None])
         );
         assert_eq!(
-            right_values.as_any().downcast_ref::<Int32Array>().unwrap(),
+            inputs
+                .right_values
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap(),
             &Int32Array::from(vec![None, Some(3), Some(4)])
         );
         Ok(())
@@ -438,20 +448,27 @@ mod tests {
     fn keeps_first_duplicate_key() -> Result<()> {
         let left = string_i32_map(vec!["a", "a"], vec![1, 99], vec![2]);
         let right = string_i32_map(vec!["a", "a"], vec![2, 88], vec![2]);
-        let (keys, left_values, right_values, offsets, _) =
-            build_lambda_inputs("map_zip_with", &left, &right, &return_type())?;
+        let inputs = build_lambda_inputs("map_zip_with", &left, &right, &return_type())?;
 
-        assert_eq!(offsets.as_ref(), &[0, 1]);
+        assert_eq!(inputs.offsets.as_ref(), &[0, 1]);
         assert_eq!(
-            keys.as_any().downcast_ref::<StringArray>().unwrap(),
+            inputs.keys.as_any().downcast_ref::<StringArray>().unwrap(),
             &StringArray::from(vec!["a"])
         );
         assert_eq!(
-            left_values.as_any().downcast_ref::<Int32Array>().unwrap(),
+            inputs
+                .left_values
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap(),
             &Int32Array::from(vec![1])
         );
         assert_eq!(
-            right_values.as_any().downcast_ref::<Int32Array>().unwrap(),
+            inputs
+                .right_values
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap(),
             &Int32Array::from(vec![2])
         );
         Ok(())
