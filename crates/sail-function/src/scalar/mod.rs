@@ -13,6 +13,7 @@ pub mod json;
 pub mod map;
 pub mod math;
 pub mod misc;
+pub mod mixed_numeric;
 pub mod multi_expr;
 pub mod normalize_float_keys;
 pub mod predicate;

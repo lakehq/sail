@@ -32,7 +32,8 @@ impl PhysicalOptimizerRule for PostFilterPushdown {
             // removing the workaround: https://github.com/apache/datafusion/issues/25147
             config.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
         }
-        FilterPushdown::new_post_optimization().optimize(plan, &config)
+        let plan = FilterPushdown::new_post_optimization().optimize(plan, &config)?;
+        crate::mixed_numeric::specialize(plan, &config)
     }
 
     fn name(&self) -> &str {
