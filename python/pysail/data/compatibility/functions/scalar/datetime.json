@@ -303,7 +303,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_interval",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
