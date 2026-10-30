@@ -15,9 +15,23 @@ use serde::{Deserialize, Serialize};
 
 use super::manifest_scan_exec::manifest_scan_schema;
 pub use crate::datasource::partition_defaults::IdentityPartitionDefaults;
-use crate::spec::{DataContentType, DataFile, DataFileFormat};
+use crate::spec::delete_index::DeleteFileRef;
+use crate::spec::{DataContentType, DataFile, DataFileFormat, Schema as IcebergSchema};
 
 pub(crate) const COL_IDENTITY_PARTITION_DEFAULTS: &str = "identity_partition_defaults";
+pub(crate) const COL_REWRITE_SCAN_CONTEXT: &str = "rewrite_scan_context";
+
+/// Per-file state resolved against the snapshot pinned by the rewrite coordinator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct RewriteScanContext {
+    pub read_schema: Schema,
+    pub iceberg_schema: IcebergSchema,
+    pub positional_deletes: Vec<DeleteFileRef>,
+    pub equality_deletes: Vec<DeleteFileRef>,
+    pub first_row_id: Option<i64>,
+    pub data_sequence_number: i64,
+    pub preserve_lineage: bool,
+}
 
 /// Immutable data-file input; column metrics are unnecessary for an unfiltered rewrite.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -27,6 +41,9 @@ pub struct IcebergFileTask {
     pub records: u64,
     pub spec_id: i32,
     pub identity_partition_defaults: IdentityPartitionDefaults,
+    /// JSON retains schema and delete descriptors (including Puffin blob ranges) in the task.
+    #[serde(default)]
+    pub rewrite_scan_context: Option<String>,
 }
 
 impl From<&DataFile> for IcebergFileTask {
@@ -37,6 +54,7 @@ impl From<&DataFile> for IcebergFileTask {
             records: file.record_count,
             spec_id: file.partition_spec_id,
             identity_partition_defaults: Default::default(),
+            rewrite_scan_context: None,
         }
     }
 }
@@ -58,6 +76,11 @@ impl IcebergFileTasksExec {
             COL_IDENTITY_PARTITION_DEFAULTS,
             DataType::Utf8,
             false,
+        )));
+        fields.push(Arc::new(Field::new(
+            COL_REWRITE_SCAN_CONTEXT,
+            DataType::Utf8,
+            true,
         )));
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::new(fields))),
@@ -146,9 +169,115 @@ impl ExecutionPlan for IcebergFileTasksExec {
                     Arc::new(StringArray::from(vec![DataContentType::Data.as_action_str(); files.len()])),
                     Arc::new(BooleanArray::from(vec![false; files.len()])),
                     Arc::new(StringArray::from(defaults)),
+                    Arc::new(StringArray::from(files.iter().map(|file| file.rewrite_scan_context.as_deref()).collect::<Vec<_>>())),
                 ])?;
             }
         };
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use futures::TryStreamExt;
+
+    use super::*;
+    use crate::spec::{NestedField, PrimitiveType, Type};
+
+    #[tokio::test]
+    async fn rewrite_scan_context_roundtrips_schema_lineage_and_shared_puffin_ranges() {
+        let iceberg_schema = IcebergSchema::builder()
+            .with_fields([
+                Arc::new(NestedField::optional(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "__sail_iceberg_equality_2",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])
+            .build()
+            .expect("read schema");
+        let read_schema =
+            crate::datasource::type_converter::iceberg_schema_to_arrow(&iceberg_schema)
+                .expect("Arrow schema");
+        let read_schema =
+            crate::row_lineage::append_lineage_fields(&read_schema).expect("lineage schema");
+        let equality_file = serde_json::from_value(serde_json::json!({
+            "content": DataContentType::EqualityDeletes, "file_path": "data/equality.parquet", "file_format": "PARQUET",
+            "partition": [], "record_count": 1, "file_size_in_bytes": 100, "partition_spec_id": 0,
+            "equality_ids": [2]
+        })).expect("equality file");
+        let equality_delete = DeleteFileRef {
+            data_file: equality_file,
+            data_sequence_number: 8,
+            partition_spec_id: 0,
+            is_unpartitioned_spec: true,
+        };
+        let contexts = [4, 36].into_iter().enumerate().map(|(index, offset)| {
+            let file = serde_json::from_value(serde_json::json!({
+                "content": DataContentType::PositionDeletes, "file_path": "data/shared.puffin", "file_format": "PUFFIN",
+                "partition": [], "record_count": 1, "file_size_in_bytes": 256, "partition_spec_id": 0,
+                "referenced_data_file": format!("data/{index}.parquet"),
+                "content_offset": offset, "content_size_in_bytes": 32
+            })).expect("deletion vector");
+            RewriteScanContext {
+                read_schema: read_schema.clone(), iceberg_schema: iceberg_schema.clone(),
+                positional_deletes: vec![DeleteFileRef {
+                    data_file: file, data_sequence_number: 8, partition_spec_id: 0, is_unpartitioned_spec: true,
+                }],
+                equality_deletes: vec![equality_delete.clone()],
+                first_row_id: Some(100 + index as i64 * 10), data_sequence_number: 7, preserve_lineage: true,
+            }
+        }).collect::<Vec<_>>();
+        let tasks = IcebergFileTasksExec::try_new(
+            contexts
+                .iter()
+                .enumerate()
+                .map(|(index, context)| {
+                    vec![IcebergFileTask {
+                        path: format!("data/{index}.parquet"),
+                        size: 100,
+                        records: 10,
+                        spec_id: 0,
+                        identity_partition_defaults: Default::default(),
+                        rewrite_scan_context: Some(
+                            serde_json::to_string(context).expect("context JSON"),
+                        ),
+                    }]
+                })
+                .collect(),
+        )
+        .expect("file tasks");
+        let decoded = IcebergFileTasksExec::try_from_serialized(
+            &tasks.serialized_groups().expect("groups JSON"),
+        )
+        .expect("decoded groups");
+        for (partition, expected) in contexts.iter().enumerate() {
+            let batches = decoded
+                .execute(partition, Arc::new(TaskContext::default()))
+                .expect("task stream")
+                .try_collect::<Vec<_>>()
+                .await
+                .expect("task batches");
+            assert_eq!(batches.len(), 1);
+            let values = batches[0]
+                .column_by_name(COL_REWRITE_SCAN_CONTEXT)
+                .expect("context column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("JSON array");
+            let context: RewriteScanContext =
+                serde_json::from_str(values.value(0)).expect("typed context");
+            assert_eq!(&context, expected);
+            context.positional_deletes[0]
+                .data_file
+                .validate_deletion_vector()
+                .expect("valid DV descriptor");
+        }
     }
 }

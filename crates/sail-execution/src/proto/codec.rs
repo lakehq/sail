@@ -1679,6 +1679,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             Arc::new(try_decode_schema(&output.schema)?),
                             output.rewritten_data_files_count,
                             output.rewritten_bytes_count,
+                            output.starting_sequence_number,
                         ),
                     None => return plan_err!("Missing output for IcebergCommitExec"),
                 };
@@ -3133,11 +3134,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::Command(output) =>
                         r#gen::iceberg_commit_exec_node::Output::CommandOutput(Self::encode_command_output(*output)),
                     sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::RewriteDataFiles {
-                        rewritten_data_files_count, rewritten_bytes_count,
+                        rewritten_data_files_count, rewritten_bytes_count, starting_sequence_number,
                     } => r#gen::iceberg_commit_exec_node::Output::RewriteDataFilesOutput(r#gen::IcebergRewriteDataFilesOutput {
                         schema: try_encode_schema(&iceberg_commit_exec.schema())?,
                         rewritten_data_files_count: *rewritten_data_files_count,
                         rewritten_bytes_count: *rewritten_bytes_count,
+                        starting_sequence_number: *starting_sequence_number,
                     }),
                 }),
             })
@@ -6412,6 +6414,7 @@ mod tests {
                         records: 10,
                         spec_id: group,
                         identity_partition_defaults: partition_defaults.clone(),
+                        rewrite_scan_context: None,
                     }]
                 })
                 .collect(),
@@ -7140,7 +7143,7 @@ mod tests {
                 None,
                 SnapshotUpdateKind::RewriteDataFiles,
             )
-            .with_rewrite_data_files_output(input.schema(), 3, 42),
+            .with_rewrite_data_files_output(input.schema(), 3, 42, Some(7)),
         );
         let rebuilt = rewrite.replace_children(
             vec![input],
@@ -7155,7 +7158,8 @@ mod tests {
                 .output(),
             &CommitOutput::RewriteDataFiles {
                 rewritten_data_files_count: 3,
-                rewritten_bytes_count: 42
+                rewritten_bytes_count: 42,
+                starting_sequence_number: Some(7),
             }
         );
         assert!(RemoteExecutionCodec::try_decode_command_output(0).is_err());

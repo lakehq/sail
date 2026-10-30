@@ -1114,6 +1114,84 @@ def test_unknown_append_preserves_files_without_retrying(
         spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
 
 
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("apply_commit", [False, True], ids=["not_applied", "applied"])
+@pytest.mark.parametrize("fault", [503, "disconnect", "malformed"])
+def test_unknown_rewrite_preserves_current_and_historical_files(
+    spark,
+    gated_remote,
+    commit_gate_proxy,
+    iceberg_rest_endpoint,
+    seaweedfs_host_endpoint,
+    version,
+    apply_commit,
+    fault,
+    request,
+):
+    table_name = "unknown_rewrite_" + request.node.callspec.id.replace("-", "_")
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    spark.sql(
+        f"CREATE TABLE {table_fqn} (id INT) USING iceberg "
+        f"TBLPROPERTIES ('format-version'='{version}', 'write.delete.mode'='merge-on-read')"
+    )
+    properties = {
+        "s3.endpoint": seaweedfs_host_endpoint,
+        "s3.access-key-id": "admin",
+        "s3.secret-access-key": "password",
+        "s3.region": "us-east-1",
+    }
+    file_io = PyArrowFileIO(properties)
+    try:
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1), (2)")  # noqa: S608
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (3), (4)")  # noqa: S608
+        original_snapshot = _load_table(iceberg_rest_endpoint, table_name)["metadata"]["current-snapshot-id"]
+        spark.sql(f"DELETE FROM {table_fqn} WHERE id = 1")  # noqa: S608
+        before = _load_table(iceberg_rest_endpoint, table_name)
+        location = before["metadata"]["location"]
+        bucket = urllib.parse.urlparse(location).netloc
+        before_keys = _s3_object_keys(seaweedfs_host_endpoint, location)
+        original_bytes = {}
+        for key in before_keys:
+            with file_io.new_input(f"s3://{bucket}/{key}").open() as source:
+                original_bytes[key] = source.read()
+        _, gate = commit_gate_proxy
+        gate.response_fault = fault
+        gate.apply_commit = apply_commit
+        gate.arm(NAMESPACE, table_name)
+        gate.release.set()
+        with spark_session_factory(gated_remote) as sessions:
+            writer = sessions.create()
+            with pytest.raises(PySparkException, match="commit state unknown"):
+                writer.sql(
+                    f"CALL system.rewrite_data_files('{table_fqn}', options => map('rewrite-all', 'true'))"
+                ).collect()
+
+        assert gate.request_count == 1
+        assert gate.request is not None
+        proposed = next(update["snapshot"] for update in gate.request["updates"] if update["action"] == "add-snapshot")
+        assert proposed["summary"]["operation"] == "replace"
+        after = _load_table(iceberg_rest_endpoint, table_name)
+        if apply_commit:
+            assert after["metadata"]["current-snapshot-id"] == proposed["snapshot-id"]
+            assert len(after["metadata"]["snapshots"]) == len(before["metadata"]["snapshots"]) + 1
+        else:
+            assert after["metadata-location"] == before["metadata-location"]
+        after_keys = _s3_object_keys(seaweedfs_host_endpoint, location)
+        assert before_keys <= after_keys
+        assert any(key.endswith(".parquet") for key in after_keys - before_keys)
+        assert any(key.endswith(".avro") for key in after_keys - before_keys)
+        for key, expected_bytes in original_bytes.items():
+            with file_io.new_input(f"s3://{bucket}/{key}").open() as source:
+                assert source.read() == expected_bytes
+        assert [row.id for row in spark.table(table_fqn).orderBy("id").collect()] == [2, 3, 4]
+        history = spark.sql(f"SELECT id FROM {table_fqn} VERSION AS OF {original_snapshot} ORDER BY id")  # noqa: S608
+        assert [row.id for row in history.collect()] == [1, 2, 3, 4]
+        reference = StaticTable.from_metadata(after["metadata-location"], properties=properties)
+        assert sorted(reference.scan().to_arrow().column("id").to_pylist()) == [2, 3, 4]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+
+
 @pytest.mark.parametrize("apply_commit", [False, True], ids=["not_applied", "applied"])
 def test_unknown_alter_does_not_report_success(
     spark, gated_remote, commit_gate_proxy, iceberg_rest_endpoint, apply_commit

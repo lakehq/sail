@@ -552,7 +552,7 @@ impl ExecutionPlan for IcebergWriterExec {
             }
 
             let data_location = write_context.data_location()?;
-            let preserve_lineage = row_level_mode.is_some()
+            let preserve_lineage = (row_level_mode.is_some() || write_context.rewrite_lineage)
                 && write_context
                     .base_table
                     .as_ref()

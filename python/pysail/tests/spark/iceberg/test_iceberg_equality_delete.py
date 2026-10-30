@@ -99,6 +99,8 @@ def _append_equality_delete_snapshot(
     equality_ids: list[int],
     *,
     partition: Record | None = None,
+    partition_spec: PartitionSpec | None = None,
+    data_sequence_number: int | None = None,
     assign_root_ids: bool = True,
     metrics: dict | None = None,
 ) -> Path:
@@ -137,7 +139,7 @@ def _append_equality_delete_snapshot(
 
     manifest_path = metadata_dir / f"manifest-{uuid.uuid4()}.avro"
     with _EqualityDeleteManifestWriter(
-        table.spec(),
+        partition_spec or table.spec(),
         table.schema(),
         io.new_output(manifest_path.as_uri()),
         snapshot_id,
@@ -147,6 +149,7 @@ def _append_equality_delete_snapshot(
             ManifestEntry.from_args(
                 status=ManifestEntryStatus.ADDED,
                 snapshot_id=snapshot_id,
+                sequence_number=data_sequence_number,
                 data_file=delete_data_file,
             )
         )

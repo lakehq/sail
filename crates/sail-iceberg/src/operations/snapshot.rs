@@ -422,6 +422,7 @@ pub struct SnapshotProducer<'a> {
     /// If true, create a snapshot with no parent (for bootstrap scenarios)
     pub is_bootstrap: bool,
     pub row_lineage_start_row_id: Option<i64>,
+    added_data_sequence_number: Option<i64>,
     pub dynamic_partition_overwrite: bool,
     action_summary_properties: crate::operation_metrics::ActionSummaryProperties,
 }
@@ -547,6 +548,7 @@ impl<'a> SnapshotProducer<'a> {
             write_path_mode: crate::utils::WritePathMode::Absolute,
             is_bootstrap: false,
             row_lineage_start_row_id: None,
+            added_data_sequence_number: None,
             dynamic_partition_overwrite: false,
             action_summary_properties: Default::default(),
         }
@@ -574,6 +576,11 @@ impl<'a> SnapshotProducer<'a> {
 
     pub fn with_row_lineage_start_row_id(mut self, start_row_id: Option<i64>) -> Self {
         self.row_lineage_start_row_id = start_row_id;
+        self
+    }
+
+    pub fn with_added_data_sequence_number(mut self, sequence_number: Option<i64>) -> Self {
+        self.added_data_sequence_number = sequence_number;
         self
     }
 
@@ -1254,7 +1261,13 @@ impl<'a> SnapshotProducer<'a> {
             let mut writer =
                 ManifestWriterBuilder::new(Some(new_snapshot_id), None, data_metadata).build();
             for df in &added_data_files {
-                writer.add(df.clone());
+                writer.add_entry(ManifestEntry::new(
+                    ManifestStatus::Added,
+                    Some(new_snapshot_id),
+                    self.added_data_sequence_number,
+                    None,
+                    df.clone(),
+                ));
             }
             new_manifest_files.push(
                 self.write_manifest(
@@ -1944,7 +1957,7 @@ mod tests {
 
     #[test]
     fn targeted_rewrite_marks_removed_files_and_reuses_unaffected_manifests() {
-        futures::executor::block_on(async {
+        let check = |version, kind, data_sequence| async move {
             let table_url =
                 url::Url::parse("file:///tmp/iceberg-targeted-rewrite/").expect("table URL");
             let store: Arc<dyn object_store::ObjectStore> =
@@ -1956,7 +1969,7 @@ mod tests {
                 Arc::new(schema.clone()),
                 0,
                 partition_spec.clone(),
-                FormatVersion::V2,
+                version,
                 ManifestContentType::Data,
             );
             let parent_snapshot_id = 10;
@@ -2020,9 +2033,7 @@ mod tests {
             let mut parent_list = ManifestListWriter::new();
             parent_list.append(affected_file);
             parent_list.append(unaffected_file);
-            let parent_list_bytes = parent_list
-                .to_bytes(FormatVersion::V2)
-                .expect("parent manifest list");
+            let parent_list_bytes = parent_list.to_bytes(version).expect("parent manifest list");
             store_ctx
                 .prefixed
                 .put(
@@ -2042,7 +2053,7 @@ mod tests {
             let transaction = Transaction::new(
                 table_url.to_string(),
                 parent_snapshot,
-                parent_sequence_number,
+                parent_sequence_number + 2,
             );
             let action_commit = SnapshotProducer::new(
                 &transaction,
@@ -2052,7 +2063,9 @@ mod tests {
             )
             .with_partition_specs(vec![partition_spec])
             .with_removed_data_file_paths(vec!["data/remove.parquet".to_string()])
-            .commit(SnapshotUpdateKind::CopyOnWrite)
+            .with_added_data_sequence_number(data_sequence)
+            .with_row_lineage_start_row_id((version == FormatVersion::V3).then_some(0))
+            .commit(kind)
             .await
             .expect("targeted rewrite");
 
@@ -2064,7 +2077,15 @@ mod tests {
                     _ => None,
                 })
                 .expect("new snapshot");
-            assert_eq!(snapshot.summary.operation, Operation::Overwrite);
+            assert_eq!(snapshot.sequence_number(), parent_sequence_number + 3);
+            assert_eq!(
+                snapshot.summary.operation,
+                if kind == SnapshotUpdateKind::RewriteDataFiles {
+                    Operation::Replace
+                } else {
+                    Operation::Overwrite
+                }
+            );
             let summary = &snapshot.summary.additional_properties;
             assert_eq!(
                 summary.get("deleted-data-files").map(String::as_str),
@@ -2080,9 +2101,13 @@ mod tests {
             );
             assert_eq!(summary.get("total-records").map(String::as_str), Some("9"));
 
-            let manifest_list = crate::io::load_manifest_list(&store_ctx, snapshot.manifest_list())
-                .await
-                .expect("new manifest list");
+            let manifest_list = crate::io::load_manifest_list_with_version(
+                &store_ctx,
+                snapshot.manifest_list(),
+                version,
+            )
+            .await
+            .expect("new manifest list");
             assert!(
                 manifest_list
                     .entries()
@@ -2096,12 +2121,141 @@ mod tests {
                     .expect("manifest");
                 for entry in manifest.entries() {
                     statuses.insert(entry.data_file.file_path.clone(), entry.status);
+                    if entry.data_file.file_path == "data/replacement.parquet" {
+                        assert_eq!(entry.sequence_number, data_sequence);
+                        assert_eq!(entry.file_sequence_number, None);
+                        assert_eq!(manifest_file.sequence_number, snapshot.sequence_number());
+                        assert_eq!(
+                            manifest_file.min_sequence_number,
+                            data_sequence.unwrap_or(snapshot.sequence_number())
+                        );
+                    }
                 }
             }
             assert_eq!(statuses["data/remove.parquet"], ManifestStatus::Deleted);
             assert_eq!(statuses["data/survivor.parquet"], ManifestStatus::Existing);
             assert_eq!(statuses["data/unaffected.parquet"], ManifestStatus::Added);
             assert_eq!(statuses["data/replacement.parquet"], ManifestStatus::Added);
+        };
+        for (version, kind, data_sequence) in [
+            (FormatVersion::V2, SnapshotUpdateKind::CopyOnWrite, None),
+            (
+                FormatVersion::V2,
+                SnapshotUpdateKind::RewriteDataFiles,
+                Some(1),
+            ),
+            (
+                FormatVersion::V3,
+                SnapshotUpdateKind::RewriteDataFiles,
+                None,
+            ),
+        ] {
+            futures::executor::block_on(check(version, kind, data_sequence));
+        }
+    }
+
+    #[test]
+    fn rewrite_delete_pruning_retains_shared_blobs_and_unscoped_deletes() {
+        futures::executor::block_on(async {
+            let table_url = url::Url::parse("file:///tmp/iceberg-delete-pruning/").expect("URL");
+            let store_ctx =
+                StoreContext::new(Arc::new(object_store::memory::InMemory::new()), &table_url)
+                    .expect("store context");
+            let snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(10)
+                .with_sequence_number(3)
+                .with_manifest_list("metadata/parent-list.avro")
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .build()
+                .expect("snapshot");
+            let transaction = Transaction::new(table_url.to_string(), snapshot, 3);
+            let metadata = ManifestMetadata::new(
+                Arc::new(Schema::builder().build().expect("schema")),
+                0,
+                PartitionSpec::unpartitioned_spec(),
+                FormatVersion::V3,
+                ManifestContentType::Deletes,
+            );
+            let producer = SnapshotProducer::new(
+                &transaction,
+                vec![],
+                Some(store_ctx.clone()),
+                Some(metadata.clone()),
+            );
+            let mut writer = ManifestWriterBuilder::new(Some(10), None, metadata).build();
+            for (target, offset) in [("data/remove.parquet", 4), ("data/keep.parquet", 36)] {
+                let mut file = delete_file("data/shared.puffin", 0);
+                file.file_format = DataFileFormat::Puffin;
+                file.file_size_in_bytes = 100;
+                file.referenced_data_file = Some(target.to_string());
+                file.content_offset = Some(offset);
+                file.content_size_in_bytes = Some(32);
+                writer.add(file);
+            }
+            let mut targeted = delete_file("data/targeted.parquet", 0);
+            targeted.referenced_data_file = Some("data/remove.parquet".to_string());
+            writer.add(targeted);
+            let mut generic = delete_file("data/generic.parquet", 0);
+            generic.referenced_data_file = None;
+            writer.add(generic.clone());
+            let mut equality = generic;
+            equality.file_path = "data/equality.parquet".to_string();
+            equality.content = DataContentType::EqualityDeletes;
+            equality.equality_ids = vec![1];
+            writer.add(equality);
+            let mut created_paths = vec![];
+            let parent = producer
+                .write_manifest(&store_ctx, writer, 3, 10, None, &mut created_paths)
+                .await
+                .expect("parent manifest");
+            let (rewritten, removed) = producer
+                .rewrite_parent_delete_manifests(
+                    &store_ctx,
+                    vec![parent.clone()],
+                    &HashSet::from(["data/remove.parquet".to_string()]),
+                    false,
+                    4,
+                    11,
+                    &mut created_paths,
+                )
+                .await
+                .expect("prune selected deletes");
+            assert_eq!(removed.deletion_vectors, 1);
+            assert_eq!(removed.position_delete_files, 1);
+            assert_eq!(removed.equality_delete_files, 0);
+            let manifest = crate::io::load_manifest(&store_ctx, &rewritten[0].manifest_path)
+                .await
+                .expect("rewritten manifest");
+            let entries = manifest.entries();
+            assert_eq!(entries.len(), 5);
+            for entry in entries {
+                let file = &entry.data_file;
+                let removed = file.referenced_data_file.as_deref() == Some("data/remove.parquet");
+                assert_eq!(
+                    entry.status,
+                    if removed {
+                        ManifestStatus::Deleted
+                    } else {
+                        ManifestStatus::Existing
+                    }
+                );
+                assert_eq!(entry.sequence_number, Some(3));
+                assert_eq!(entry.file_sequence_number, Some(3));
+                if file.is_deletion_vector() {
+                    assert_eq!(file.file_path, "data/shared.puffin");
+                    assert_eq!(file.content_offset, Some(if removed { 4 } else { 36 }));
+                    assert_eq!(file.content_size_in_bytes, Some(32));
+                }
+            }
+            let historical = crate::io::load_manifest(&store_ctx, &parent.manifest_path)
+                .await
+                .expect("historical manifest");
+            assert!(
+                historical
+                    .entries()
+                    .iter()
+                    .all(|entry| entry.status == ManifestStatus::Added)
+            );
         });
     }
 

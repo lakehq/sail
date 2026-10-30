@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, BooleanArray, StringArray, UInt64Array};
+use datafusion::arrow::array::{Array, BooleanArray, Int32Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -11,8 +11,10 @@ use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFacto
 use datafusion::datasource::physical_plan::{
     FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
 };
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -26,12 +28,14 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
+use sail_common_datafusion::datasource::{MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN};
 use sail_common_datafusion::input_file::{
     InputFileMetadataSource, projection_references_input_file_metadata,
 };
 use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::{
-    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching, StructFieldMatching,
+    SchemaEvolutionCastColumnExpr, SchemaEvolutionPhysicalExprAdapterFactoryWithMatching,
+    StructFieldMatching,
 };
 use url::Url;
 
@@ -39,17 +43,23 @@ use crate::datasource::partition_defaults::{
     IdentityPartitionDefaults, create_data_scan_with_partition_defaults,
 };
 use crate::io::StoreContext;
-use crate::physical_plan::file_tasks_exec::COL_IDENTITY_PARTITION_DEFAULTS;
-use crate::physical_plan::manifest_scan_exec::{
-    COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE, COL_RECORD_COUNT,
+use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
+use crate::physical_plan::file_tasks_exec::{
+    COL_IDENTITY_PARTITION_DEFAULTS, COL_REWRITE_SCAN_CONTEXT, RewriteScanContext,
 };
+use crate::physical_plan::manifest_scan_exec::{
+    COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES, COL_NAN_FREE, COL_PARTITION_SPEC_ID, COL_RECORD_COUNT,
+};
+use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
 
 struct ScanFile {
     path: String,
     size: u64,
     records: u64,
+    spec_id: i32,
     nan_free: bool,
     defaults: IdentityPartitionDefaults,
+    rewrite: Option<RewriteScanContext>,
 }
 
 /// State machine for the streaming scan-by-data-files loop.
@@ -124,6 +134,10 @@ impl ScanByDataFilesState {
             .column_by_name(COL_RECORD_COUNT)
             .and_then(|column| column.as_any().downcast_ref::<UInt64Array>())
             .ok_or_else(|| DataFusionError::Internal("Missing Iceberg record count".into()))?;
+        let spec_ids = batch
+            .column_by_name(COL_PARTITION_SPEC_ID)
+            .and_then(|column| column.as_any().downcast_ref::<Int32Array>())
+            .ok_or_else(|| DataFusionError::Internal("Missing Iceberg partition spec ID".into()))?;
         let nan_free = batch
             .column_by_name(COL_NAN_FREE)
             .and_then(|column| column.as_any().downcast_ref::<BooleanArray>())
@@ -141,6 +155,17 @@ impl ScanByDataFilesState {
                     })
             })
             .transpose()?;
+        let rewrite_context = batch
+            .column_by_name(COL_REWRITE_SCAN_CONTEXT)
+            .map(|column| {
+                column
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal("Invalid Iceberg rewrite scan context".into())
+                    })
+            })
+            .transpose()?;
         let mut files = Vec::with_capacity(path_col.len());
         for i in 0..path_col.len() {
             if !path_col.is_null(i) {
@@ -148,7 +173,13 @@ impl ScanByDataFilesState {
                     path: path_col.value(i).to_string(),
                     size: size_col.value(i),
                     records: rows.value(i),
+                    spec_id: spec_ids.value(i),
                     nan_free: nan_free.value(i),
+                    rewrite: rewrite_context
+                        .filter(|column| !column.is_null(i))
+                        .map(|column| serde_json::from_str(column.value(i)))
+                        .transpose()
+                        .map_err(|error| DataFusionError::External(Box::new(error)))?,
                     defaults: defaults
                         .map(|column| serde_json::from_str(column.value(i)))
                         .transpose()
@@ -160,6 +191,136 @@ impl ScanByDataFilesState {
         Ok(files)
     }
 
+    /// Build an ordered whole-file scan before applying deletes or materializing lineage.
+    fn build_rewrite_scan(&self, file: ScanFile) -> Result<Arc<dyn ExecutionPlan>> {
+        let store = self
+            .context
+            .runtime_env()
+            .object_store_registry
+            .get_store(&self.table_url)?;
+        let store_ctx = StoreContext::new(Arc::clone(&store), &self.table_url)?;
+        let schema = file
+            .rewrite
+            .as_ref()
+            .map(|rewrite| Arc::new(rewrite.read_schema.clone()))
+            .unwrap_or_else(|| Arc::clone(&self.file_schema));
+        let mut table_schema = TableSchema::builder(Arc::clone(&schema));
+        if file.rewrite.is_some() {
+            table_schema = table_schema.with_virtual_columns(vec![
+                crate::row_level_metadata::parquet_row_position_field(&schema),
+            ]);
+        }
+        let table_schema = table_schema.build();
+        let mut statistics = Statistics::new_unknown(table_schema.table_schema());
+        statistics.num_rows = datafusion_common::stats::Precision::Exact(
+            usize::try_from(file.records)
+                .map_err(|error| DataFusionError::Execution(error.to_string()))?,
+        );
+        let mut extensions = datafusion::common::extensions::Extensions::default();
+        extensions.insert(file.defaults);
+        let partitioned = PartitionedFile {
+            object_meta: ObjectMeta {
+                location: store_ctx.resolve_to_absolute_path(&file.path)?,
+                last_modified: chrono::Utc::now(),
+                size: file.size,
+                e_tag: None,
+                version: None,
+            },
+            partition_values: vec![],
+            range: None,
+            statistics: Some(Arc::new(statistics)),
+            ordering: None,
+            extensions,
+            metadata_size_hint: None,
+            arrow_schema: None,
+            table_reference: None,
+        };
+        let reader = Arc::new(CachedParquetFileReaderFactory::new(
+            store,
+            self.context
+                .runtime_env()
+                .cache_manager
+                .get_file_metadata_cache(),
+        ));
+        let source = ParquetSource::new(table_schema)
+            .with_table_parquet_options(crate::datasource::parquet::parquet_options(
+                &schema,
+                false,
+                self.context
+                    .session_config()
+                    .options()
+                    .execution
+                    .parquet
+                    .clone(),
+            ))
+            .with_parquet_file_reader_factory(reader);
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse(&self.table_url[..url::Position::BeforePath])?,
+            Arc::new(source),
+        )
+        .with_file_groups(vec![FileGroup::from(vec![partitioned])])
+        .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
+        .with_preserve_order(true)
+        .with_expr_adapter(Some(Arc::new(
+            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+                StructFieldMatching::FieldId,
+            ),
+        )))
+        .build();
+        let mut scan = create_data_scan_with_partition_defaults(config)?;
+        if let Some(rewrite) = file.rewrite {
+            let lineage = rewrite
+                .preserve_lineage
+                .then_some(crate::row_lineage::RowLineage {
+                    first_row_id: rewrite.first_row_id,
+                    data_sequence_number: rewrite.data_sequence_number,
+                });
+            scan = Arc::new(IcebergMergeMetadataExec::try_new(
+                scan,
+                file.path.clone(),
+                file.spec_id,
+                String::new(),
+                Some(MERGE_FILE_COLUMN.to_string()),
+                Some(MERGE_ROW_INDEX_COLUMN.to_string()),
+                lineage,
+            )?);
+            if !rewrite.positional_deletes.is_empty() || !rewrite.equality_deletes.is_empty() {
+                scan = Arc::new(IcebergDeleteApplyExec::new(
+                    scan,
+                    file.path,
+                    rewrite.positional_deletes,
+                    rewrite.equality_deletes,
+                    self.table_url.to_string(),
+                    rewrite.iceberg_schema,
+                ));
+            }
+        }
+        // Historical equality keys may also be nested inside a still-visible struct.
+        let read_schema = scan.schema();
+        let expressions = self
+            .output_schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let index = read_schema.index_of(field.name())?;
+                let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new(field.name(), index));
+                let expression = if read_schema.field(index).data_type() == field.data_type() {
+                    column
+                } else {
+                    Arc::new(SchemaEvolutionCastColumnExpr::new_with_matching(
+                        column,
+                        read_schema.fields()[index].clone(),
+                        field.clone(),
+                        None,
+                        StructFieldMatching::FieldId,
+                    ))
+                };
+                Ok((expression, field.name().clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Arc::new(ProjectionExec::try_new(expressions, scan)?))
+    }
+
     /// Build and start a Parquet scan for the accumulated file entries.
     async fn build_next_scan(&mut self) -> Result<()> {
         if self.pending_files.is_empty() {
@@ -167,6 +328,23 @@ impl ScanByDataFilesState {
         }
 
         let files = std::mem::take(&mut self.pending_files);
+        if files.iter().any(|file| file.rewrite.is_some()) {
+            let scans = files
+                .into_iter()
+                .map(|file| {
+                    self.build_rewrite_scan(file)?
+                        .execute(0, Arc::clone(&self.context))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let combined = stream::iter(scans)
+                .map(Ok::<_, DataFusionError>)
+                .try_flatten();
+            self.current_scan = Some(Box::pin(RecordBatchStreamAdapter::new(
+                self.output_schema.clone(),
+                combined,
+            )));
+            return Ok(());
+        }
         if self.output_schema.fields().is_empty() {
             let rows = files
                 .iter()
