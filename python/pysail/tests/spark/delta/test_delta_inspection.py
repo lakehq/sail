@@ -244,11 +244,16 @@ def test_custom_procedures_are_not_registered(spark, inspection_table, namespace
     assert sorted(file.name for file in (path / "_delta_log").iterdir()) == before
 
 
+@pytest.mark.skipif(
+    bool(os.environ.get("SPARK_REMOTE")), reason="Relative paths require the in-process server's working directory"
+)
 @pytest.mark.parametrize("command", ["DESCRIBE DETAIL", "DESCRIBE HISTORY", "OPTIMIZE", "VACUUM"])
 @pytest.mark.parametrize("prefix", ["", "./"], ids=["relative", "dot-relative"])
-def test_native_delta_command_keeps_relative_string_target_as_path(spark, tmp_path, command, prefix):
+def test_native_delta_command_keeps_relative_string_target_as_path(spark, tmp_path, monkeypatch, command, prefix):
     # Spark 4.2.0 + Delta 4.4.0 treat string targets as paths, not catalog identifiers.
     path = tmp_path / "relative_delta_target"
+    # Keep the working directory and table on the same drive on Windows.
+    monkeypatch.chdir(tmp_path)
     spark.range(2).coalesce(1).write.format("delta").save(str(path))
     relative = prefix + os.path.relpath(path)
     absolute = escape_sql_string_literal(str(path))
@@ -366,6 +371,7 @@ def test_inspection_distributed_plan(tmp_path, snapshot):
             spark.sql("DROP TABLE delta_distributed")
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("ict", [False, True])
 def test_inspection_matches_delta_spark(spark, delta_jvm_spark, tmp_path, ict):
     path = tmp_path / "interop"
@@ -402,6 +408,7 @@ def test_inspection_matches_delta_spark(spark, delta_jvm_spark, tmp_path, ict):
         spark.sql("DROP TABLE inspection_interop")
 
 
+@pytest.mark.integration
 def test_detail_preserves_mapping_and_deletion_vectors(spark, delta_jvm_spark, tmp_path):
     path = tmp_path / "mapped_dv"
     jvm = delta_jvm_spark
@@ -427,6 +434,7 @@ def test_detail_preserves_mapping_and_deletion_vectors(spark, delta_jvm_spark, t
         spark.sql("DROP TABLE inspection_mapped")
 
 
+@pytest.mark.integration
 def test_detail_resolves_logical_clustering_columns(spark, delta_jvm_spark, tmp_path):
     path = tmp_path / "clustered"
     jvm = delta_jvm_spark
