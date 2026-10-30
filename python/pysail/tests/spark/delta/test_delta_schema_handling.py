@@ -66,6 +66,128 @@ def _delta_field(schema, name):
     raise AssertionError(msg)
 
 
+def _catalog_nullability_schema(shape, nullable):
+    array_type = ArrayType(StringType(), containsNull=nullable)
+    payload_type = {
+        "array": array_type,
+        "struct": StructType([StructField("items", array_type, nullable)]),
+        "map": MapType(StringType(), array_type, valueContainsNull=nullable),
+    }[shape]
+    return StructType([StructField("id", IntegerType(), False), StructField("payload", payload_type, True)])
+
+
+def _catalog_nullability_rows(shape):
+    populated, empty, nested_null, null_child = {
+        "array": (["a"], [], [None, "b"], None),
+        "struct": (Row(items=["a"]), Row(items=[]), Row(items=[None, "b"]), Row(items=None)),
+        "map": ({"items": ["a"]}, {}, {"items": [None, "b"]}, {"items": None}),
+    }[shape]
+    return [(0, populated)], [(1, populated), (2, empty)], [(3, nested_null), (4, null_child), (5, None)]
+
+
+def _assert_catalog_nullability(spark, table_name, delta_path, expected_type, expected_rows):
+    logged_payload = _delta_field(_latest_delta_schema(delta_path), "payload")
+    if isinstance(expected_type, StructType):
+        # Spark field metadata has a separate encoding in Sail's log schema.
+        assert logged_payload["type"]["type"] == "struct"
+        [logged_items] = logged_payload["type"]["fields"]
+        assert logged_items["name"] == "items"
+        assert logged_items["nullable"] == expected_type["items"].nullable
+        assert logged_items["type"] == expected_type["items"].dataType.jsonValue()
+    else:
+        assert logged_payload["type"] == expected_type.jsonValue()
+    assert logged_payload["nullable"] is True
+    named = spark.table(table_name)
+    by_path = spark.read.format("delta").load(str(delta_path))
+    assert named.schema == by_path.schema
+    assert named.schema["payload"].dataType == expected_type
+    assert named.schema["payload"].nullable is True
+    for frame in (named, by_path):
+        rows = sorted(frame.collect(), key=lambda row: row.id)
+        assert [(row.id, row.payload) for row in rows] == expected_rows
+
+
+def _exercise_catalog_nullability(spark, table_name, delta_path, creation, mode, shape, initial_nullable):
+    initial_schema = _catalog_nullability_schema(shape, initial_nullable)
+    initial_rows, strict_rows, nullable_rows = _catalog_nullability_rows(shape)
+    initial = spark.createDataFrame(initial_rows, initial_schema)
+    if creation == "ddl":
+        spark.sql(
+            f"CREATE TABLE {table_name} (id INT, payload {initial_schema['payload'].dataType.simpleString()}) "
+            f"USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'"
+        ).collect()
+        initial.write.format("delta").mode("append").saveAsTable(table_name)
+    else:
+        initial.write.format("delta").option("path", str(delta_path)).saveAsTable(table_name)
+    expected_type = initial_schema["payload"].dataType
+    _assert_catalog_nullability(spark, table_name, delta_path, expected_type, initial_rows)
+
+    strict = spark.createDataFrame(strict_rows, _catalog_nullability_schema(shape, False))
+    strict.write.format("delta").mode(mode).saveAsTable(table_name)
+    expected_rows = (initial_rows if mode == "append" else []) + strict_rows
+    _assert_catalog_nullability(spark, table_name, delta_path, expected_type, expected_rows)
+
+    if initial_nullable:
+        nullable = spark.createDataFrame(nullable_rows, _catalog_nullability_schema(shape, True))
+        nullable.write.format("delta").mode("append").saveAsTable(table_name)
+        _assert_catalog_nullability(spark, table_name, delta_path, expected_type, expected_rows + nullable_rows)
+
+
+@pytest.mark.parametrize(
+    ("creation", "mode", "shape", "initial_nullable"),
+    [
+        pytest.param("ddl", "overwrite", "array", True, id="ddl-array"),
+        pytest.param("dataframe", "overwrite", "array", True, id="dataframe-array"),
+        pytest.param("dataframe", "append", "array", True, id="append-array"),
+        pytest.param("dataframe", "overwrite", "array", False, id="always-strict-array"),
+        pytest.param("dataframe", "overwrite", "struct", True, id="nested-struct"),
+        pytest.param("dataframe", "overwrite", "map", True, id="nested-map"),
+    ],
+)
+def test_delta_catalog_uses_snapshot_nullability(spark, tmp_path, creation, mode, shape, initial_nullable):
+    table_name = "delta_catalog_nullability"
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
+    try:
+        _exercise_catalog_nullability(spark, table_name, tmp_path / "table", creation, mode, shape, initial_nullable)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}").collect()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("creation", "shape"),
+    [("ddl", "array"), ("dataframe", "array"), ("dataframe", "struct"), ("dataframe", "map")],
+)
+def test_delta_catalog_nullability_delta_spark(spark, delta_jvm_spark, tmp_path, creation, shape):
+    """Reference lifecycle, then alternate Sail and Delta-Spark writes to the same log."""
+    delta_path = tmp_path / "table"
+    sail_table = "delta_catalog_nullability_sail"
+    jvm_table = "delta_catalog_nullability_jvm"
+    spark.sql(f"DROP TABLE IF EXISTS {sail_table}").collect()
+    delta_jvm_spark.sql(f"DROP TABLE IF EXISTS {jvm_table}").collect()
+    try:
+        _exercise_catalog_nullability(delta_jvm_spark, jvm_table, delta_path, creation, "overwrite", shape, True)
+        spark.sql(
+            f"CREATE TABLE {sail_table} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'"
+        ).collect()
+        _, strict_rows, nullable_rows = _catalog_nullability_rows(shape)
+        expected_type = _catalog_nullability_schema(shape, True)["payload"].dataType
+        _assert_catalog_nullability(spark, sail_table, delta_path, expected_type, strict_rows + nullable_rows)
+
+        strict = spark.createDataFrame(strict_rows, _catalog_nullability_schema(shape, False))
+        strict.write.format("delta").mode("overwrite").saveAsTable(sail_table)
+        for engine, table in ((spark, sail_table), (delta_jvm_spark, jvm_table)):
+            _assert_catalog_nullability(engine, table, delta_path, expected_type, strict_rows)
+
+        nullable = delta_jvm_spark.createDataFrame(nullable_rows, _catalog_nullability_schema(shape, True))
+        nullable.write.format("delta").mode("append").save(str(delta_path))
+        for engine, table in ((spark, sail_table), (delta_jvm_spark, jvm_table)):
+            _assert_catalog_nullability(engine, table, delta_path, expected_type, strict_rows + nullable_rows)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {sail_table}").collect()
+        delta_jvm_spark.sql(f"DROP TABLE IF EXISTS {jvm_table}").collect()
+
+
 def test_delta_schema_read_with_custom_schema(spark, tmp_path):
     """Test with a custom schema and filter conditions."""
     delta_path = tmp_path / "delta_custom_schema"
