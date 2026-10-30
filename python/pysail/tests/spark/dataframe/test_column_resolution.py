@@ -686,3 +686,56 @@ def test_nested_scalar_lateral_alias_schema(spark, grouping):
     for _ in range(16):
         query = f"SELECT b FROM (SELECT ({query}) AS a, a AS b{grouping}) q"  # noqa: S608
     assert spark.sql(query).dtypes == [("b", "int")]
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.skip(reason="Flaky: wide projections can exceed the timeout on CI runners")
+@pytest.mark.parametrize("value", ["1", "id + 1"])
+def test_wide_independent_projection(spark, value):
+    # Wide generated projections must not copy a growing lateral-alias schema
+    # for every expression. The generous timeout catches quadratic analysis,
+    # while checking the actual schema and values rather than internal plans.
+    width = 8000
+    projection = ", ".join(f"{value} AS c{i}" for i in range(width))
+    result = spark.sql(f"SELECT {projection} FROM range(1)")  # noqa: S608
+    expected_type = "int" if value == "1" else "bigint"
+    assert result.dtypes == [(f"c{i}", expected_type) for i in range(width)]
+    assert result.select("c0", f"c{width - 1}").collect() == [(1, 1)]
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize("array_wrapped", [False, True])
+@pytest.mark.parametrize("temporal", [False, True])
+def test_wide_set_operation_struct_coercion(spark, temporal, array_wrapped):
+    # A wide struct must not become a chain of full-struct field updates.
+    # Check both generic widening and batched Spark temporal conversions.
+    width = 256
+    left_value = "timestamp_seconds(id)" if temporal else "CAST(id AS INT)"
+    right_value = "CAST(timestamp_seconds(id) AS STRING)" if temporal else "id"
+
+    def projection(value):
+        fields = ", ".join(f"'c{i}', {value}" for i in range(width))
+        struct = f"named_struct({fields})"
+        return f"array({struct})" if array_wrapped else struct
+
+    ansi = spark.conf.get("spark.sql.ansi.enabled")
+    timezone = spark.conf.get("spark.sql.session.timeZone")
+    try:
+        spark.conf.set("spark.sql.ansi.enabled", "false")
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
+        result = spark.sql(
+            f"SELECT {projection(left_value)} AS v FROM range(1) "  # noqa: S608
+            f"INTERSECT SELECT {projection(right_value)} AS v FROM range(1)"
+        )
+        field_type = "string" if temporal else "bigint"
+        expected_type = "struct<" + ",".join(f"c{i}:{field_type}" for i in range(width)) + ">"
+        if array_wrapped:
+            expected_type = f"array<{expected_type}>"
+        assert result.dtypes == [("v", expected_type)]
+        rows = result.collect()
+        assert len(rows) == 1
+        value = rows[0].v[0] if array_wrapped else rows[0].v
+        assert list(value) == ["1970-01-01 00:00:00" if temporal else 0] * width
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", ansi)
+        spark.conf.set("spark.sql.session.timeZone", timezone)

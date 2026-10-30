@@ -6,8 +6,9 @@ use arrow::compute::kernels::cast_utils::Parser;
 use arrow::compute::{CastOptions, cast_with_options, parse_string_to_decimal_native};
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Decimal64Type, Decimal128Type, DecimalType,
-    Float32Type, Float64Type, Int32Type, Int64Type, TimeUnit, TimestampMicrosecondType,
-    TimestampNanosecondType,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, TimeUnit,
+    TimestampMicrosecondType, TimestampNanosecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow::error::ArrowError;
 use datafusion_common::{Result, ScalarValue, internal_err};
@@ -36,6 +37,20 @@ impl CorrelationCast {
     pub fn supports(from: &DataType, to: &DataType) -> bool {
         match (from, to) {
             (DataType::Float32, DataType::Float64) => true,
+            (DataType::Float32 | DataType::Float64, DataType::Decimal128(p, s)) => {
+                (1..=38).contains(p) && (0..=(*p as i8)).contains(s)
+            }
+            (
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64,
+                DataType::Decimal128(p, s),
+            ) => (1..=38).contains(p) && (0..=(*p as i8)).contains(s),
             (DataType::Decimal128(p, s), DataType::Float64) => {
                 (1..=18).contains(p) && (0..=(*p as i8)).contains(s)
             }
@@ -111,6 +126,36 @@ fn cast_array(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
                     .unary::<_, Float64Type>(f64::from),
             ))
         }
+        (DataType::Float32, DataType::Decimal128(p, s)) => {
+            floating_decimal(array.as_primitive::<Float32Type>(), *p, *s, f64::from)
+        }
+        (DataType::Float64, DataType::Decimal128(p, s)) => {
+            floating_decimal(array.as_primitive::<Float64Type>(), *p, *s, |value| value)
+        }
+        (DataType::Int8, DataType::Decimal128(p, s)) => {
+            integral_decimal(array.as_primitive::<Int8Type>(), *p, *s)
+        }
+        (DataType::Int16, DataType::Decimal128(p, s)) => {
+            integral_decimal(array.as_primitive::<Int16Type>(), *p, *s)
+        }
+        (DataType::Int32, DataType::Decimal128(p, s)) => {
+            integral_decimal(array.as_primitive::<Int32Type>(), *p, *s)
+        }
+        (DataType::Int64, DataType::Decimal128(p, s)) => {
+            integral_decimal(array.as_primitive::<Int64Type>(), *p, *s)
+        }
+        (DataType::UInt8, DataType::Decimal128(p, s)) => {
+            integral_decimal(array.as_primitive::<UInt8Type>(), *p, *s)
+        }
+        (DataType::UInt16, DataType::Decimal128(p, s)) => {
+            integral_decimal(array.as_primitive::<UInt16Type>(), *p, *s)
+        }
+        (DataType::UInt32, DataType::Decimal128(p, s)) => {
+            integral_decimal(array.as_primitive::<UInt32Type>(), *p, *s)
+        }
+        (DataType::UInt64, DataType::Decimal128(p, s)) => {
+            integral_decimal(array.as_primitive::<UInt64Type>(), *p, *s)
+        }
         (DataType::Decimal128(_, _), DataType::Decimal128(p, s)) => Ok(downscale_decimal(
             array.as_primitive::<Decimal128Type>(),
             *p,
@@ -160,6 +205,102 @@ fn cast_array(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
                 .unary::<_, Date32Type>(|value| value.div_euclid(86_400_000_000_000) as i32),
         )),
         _ => internal_err!("unsupported physical correlation CAST"),
+    }
+}
+
+fn native_numeric(array: &dyn Array, target: &DataType) -> Result<ArrayRef> {
+    Ok(cast_with_options(
+        array,
+        target,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )?)
+}
+
+fn integral_decimal<T>(
+    array: &arrow::array::PrimitiveArray<T>,
+    precision: u8,
+    scale: i8,
+) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+    T::Native: Into<i128>,
+{
+    let target = DataType::Decimal128(precision, scale);
+    // Native fallible casts skip invalid slots and choose the first native error.
+    if array.null_count() != 0 {
+        return native_numeric(array, &target);
+    }
+    let multiplier = 10_i128.pow(scale as u32);
+    let limit = Decimal128Type::MAX_FOR_EACH_PRECISION[usize::from(precision)] / multiplier;
+    let in_range = |value: T::Native| {
+        let value = value.into();
+        (-limit..=limit).contains(&value)
+    };
+    if !array.values().iter().copied().all(in_range) {
+        return native_numeric(array, &target);
+    }
+    Ok(Arc::new(
+        array
+            .unary::<_, Decimal128Type>(|value| value.into() * multiplier)
+            .with_precision_and_scale(precision, scale)?,
+    ))
+}
+
+fn floating_decimal<T, F>(
+    array: &arrow::array::PrimitiveArray<T>,
+    precision: u8,
+    scale: i8,
+    widen: F,
+) -> Result<ArrayRef>
+where
+    T: ArrowPrimitiveType,
+    F: Fn(T::Native) -> f64,
+{
+    let target = DataType::Decimal128(precision, scale);
+    if array.null_count() != 0 {
+        return native_numeric(array, &target);
+    }
+    let maximum = Decimal128Type::MAX_FOR_EACH_PRECISION[usize::from(precision)];
+    let mut bound = maximum as f64;
+    if bound as i128 > maximum {
+        bound = bound.next_down();
+    }
+    let multiplier = 10_f64.powi(i32::from(scale));
+    let mut values = Vec::with_capacity(array.len());
+    for &value in array.values() {
+        let rounded = (multiplier * widen(value)).round();
+        if rounded
+            .abs()
+            .partial_cmp(&bound)
+            .is_none_or(|order| order.is_gt())
+        {
+            // This also catches NaN/infinity; preserve native error text and priority.
+            return native_numeric(array, &target);
+        }
+        values.push(integral_float_i128(rounded));
+    }
+    Ok(Arc::new(
+        Decimal128Array::new(values.into(), None).with_precision_and_scale(precision, scale)?,
+    ))
+}
+
+#[inline]
+fn integral_float_i128(value: f64) -> i128 {
+    if value.abs() < 9_223_372_036_854_775_808.0 {
+        return i128::from(value as i64);
+    }
+    // The caller proved a finite integer within decimal precision <= 38.
+    let bits = value.to_bits();
+    let exponent = ((bits >> 52) & 0x7ff) as u32 - 1023;
+    let significand = (bits & ((1_u64 << 52) - 1)) | (1_u64 << 52);
+    let magnitude = i128::from(significand) << (exponent - 52);
+    if value.is_sign_negative() {
+        -magnitude
+    } else {
+        magnitude
     }
 }
 
@@ -435,6 +576,211 @@ mod tests {
             x => panic!("mismatch {x:?}"),
         }
     }
+
+    #[test]
+    fn numeric_decimal_casts_preserve_small_and_wide_native_results() {
+        use arrow::array::{Float32Array, Float64Array, Int32Array};
+        let floats = [
+            0.0, -0.0, 1.005, -1.005, 1.2345, -1.2345, 100_000.0, -100_000.0,
+        ];
+        for (precision, scale) in [(12, 2), (18, 0), (30, 15), (38, 20), (38, 38)] {
+            let target = DataType::Decimal128(precision, scale);
+            for array in [
+                Arc::new(Float64Array::from(floats.to_vec())) as ArrayRef,
+                Arc::new(Float32Array::from(floats.map(|v| v as f32).to_vec())) as ArrayRef,
+            ] {
+                for i in 0..array.len() {
+                    let item = array.slice(i, 1);
+                    exact(super::cast_array(&item, &target), native(&item, &target));
+                }
+                exact(super::cast_array(&array, &target), native(&array, &target));
+            }
+        }
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![0, 1, -1, 999_999_999, -999_999_999]));
+        let target = DataType::Decimal128(9, 0);
+        exact(super::cast_array(&ints, &target), native(&ints, &target));
+        let longs: ArrayRef = Arc::new(Int64Array::from(vec![
+            0,
+            1,
+            -1,
+            (1_i64 << 53) + 1,
+            999_999_999_999_999_999,
+            -999_999_999_999_999_999,
+        ]));
+        let target = DataType::Decimal128(38, 20);
+        exact(super::cast_array(&longs, &target), native(&longs, &target));
+    }
+
+    #[test]
+    fn numeric_decimal_errors_nulls_and_precision_boundaries_match_native() {
+        use arrow::array::{Float32Array, Float64Array, Int32Array};
+        use arrow::datatypes::{Decimal128Type, DecimalType};
+        for precision in 1..=38 {
+            let bound = Decimal128Type::MAX_FOR_EACH_PRECISION[usize::from(precision)] as f64;
+            let target = DataType::Decimal128(precision, 0);
+            for value in [
+                bound.next_down(),
+                bound,
+                bound.next_up(),
+                -bound.next_down(),
+                -bound,
+                -bound.next_up(),
+            ] {
+                let array: ArrayRef = Arc::new(Float64Array::from(vec![value]));
+                exact(super::cast_array(&array, &target), native(&array, &target));
+            }
+        }
+        let floats: ArrayRef = Arc::new(Float64Array::from(vec![
+            None,
+            Some(1.25),
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(-f64::INFINITY),
+            Some(f64::MAX),
+        ]));
+        let f32s: ArrayRef = Arc::new(Float32Array::from(vec![None, Some(1.25), Some(f32::NAN)]));
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![
+            None,
+            Some(1),
+            Some(1_000_000_000),
+            Some(i32::MIN),
+        ]));
+        let longs: ArrayRef = Arc::new(Int64Array::from(vec![
+            None,
+            Some(1),
+            Some(1_000_000_000_000_000_000),
+            Some(i64::MIN),
+        ]));
+        for (array, target) in [
+            (floats, DataType::Decimal128(30, 15)),
+            (f32s, DataType::Decimal128(12, 2)),
+            (ints, DataType::Decimal128(9, 0)),
+            (longs, DataType::Decimal128(38, 20)),
+        ] {
+            for i in 0..array.len() {
+                let item = array.slice(i, 1);
+                exact(super::cast_array(&item, &target), native(&item, &target));
+            }
+            exact(super::cast_array(&array, &target), native(&array, &target));
+        }
+    }
+    fn native_valid_numeric_rows(array: &ArrayRef, target: &DataType) -> ArrayRef {
+        let oracle = cast_with_options(
+            array,
+            target,
+            &CastOptions {
+                safe: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let valid = arrow::array::BooleanArray::from(
+            (0..array.len())
+                .map(|index| oracle.is_valid(index))
+                .collect::<Vec<_>>(),
+        );
+        let result = arrow::compute::filter(array.as_ref(), &valid).unwrap();
+        assert_eq!(result.null_count(), 0);
+        result
+    }
+
+    #[test]
+    fn numeric_decimal_valid_f64_exponents_and_mantissas_match_native() {
+        use arrow::array::Float64Array;
+
+        let mut bits = Vec::new();
+        for exponent in 0_u64..2047 {
+            for mantissa in [
+                0,
+                1,
+                0x7_ffff_ffff_ffff,
+                0x8_0000_0000_0000,
+                0xf_ffff_ffff_fffe,
+                0xf_ffff_ffff_ffff,
+            ] {
+                for sign in [0, 1_u64 << 63] {
+                    bits.push(sign | (exponent << 52) | mantissa);
+                }
+            }
+        }
+        let mut state = 0x0028_4329_2026_1029_u64;
+        for _ in 0..4096 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let exponent = (state >> 52) % 2047;
+            bits.push((state & 0x800f_ffff_ffff_ffff) | (exponent << 52));
+        }
+        for value in [1.005_f64, -1.005, 2.675, -2.675, 0.005, -0.005] {
+            bits.extend([
+                value.next_down().to_bits(),
+                value.to_bits(),
+                value.next_up().to_bits(),
+            ]);
+        }
+        bits.sort_unstable();
+        bits.dedup();
+        let values = bits.into_iter().map(f64::from_bits).collect::<Vec<_>>();
+        assert!(values.iter().all(|value| value.is_finite()));
+        let source: ArrayRef = Arc::new(Float64Array::from(values));
+        for (precision, scale) in [
+            (9, 0),
+            (12, 2),
+            (18, 0),
+            (19, 0),
+            (30, 15),
+            (38, 0),
+            (38, 20),
+            (38, 38),
+        ] {
+            let target = DataType::Decimal128(precision, scale);
+            let valid = native_valid_numeric_rows(&source, &target);
+            assert!(valid.len() > 1000);
+            let expected = native(&valid, &target).unwrap();
+            if target == DataType::Decimal128(38, 0) {
+                let expected = expected.as_any().downcast_ref::<Decimal128Array>().unwrap();
+                assert!(
+                    expected
+                        .values()
+                        .iter()
+                        .filter(|value| value.unsigned_abs() >= (1_u128 << 63))
+                        .count()
+                        > 100
+                );
+            }
+            exact(super::cast_array(&valid, &target), Ok(expected));
+            let slice = valid.slice(1, valid.len() - 2);
+            exact(super::cast_array(&slice, &target), native(&slice, &target));
+            let empty = valid.slice(1, 0);
+            exact(super::cast_array(&empty, &target), native(&empty, &target));
+        }
+    }
+
+    #[test]
+    fn numeric_decimal_small_integer_domains_match_native() {
+        use arrow::array::{Int8Array, Int16Array};
+
+        let sources: [ArrayRef; 2] = [
+            Arc::new(Int8Array::from((i8::MIN..=i8::MAX).collect::<Vec<_>>())),
+            Arc::new(Int16Array::from((i16::MIN..=i16::MAX).collect::<Vec<_>>())),
+        ];
+        for source in sources {
+            for (precision, scale) in [(2, 0), (3, 0), (5, 0), (9, 2), (38, 20), (38, 38)] {
+                let target = DataType::Decimal128(precision, scale);
+                let valid = native_valid_numeric_rows(&source, &target);
+                assert!(!valid.is_empty());
+                exact(super::cast_array(&valid, &target), native(&valid, &target));
+                let slice = valid.slice(1, valid.len() - 1);
+                exact(super::cast_array(&slice, &target), native(&slice, &target));
+                // Keep exact native diagnostics for the same unfiltered boundary inputs.
+                exact(
+                    super::cast_array(&source, &target),
+                    native(&source, &target),
+                );
+            }
+        }
+    }
+
     #[test]
     fn matches_native_decimal_errors_and_utc_day_arithmetic() {
         let values = [
@@ -958,6 +1304,71 @@ mod tests {
             (DataType::Decimal128(18, 1), DataType::Decimal128(18, 2)),
         ] {
             assert!(!super::CorrelationCast::supports(&from, &to));
+        }
+    }
+
+    #[test]
+    fn unsigned_decimal_boundaries_nulls_and_slices_match_native() {
+        use arrow::array::{UInt8Array, UInt16Array, UInt32Array, UInt64Array};
+
+        let arrays: [ArrayRef; 4] = [
+            Arc::new(UInt8Array::from(vec![0, 1, u8::MAX - 1, u8::MAX])),
+            Arc::new(UInt16Array::from(vec![0, 1, u16::MAX - 1, u16::MAX])),
+            Arc::new(UInt32Array::from(vec![0, 1, u32::MAX - 1, u32::MAX])),
+            Arc::new(UInt64Array::from(vec![
+                0,
+                1,
+                (1_u64 << 53) + 1,
+                (1_u64 << 63) + 1,
+                999_999_999_999_999_999,
+                1_000_000_000_000_000_000,
+                9_999_999_999_999_999_999,
+                10_000_000_000_000_000_000,
+                u64::MAX,
+            ])),
+        ];
+        for array in arrays {
+            for (precision, scale) in [
+                (2, 0),
+                (9, 0),
+                (19, 0),
+                (20, 0),
+                (38, 18),
+                (38, 19),
+                (38, 20),
+            ] {
+                let target = DataType::Decimal128(precision, scale);
+                let valid = native_valid_numeric_rows(&array, &target);
+                assert!(!valid.is_empty());
+                exact(super::cast_array(&valid, &target), native(&valid, &target));
+                exact(super::cast_array(&array, &target), native(&array, &target));
+                let slice = array.slice(1, array.len() - 1);
+                exact(super::cast_array(&slice, &target), native(&slice, &target));
+                let empty = array.slice(1, 0);
+                exact(super::cast_array(&empty, &target), native(&empty, &target));
+            }
+        }
+        // Hidden overflow must be skipped by native validity, while a visible overflow still fails.
+        let hidden: ArrayRef = Arc::new(UInt64Array::new(
+            vec![u64::MAX, 1].into(),
+            Some(vec![false, true].into()),
+        ));
+        let visible: ArrayRef = Arc::new(UInt64Array::from(vec![None, Some(u64::MAX)]));
+        for target in [
+            DataType::Decimal128(19, 0),
+            DataType::Decimal128(38, 19),
+            DataType::Decimal128(38, 20),
+        ] {
+            assert!(native(&hidden, &target).is_ok());
+            assert!(native(&visible, &target).is_err());
+            exact(
+                super::cast_array(&hidden, &target),
+                native(&hidden, &target),
+            );
+            exact(
+                super::cast_array(&visible, &target),
+                native(&visible, &target),
+            );
         }
     }
 }

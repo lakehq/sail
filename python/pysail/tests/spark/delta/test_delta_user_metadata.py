@@ -169,7 +169,7 @@ def test_session_user_metadata_after_failed_config_batch(spark, tmp_path, values
     ddl_path = tmp_path / "failed_batch_ddl"
     table = "delta_metadata_failed_batch"
     try:
-        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING DELTA LOCATION '{ddl_path}'")
+        spark.sql(f"CREATE TABLE {table} (id BIGINT) USING DELTA LOCATION '{ddl_path.as_uri()}'")
         assert _read_latest_commit_info(ddl_path)["userMetadata"] == expected
         spark.sql(f"ALTER TABLE {table} SET TBLPROPERTIES ('label' = 'after-failure')")
         assert _read_latest_commit_info(ddl_path)["userMetadata"] == expected
@@ -264,7 +264,7 @@ def test_session_user_metadata_sql_operations(spark, tmp_path, deletion_vectors)
     spark.conf.set(USER_METADATA_CONFIG, "sql-commits")
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT, value STRING) USING DELTA LOCATION '{path}' "
+            f"CREATE TABLE {table} (id INT, value STRING) USING DELTA LOCATION '{path.as_uri()}' "
             f"TBLPROPERTIES ('delta.enableDeletionVectors' = '{str(deletion_vectors).lower()}')"
         )
         assert _read_latest_commit_info(path)["userMetadata"] == "sql-commits"
@@ -304,7 +304,7 @@ def test_session_user_metadata_create_and_replace(spark, tmp_path, as_select):
     try:
         for command, metadata in [("CREATE TABLE", "create"), ("CREATE OR REPLACE TABLE", "replace")]:
             spark.conf.set(USER_METADATA_CONFIG, metadata)
-            spark.sql(f"{command} {table} {columns} USING DELTA LOCATION '{path}' {query}")
+            spark.sql(f"{command} {table} {columns} USING DELTA LOCATION '{path.as_uri()}' {query}")
             assert _read_latest_commit_info(path)["userMetadata"] == metadata
             assert spark.table(table).collect() == ([(1,)] if as_select else [])
     finally:
@@ -327,7 +327,7 @@ def test_session_user_metadata_alter_table(spark, tmp_path, alteration):
     table = "delta_metadata_alter"
     try:
         spark.sql(
-            f"CREATE TABLE {table} (id INT, value STRING DEFAULT 'initial') USING DELTA LOCATION '{path}' "
+            f"CREATE TABLE {table} (id INT, value STRING DEFAULT 'initial') USING DELTA LOCATION '{path.as_uri()}' "
             "TBLPROPERTIES ('label' = 'initial', 'delta.feature.allowColumnDefaults' = 'supported', "
             "'delta.enableTypeWidening' = 'true')"
         )

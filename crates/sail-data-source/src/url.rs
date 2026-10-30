@@ -632,8 +632,14 @@ fn attach_default_glob(mut url: GlobUrl) -> Result<GlobUrl> {
     Ok(url)
 }
 
-pub async fn rewrite_directory_url(url: GlobUrl, session: &dyn Session) -> Result<GlobUrl> {
+pub async fn rewrite_directory_url(mut url: GlobUrl, session: &dyn Session) -> Result<GlobUrl> {
     if url.glob.is_some() || url.base.path().ends_with(object_store::path::DELIMITER) {
+        return Ok(url);
+    }
+    // Opening a local directory for HEAD can fail with AccessDenied on Windows.
+    // Detect existing directories before probing the object store.
+    if url.base.scheme() == "file" && url.base.to_file_path().is_ok_and(|path| path.is_dir()) {
+        url.base.set_path(&format!("{}/", url.base.path()));
         return Ok(url);
     }
     debug!("rewrite_directory_url: Checking if URL is a directory: {url:?}");

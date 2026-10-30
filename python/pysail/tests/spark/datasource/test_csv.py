@@ -382,7 +382,7 @@ def test_csv_infer_schema_skips_whitespace_only_lines(spark, tmp_path):
 def test_csv_read_quoted_value_with_line_breaks(spark, tmp_path, value, expected):
     # Without `multiLine`, Spark reads such a value as broken rows. Sail parses the quotes across
     # lines, but drops whitespace-only lines before parsing, inside quotes as well.
-    (tmp_path / "data.csv").write_text(f'a,b\n"{value}",1\n')
+    (tmp_path / "data.csv").write_text(f'a,b\n"{value}",1\n', newline="\n")
     df = spark.read.option("header", "true").csv(str(tmp_path))
     assert df.collect() == [Row(a=expected, b="1")]
 
@@ -427,10 +427,12 @@ def test_csv_table_truncated_rows(spark, tmp_path):
     path.mkdir()
     (path / "data.csv").write_text(TRUNCATED_ROWS_CSV)
     columns = "a STRING, b INT, c STRING"
-    spark.sql(f"CREATE TABLE csv_truncated_rows ({columns}) USING csv OPTIONS (header 'true') LOCATION '{path}'")
+    spark.sql(
+        f"CREATE TABLE csv_truncated_rows ({columns}) USING csv OPTIONS (header 'true') LOCATION '{path.as_uri()}'"
+    )
     spark.sql(
         f"CREATE TABLE csv_truncated_rows_failfast ({columns}) USING csv "
-        f"OPTIONS (header 'true', mode 'FAILFAST') LOCATION '{path}'"
+        f"OPTIONS (header 'true', mode 'FAILFAST') LOCATION '{path.as_uri()}'"
     )
     try:
         assert spark.sql("SELECT * FROM csv_truncated_rows ORDER BY a").collect() == [
