@@ -16,6 +16,32 @@ Feature: map_zip_with higher-order function
         | result                 |
         | {a -> 1, b -> 5, c -> 4} |
 
+    Scenario: Coerce integral map key types to a common type
+      When query
+        """
+        SELECT map_zip_with(
+          map(CAST(1 AS INT), 'left'),
+          map(CAST(1 AS BIGINT), 'right'),
+          (k, v1, v2) -> concat(v1, v2)
+        ) AS result
+        """
+      Then query result
+        | result          |
+        | {1 -> leftright} |
+
+    Scenario: Coerce an untyped empty map to the other map's key type
+      When query
+        """
+        SELECT map_zip_with(
+          map(),
+          map('a', 1),
+          (k, v1, v2) -> coalesce(v1, 0) + coalesce(v2, 0)
+        ) AS result
+        """
+      Then query result
+        | result   |
+        | {a -> 1} |
+
     Scenario: Zip maps with string values
       When query
         """
@@ -91,6 +117,17 @@ Feature: map_zip_with higher-order function
       Then query result
         | result |
         | NULL   |
+
+    Scenario: Empty and NULL maps skip lambda evaluation when there are no keys
+      When query
+        """
+        SELECT map_zip_with(map_value, CAST(map() AS MAP<STRING, INT>), (k, v1, v2) -> CAST(raise_error('boom') AS INT)) AS result
+        FROM VALUES (CAST(NULL AS MAP<STRING, INT>)), (CAST(map() AS MAP<STRING, INT>)) AS t(map_value)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | {}     |
 
   Rule: Lambda arity errors
 
