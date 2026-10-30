@@ -6,6 +6,7 @@ use sail_common::spec;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
+use crate::streaming::rewriter::is_streaming_plan;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_deduplicate(
@@ -25,6 +26,12 @@ impl PlanResolver<'_> {
             .await?;
         let schema = input.schema();
         if within_watermark {
+            // Spark only defines watermark-based deduplication for streaming input.
+            if !is_streaming_plan(&input)? {
+                return Err(PlanError::analysis(
+                    "dropDuplicatesWithinWatermark is not supported with batch DataFrames/DataSets",
+                ));
+            }
             return Err(PlanError::todo("deduplicate within watermark"));
         }
         if !column_names.is_empty() && !all_columns_as_keys {

@@ -6,8 +6,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::array::{Array, ArrayData, ArrayRef, RecordBatch, make_array};
+use datafusion::arrow::datatypes::{
+    DataType as ArrowDataType, FieldRef, Fields, Schema, SchemaRef,
+};
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::Span;
@@ -481,6 +483,7 @@ impl Executor {
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
+    let batch = &deduplicate_struct_field_names(batch)?;
     let mut output = ArrowBatch::default();
     {
         // Fallback incase view types weren't handled in planning/execution.
@@ -498,4 +501,176 @@ pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {
         writer.finish()?;
     }
     Ok(output)
+}
+
+/// Renames duplicate struct field names in the Arrow data sent to the client.
+///
+/// The Spark Connect client converts a struct value to a row by looking up each field
+/// by a deduplicated name (`<name>_<index>` for a name that appears more than once in
+/// the struct), and takes the original names from the schema in the response.
+/// A struct with duplicate field names cannot be converted otherwise.
+fn deduplicate_struct_field_names(batch: &RecordBatch) -> SparkResult<RecordBatch> {
+    let schema = batch.schema();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(deduplicate_field)
+        .collect::<Vec<_>>();
+    if fields
+        .iter()
+        .zip(schema.fields().iter())
+        .all(|(new, old)| new == old)
+    {
+        return Ok(batch.clone());
+    }
+    let columns = batch
+        .columns()
+        .iter()
+        .zip(fields.iter())
+        .map(|(column, field)| relabel_array(column, field.data_type()))
+        .collect::<SparkResult<Vec<_>>>()?;
+    let schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    Ok(RecordBatch::try_new(schema, columns)?)
+}
+
+fn deduplicate_field(field: &FieldRef) -> FieldRef {
+    let data_type = deduplicate_data_type(field.data_type());
+    if &data_type == field.data_type() {
+        Arc::clone(field)
+    } else {
+        Arc::new(field.as_ref().clone().with_data_type(data_type))
+    }
+}
+
+fn deduplicate_data_type(data_type: &ArrowDataType) -> ArrowDataType {
+    match data_type {
+        ArrowDataType::Struct(fields) => {
+            let names = deduplicate_names(fields);
+            let fields = fields
+                .iter()
+                .zip(names)
+                .map(|(field, name)| {
+                    let field = deduplicate_field(field);
+                    if field.name() == &name {
+                        field
+                    } else {
+                        Arc::new(field.as_ref().clone().with_name(name))
+                    }
+                })
+                .collect::<Fields>();
+            ArrowDataType::Struct(fields)
+        }
+        ArrowDataType::List(field) => ArrowDataType::List(deduplicate_field(field)),
+        ArrowDataType::LargeList(field) => ArrowDataType::LargeList(deduplicate_field(field)),
+        ArrowDataType::FixedSizeList(field, size) => {
+            ArrowDataType::FixedSizeList(deduplicate_field(field), *size)
+        }
+        ArrowDataType::Map(field, sorted) => ArrowDataType::Map(deduplicate_field(field), *sorted),
+        other => other.clone(),
+    }
+}
+
+/// Follows `_dedup_names` in `pyspark.sql.pandas.types`.
+fn deduplicate_names(fields: &Fields) -> Vec<String> {
+    let mut seen = std::collections::HashMap::<&str, usize>::new();
+    fields
+        .iter()
+        .map(|field| {
+            let total = fields.iter().filter(|f| f.name() == field.name()).count();
+            if total > 1 {
+                let index = seen.entry(field.name().as_str()).or_insert(0);
+                let name = format!("{}_{}", field.name(), index);
+                *index += 1;
+                name
+            } else {
+                field.name().clone()
+            }
+        })
+        .collect()
+}
+
+/// Gives an array a data type that differs only in field names.
+fn relabel_array(array: &ArrayRef, data_type: &ArrowDataType) -> SparkResult<ArrayRef> {
+    if array.data_type() == data_type {
+        return Ok(Arc::clone(array));
+    }
+    Ok(make_array(relabel_data(array.to_data(), data_type)?))
+}
+
+fn relabel_data(data: ArrayData, data_type: &ArrowDataType) -> SparkResult<ArrayData> {
+    let child_types: Vec<&ArrowDataType> = match data_type {
+        ArrowDataType::Struct(fields) => fields.iter().map(|f| f.data_type()).collect(),
+        ArrowDataType::List(field)
+        | ArrowDataType::LargeList(field)
+        | ArrowDataType::FixedSizeList(field, _)
+        | ArrowDataType::Map(field, _) => vec![field.data_type()],
+        _ => vec![],
+    };
+    let children = data
+        .child_data()
+        .iter()
+        .zip(child_types)
+        .map(|(child, child_type)| relabel_data(child.clone(), child_type))
+        .collect::<SparkResult<Vec<_>>>()?;
+    let data = data
+        .into_builder()
+        .data_type(data_type.clone())
+        .child_data(children)
+        .build()?;
+    Ok(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::{Int32Array, StringArray, StructArray};
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    #[test]
+    fn deduplicates_nested_struct_field_names() -> SparkResult<()> {
+        let fields = Fields::from(vec![
+            Field::new("x", ArrowDataType::Utf8, true),
+            Field::new("x", ArrowDataType::Int32, true),
+            Field::new("y", ArrowDataType::Int32, true),
+        ]);
+        let column = Arc::new(StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["a"])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![2])) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            ArrowDataType::Struct(fields),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![column])?;
+
+        let batch = deduplicate_struct_field_names(&batch)?;
+
+        let ArrowDataType::Struct(fields) = batch.schema().field(0).data_type().clone() else {
+            return Err(SparkError::internal("expected a struct"));
+        };
+        let names = fields.iter().map(|f| f.name().as_str()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["x_0", "x_1", "y"]);
+        assert_eq!(batch.num_rows(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn keeps_batches_without_duplicate_names() -> SparkResult<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1]))])?;
+        let output = deduplicate_struct_field_names(&batch)?;
+        assert_eq!(output.schema(), batch.schema());
+        Ok(())
+    }
 }

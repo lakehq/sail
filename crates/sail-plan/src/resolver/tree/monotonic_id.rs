@@ -6,7 +6,9 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, Extension, LogicalPlan, ident};
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+use sail_function::scalar::misc::monotonically_increasing_id::{
+    SparkDistributedSequenceId, SparkMonotonicallyIncreasingId,
+};
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 
 use crate::resolver::PlanResolver;
@@ -17,6 +19,7 @@ pub(crate) struct MonotonicIdRewriter<'s> {
     plan: LogicalPlan,
     state: &'s mut PlanResolverState,
     column_name: Option<String>,
+    sequence_column_name: Option<String>,
 }
 
 impl<'s> PlanRewriter<'s> for MonotonicIdRewriter<'s> {
@@ -25,6 +28,7 @@ impl<'s> PlanRewriter<'s> for MonotonicIdRewriter<'s> {
             plan,
             state,
             column_name: None,
+            sequence_column_name: None,
         }
     }
 
@@ -43,14 +47,20 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
         };
 
         let inner = func.inner();
-        if !inner.is::<SparkMonotonicallyIncreasingId>() {
+        let consecutive = inner.is::<SparkDistributedSequenceId>();
+        if !consecutive && !inner.is::<SparkMonotonicallyIncreasingId>() {
             return Ok(Transformed::no(func.call(args)));
         }
 
-        // `monotonically_increasing_id()` is nullary
+        // `monotonically_increasing_id()` and `distributed_sequence_id()` are nullary
         args.zero()?;
 
-        let col = match &self.column_name {
+        let existing = if consecutive {
+            &self.sequence_column_name
+        } else {
+            &self.column_name
+        };
+        let col = match existing {
             Some(c) => c.clone(),
             None => {
                 // Create an internal-only field ID without a referenceable name.
@@ -61,9 +71,17 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
                 let (plan, _, _) = PlanResolver::require_input_sort_inner(plan)
                     .map_err(|error| DataFusionError::External(Box::new(error)))?;
                 self.plan = LogicalPlan::Extension(Extension {
-                    node: Arc::new(MonotonicIdNode::try_new(Arc::new(plan), col.clone())?),
+                    node: Arc::new(MonotonicIdNode::try_new_with_consecutive(
+                        Arc::new(plan),
+                        col.clone(),
+                        consecutive,
+                    )?),
                 });
-                self.column_name = Some(col.clone());
+                if consecutive {
+                    self.sequence_column_name = Some(col.clone());
+                } else {
+                    self.column_name = Some(col.clone());
+                }
                 col
             }
         };

@@ -100,7 +100,7 @@ impl CatalogManager {
         &self,
         view: &str,
         options: DropTemporaryViewOptions,
-    ) -> CatalogResult<()> {
+    ) -> CatalogResult<bool> {
         let DropTemporaryViewOptions { if_exists } = options;
         GLOBAL_TEMPORARY_VIEW_MANAGER.drop_view(view, if_exists)
     }
@@ -109,7 +109,7 @@ impl CatalogManager {
         &self,
         view: &str,
         options: DropTemporaryViewOptions,
-    ) -> CatalogResult<()> {
+    ) -> CatalogResult<bool> {
         let DropTemporaryViewOptions { if_exists } = options;
         self.temporary_views.drop_view(view, if_exists)
     }

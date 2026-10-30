@@ -1,28 +1,37 @@
 use std::sync::Arc;
 
+use datafusion::functions::expr_fn::named_struct;
 use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
+use datafusion_expr::expr::{
+    AggregateFunction, AggregateFunctionParams, WindowFunction, WindowFunctionDefinition,
+    WindowFunctionParams,
+};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
     Aggregate, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    Projection, SortExpr, Volatility, bitwise_and, bitwise_shift_right, cast,
+    Projection, SortExpr, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits, bitwise_and,
+    bitwise_shift_right, cast, ident, lit, when,
 };
+use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
 use sail_common_datafusion::input_file::is_input_file_metadata_function;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::scalar::datetime::spark_session_window::SparkSessionWindow;
 use sail_function::scalar::explode::Explode;
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::partition_random::PartitionRandomNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::get_udf_display_name;
@@ -30,12 +39,13 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use crate::resolver::expression::NamedExpr;
+use crate::resolver::expression::{NamedExpr, take_auto_generated_alias};
 use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::exists::ExistsRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
+use crate::resolver::tree::window::WindowRewriter;
 
 /// Projections resolved by index, with typed columns for lateral dependencies.
 /// A `None` marks a projection deferred until grouping is materialized.
@@ -163,8 +173,12 @@ impl PlanResolver<'_> {
 
         // Expand a generator (e.g. window's `explode`) in the grouping into a named
         // column; a no-op for ordinary aggregates.
-        let (input, grouping, generator_replacements) =
+        let (input, grouping, mut generator_replacements) =
             self.expand_grouping_generators(input, grouping, state)?;
+        let grouping_before_sessions = grouping.clone();
+        let (input, grouping, session_replacements) =
+            self.expand_session_windows(input, grouping, state)?;
+        generator_replacements.extend(session_replacements.clone());
         let schema = input.schema();
 
         // Resolve the deferred projections (grouping columns are now in scope) and
@@ -194,6 +208,26 @@ impl PlanResolver<'_> {
         let (input, projections, grouping) =
             self.prepare_aggregate_input(input, projections, grouping, state)?;
         let schema = input.schema();
+
+        // The grouping columns of the result have the sessions instead of the IDs of the sessions.
+        let (projections, with_grouping_expressions) =
+            if with_grouping_expressions && !session_replacements.is_empty() {
+                let outputs = grouping_before_sessions
+                    .into_iter()
+                    .map(|group| {
+                        Ok(NamedExpr {
+                            expr: Self::replace_grouping_expressions(
+                                group.expr,
+                                &session_replacements,
+                            )?,
+                            ..group
+                        })
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                (outputs.into_iter().chain(projections).collect(), false)
+            } else {
+                (projections, with_grouping_expressions)
+            };
 
         // Spark CheckAnalysis: GroupedAgg Pandas/Arrow UDFs cannot be mixed with regular
         // (non-UDF) aggregate functions in the same .agg() call.
@@ -595,9 +629,14 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata: _,
+                    mut metadata,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let auto_generated_alias = take_auto_generated_alias(&mut metadata);
+                let name = state.register_field_name(name.one()?);
+                if auto_generated_alias {
+                    state.set_auto_generated_alias(&name)?;
+                }
+                Ok(expr.alias(name))
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)
@@ -710,6 +749,8 @@ impl PlanResolver<'_> {
                 } else if let Some(node) = node.downcast_ref::<MonotonicIdNode>() {
                     Self::find_input_sort_ordering(node.input().as_ref())
                 } else if let Some(node) = node.downcast_ref::<SparkPartitionIdNode>() {
+                    Self::find_input_sort_ordering(node.input().as_ref())
+                } else if let Some(node) = node.downcast_ref::<PartitionRandomNode>() {
                     Self::find_input_sort_ordering(node.input().as_ref())
                 } else {
                     None
@@ -901,6 +942,7 @@ impl PlanResolver<'_> {
                 }
                 if !extension.node.as_any().is::<MonotonicIdNode>()
                     && !extension.node.as_any().is::<SparkPartitionIdNode>()
+                    && !extension.node.as_any().is::<PartitionRandomNode>()
                 {
                     return Ok((LogicalPlan::Extension(extension), false, false));
                 }
@@ -1027,8 +1069,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Vec<NamedExpr>> {
         for (index, projection) in deferred {
             resolved[index] = Some(
-                self.resolve_named_expression(projection, schema, state)
-                    .await?,
+                self.resolve_named_expression(projection.clone(), schema, state)
+                    .await?
+                    .with_auto_generated_alias(&projection),
             );
         }
         resolved
@@ -1371,6 +1414,177 @@ impl PlanResolver<'_> {
             }
         }
         Ok((input, grouping, replacements))
+    }
+
+    /// Rewrites a grouping by `session_window` so that the rows of a session are grouped together.
+    ///
+    /// The session of a row starts at the time of the row and lasts for the gap duration. The
+    /// sessions of the rows that have the same values of the other grouping expressions are merged
+    /// in the order of the time when they overlap. This is computed with window functions: a row
+    /// starts a new session if its time is after the latest end of the sessions of the previous
+    /// rows (a session that ends when the next one starts is merged with it), and the session ID is
+    /// the number of sessions started so far. The grouping
+    /// by `session_window` becomes the grouping by the session ID, and the session itself is the
+    /// earliest start and the latest end of its rows. The rows with a null time are removed, as in
+    /// Spark.
+    pub(super) fn expand_session_windows(
+        &self,
+        input: LogicalPlan,
+        mut grouping: Vec<NamedExpr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GroupingReplacements)> {
+        let is_session = Self::is_session_window;
+        let has_session = |expr: &Expr| expr.exists(|e| Ok(is_session(e))).unwrap_or(false);
+        let mut sessions = grouping
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| has_session(&group.expr))
+            .map(|(index, _)| index);
+        let Some(index) = sessions.next() else {
+            return Ok((input, grouping, vec![]));
+        };
+        if sessions.next().is_some() {
+            return Err(PlanError::analysis(
+                "Multiple time/session window expressions would result in a cartesian product \
+                 of rows, therefore they are currently not supported.",
+            ));
+        }
+        let session = grouping[index].expr.clone();
+        if !is_session(&session) {
+            return Err(PlanError::unsupported(
+                "session_window in an expression of a grouping",
+            ));
+        }
+        let keys = grouping
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .map(|(_, group)| group.expr.clone())
+            .collect::<Vec<_>>();
+        if keys.iter().any(|key| matches!(key, Expr::GroupingSet(_))) {
+            return Err(PlanError::unsupported(
+                "session_window with ROLLUP, CUBE, or GROUPING SETS",
+            ));
+        }
+
+        // The start and the end of the session of each row.
+        let start = state.register_field_name("");
+        let end = state.register_field_name("");
+        let mut projection = input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<_>>();
+        projection.push(session.clone().field("start").alias(&start));
+        projection.push(session.clone().field("end").alias(&end));
+        let plan = LogicalPlan::Projection(Projection::try_new(projection, Arc::new(input))?);
+        let plan = LogicalPlanBuilder::from(plan)
+            .filter(ident(&start).is_not_null())?
+            .build()?;
+
+        let window = |function: Arc<AggregateUDF>, arg: Expr, frame: WindowFrame| {
+            Expr::WindowFunction(Box::new(WindowFunction {
+                fun: WindowFunctionDefinition::AggregateUDF(function),
+                params: WindowFunctionParams {
+                    args: vec![arg],
+                    partition_by: keys.clone(),
+                    order_by: vec![ident(&start).sort(true, true)],
+                    window_frame: frame,
+                    filter: None,
+                    null_treatment: None,
+                    distinct: false,
+                },
+            }))
+        };
+        let single = |name: &str, expr: Expr| NamedExpr {
+            name: vec![name.to_string()],
+            expr,
+            metadata: vec![],
+        };
+        let rows_before = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+        );
+        let rows_until_current = WindowFrame::new_bounds(
+            WindowFrameUnits::Rows,
+            WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+            WindowFrameBound::CurrentRow,
+        );
+
+        // The latest end of the sessions of the previous rows.
+        let previous_end = window(min_max::max_udaf(), ident(&end), rows_before);
+        let (plan, previous_end) = self.rewrite_projection::<WindowRewriter>(
+            plan,
+            vec![single("previous_end", previous_end)],
+            state,
+        )?;
+        let previous_end = previous_end.one()?.expr;
+        // The ID of the session of each row.
+        let starts_session = when(
+            previous_end
+                .clone()
+                .is_null()
+                .or(ident(&start).gt(previous_end)),
+            lit(1_i64),
+        )
+        .otherwise(lit(0_i64))?;
+        let session_id = window(sum::sum_udaf(), starts_session, rows_until_current);
+        let (plan, session_id) = self.rewrite_projection::<WindowRewriter>(
+            plan,
+            vec![single("session_id", session_id)],
+            state,
+        )?;
+
+        grouping[index].expr = session_id.one()?.expr;
+        let aggregate = |function: Arc<AggregateUDF>, column: &str| {
+            Expr::AggregateFunction(AggregateFunction {
+                func: function,
+                params: AggregateFunctionParams {
+                    args: vec![ident(column)],
+                    distinct: false,
+                    filter: None,
+                    order_by: vec![],
+                    null_treatment: None,
+                },
+            })
+        };
+        let merged = named_struct(vec![
+            lit("start"),
+            aggregate(min_max::min_udaf(), &start),
+            lit("end"),
+            aggregate(min_max::max_udaf(), &end),
+        ]);
+        Ok((plan, grouping, vec![(session, merged)]))
+    }
+
+    fn is_session_window(expr: &Expr) -> bool {
+        matches!(expr, Expr::ScalarFunction(f) if f.func.inner().is::<SparkSessionWindow>())
+    }
+
+    /// Removes the rows with a null time from the input of a projection with `session_window`,
+    /// as Spark does.
+    pub(super) fn drop_rows_without_session_time(
+        input: LogicalPlan,
+        expressions: &[NamedExpr],
+    ) -> PlanResult<LogicalPlan> {
+        let mut sessions: Vec<Expr> = vec![];
+        for named in expressions {
+            named.expr.apply(|expr| {
+                if Self::is_session_window(expr) && !sessions.contains(expr) {
+                    sessions.push(expr.clone());
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        let mut input = input;
+        for session in sessions {
+            input = LogicalPlanBuilder::from(input)
+                .filter(session.field("start").is_not_null())?
+                .build()?;
+        }
+        Ok(input)
     }
 
     /// Whether a grouping expression contains a generator (e.g. `explode`) and so

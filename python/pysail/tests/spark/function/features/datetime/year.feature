@@ -196,7 +196,6 @@ Feature: year
         | year of string datetime literal     | '2024-03-15 10:30:00'       |
         | year of string with timezone offset | '2024-03-15 10:30:00+05:30' |
 
-    @sail-bug
     Scenario: year of year-only string
       When query
         """
@@ -206,7 +205,6 @@ Feature: year
         | result |
         | 2024   |
 
-    @sail-bug
     Scenario: year of invalid string returns NULL when ANSI is off
       Given config spark.sql.ansi.enabled = false
       When query
@@ -217,7 +215,6 @@ Feature: year
         | result |
         | NULL   |
 
-    @sail-bug
     Scenario: year of empty string returns NULL when ANSI is off
       Given config spark.sql.ansi.enabled = false
       When query

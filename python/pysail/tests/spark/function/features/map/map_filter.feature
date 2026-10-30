@@ -529,7 +529,6 @@ Feature: map_filter with lambda
 
   Rule: Map columns are inferred across all VALUES rows
 
-    @sail-bug
     Scenario: Filter a VALUES map column beginning with empty and untyped null maps
       When query
         """

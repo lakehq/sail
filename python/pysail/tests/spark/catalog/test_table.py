@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from pyspark.errors.exceptions.connect import IllegalArgumentException
+from pyspark.sql import Row
 from pyspark.sql.types import LongType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark
@@ -164,3 +165,19 @@ def test_create_table_returns_readable_dataframe(created_table):
     _, schema, _, result = created_table
     assert result.schema == schema
     assert result.collect() == []
+
+
+# Spark uses the `path` option of `CREATE TABLE` as the location of the table.
+def test_create_table_with_path_option(spark, tmp_path):
+    path = str(tmp_path / "data")
+    spark.range(2).selectExpr("id AS key", "id * 10 AS value").write.partitionBy("key").parquet(path)
+    spark.sql(
+        "CREATE TABLE path_option_tbl (value LONG, key LONG) "
+        f"USING parquet OPTIONS (path '{escape_sql_string_literal(path)}') PARTITIONED BY (key)"
+    )
+    try:
+        assert spark.catalog.getTable("path_option_tbl").tableType == "EXTERNAL"
+        spark.catalog.recoverPartitions("path_option_tbl")
+        assert sorted(spark.table("path_option_tbl").collect()) == [Row(value=0, key=0), Row(value=10, key=1)]
+    finally:
+        spark.sql("DROP TABLE path_option_tbl")

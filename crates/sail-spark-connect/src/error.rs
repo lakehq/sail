@@ -7,6 +7,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use prost::{DecodeError, UnknownEnumValue};
 use sail_cache::error::CacheError;
+use sail_catalog::error::CatalogError;
 use sail_common::actor::ActorSendError;
 use sail_common::error::CommonError;
 use sail_common_datafusion::error::{CommonErrorCause, PythonErrorCause};
@@ -111,6 +112,12 @@ impl From<PlanError> for SparkError {
             PlanError::AnalysisError(message) => SparkError::AnalysisError(message),
             PlanError::DeltaTableError(e) => SparkError::InternalError(e.to_string()),
         }
+    }
+}
+
+impl From<CatalogError> for SparkError {
+    fn from(error: CatalogError) -> Self {
+        PlanError::from(error).into()
     }
 }
 

@@ -2804,7 +2804,7 @@ name: "test_derived_tpcds_query_result[09]"
 data:
   |-
     | bucket1     | bucket2    | bucket3    | bucket4      | bucket5      |
-    | -162.240578 | 105.717630 | 198.330830 | -1178.708246 | -1467.157090 |
+    | -162.240579 | 105.717631 | 198.330831 | -1178.708247 | -1467.157090 |
 ---
 name: "test_derived_tpcds_query_result[10]"
 data:
@@ -2822,11 +2822,11 @@ data:
     | i_item_id        | i_item_desc                                                                                                                                                                                             | i_category | i_class      | i_current_price | itemrevenue | revenueratio |
     | AAAAAAAAGCAAAAAA | International, substantial schools mean effectively. Users put then in a operations. Particul                                                                                                           | Books      | business     | 5.07            | 4869.76     | 100.000000   |
     | AAAAAAAABGAAAAAA | More reg                                                                                                                                                                                                | Books      | fiction      | 57.09           | 5196.30     | 77.809073    |
-    | AAAAAAAADEAAAAAA | Already                                                                                                                                                                                                 | Books      | fiction      | 1.47            | 138.40      | 2.072392     |
-    | AAAAAAAALIAAAAAA | Lines shall describe explicitly northern, firm systems. Later                                                                                                                                           | Books      | fiction      | 2.99            | 1343.57     | 20.118533    |
+    | AAAAAAAADEAAAAAA | Already                                                                                                                                                                                                 | Books      | fiction      | 1.47            | 138.40      | 2.072393     |
+    | AAAAAAAALIAAAAAA | Lines shall describe explicitly northern, firm systems. Later                                                                                                                                           | Books      | fiction      | 2.99            | 1343.57     | 20.118534    |
     | AAAAAAAANJAAAAAA | Recent performances get yet other publications; current patients could not carry comparatively intense, vital times. Wide problems smooth truly. Tomorrow used years catch a                            | Books      | reference    | 2.21            | 8826.84     | 100.000000   |
     | AAAAAAAAAEAAAAAA | Readily happy questions give other, large parents. Parents might use over top influences. Small men would                                                                                               | Books      | science      | 6.67            | 14383.38    | 100.000000   |
-    | AAAAAAAABJAAAAAA | Prospects know                                                                                                                                                                                          | Books      | self-help    | 59.77           | 3690.50     | 30.448589    |
+    | AAAAAAAABJAAAAAA | Prospects know                                                                                                                                                                                          | Books      | self-help    | 59.77           | 3690.50     | 30.448590    |
     | AAAAAAAAJHAAAAAA | However increasing dates meet. Large, ready goals mean now blind structures. Crea                                                                                                                       | Books      | self-help    | 38.79           | 8429.93     | 69.551410    |
     | AAAAAAAACLAAAAAA | Eyes appreciate political yards. Constant, awful eyes could c                                                                                                                                           | Books      | sports       | 1.71            | 18977.23    | 100.000000   |
     | AAAAAAAAOFAAAAAA | Enough gradual particles will encourage; therefore national studies approach even complete hours. Volumes would come wooden, great places. Economical                                                   | Jewelry    | birdal       | 4.19            | 690.59      | 100.000000   |
@@ -2835,13 +2835,13 @@ data:
     | AAAAAAAAKBAAAAAA | Workers could become. Feelings take never to a rivals; of course close problems call over besides other plans. Severe changes must not know also. Lives lead earlier possible, lacking representatives. | Jewelry    | diamonds     | 8.57            | 1510.90     | 100.000000   |
     | AAAAAAAAMCAAAAAA | Thus certain organisations cannot study even adequate sounds; national organisations sit years. Sometimes major specialists ought to retain figures;                                                    | Jewelry    | mens watch   | 0.37            | 1372.80     | 100.000000   |
     | AAAAAAAAKDAAAAAA | British units must not leave quick in a questions. Tasks terminate supreme departments. So significant families will not                                                                                | Jewelry    | womens watch | 4.87            | 1104.22     | 100.000000   |
-    | AAAAAAAAGBAAAAAA | Industria                                                                                                                                                                                               | Women      | dresses      | 2.61            | 422.40      | 35.614012    |
+    | AAAAAAAAGBAAAAAA | Industria                                                                                                                                                                                               | Women      | dresses      | 2.61            | 422.40      | 35.614013    |
     | AAAAAAAAGKAAAAAA | Eggs count. Opening types enforce areas. Lines put rather years. Active, nasty eyes walk there enough young metres. Possibilities must admit. Arms a                                                    | Women      | dresses      | 6.73            | 763.65      | 64.385987    |
     | AAAAAAAAABAAAAAA | Neighbouring leaves shall not take functions; powerful, interesting things ma                                                                                                                           | Women      | fragrances   | 0.87            | 419.94      | 19.622264    |
     | AAAAAAAAEEAAAAAA | Again good payments sep                                                                                                                                                                                 | Women      | fragrances   | 5.67            | 1531.60     | 71.566080    |
     | AAAAAAAAGEAAAAAA | Civil loans put also after a members. Only easy collections fail however directly public da                                                                                                             | Women      | fragrances   | 5.31            | 188.58      | 8.811655     |
     | AAAAAAAAJEAAAAAA | Then critical years could instruct true                                                                                                                                                                 | Women      | maternity    | 41.16           | 1136.46     | 71.814218    |
-    | AAAAAAAAMHAAAAAA | Democratic houses can                                                                                                                                                                                   | Women      | maternity    | 2.60            | 446.04      | 28.185781    |
+    | AAAAAAAAMHAAAAAA | Democratic houses can                                                                                                                                                                                   | Women      | maternity    | 2.60            | 446.04      | 28.185782    |
     | AAAAAAAAHDAAAAAA | Complete cases shall happen to a generations. Systems must tell sometimes main scenes. Tonnes make still main trees. Different, personal owners become often little important y                         | Women      | swimwear     | 0.99            | 8215.50     | 100.000000   |
 ---
 name: "test_derived_tpcds_query_result[13]"
@@ -3010,7 +3010,7 @@ name: "test_derived_tpcds_query_result[18]"
 data:
   |-
     | i_item_id        | ca_country    | ca_state | ca_county       | agg1      | agg2       | agg3       | agg4       | agg5         | agg6        | agg7     |
-    | NULL             | NULL          | NULL     | NULL            | 59.260869 | 86.442173  | 53.683478  | 46.365217  | 171.216086   | 1936.521739 | 0.608695 |
+    | NULL             | NULL          | NULL     | NULL            | 59.260870 | 86.442174  | 53.683478  | 46.365217  | 171.216087   | 1936.521739 | 0.608696 |
     | AAAAAAAAAHAAAAAA | NULL          | NULL     | NULL            | 61.000000 | 78.270000  | 0.000000   | 17.210000  | -2070.950000 | 1942.000000 | 1.000000 |
     | AAAAAAAAALAAAAAA | NULL          | NULL     | NULL            | 60.000000 | 39.160000  | 670.750000 | 21.920000  | -418.750000  | 1928.000000 | 0.000000 |
     | AAAAAAAABAAAAAAA | NULL          | NULL     | NULL            | 30.000000 | 185.900000 | 0.000000   | 9.290000   | -1917.000000 | 1928.000000 | 0.000000 |
@@ -3293,7 +3293,7 @@ data:
     | AAAAAAAAHGAAAAAA | 48.0      | 119.430000 | 0.000000    | 61.950000  |
     | AAAAAAAAHJAAAAAA | 66.0      | 59.490000  | 0.000000    | 39.260000  |
     | AAAAAAAAIAAAAAAA | 69.5      | 103.905000 | 0.000000    | 47.960000  |
-    | AAAAAAAAICAAAAAA | 42.666667 | 103.836666 | 0.000000    | 69.956666  |
+    | AAAAAAAAICAAAAAA | 42.666667 | 103.836667 | 0.000000    | 69.956667  |
     | AAAAAAAAIDAAAAAA | 77.0      | 12.000000  | 157.540000  | 3.720000   |
     | AAAAAAAAIGAAAAAA | 31.5      | 33.670000  | 397.425000  | 24.500000  |
     | AAAAAAAAIIAAAAAA | 54.0      | 168.920000 | 0.000000    | 92.900000  |
@@ -3330,7 +3330,7 @@ name: "test_derived_tpcds_query_result[27]"
 data:
   |-
     | i_item_id        | s_state | g_state | agg1      | agg2       | agg3        | agg4       |
-    | NULL             | NULL    | 1       | 50.202381 | 80.912976  | 195.773176  | 44.271764  |
+    | NULL             | NULL    | 1       | 50.202381 | 80.912976  | 195.773176  | 44.271765  |
     | AAAAAAAAABAAAAAA | NULL    | 1       | 4.0       | 33.100000  | 28.790000   | 24.820000  |
     | AAAAAAAAABAAAAAA | TN      | 0       | 4.0       | 33.100000  | 28.790000   | 24.820000  |
     | AAAAAAAAAEAAAAAA | NULL    | 1       | 69.5      | 31.390000  | 424.735000  | 21.515000  |
@@ -3435,7 +3435,7 @@ name: "test_derived_tpcds_query_result[28]"
 data:
   |-
     | B1_LP     | B1_CNT | B1_CNTD | B2_LP     | B2_CNT | B2_CNTD | B3_LP     | B3_CNT | B3_CNTD | B4_LP     | B4_CNT | B4_CNTD | B5_LP     | B5_CNT | B5_CNTD | B6_LP      | B6_CNT | B6_CNTD |
-    | 54.676526 | 357    | 346     | 89.351976 | 344    | 340     | 58.990555 | 288    | 280     | 70.273530 | 371    | 360     | 89.852031 | 315    | 311     | 108.428782 | 271    | 268     |
+    | 54.676527 | 357    | 346     | 89.351977 | 344    | 340     | 58.990556 | 288    | 280     | 70.273531 | 371    | 360     | 89.852032 | 315    | 311     | 108.428782 | 271    | 268     |
 ---
 name: "test_derived_tpcds_query_result[29]"
 data:
@@ -3566,66 +3566,66 @@ name: "test_derived_tpcds_query_result[36]"
 data:
   |-
     | gross_margin | i_category  | i_class         | lochierarchy | rank_within_parent |
-    | -0.430576    | NULL        | NULL            | 2            | 1                  |
+    | -0.430577    | NULL        | NULL            | 2            | 1                  |
     | -0.547231    | Electronics | NULL            | 1            | 1                  |
     | -0.530751    | Sports      | NULL            | 1            | 2                  |
-    | -0.503841    | Men         | NULL            | 1            | 3                  |
-    | -0.438801    | Women       | NULL            | 1            | 4                  |
+    | -0.503842    | Men         | NULL            | 1            | 3                  |
+    | -0.438802    | Women       | NULL            | 1            | 4                  |
     | -0.419469    | Music       | NULL            | 1            | 5                  |
     | -0.416464    | Books       | NULL            | 1            | 6                  |
     | -0.387017    | Jewelry     | NULL            | 1            | 7                  |
     | -0.361761    | Children    | NULL            | 1            | 8                  |
     | -0.291218    | Home        | NULL            | 1            | 9                  |
     | -0.273163    | Shoes       | NULL            | 1            | 10                 |
-    | -0.594526    | Books       | sports          | 0            | 1                  |
+    | -0.594527    | Books       | sports          | 0            | 1                  |
     | -0.439102    | Books       | fiction         | 0            | 2                  |
-    | -0.417870    | Books       | self-help       | 0            | 3                  |
+    | -0.417871    | Books       | self-help       | 0            | 3                  |
     | -0.397668    | Books       | reference       | 0            | 4                  |
     | -0.384540    | Books       | arts            | 0            | 5                  |
     | -0.371207    | Books       | travel          | 0            | 6                  |
-    | -0.260308    | Books       | business        | 0            | 7                  |
+    | -0.260309    | Books       | business        | 0            | 7                  |
     | -0.430025    | Children    | newborn         | 0            | 1                  |
-    | -0.422057    | Children    | school-uniforms | 0            | 2                  |
+    | -0.422058    | Children    | school-uniforms | 0            | 2                  |
     | -0.281165    | Children    | toddlers        | 0            | 3                  |
-    | -0.796862    | Electronics | monitors        | 0            | 1                  |
-    | -0.794236    | Electronics | memory          | 0            | 2                  |
+    | -0.796863    | Electronics | monitors        | 0            | 1                  |
+    | -0.794237    | Electronics | memory          | 0            | 2                  |
     | -0.617659    | Electronics | stereo          | 0            | 3                  |
-    | -0.597787    | Electronics | audio           | 0            | 4                  |
+    | -0.597788    | Electronics | audio           | 0            | 4                  |
     | -0.525914    | Electronics | karoke          | 0            | 5                  |
-    | -0.525155    | Electronics | musical         | 0            | 6                  |
+    | -0.525156    | Electronics | musical         | 0            | 6                  |
     | -0.493053    | Electronics | televisions     | 0            | 7                  |
-    | -0.441702    | Electronics | dvd/vcr players | 0            | 8                  |
-    | -0.399292    | Electronics | scanners        | 0            | 9                  |
-    | -0.405376    | Home        | rugs            | 0            | 1                  |
-    | -0.392220    | Home        | kids            | 0            | 2                  |
-    | -0.251614    | Home        | decor           | 0            | 3                  |
+    | -0.441703    | Electronics | dvd/vcr players | 0            | 8                  |
+    | -0.399293    | Electronics | scanners        | 0            | 9                  |
+    | -0.405377    | Home        | rugs            | 0            | 1                  |
+    | -0.392221    | Home        | kids            | 0            | 2                  |
+    | -0.251615    | Home        | decor           | 0            | 3                  |
     | -0.242944    | Home        | bedding         | 0            | 4                  |
-    | -0.237312    | Home        | furniture       | 0            | 5                  |
-    | -0.505082    | Jewelry     | costume         | 0            | 1                  |
-    | -0.480175    | Jewelry     | estate          | 0            | 2                  |
+    | -0.237313    | Home        | furniture       | 0            | 5                  |
+    | -0.505083    | Jewelry     | costume         | 0            | 1                  |
+    | -0.480176    | Jewelry     | estate          | 0            | 2                  |
     | -0.478363    | Jewelry     | consignment     | 0            | 3                  |
-    | -0.446837    | Jewelry     | pendants        | 0            | 4                  |
+    | -0.446838    | Jewelry     | pendants        | 0            | 4                  |
     | -0.424806    | Jewelry     | diamonds        | 0            | 5                  |
     | -0.410503    | Jewelry     | jewelry boxes   | 0            | 6                  |
     | -0.349686    | Jewelry     | semi-precious   | 0            | 7                  |
-    | -0.313966    | Jewelry     | custom          | 0            | 8                  |
-    | -0.243004    | Jewelry     | gold            | 0            | 9                  |
-    | -0.218682    | Jewelry     | mens watch      | 0            | 10                 |
-    | -0.599366    | Men         | sports-apparel  | 0            | 1                  |
+    | -0.313967    | Jewelry     | custom          | 0            | 8                  |
+    | -0.243005    | Jewelry     | gold            | 0            | 9                  |
+    | -0.218683    | Jewelry     | mens watch      | 0            | 10                 |
+    | -0.599367    | Men         | sports-apparel  | 0            | 1                  |
     | -0.489749    | Men         | accessories     | 0            | 2                  |
     | -0.469619    | Men         | shirts          | 0            | 3                  |
     | -0.432612    | Men         | pants           | 0            | 4                  |
-    | -0.491076    | Music       | pop             | 0            | 1                  |
+    | -0.491077    | Music       | pop             | 0            | 1                  |
     | -0.433890    | Music       | country         | 0            | 2                  |
     | -0.314926    | Music       | classical       | 0            | 3                  |
     | -0.340187    | Shoes       | mens            | 0            | 1                  |
-    | -0.254302    | Shoes       | womens          | 0            | 2                  |
-    | -0.682038    | Sports      | fishing         | 0            | 1                  |
-    | -0.512801    | Sports      | sailing         | 0            | 2                  |
+    | -0.254303    | Shoes       | womens          | 0            | 2                  |
+    | -0.682039    | Sports      | fishing         | 0            | 1                  |
+    | -0.512802    | Sports      | sailing         | 0            | 2                  |
     | -0.332856    | Sports      | guns            | 0            | 3                  |
-    | -0.494163    | Women       | swimwear        | 0            | 1                  |
+    | -0.494164    | Women       | swimwear        | 0            | 1                  |
     | -0.403747    | Women       | fragrances      | 0            | 2                  |
-    | -0.365093    | Women       | maternity       | 0            | 3                  |
+    | -0.365094    | Women       | maternity       | 0            | 3                  |
 ---
 name: "test_derived_tpcds_query_result[37]"
 data:
@@ -3793,66 +3793,66 @@ data:
   |-
     | i_category  | i_brand               | s_store_name | s_company_name | d_year | avg_monthly_sales | sum_sales | psum    | nsum    |
     | Women       | edu packamalg #2      | ought        | Unknown        | 2001   | 892.472500        | 213.99    | 643.32  | 665.13  |
-    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536666        | 92.96     | 319.61  | 134.25  |
+    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536667        | 92.96     | 319.61  | 134.25  |
     | Women       | edu packamalg #2      | ought        | Unknown        | 2001   | 892.472500        | 250.77    | 378.47  | 643.32  |
-    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536666        | 134.25    | 92.96   | 1626.75 |
+    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536667        | 134.25    | 92.96   | 1626.75 |
     | Children    | exportiexporti #2     | ought        | Unknown        | 2001   | 846.785833        | 236.56    | 438.98  | 736.59  |
-    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761666       | 631.88    | 774.43  | 760.43  |
-    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761666       | 637.00    | 715.72  | 1412.57 |
+    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761667       | 631.88    | 774.43  | 760.43  |
+    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761667       | 637.00    | 715.72  | 1412.57 |
     | Children    | edu packexporti #2    | ought        | Unknown        | 2001   | 789.115000        | 237.21    | 675.87  | 315.38  |
-    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761666       | 679.89    | 760.43  | 715.72  |
+    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761667       | 679.89    | 760.43  | 715.72  |
     | Women       | edu packamalg #2      | ought        | Unknown        | 2001   | 892.472500        | 378.47    | 427.51  | 250.77  |
-    | Music       | edu packscholar #2    | ought        | Unknown        | 2001   | 609.269166        | 97.34     | 491.89  | 461.09  |
-    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761666       | 696.69    | 2248.25 | 774.43  |
-    | Music       | edu packscholar #2    | ought        | Unknown        | 2001   | 609.269166        | 114.65    | 568.05  | 491.89  |
-    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761666       | 715.72    | 679.89  | 637.00  |
+    | Music       | edu packscholar #2    | ought        | Unknown        | 2001   | 609.269167        | 97.34     | 491.89  | 461.09  |
+    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761667       | 696.69    | 2248.25 | 774.43  |
+    | Music       | edu packscholar #2    | ought        | Unknown        | 2001   | 609.269167        | 114.65    | 568.05  | 491.89  |
+    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761667       | 715.72    | 679.89  | 637.00  |
     | Children    | edu packexporti #2    | ought        | Unknown        | 2001   | 789.115000        | 315.38    | 237.21  | 1286.58 |
     | Women       | edu packamalg #2      | ought        | Unknown        | 2001   | 892.472500        | 427.51    | 765.09  | 378.47  |
-    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536666        | 311.45    | 1666.67 | 704.76  |
+    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536667        | 311.45    | 1666.67 | 704.76  |
     | Music       | importoscholar #2     | ought        | Unknown        | 2001   | 617.797500        | 167.80    | 446.84  | 273.82  |
-    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536666        | 319.61    | 443.33  | 92.96   |
-    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761666       | 760.43    | 631.88  | 679.89  |
+    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536667        | 319.61    | 443.33  | 92.96   |
+    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761667       | 760.43    | 631.88  | 679.89  |
     | Men         | edu packimporto #2    | ought        | Unknown        | 2001   | 508.390833        | 82.51     | 808.06  | 291.45  |
-    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761666       | 774.43    | 696.69  | 631.88  |
+    | Men         | amalgimporto #2       | ought        | Unknown        | 2001   | 1196.761667       | 774.43    | 696.69  | 631.88  |
     | Men         | importoimporto #2     | ought        | Unknown        | 2001   | 633.865833        | 211.76    | 434.06  | 689.61  |
     | Children    | exportiexporti #2     | ought        | Unknown        | 2001   | 846.785833        | 428.36    | 955.91  | 542.04  |
     | Children    | edu packexporti #2    | ought        | Unknown        | 2001   | 789.115000        | 380.30    | 698.84  | 675.87  |
     | Children    | exportiexporti #2     | ought        | Unknown        | 2001   | 846.785833        | 438.98    | 542.04  | 236.56  |
-    | Books       | exportiunivamalg #2   | ought        | Unknown        | 2001   | 390.779166        | 0.00      | 259.83  | 72.33   |
-    | Shoes       | amalgedu pack #2      | ought        | Unknown        | 2001   | 412.601666        | 25.04     | 361.29  | 306.33  |
-    | Books       | exportiunivamalg #2   | ought        | Unknown        | 2001   | 390.779166        | 4.71      | 339.45  | 259.83  |
-    | Music       | edu packscholar #2    | ought        | Unknown        | 2001   | 609.269166        | 226.78    | 461.09  | 312.28  |
+    | Books       | exportiunivamalg #2   | ought        | Unknown        | 2001   | 390.779167        | 0.00      | 259.83  | 72.33   |
+    | Shoes       | amalgedu pack #2      | ought        | Unknown        | 2001   | 412.601667        | 25.04     | 361.29  | 306.33  |
+    | Books       | exportiunivamalg #2   | ought        | Unknown        | 2001   | 390.779167        | 4.71      | 339.45  | 259.83  |
+    | Music       | edu packscholar #2    | ought        | Unknown        | 2001   | 609.269167        | 226.78    | 461.09  | 312.28  |
     | Women       | exportiamalg #2       | ought        | Unknown        | 2001   | 437.822500        | 55.84     | 512.23  | 82.76   |
     | Children    | edu packexporti #2    | ought        | Unknown        | 2001   | 789.115000        | 421.64    | 1478.58 | 663.85  |
     | Music       | importoscholar #2     | ought        | Unknown        | 2001   | 617.797500        | 259.22    | 396.80  | 268.49  |
-    | Shoes       | amalgedu pack #2      | ought        | Unknown        | 2001   | 412.601666        | 56.78     | 306.33  | 470.29  |
+    | Shoes       | amalgedu pack #2      | ought        | Unknown        | 2001   | 412.601667        | 56.78     | 306.33  | 470.29  |
     | Women       | exportiamalg #2       | ought        | Unknown        | 2001   | 437.822500        | 82.76     | 55.84   | 362.97  |
     | Music       | importoscholar #2     | ought        | Unknown        | 2001   | 617.797500        | 268.49    | 259.22  | 437.90  |
     | Music       | importoscholar #2     | ought        | Unknown        | 2001   | 617.797500        | 273.82    | 167.80  | 396.80  |
-    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536666        | 443.33    | 499.06  | 319.61  |
-    | Books       | exportiunivamalg #2   | ought        | Unknown        | 2001   | 390.779166        | 72.33     | 0.00    | 688.66  |
-    | Books       | exportiunivamalg #2   | ought        | Unknown        | 2001   | 390.779166        | 73.69     | 400.73  | 339.45  |
+    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536667        | 443.33    | 499.06  | 319.61  |
+    | Books       | exportiunivamalg #2   | ought        | Unknown        | 2001   | 390.779167        | 72.33     | 0.00    | 688.66  |
+    | Books       | exportiunivamalg #2   | ought        | Unknown        | 2001   | 390.779167        | 73.69     | 400.73  | 339.45  |
     | Books       | amalgmaxi #12         | ought        | Unknown        | 2001   | 386.102500        | 70.21     | 353.49  | 259.12  |
     | Men         | importoimporto #2     | ought        | Unknown        | 2001   | 633.865833        | 318.83    | 516.99  | 434.06  |
     | Men         | edu packimporto #2    | ought        | Unknown        | 2001   | 508.390833        | 195.30    | 291.45  | 482.65  |
-    | Children    | amalgexporti #2       | ought        | Unknown        | 2001   | 352.364166        | 45.45     | 179.38  | 303.21  |
+    | Children    | amalgexporti #2       | ought        | Unknown        | 2001   | 352.364167        | 45.45     | 179.38  | 303.21  |
     | Children    | exportiexporti #2     | ought        | Unknown        | 2001   | 846.785833        | 542.04    | 428.36  | 438.98  |
-    | Shoes       | amalgedu pack #2      | ought        | Unknown        | 2001   | 412.601666        | 108.59    | 470.29  | 427.61  |
-    | Music       | edu packscholar #2    | ought        | Unknown        | 2001   | 609.269166        | 312.28    | 226.78  | 1320.73 |
+    | Shoes       | amalgedu pack #2      | ought        | Unknown        | 2001   | 412.601667        | 108.59    | 470.29  | 427.61  |
+    | Music       | edu packscholar #2    | ought        | Unknown        | 2001   | 609.269167        | 312.28    | 226.78  | 1320.73 |
     | Books       | scholarunivamalg #8   | ought        | Unknown        | 2001   | 368.423333        | 79.30     | 293.20  | 541.88  |
     | Books       | amalgmaxi #12         | ought        | Unknown        | 2001   | 386.102500        | 97.66     | 255.85  | 718.28  |
-    | Women       | importoamalg #2       | ought        | Unknown        | 2001   | 413.034166        | 131.74    | 313.17  | 651.65  |
-    | Children    | amalgexporti #2       | ought        | Unknown        | 2001   | 352.364166        | 76.15     | 805.80  | 179.38  |
-    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536666        | 499.06    | 704.76  | 443.33  |
+    | Women       | importoamalg #2       | ought        | Unknown        | 2001   | 413.034167        | 131.74    | 313.17  | 651.65  |
+    | Children    | amalgexporti #2       | ought        | Unknown        | 2001   | 352.364167        | 76.15     | 805.80  | 179.38  |
+    | Music       | exportischolar #2     | ought        | Unknown        | 2001   | 768.536667        | 499.06    | 704.76  | 443.33  |
     | Electronics | maxiunivamalg #12     | ought        | Unknown        | 2001   | 271.762727        | 9.74      | 119.40  | 238.80  |
     | Books       | amalgmaxi #12         | ought        | Unknown        | 2001   | 386.102500        | 135.32    | 259.12  | 266.88  |
     | Women       | edu packamalg #2      | ought        | Unknown        | 2001   | 892.472500        | 643.32    | 250.77  | 213.99  |
     | Men         | importoimporto #2     | ought        | Unknown        | 2001   | 633.865833        | 391.31    | 499.86  | 516.99  |
-    | Jewelry     | exporticorp #8        | ought        | Unknown        | 2001   | 256.526363        | 17.38     | 694.93  | 285.94  |
-    | Jewelry     | exporticorp #8        | ought        | Unknown        | 2001   | 256.526363        | 18.72     | 83.43   | 387.98  |
+    | Jewelry     | exporticorp #8        | ought        | Unknown        | 2001   | 256.526364        | 17.38     | 694.93  | 285.94  |
+    | Jewelry     | exporticorp #8        | ought        | Unknown        | 2001   | 256.526364        | 18.72     | 83.43   | 387.98  |
     | Men         | edu packimporto #2    | ought        | Unknown        | 2001   | 508.390833        | 274.90    | 1298.28 | 327.04  |
     | Jewelry     | corpbrand #6          | ought        | Unknown        | 2001   | 244.093333        | 12.88     | 171.63  | 136.17  |
-    | Home        | importobrand #6       | ought        | Unknown        | 2001   | 244.651666        | 15.31     | 416.03  | 140.94  |
+    | Home        | importobrand #6       | ought        | Unknown        | 2001   | 244.651667        | 15.31     | 416.03  | 140.94  |
     | Women       | edu packamalg #2      | ought        | Unknown        | 2001   | 892.472500        | 665.13    | 213.99  | 1432.07 |
     | Home        | brandbrand #4         | ought        | Unknown        | 2001   | 241.250909        | 16.14     | 238.01  | 306.32  |
     | Music       | importoscholar #2     | ought        | Unknown        | 2001   | 617.797500        | 396.80    | 273.82  | 259.22  |
@@ -3864,34 +3864,34 @@ data:
     | Jewelry     | scholarbrand #2       | ought        | Unknown        | 2001   | 227.185000        | 14.89     | 112.35  | 227.45  |
     | Books       | scholarunivamalg #8   | ought        | Unknown        | 2001   | 368.423333        | 160.13    | 280.98  | 256.97  |
     | Electronics | maxiunivamalg #12     | ought        | Unknown        | 2001   | 271.762727        | 64.01     | 743.09  | 159.90  |
-    | Home        | importobrand #6       | ought        | Unknown        | 2001   | 244.651666        | 39.00     | 62.22   | 482.57  |
-    | Books       | scholarunivamalg #2   | ought        | Unknown        | 2001   | 205.926666        | 3.19      | 198.30  | 16.43   |
-    | Jewelry     | exporticorp #8        | ought        | Unknown        | 2001   | 256.526363        | 54.24     | 387.98  | 232.11  |
+    | Home        | importobrand #6       | ought        | Unknown        | 2001   | 244.651667        | 39.00     | 62.22   | 482.57  |
+    | Books       | scholarunivamalg #2   | ought        | Unknown        | 2001   | 205.926667        | 3.19      | 198.30  | 16.43   |
+    | Jewelry     | exporticorp #8        | ought        | Unknown        | 2001   | 256.526364        | 54.24     | 387.98  | 232.11  |
     | Books       | brandmaxi #2          | ought        | Unknown        | 2001   | 244.495000        | 43.24     | 234.39  | 302.08  |
     | Books       | exportiunivamalg #6   | ought        | Unknown        | 2001   | 223.603636        | 23.06     | 119.90  | 348.88  |
     | Men         | importoimporto #2     | ought        | Unknown        | 2001   | 633.865833        | 434.06    | 318.83  | 211.76  |
     | Men         | exportiimporto #2     | ought        | Unknown        | 2001   | 205.345000        | 11.75     | 312.83  | 83.42   |
-    | Jewelry     | importocorp #4        | ought        | Unknown        | 2001   | 228.071666        | 35.89     | 354.87  | 192.09  |
-    | Women       | importoamalg #2       | ought        | Unknown        | 2001   | 413.034166        | 222.17    | 651.65  | 726.69  |
-    | Books       | scholarunivamalg #2   | ought        | Unknown        | 2001   | 205.926666        | 16.43     | 3.19    | 150.52  |
+    | Jewelry     | importocorp #4        | ought        | Unknown        | 2001   | 228.071667        | 35.89     | 354.87  | 192.09  |
+    | Women       | importoamalg #2       | ought        | Unknown        | 2001   | 413.034167        | 222.17    | 651.65  | 726.69  |
+    | Books       | scholarunivamalg #2   | ought        | Unknown        | 2001   | 205.926667        | 16.43     | 3.19    | 150.52  |
     | Jewelry     | importobrand #6       | ought        | Unknown        | 2001   | 217.964545        | 28.88     | 103.60  | 118.28  |
     | Books       | importomaxi #4        | ought        | Unknown        | 2001   | 197.235000        | 8.64      | 21.89   | 76.32   |
-    | Jewelry     | amalgbrand #2         | ought        | Unknown        | 2001   | 227.234166        | 40.89     | 333.93  | 73.73   |
+    | Jewelry     | amalgbrand #2         | ought        | Unknown        | 2001   | 227.234167        | 40.89     | 333.93  | 73.73   |
     | Sports      | importomaxi #4        | ought        | Unknown        | 2001   | 238.883333        | 53.09     | 181.05  | 190.87  |
     | Jewelry     | brandcorp #4          | ought        | Unknown        | 2001   | 201.580833        | 17.47     | 63.20   | 543.27  |
-    | Electronics | exportiunivamalg #8   | ought        | Unknown        | 2001   | 182.721666        | 0.00      | 255.63  | 140.14  |
-    | Children    | amalgexporti #2       | ought        | Unknown        | 2001   | 352.364166        | 169.68    | 303.21  | 192.70  |
-    | Home        | importobrand #6       | ought        | Unknown        | 2001   | 244.651666        | 62.22     | 140.94  | 39.00   |
+    | Electronics | exportiunivamalg #8   | ought        | Unknown        | 2001   | 182.721667        | 0.00      | 255.63  | 140.14  |
+    | Children    | amalgexporti #2       | ought        | Unknown        | 2001   | 352.364167        | 169.68    | 303.21  | 192.70  |
+    | Home        | importobrand #6       | ought        | Unknown        | 2001   | 244.651667        | 62.22     | 140.94  | 39.00   |
     | Men         | edu packimporto #2    | ought        | Unknown        | 2001   | 508.390833        | 327.04    | 274.90  | 808.06  |
     | Music       | importoscholar #2     | ought        | Unknown        | 2001   | 617.797500        | 437.90    | 268.49  | 920.34  |
     | Jewelry     | brandcorp #4          | ought        | Unknown        | 2001   | 201.580833        | 21.98     | 142.54  | 72.49   |
-    | Home        | importobrand #6       | ought        | Unknown        | 2001   | 244.651666        | 65.47     | 383.26  | 175.41  |
+    | Home        | importobrand #6       | ought        | Unknown        | 2001   | 244.651667        | 65.47     | 383.26  | 175.41  |
     | Children    | exportiexporti #2     | ought        | Unknown        | 2001   | 846.785833        | 668.09    | 736.59  | 786.34  |
     | Electronics | corpunivamalg #11     | ought        | Unknown        | 2001   | 179.010000        | 0.76      | 110.01  | 39.18   |
     | Men         | exportiimporto #2     | ought        | Unknown        | 2001   | 205.345000        | 27.33     | 191.51  | 312.83  |
-    | Books       | univunivamalg #8      | ought        | Unknown        | 2001   | 186.919166        | 10.29     | 367.64  | 69.59   |
+    | Books       | univunivamalg #8      | ought        | Unknown        | 2001   | 186.919167        | 10.29     | 367.64  | 69.59   |
     | Electronics | edu packunivamalg #11 | ought        | Unknown        | 2001   | 198.143333        | 21.66     | 81.22   | 154.32  |
-    | Electronics | exportiunivamalg #8   | ought        | Unknown        | 2001   | 182.721666        | 7.05      | 965.06  | 151.05  |
+    | Electronics | exportiunivamalg #8   | ought        | Unknown        | 2001   | 182.721667        | 7.05      | 965.06  | 151.05  |
 ---
 name: "test_derived_tpcds_query_result[48]"
 data:
@@ -4058,31 +4058,31 @@ data:
     | NY Metro | 2000   | 10    | 949.893333        | 382.23    | 673.09  | 2734.05 |
     | NY Metro | 2000   | 1     | 949.893333        | 403.28    | 729.04  | 515.76  |
     | NY Metro | 2000   | 7     | 949.893333        | 460.44    | 797.19  | 525.22  |
-    | NY Metro | 2000   | 6     | 805.049166        | 332.25    | 799.33  | 823.18  |
-    | NY Metro | 2000   | 4     | 805.049166        | 337.52    | 1216.24 | 799.33  |
+    | NY Metro | 2000   | 6     | 805.049167        | 332.25    | 799.33  | 823.18  |
+    | NY Metro | 2000   | 4     | 805.049167        | 337.52    | 1216.24 | 799.33  |
     | NY Metro | 2000   | 3     | 512.695000        | 68.00     | 245.67  | 595.97  |
     | NY Metro | 2000   | 2     | 949.893333        | 515.76    | 403.28  | 809.49  |
     | NY Metro | 2000   | 8     | 949.893333        | 525.22    | 460.44  | 673.09  |
     | NY Metro | 2000   | 1     | 512.695000        | 130.07    | 824.45  | 245.67  |
     | NY Metro | 2000   | 4     | 949.893333        | 574.89    | 809.49  | 734.80  |
-    | NY Metro | 2000   | 9     | 750.691666        | 405.15    | 667.57  | 808.84  |
+    | NY Metro | 2000   | 9     | 750.691667        | 405.15    | 667.57  | 808.84  |
     | NY Metro | 2000   | 6     | 369.163333        | 37.93     | 289.85  | 256.52  |
     | NY Metro | 2000   | 9     | 380.620000        | 59.01     | 339.29  | 291.65  |
-    | NY Metro | 2000   | 3     | 344.568181        | 32.72     | 532.04  | 244.08  |
-    | NY Metro | 2000   | 9     | 344.568181        | 34.86     | 192.94  | 377.95  |
-    | NY Metro | 2000   | 4     | 330.511666        | 33.65     | 466.70  | 437.21  |
-    | NY Metro | 2000   | 4     | 314.956666        | 36.59     | 121.09  | 461.31  |
+    | NY Metro | 2000   | 3     | 344.568182        | 32.72     | 532.04  | 244.08  |
+    | NY Metro | 2000   | 9     | 344.568182        | 34.86     | 192.94  | 377.95  |
+    | NY Metro | 2000   | 4     | 330.511667        | 33.65     | 466.70  | 437.21  |
+    | NY Metro | 2000   | 4     | 314.956667        | 36.59     | 121.09  | 461.31  |
     | NY Metro | 2000   | 5     | 380.620000        | 103.13    | 219.00  | 267.82  |
     | NY Metro | 2000   | 9     | 949.893333        | 673.09    | 525.22  | 382.23  |
     | NY Metro | 2000   | 2     | 512.695000        | 245.67    | 130.07  | 68.00   |
-    | NY Metro | 2000   | 1     | 344.568181        | 86.77     | 369.70  | 532.04  |
-    | NY Metro | 2000   | 9     | 330.511666        | 72.89     | 294.48  | 223.73  |
+    | NY Metro | 2000   | 1     | 344.568182        | 86.77     | 369.70  | 532.04  |
+    | NY Metro | 2000   | 9     | 330.511667        | 72.89     | 294.48  | 223.73  |
     | NY Metro | 2000   | 1     | 369.163333        | 118.09    | 692.60  | 419.02  |
-    | NY Metro | 2000   | 2     | 805.049166        | 557.61    | 940.66  | 1216.24 |
-    | NY Metro | 2000   | 6     | 310.154166        | 66.78     | 219.39  | 437.60  |
+    | NY Metro | 2000   | 2     | 805.049167        | 557.61    | 940.66  | 1216.24 |
+    | NY Metro | 2000   | 6     | 310.154167        | 66.78     | 219.39  | 437.60  |
     | NY Metro | 2000   | 6     | 291.491818        | 51.97     | 156.16  | 334.72  |
     | NY Metro | 2000   | 4     | 281.282727        | 43.59     | 195.62  | 346.91  |
-    | NY Metro | 2000   | 7     | 255.389166        | 25.84     | 135.48  | 89.57   |
+    | NY Metro | 2000   | 7     | 255.389167        | 25.84     | 135.48  | 89.57   |
     | NY Metro | 2000   | 10    | 512.695000        | 288.67    | 846.71  | 1307.51 |
     | NY Metro | 2000   | 9     | 415.355000        | 191.78    | 204.28  | 458.43  |
     | NY Metro | 2000   | 2     | 257.160909        | 35.97     | 254.67  | 136.00  |
@@ -4093,67 +4093,67 @@ data:
     | NY Metro | 2000   | 9     | 301.765000        | 85.67     | 321.74  | 114.20  |
     | NY Metro | 2000   | 5     | 949.893333        | 734.80    | 574.89  | 797.19  |
     | NY Metro | 2000   | 4     | 219.097500        | 5.75      | 151.31  | 445.34  |
-    | NY Metro | 2000   | 9     | 217.219090        | 3.89      | 151.40  | 30.08   |
+    | NY Metro | 2000   | 9     | 217.219091        | 3.89      | 151.40  | 30.08   |
     | NY Metro | 2000   | 10    | 281.282727        | 68.24     | 178.58  | 731.64  |
     | NY Metro | 2000   | 8     | 415.355000        | 204.28    | 621.99  | 191.78  |
     | NY Metro | 2000   | 4     | 216.597500        | 9.37      | 565.79  | 159.14  |
-    | NY Metro | 2000   | 2     | 310.154166        | 107.53    | 430.60  | 297.69  |
+    | NY Metro | 2000   | 2     | 310.154167        | 107.53    | 430.60  | 297.69  |
     | NY Metro | 2000   | 6     | 240.693636        | 38.78     | 66.15   | 89.89   |
-    | NY Metro | 2000   | 4     | 211.969166        | 10.47     | 114.45  | 621.78  |
-    | NY Metro | 2000   | 2     | 202.885454        | 3.09      | 284.76  | 405.38  |
+    | NY Metro | 2000   | 4     | 211.969167        | 10.47     | 114.45  | 621.78  |
+    | NY Metro | 2000   | 2     | 202.885455        | 3.09      | 284.76  | 405.38  |
     | NY Metro | 2000   | 7     | 207.185833        | 7.44      | 212.71  | 75.50   |
-    | NY Metro | 2000   | 4     | 255.389166        | 58.23     | 277.84  | 808.32  |
-    | NY Metro | 2000   | 5     | 217.219090        | 22.02     | 180.94  | 207.41  |
+    | NY Metro | 2000   | 4     | 255.389167        | 58.23     | 277.84  | 808.32  |
+    | NY Metro | 2000   | 5     | 217.219091        | 22.02     | 180.94  | 207.41  |
     | NY Metro | 2000   | 7     | 219.097500        | 24.35     | 67.11   | 229.33  |
     | NY Metro | 2000   | 5     | 231.960833        | 37.45     | 237.04  | 100.68  |
-    | NY Metro | 2000   | 9     | 805.049166        | 610.80    | 811.92  | 903.85  |
-    | NY Metro | 2000   | 3     | 314.956666        | 121.09    | 144.46  | 36.59   |
-    | NY Metro | 2000   | 3     | 207.465454        | 13.79     | 149.01  | 110.13  |
-    | NY Metro | 2000   | 4     | 222.856363        | 34.56     | 221.13  | 247.65  |
+    | NY Metro | 2000   | 9     | 805.049167        | 610.80    | 811.92  | 903.85  |
+    | NY Metro | 2000   | 3     | 314.956667        | 121.09    | 144.46  | 36.59   |
+    | NY Metro | 2000   | 3     | 207.465455        | 13.79     | 149.01  | 110.13  |
+    | NY Metro | 2000   | 4     | 222.856364        | 34.56     | 221.13  | 247.65  |
     | NY Metro | 2000   | 10    | 301.765000        | 114.20    | 85.67   | 977.47  |
-    | NY Metro | 2000   | 10    | 217.219090        | 30.08     | 3.89    | 522.34  |
-    | NY Metro | 2000   | 9     | 222.856363        | 36.25     | 249.61  | 76.08   |
+    | NY Metro | 2000   | 10    | 217.219091        | 30.08     | 3.89    | 522.34  |
+    | NY Metro | 2000   | 9     | 222.856364        | 36.25     | 249.61  | 76.08   |
     | NY Metro | 2000   | 4     | 207.185833        | 20.87     | 431.73  | 348.60  |
     | NY Metro | 2000   | 4     | 197.178333        | 11.31     | 102.44  | 69.76   |
-    | NY Metro | 2000   | 10    | 203.936363        | 18.82     | 224.72  | 25.65   |
-    | NY Metro | 2000   | 9     | 314.956666        | 130.11    | 284.36  | 414.98  |
+    | NY Metro | 2000   | 10    | 203.936364        | 18.82     | 224.72  | 25.65   |
+    | NY Metro | 2000   | 9     | 314.956667        | 130.11    | 284.36  | 414.98  |
     | NY Metro | 2000   | 3     | 415.355000        | 230.65    | 403.25  | 671.21  |
     | NY Metro | 2000   | 4     | 530.352500        | 347.43    | 388.33  | 400.30  |
-    | NY Metro | 2000   | 3     | 184.955454        | 2.73      | 185.95  | 308.98  |
+    | NY Metro | 2000   | 3     | 184.955455        | 2.73      | 185.95  | 308.98  |
     | NY Metro | 2000   | 5     | 257.160909        | 76.79     | 139.83  | 119.46  |
     | NY Metro | 2000   | 6     | 207.317500        | 28.63     | 334.36  | 110.14  |
-    | NY Metro | 2000   | 11    | 203.936363        | 25.65     | 18.82   | 253.41  |
+    | NY Metro | 2000   | 11    | 203.936364        | 25.65     | 18.82   | 253.41  |
     | NY Metro | 2000   | 8     | 204.665833        | 27.84     | 465.40  | 79.68   |
     | NY Metro | 2000   | 5     | 240.693636        | 66.15     | 247.68  | 38.78   |
     | NY Metro | 2000   | 10    | 175.870000        | 2.25      | 173.78  | 163.87  |
     | NY Metro | 2000   | 8     | 369.163333        | 196.82    | 256.52  | 450.62  |
-    | NY Metro | 2000   | 2     | 314.956666        | 144.46    | 293.82  | 121.09  |
+    | NY Metro | 2000   | 2     | 314.956667        | 144.46    | 293.82  | 121.09  |
     | NY Metro | 2000   | 6     | 270.845833        | 100.82    | 485.03  | 310.89  |
     | NY Metro | 2000   | 5     | 301.765000        | 132.05    | 204.72  | 236.06  |
     | NY Metro | 2000   | 8     | 178.673333        | 9.21      | 42.57   | 290.05  |
     | NY Metro | 2000   | 9     | 207.185833        | 37.92     | 75.50   | 92.73   |
-    | NY Metro | 2000   | 9     | 211.969166        | 42.71     | 206.05  | 204.88  |
+    | NY Metro | 2000   | 9     | 211.969167        | 42.71     | 206.05  | 204.88  |
     | NY Metro | 2000   | 5     | 196.323636        | 27.43     | 215.15  | 233.94  |
     | NY Metro | 2000   | 3     | 178.673333        | 10.77     | 199.84  | 412.25  |
     | NY Metro | 2000   | 7     | 257.160909        | 90.70     | 119.46  | 197.29  |
-    | NY Metro | 2000   | 8     | 255.389166        | 89.57     | 25.84   | 182.33  |
+    | NY Metro | 2000   | 8     | 255.389167        | 89.57     | 25.84   | 182.33  |
     | NY Metro | 2000   | 6     | 192.737500        | 27.54     | 167.74  | 45.15   |
-    | NY Metro | 2000   | 9     | 168.885454        | 4.71      | 362.83  | 139.19  |
+    | NY Metro | 2000   | 9     | 168.885455        | 4.71      | 362.83  | 139.19  |
     | NY Metro | 2000   | 6     | 165.600909        | 1.93      | 162.37  | 132.70  |
     | NY Metro | 2000   | 4     | 380.620000        | 219.00    | 344.41  | 103.13  |
-    | NY Metro | 2000   | 6     | 222.856363        | 62.02     | 247.65  | 249.61  |
+    | NY Metro | 2000   | 6     | 222.856364        | 62.02     | 247.65  | 249.61  |
     | NY Metro | 2000   | 6     | 163.544000        | 3.92      | 178.04  | NULL    |
     | NY Metro | 2000   | 3     | 165.600909        | 6.37      | 202.40  | 173.58  |
     | NY Metro | 2000   | 8     | 179.550000        | 23.83     | 265.91  | 62.47   |
-    | NY Metro | 2000   | 3     | 168.885454        | 13.21     | 186.75  | 173.56  |
+    | NY Metro | 2000   | 3     | 168.885455        | 13.21     | 186.75  | 173.56  |
     | NY Metro | 2000   | 7     | 184.524545        | 29.28     | 176.67  | 82.58   |
-    | NY Metro | 2000   | 4     | 174.589166        | 19.49     | 108.91  | 105.54  |
+    | NY Metro | 2000   | 4     | 174.589167        | 19.49     | 108.91  | 105.54  |
     | NY Metro | 2000   | 3     | 164.802727        | 9.79      | 102.52  | 279.44  |
     | NY Metro | 2000   | 8     | 160.534545        | 5.75      | 178.21  | 147.32  |
     | NY Metro | 2000   | 6     | 153.242727        | 0.00      | 229.63  | 41.88   |
-    | NY Metro | 2000   | 10    | 184.955454        | 32.01     | 299.75  | 319.02  |
+    | NY Metro | 2000   | 10    | 184.955455        | 32.01     | 299.75  | 319.02  |
     | NY Metro | 2000   | 6     | 949.893333        | 797.19    | 734.80  | 460.44  |
-    | NY Metro | 2000   | 8     | 221.837272        | 69.49     | 341.63  | 104.11  |
+    | NY Metro | 2000   | 8     | 221.837273        | 69.49     | 341.63  | 104.11  |
     | NY Metro | 2000   | 8     | 231.960833        | 79.84     | 112.57  | 378.31  |
 ---
 name: "test_derived_tpcds_query_result[58]"
@@ -4170,100 +4170,100 @@ data:
     | ought         | AAAAAAAABAAAAAAA | 5244        | NULL                      | NULL                      | NULL                      | NULL                      | NULL                      | 0.297652                  | NULL                      |
     | ought         | AAAAAAAABAAAAAAA | 5244        | NULL                      | NULL                      | NULL                      | NULL                      | NULL                      | 0.297652                  | NULL                      |
     | ought         | AAAAAAAABAAAAAAA | 5244        | NULL                      | NULL                      | NULL                      | NULL                      | NULL                      | 0.297652                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459189                  | NULL                      | NULL                      | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
-    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349476                  | 1.736745                  | 2.540648                  | NULL                      | 2.665555                  | 1.584683                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5245        | NULL                      | NULL                      | NULL                      | 0.459190                  | NULL                      | NULL                      | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
+    | ought         | AAAAAAAABAAAAAAA | 5246        | 1.349477                  | 1.736746                  | 2.540649                  | NULL                      | 2.665556                  | 1.584684                  | NULL                      |
 ---
 name: "test_derived_tpcds_query_result[60]"
 data:
@@ -4313,36 +4313,36 @@ data:
     | 11           | 143.71    | 104.816000        |
     | 11           | 182.00    | 104.816000        |
     | 11           | 225.86    | 104.816000        |
-    | 23           | 2.90      | 157.519166        |
-    | 23           | 21.84     | 157.519166        |
-    | 23           | 37.84     | 157.519166        |
-    | 23           | 54.61     | 157.519166        |
-    | 23           | 94.17     | 157.519166        |
-    | 23           | 133.27    | 157.519166        |
-    | 23           | 187.98    | 157.519166        |
-    | 23           | 211.89    | 157.519166        |
-    | 23           | 220.89    | 157.519166        |
-    | 23           | 344.06    | 157.519166        |
-    | 23           | 421.68    | 157.519166        |
-    | 30           | 12.26     | 181.779090        |
-    | 30           | 40.18     | 181.779090        |
-    | 30           | 51.62     | 181.779090        |
-    | 30           | 62.95     | 181.779090        |
-    | 30           | 104.56    | 181.779090        |
-    | 30           | 107.06    | 181.779090        |
-    | 30           | 121.98    | 181.779090        |
-    | 30           | 516.68    | 181.779090        |
-    | 30           | 594.54    | 181.779090        |
-    | 52           | 36.07     | 225.586363        |
-    | 52           | 76.46     | 225.586363        |
-    | 52           | 130.66    | 225.586363        |
-    | 52           | 137.32    | 225.586363        |
-    | 52           | 155.35    | 225.586363        |
-    | 52           | 193.56    | 225.586363        |
-    | 52           | 201.11    | 225.586363        |
-    | 52           | 405.89    | 225.586363        |
-    | 52           | 424.85    | 225.586363        |
-    | 52           | 506.97    | 225.586363        |
+    | 23           | 2.90      | 157.519167        |
+    | 23           | 21.84     | 157.519167        |
+    | 23           | 37.84     | 157.519167        |
+    | 23           | 54.61     | 157.519167        |
+    | 23           | 94.17     | 157.519167        |
+    | 23           | 133.27    | 157.519167        |
+    | 23           | 187.98    | 157.519167        |
+    | 23           | 211.89    | 157.519167        |
+    | 23           | 220.89    | 157.519167        |
+    | 23           | 344.06    | 157.519167        |
+    | 23           | 421.68    | 157.519167        |
+    | 30           | 12.26     | 181.779091        |
+    | 30           | 40.18     | 181.779091        |
+    | 30           | 51.62     | 181.779091        |
+    | 30           | 62.95     | 181.779091        |
+    | 30           | 104.56    | 181.779091        |
+    | 30           | 107.06    | 181.779091        |
+    | 30           | 121.98    | 181.779091        |
+    | 30           | 516.68    | 181.779091        |
+    | 30           | 594.54    | 181.779091        |
+    | 52           | 36.07     | 225.586364        |
+    | 52           | 76.46     | 225.586364        |
+    | 52           | 130.66    | 225.586364        |
+    | 52           | 137.32    | 225.586364        |
+    | 52           | 155.35    | 225.586364        |
+    | 52           | 193.56    | 225.586364        |
+    | 52           | 201.11    | 225.586364        |
+    | 52           | 405.89    | 225.586364        |
+    | 52           | 424.85    | 225.586364        |
+    | 52           | 506.97    | 225.586364        |
 ---
 name: "test_derived_tpcds_query_result[64]"
 data:
@@ -4922,29 +4922,29 @@ name: "test_derived_tpcds_query_result[89]"
 data:
   |-
     | i_category  | i_class   | i_brand               | s_store_name | s_company_name | d_moy | sum_sales | avg_monthly_sales |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 4     | 97.34     | 609.269166        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 2     | 114.65    | 609.269166        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 6     | 226.78    | 609.269166        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 7     | 312.28    | 609.269166        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 4     | 97.34     | 609.269167        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 2     | 114.65    | 609.269167        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 6     | 226.78    | 609.269167        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 7     | 312.28    | 609.269167        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 6     | 21.66     | 198.143333        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 5     | 461.09    | 609.269166        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 5     | 461.09    | 609.269167        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 4     | 67.19     | 198.143333        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 3     | 78.57     | 198.143333        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 3     | 491.89    | 609.269166        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 3     | 491.89    | 609.269167        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 5     | 81.22     | 198.143333        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 9     | 496.02    | 609.269166        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 9     | 496.02    | 609.269167        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 2     | 148.51    | 198.143333        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 7     | 154.32    | 198.143333        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 10    | 154.53    | 198.143333        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 1     | 227.36    | 198.143333        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 12    | 283.42    | 198.143333        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 11    | 310.39    | 198.143333        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 10    | 741.08    | 609.269166        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 10    | 741.08    | 609.269167        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 8     | 370.11    | 198.143333        |
     | Electronics | audio     | edu packunivamalg #11 | ought        | Unknown        | 9     | 480.44    | 198.143333        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 11    | 1201.25   | 609.269166        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 12    | 1280.07   | 609.269166        |
-    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 8     | 1320.73   | 609.269166        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 11    | 1201.25   | 609.269167        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 12    | 1280.07   | 609.269167        |
+    | Music       | classical | edu packscholar #2    | ought        | Unknown        | 8     | 1320.73   | 609.269167        |
 ---
 name: "test_derived_tpcds_query_result[90]"
 data:
@@ -4995,32 +4995,32 @@ data:
   |-
     | i_item_id        | i_item_desc                                                                                                                                                                                         | i_category | i_class        | i_current_price | itemrevenue | revenueratio |
     | AAAAAAAAABAAAAAA | Unquestionably different demands may not turn worldwide false, wide police. Satisfied, littl                                                                                                        | Men        | accessories    | 6.49            | 10116.51    | 28.960025    |
-    | AAAAAAAAFCAAAAAA | Strict, strong results may think even nervous husbands. Other, sexua                                                                                                                                | Men        | accessories    | 2.42            | 2676.00     | 7.660450     |
-    | AAAAAAAAFIAAAAAA | Papers could not invade just from a wishes. Plants increase remarkably great, important exercises. Tracks should give only                                                                          | Men        | accessories    | 3.12            | 7950.75     | 22.760212    |
+    | AAAAAAAAFCAAAAAA | Strict, strong results may think even nervous husbands. Other, sexua                                                                                                                                | Men        | accessories    | 2.42            | 2676.00     | 7.660451     |
+    | AAAAAAAAFIAAAAAA | Papers could not invade just from a wishes. Plants increase remarkably great, important exercises. Tracks should give only                                                                          | Men        | accessories    | 3.12            | 7950.75     | 22.760213    |
     | AAAAAAAAIFAAAAAA | Holy companies win less all right essential initiatives. Men learn. Eyes might come opportunities; great, large centres should                                                                      | Men        | accessories    | 4.79            | 6851.30     | 19.612872    |
-    | AAAAAAAAMKAAAAAA | Automatic, black developments get thus new profits. Chemicals describe widely similar temperatures. Easy features used to emphasize different                                                       | Men        | accessories    | 1.75            | 7338.11     | 21.006438    |
+    | AAAAAAAAMKAAAAAA | Automatic, black developments get thus new profits. Chemicals describe widely similar temperatures. Easy features used to emphasize different                                                       | Men        | accessories    | 1.75            | 7338.11     | 21.006439    |
     | AAAAAAAAFFAAAAAA | Only colleges support then institutions; correct, great processes seem perhaps national boys. Cattle                                                                                                | Men        | pants          | 39.31           | 6882.35     | 100.000000   |
     | AAAAAAAAEAAAAAAA | Passengers want etc in a walls. Important years must benefit clear by a ideas; hot children must avoid. Major, bad pounds rise on the needs. Farms may not see bright lines. Differ                 | Men        | shirts         | 4.00            | 4300.34     | 100.000000   |
     | AAAAAAAADBAAAAAA | Patient                                                                                                                                                                                             | Men        | sports-apparel | 10.61           | 2550.24     | 7.795778     |
-    | AAAAAAAADKAAAAAA | Windows report easily; diplomatic years use                                                                                                                                                         | Men        | sports-apparel | 75.25           | 9418.60     | 28.791532    |
-    | AAAAAAAAEEAAAAAA | Labour agents take. Fairly general ques                                                                                                                                                             | Men        | sports-apparel | 6.93            | 8825.92     | 26.979780    |
-    | AAAAAAAAGCAAAAAA | International, substantial schools mean effectively. Users put then in a operations. Particul                                                                                                       | Men        | sports-apparel | 16.70           | 2524.47     | 7.717002     |
-    | AAAAAAAAGHAAAAAA | Planned examples shake essential characters. Languages sample large crops. Small, white discussions make nearly anxious, foreign eyes. Tiny, present d                                              | Men        | sports-apparel | 4.67            | 1234.08     | 3.772434     |
+    | AAAAAAAADKAAAAAA | Windows report easily; diplomatic years use                                                                                                                                                         | Men        | sports-apparel | 75.25           | 9418.60     | 28.791533    |
+    | AAAAAAAAEEAAAAAA | Labour agents take. Fairly general ques                                                                                                                                                             | Men        | sports-apparel | 6.93            | 8825.92     | 26.979781    |
+    | AAAAAAAAGCAAAAAA | International, substantial schools mean effectively. Users put then in a operations. Particul                                                                                                       | Men        | sports-apparel | 16.70           | 2524.47     | 7.717003     |
+    | AAAAAAAAGHAAAAAA | Planned examples shake essential characters. Languages sample large crops. Small, white discussions make nearly anxious, foreign eyes. Tiny, present d                                              | Men        | sports-apparel | 4.67            | 1234.08     | 3.772435     |
     | AAAAAAAAKBAAAAAA | Following, new prospects get almost available children. Terms can need very lucky days. Likely, sufficient persons prolong particularly words. Years might not organise also. Oth                   | Men        | sports-apparel | 2.77            | 1533.12     | 4.686564     |
     | AAAAAAAAKEAAAAAA | Straight possible women ought to match only thanks. Specia                                                                                                                                          | Men        | sports-apparel | 3.91            | 6626.66     | 20.256906    |
     | AAAAAAAACLAAAAAA | Eyes appreciate political yards. Constant, awful eyes could c                                                                                                                                       | Music      | classical      | 64.48           | 3462.98     | 100.000000   |
-    | AAAAAAAACIAAAAAA | Final orders give else. International, living personnel may miss significant companies. Black, american numbers put then                                                                            | Music      | country        | 96.31           | 19.32       | 0.222241     |
+    | AAAAAAAACIAAAAAA | Final orders give else. International, living personnel may miss significant companies. Black, american numbers put then                                                                            | Music      | country        | 96.31           | 19.32       | 0.222242     |
     | AAAAAAAAMIAAAAAA | Well famous pubs use so accounts. Losses should not generate certain stars. Positive blues pro                                                                                                      | Music      | country        | 9.00            | 8673.91     | 99.777758    |
     | AAAAAAAABAAAAAAA | Powers will not get influences. Electoral ports should show low, annual chains. Now young visitors may pose now however final pages. Bitterly right children suit increasing, leading el            | Music      | pop            | 27.02           | 4821.25     | 18.922037    |
-    | AAAAAAAAOFAAAAAA | Yet great workers ought to go. Living bases panic by a lines. Already bitter teeth buy more with a employees;                                                                                       | Music      | pop            | 2.55            | 5586.15     | 21.924052    |
-    | AAAAAAAAPKAAAAAA | Wearily current subjects will see; entirely invisible councillors know beautiful, dead years. Automatic regulations may embrace surely. Alone reliable wives might keep officially achievements. Ec | Music      | pop            | 1.26            | 15072.15    | 59.153909    |
-    | AAAAAAAACJAAAAAA | Normal things beat also general agents. Other patients must not restore mu                                                                                                                          | Music      | rock           | 9.67            | 577.64      | 9.692580     |
+    | AAAAAAAAOFAAAAAA | Yet great workers ought to go. Living bases panic by a lines. Already bitter teeth buy more with a employees;                                                                                       | Music      | pop            | 2.55            | 5586.15     | 21.924053    |
+    | AAAAAAAAPKAAAAAA | Wearily current subjects will see; entirely invisible councillors know beautiful, dead years. Automatic regulations may embrace surely. Alone reliable wives might keep officially achievements. Ec | Music      | pop            | 1.26            | 15072.15    | 59.153910    |
+    | AAAAAAAACJAAAAAA | Normal things beat also general agents. Other patients must not restore mu                                                                                                                          | Music      | rock           | 9.67            | 577.64      | 9.692581     |
     | AAAAAAAAMCAAAAAA | So general leaves discover clinical things. Sales get                                                                                                                                               | Music      | rock           | 5.20            | 5381.97     | 90.307419    |
     | AAAAAAAACDAAAAAA | Likely, main groups possess rich, interested cards; of course african me                                                                                                                            | Shoes      | athletic       | 4.99            | 8282.77     | 100.000000   |
-    | AAAAAAAAAFAAAAAA | Applicable, total structures make good                                                                                                                                                              | Shoes      | kids           | 2.16            | 9266.62     | 52.012792    |
+    | AAAAAAAAAFAAAAAA | Applicable, total structures make good                                                                                                                                                              | Shoes      | kids           | 2.16            | 9266.62     | 52.012793    |
     | AAAAAAAAGIAAAAAA | Bloody programmes live probably novels. Minute, remarkable minutes seem for example probably old                                                                                                    | Shoes      | kids           | 3.56            | 8549.42     | 47.987207    |
     | AAAAAAAAHGAAAAAA | As short materials might go sometime new, tall skills. M                                                                                                                                            | Shoes      | womens         | 4.30            | 1919.89     | 40.924041    |
-    | AAAAAAAAOCAAAAAA | Worldwide difficult shapes say reasonably too following times. Public, complete individuals may take for example civil, nea                                                                         | Shoes      | womens         | 3.00            | 2771.46     | 59.075958    |
+    | AAAAAAAAOCAAAAAA | Worldwide difficult shapes say reasonably too following times. Public, complete individuals may take for example civil, nea                                                                         | Shoes      | womens         | 3.00            | 2771.46     | 59.075959    |
 ---
 name: "test_derived_tpcds_query_result[99]"
 data:

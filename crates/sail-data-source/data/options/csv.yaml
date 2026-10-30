@@ -544,13 +544,12 @@
     If it is set to true, the specified or inferred schema will be forcibly applied to datasource files, and headers in
     CSV files will be ignored. If the option is set to false, the schema will be validated against all headers in CSV
     files in the case when the header option is set to true. Field names in the schema and column names in CSV headers
-    are checked by their positions taking into account the Sail configuration option `sql.case_sensitive` (to be
-    implemented). Though the default value is true, it is recommended to disable the `enforce_schema` option to avoid
+    are checked by their positions, case-insensitively. Though the default value is true, it is recommended to disable the `enforce_schema` option to avoid
     incorrect results. CSV built-in functions ignore this option.
   default:
     value: "true"
     parser: crate::options::parsers::parse_bool
-  supported: false
+  supported: true
   rust_type: bool
   scopes:
     - read
@@ -978,7 +977,7 @@
   default:
     value: "\n"
     parser: crate::options::parsers::parse_string
-  supported: false
+  supported: true
   rust_type: String
   scopes:
     - write

@@ -276,3 +276,16 @@ def test_json_read_uppercase_extension_via_spark_json_helper(spark, tmp_path):
     data_path.write_text('{"id": 1, "value": "a"}\n')
     df = spark.read.schema("id INT, value STRING").json(str(data_path))
     assert df.collect() == [Row(id=1, value="a")]
+
+
+# Ported from Spark 3 (3.5.9): pyspark/sql/tests/connect/test_connect_basic.py,
+# SparkConnectBasicTests.test_multi_paths; Spark sorts inferred fields by name.
+def test_json_inferred_fields_are_sorted_by_name(spark, tmp_path):
+    path = tmp_path / "people.json"
+    path.write_text('{"name": "Andy", "age": 30, "info": {"z": 1, "a": 2}}\n')
+
+    df = spark.read.json(str(path))
+
+    assert df.columns == ["age", "info", "name"]
+    assert df.schema["info"].dataType.names == ["a", "z"]
+    assert df.collect() == [Row(age=30, info=Row(a=2, z=1), name="Andy")]

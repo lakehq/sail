@@ -96,6 +96,28 @@ def spark_env_var(tmp_path_factory):
 
 
 @pytest.fixture(autouse=_is_spark_testing())
+def spark_function_tests_arrow(request):
+    # These tests compare `toPandas()` results of the Spark Connect session with those of
+    # the classic session. Spark Connect always uses Arrow, so Arrow is enabled for the
+    # classic session as well. Otherwise, array columns are returned as lists instead of
+    # NumPy arrays, which pandas does not consider equal. This is not done for all tests
+    # since `createDataFrame()` with Arrow turns NaN in the local data into NULL.
+    # The configuration is set on the session rather than passed in `PYSPARK_SUBMIT_ARGS`,
+    # since the JVM may have been launched by an earlier test class in the same process.
+    if request.cls is None or request.cls.__name__ != "SparkConnectFunctionTests":
+        yield
+        return
+    key = "spark.sql.execution.arrow.pyspark.enabled"
+    conf = request.instance.spark.conf
+    original = conf.get(key)
+    conf.set(key, "true")
+    try:
+        yield
+    finally:
+        conf.set(key, original)
+
+
+@pytest.fixture(autouse=_is_spark_testing())
 def spark_process_timezone():
     # Upstream Arrow UDF tests change the process timezone without restoring it.
     timezone = os.environ.get("TZ")
@@ -258,6 +280,22 @@ def _spark_major_version() -> int:
 
     return int(pyspark.__version__.split(".", maxsplit=1)[0])
 
+
+_CACHE_MATERIALIZATION = (
+    "Expects cached data to remain after the table files are deleted until the table is refreshed, "
+    "while Sail keeps track of cached tables without materializing their data"
+)
+
+_ARTIFACTS = "Artifacts (the AddArtifacts and ArtifactStatus requests) are not supported yet"
+
+_ORC = "The ORC data source is not supported yet"
+
+_PARTITIONING_DIFFERENCE = (
+    "Compares sampled rows with Spark, which samples each partition with its own seed, "
+    "while Sail keeps range and local relations in one partition by default"
+)
+
+_PERSISTENT_FUNCTIONS = "Creates a persistent function backed by a JVM class, which Sail cannot run"
 
 SKIPPED_SPARK_TESTS = [
     TestMarker(
@@ -570,6 +608,216 @@ SKIPPED_SPARK_TESTS = [
         ),
         spark_major_version_less_than=4,
     ),
+    # The following tests are known differences analyzed in
+    # `docs/development/spark-tests/spark-3.5.9-failures.md`.
+    TestMarker(
+        keywords=["test_parity_datasources.py", "DataSourcesParityTests", "test_jdbc"],
+        reason="Creates an embedded Derby database through the JVM JDBC driver",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_datasources.py", "DataSourcesParityTests", "test_jdbc_format"],
+        reason="Creates an embedded Derby database through the JVM JDBC driver",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_join_hint"],
+        reason="Looks for Spark's BroadcastHashJoin in the plan text, where Sail shows HashJoinExec",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_dataframe.py", "DataFrameParityTests", "test_generic_hints"],
+        reason="Looks for Spark's BroadcastHashJoin in the plan text, where Sail shows HashJoinExec",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_functions.py", "FunctionsParityTests", "test_functions_broadcast"],
+        reason="Looks for Spark's BroadcastHashJoin in the plan text, where Sail shows HashJoinExec",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.hint"],
+        reason="Looks for Spark's BroadcastHashJoin in the plan text, where Sail shows HashJoinExec",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_pandas_udf_scalar.py", "PandasUDFScalarParityTests", "test_scalar_iter_udf_init"],
+        reason=(
+            "Seeds the global NumPy random number generator per partition, which partitions share since they run "
+            "concurrently in the same Python process, so the generated values are not deterministic"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_observe"],
+        reason="DataFrame.observe is not implemented yet, since collecting the metrics needs a separate design",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_stat_sample_by"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.sampleBy"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrameStatFunctions.sampleBy"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_random_split"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.randomSplit"],
+        reason=_PARTITIONING_DIFFERENCE,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_stat_freq_items"],
+        reason=(
+            "Compares freqItems arrays element by element with the JVM session, "
+            "while the extra items and their order depend on the partitioning"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_dataframe.py", "DataFrameParityTests", "test_to_pandas"],
+        reason="Expects datetime64[ns] timestamps, while Sail returns microsecond timestamps by design",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_udf"],
+        reason="Fails in the classic Spark session's udf() before the Sail session is used",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_udtf"],
+        reason="Fails in the classic Spark session's udf() before the Sail session is used",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_orc"],
+        reason=_ORC,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_datasources.py", "DataSourcesParityTests", "test_read_multiple_orc_file"],
+        reason=_ORC,
+        spark_major_version_less_than=4,
+    ),
+    *(
+        TestMarker(
+            keywords=["test_artifact.py", class_name, test_name],
+            reason=_ARTIFACTS,
+            spark_major_version_less_than=4,
+        )
+        for class_name, test_names in {
+            "ArtifactTests": [
+                "test_add_pyfile",
+                "test_add_zipped_package",
+                "test_basic_requests",
+                "test_cache_artifact",
+                "test_copy_from_local_to_fs",
+            ],
+            "LocalClusterArtifactTests": [
+                "test_add_archive",
+                "test_add_file",
+                "test_add_pyfile",
+                "test_add_zipped_package",
+            ],
+        }.items()
+        for test_name in test_names
+    ),
+    TestMarker(
+        keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_aggregation_functions"],
+        reason=(
+            "Compares the order of the elements of collect_set and the choice among equally frequent values "
+            "of mode, which depend on the hash set of Spark; percentile_approx on a few values, which depends on "
+            "how Spark partitions the data; and max and min of floating-point values with NaN in a group, "
+            "where the grouped accumulators of DataFusion depend on the order of the rows"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_catalog.py", "CatalogParityTests", "test_refresh_table"],
+        reason=_CACHE_MATERIALIZATION,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.refreshTable"],
+        reason=_CACHE_MATERIALIZATION,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.refreshByPath"],
+        reason=_CACHE_MATERIALIZATION,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_function.py", "SparkConnectFunctionTests", "test_time_window_functions"],
+        reason=(
+            "Shows the window_time of a grouping by window without ordering the rows, "
+            "so the row order depends on the hash aggregation of Spark"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_dataframe.py", "DataFrameParityTests", "test_input_files"],
+        reason=(
+            "Expects one written file per partition of the input range, "
+            "while the Sail writer writes one file per partition of the default parallelism"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_parity_readwriter.py", "ReadwriterParityTests", "test_bucketed_write"],
+        reason="Bucketed writes are not supported",
+        spark_major_version_less_than=4,
+    ),
+    *(
+        TestMarker(
+            keywords=["test_parity_catalog.py", "CatalogParityTests", test_name],
+            reason=_PERSISTENT_FUNCTIONS,
+            spark_major_version_less_than=4,
+        )
+        for test_name in ["test_function_exists", "test_get_function", "test_list_functions"]
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.getFunction"],
+        reason=_PERSISTENT_FUNCTIONS,
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.catalog.Catalog.recoverPartitions"],
+        reason=(
+            "Expects the partitions to be missing until they are recovered, "
+            "while Sail discovers the partitions from the files when the table is read"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "SparkConnectBasicTests", "test_streaming_local_relation"],
+        reason=(
+            "Sends a local relation larger than spark.sql.session.localRelationCacheThreshold "
+            "as a cached artifact, which needs the ArtifactStatus request that Sail does not support yet"
+        ),
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["test_connect_column.py", "SparkConnectColumnTests", "test_decimal"],
+        reason=(
+            "Spark rounds a decimal literal compared with an integral column (b < 2.5 becomes b < 3) "
+            "and names the column after the rewritten comparison, while Sail keeps the literal in the name; "
+            "the results are covered in dataframe/test_decimal_comparison.py"
+        ),
+        spark_major_version_less_than=4,
+    ),
 ]
 
 
@@ -582,6 +830,12 @@ def add_pyspark_test_markers(items: list[pytest.Item]):
             ):
                 continue
             if all(k in item.keywords for k in test.keywords):
+                dtest = getattr(item, "dtest", None)
+                if dtest is not None and dtest.lineno is None:
+                    # pytest reports a skipped test at its line, but doctests of methods whose
+                    # docstring is copied from another method (e.g. `DataFrameStatFunctions.sampleBy`)
+                    # do not have a line number.
+                    dtest.lineno = 0
                 item.add_marker(pytest.mark.skip(reason=test.reason))
 
 

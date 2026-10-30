@@ -6,6 +6,7 @@ use datafusion_common::{Column, DFSchema, DFSchemaRef};
 use datafusion_expr::{Distinct, Expr, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
+use sail_logical_plan::partition_random::PartitionRandomNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
@@ -152,6 +153,7 @@ impl MissingInputBoundaries {
                     || node.is::<SortWithinPartitionsNode>()
                     || node.is::<RequiredSortNode>()
                     || node.is::<MonotonicIdNode>()
+                    || node.is::<PartitionRandomNode>()
                     || node.is::<SparkPartitionIdNode>()
             }
             // DataFrame deduplication retains its original keys when carrying extra outputs.

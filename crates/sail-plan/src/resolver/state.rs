@@ -106,6 +106,8 @@ pub(super) struct PlanResolverState {
     cte_reference_origins: HashSet<usize>,
     /// Output attributes of the parameter views referenced so far, including renewed ones.
     parameter_view_origins: HashSet<usize>,
+    /// Attributes whose names Spark generates for unaliased projections.
+    auto_generated_alias_origins: HashSet<usize>,
     /// Unresolved subquery references from a WithRelations node, keyed by plan_id.
     subquery_references: HashMap<i64, spec::QueryPlan>,
     config: PlanResolverStateConfig,
@@ -145,6 +147,7 @@ impl PlanResolverState {
             ctes: HashMap::new(),
             cte_reference_origins: HashSet::new(),
             parameter_view_origins: HashSet::new(),
+            auto_generated_alias_origins: HashSet::new(),
             subquery_references: HashMap::new(),
             config: PlanResolverStateConfig::default(),
             param_values: std::collections::HashMap::new(),
@@ -328,6 +331,19 @@ impl PlanResolverState {
 
     pub fn get_plan_schema(&self, plan_id: i64) -> Option<&DFSchemaRef> {
         self.plan_schemas.get(&plan_id)
+    }
+
+    /// Marks the name of the field as generated for an unaliased projection.
+    /// The identity projections of the field share the mark.
+    pub fn set_auto_generated_alias(&mut self, field_id: &str) -> PlanResult<()> {
+        let origin = self.get_field_info(field_id)?.origin;
+        self.auto_generated_alias_origins.insert(origin);
+        Ok(())
+    }
+
+    pub fn is_auto_generated_alias(&self, field_id: &str) -> PlanResult<bool> {
+        let origin = self.get_field_info(field_id)?.origin;
+        Ok(self.auto_generated_alias_origins.contains(&origin))
     }
 
     pub fn get_field_info(&self, field_id: &str) -> PlanResult<&FieldInfo> {

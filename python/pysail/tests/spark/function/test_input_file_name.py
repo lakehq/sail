@@ -971,3 +971,19 @@ def test_input_file_metadata_restores_delta_columns(spark, tmp_path, column_mapp
         assert row.value == row.id * 10
         assert row.original == row.id * 100
         assert row.transformed == [row.id]
+
+
+# Ported from Spark 3 (3.5.9): pyspark/sql/tests/test_udf.py, BaseUDFTestsMixin.test_udf_with_input_file_name
+# and the `input_file_name` doctest; `first()` puts a limit above the projection.
+@pytest.mark.parametrize("fmt", ["parquet", "json", "text"])
+def test_input_file_name_with_limit(spark, tmp_path, fmt):
+    location = tmp_path / fmt
+    spark.range(3).selectExpr("CAST(id AS STRING) AS value").coalesce(1).write.format(fmt).save(str(location))
+    dataframe = spark.read.format(fmt).load(str(location))
+    identity = F.udf(lambda path: path, "string")
+
+    first = dataframe.select(F.input_file_name().alias("file_name")).first()
+    first_udf = dataframe.select(identity(F.input_file_name()).alias("file_name")).first()
+
+    assert first.file_name.startswith("file:")
+    assert first_udf.file_name == first.file_name

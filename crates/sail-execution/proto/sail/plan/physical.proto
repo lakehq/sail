@@ -79,6 +79,7 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    PartitionRandomExecNode partition_random = 67;
   }
 }
 
@@ -171,6 +172,8 @@ message HigherOrderUdf {
     SparkRegexpInstrUdf regexp_instr = 10;
     SparkTransformValuesUdf transform_values = 11;
     SparkTransformKeysUdf transform_keys = 12;
+    SparkArrayZipWithUdf zip_with = 13;
+    SparkMapZipWithUdf map_zip_with = 14;
   }
 }
 
@@ -187,6 +190,10 @@ message SparkRegexpInstrUdf {
 message SparkArrayForallUdf {}
 
 message SparkMapFilterUdf {}
+
+message SparkArrayZipWithUdf {}
+
+message SparkMapZipWithUdf {}
 
 message SparkTransformValuesUdf {}
 
@@ -310,6 +317,7 @@ message PySparkUdf {
   repeated bytes input_types = 5;
   bytes output_type = 6;
   PySparkUdfConfig config = 7;
+  map<string, string> output_metadata = 8;
 }
 
 message PySparkCoGroupMapUdf {
@@ -1006,6 +1014,13 @@ message SparkPartitionIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message PartitionRandomExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  int64 seed = 3;
+  bytes schema = 4;
 }
 
 message CoalesceExecNode {

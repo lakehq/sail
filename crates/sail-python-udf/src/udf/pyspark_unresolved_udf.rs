@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion_common::internal_err;
@@ -14,6 +16,8 @@ pub struct PySparkUnresolvedUDF {
     /// The output type of the UDF. `None` for UDTFs that use an `analyze` static method
     /// to determine the return type dynamically at query analysis time.
     output_type: Option<DataType>,
+    /// The metadata of the output field, such as the user-defined type of the output.
+    output_metadata: BTreeMap<String, String>,
     deterministic: bool,
 }
 
@@ -36,8 +40,14 @@ impl PySparkUnresolvedUDF {
             eval_type,
             command,
             output_type,
+            output_metadata: BTreeMap::new(),
             deterministic,
         }
+    }
+
+    pub fn with_output_metadata(mut self, output_metadata: BTreeMap<String, String>) -> Self {
+        self.output_metadata = output_metadata;
+        self
     }
 
     pub fn python_version(&self) -> &str {
@@ -54,6 +64,10 @@ impl PySparkUnresolvedUDF {
 
     pub fn output_type(&self) -> Option<&DataType> {
         self.output_type.as_ref()
+    }
+
+    pub fn output_metadata(&self) -> &BTreeMap<String, String> {
+        &self.output_metadata
     }
 
     pub fn deterministic(&self) -> bool {

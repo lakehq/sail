@@ -184,6 +184,7 @@ impl StreamUDF for PySparkUDTF {
     fn invoke(
         &self,
         input: SendableRecordBatchStream,
+        partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let function = Python::attach(|py| -> PyUdfResult<_> {
@@ -212,6 +213,7 @@ impl StreamUDF for PySparkUDTF {
         Ok(Box::pin(PyMapStream::new(
             input,
             function,
+            partition,
             self.output_schema.clone(),
             self.config.arrow_use_large_var_types,
         )))

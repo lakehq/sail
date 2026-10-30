@@ -22,7 +22,6 @@ Feature: DataFrame sample operations
         | 1    | [2, 3, 6, 7, 8]           |
         | 2    | [1, 2, 3, 5, 6, 7, 9]     |
 
-    @sail-bug
     Scenario: a seeded sample uses Spark's partition-specific seed
       Given statement
         """
@@ -38,7 +37,6 @@ Feature: DataFrame sample operations
         | sampled_ids     |
         | [2, 3, 6, 7, 8] |
 
-    @sail-bug
     Scenario: a seeded sample advances its RNG across execution batches
       Given statement
         """

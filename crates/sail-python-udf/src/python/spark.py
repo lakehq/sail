@@ -3,6 +3,8 @@ from __future__ import annotations
 import ctypes
 import decimal
 import itertools
+import json
+import threading
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -11,9 +13,10 @@ if TYPE_CHECKING:
 import pandas as pd
 import pyarrow as pa
 import pyspark
+from pyspark import TaskContext
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
-from pyspark.sql.types import DataType, Row, StructField, StructType
+from pyspark.sql.types import ArrayType, DataType, MapType, Row, StructField, StructType, UserDefinedType
 
 _PYARROW_HAS_VIEW_TYPES = all(hasattr(pa, x) for x in ("list_view", "large_list_view", "string_view", "binary_view"))
 
@@ -68,6 +71,34 @@ except ImportError:
 
 
 PYSPARK_VERSION: tuple[int, ...] = tuple(int(part) for part in pyspark.__version__.split("."))
+
+# Python functions of different partitions run in different threads of the same process,
+# while PySpark keeps a single `TaskContext` for the Python worker process.
+# So `TaskContext.get()` is changed to return the context of the current thread when it is set.
+_thread_task_context = threading.local()
+_get_task_context = TaskContext.get.__func__
+
+
+def _get_thread_task_context(cls):
+    context = getattr(_thread_task_context, "context", None)
+    if context is not None and isinstance(context, cls):
+        return context
+    return _get_task_context(cls)
+
+
+TaskContext.get = classmethod(_get_thread_task_context)
+
+
+def _set_task_context(partition_id: int) -> None:
+    context = object.__new__(TaskContext)
+    context._stageId = 0  # noqa: SLF001
+    context._partitionId = partition_id  # noqa: SLF001
+    context._attemptNumber = 0  # noqa: SLF001
+    context._taskAttemptId = 0  # noqa: SLF001
+    context._localProperties = {}  # noqa: SLF001
+    context._cpus = 1  # noqa: SLF001
+    context._resources = {}  # noqa: SLF001
+    _thread_task_context.context = context
 
 
 def _pandas_serializer_kwargs(config) -> dict[str, bool]:
@@ -136,6 +167,59 @@ def _get_converter(t: pa.DataType) -> Converter:
         return StructConverter(t)
     msg = f"unsupported data type: {t}"
     raise ValueError(msg)
+
+
+# The key of the Arrow field metadata for the user-defined type (UDT) of the field.
+_SAIL_SPARK_UDT_METADATA_KEY = b"SAIL::spark::udt"
+
+
+def _get_user_defined_type(field: pa.Field) -> UserDefinedType | None:
+    value = (field.metadata or {}).get(_SAIL_SPARK_UDT_METADATA_KEY)
+    if value is None:
+        return None
+    udt = json.loads(value)
+    if udt.get("python_class") is None:
+        return None
+    return UserDefinedType.fromJson(
+        {"pyClass": udt["python_class"], "serializedClass": udt.get("serialized_python_class")}
+    )
+
+
+def _contains_user_defined_type(field: pa.Field) -> bool:
+    if _get_user_defined_type(field) is not None:
+        return True
+    t = field.type
+    if isinstance(t, pa.StructType):
+        return any(_contains_user_defined_type(t.field(i)) for i in range(t.num_fields))
+    if isinstance(t, _PYARROW_LIST_TYPES):
+        return _contains_user_defined_type(t.value_field)
+    if isinstance(t, pa.MapType):
+        return _contains_user_defined_type(t.key_field) or _contains_user_defined_type(t.item_field)
+    return False
+
+
+def _from_arrow_field(field: pa.Field) -> DataType:
+    """Returns the PySpark data type of an Arrow field, with the user-defined types in the field metadata."""
+    if not _contains_user_defined_type(field):
+        return from_arrow_type(field.type)
+    udt = _get_user_defined_type(field)
+    if udt is not None:
+        return udt
+    t = field.type
+    if isinstance(t, pa.StructType):
+        return StructType(
+            [StructField(f.name, _from_arrow_field(f), f.nullable) for f in (t.field(i) for i in range(t.num_fields))]
+        )
+    if isinstance(t, _PYARROW_LIST_TYPES):
+        return ArrayType(_from_arrow_field(t.value_field), t.value_field.nullable)
+    return MapType(_from_arrow_field(t.key_field), _from_arrow_field(t.item_field), t.item_field.nullable)
+
+
+def _get_field_converter(field: pa.Field) -> Converter:
+    udt = _get_user_defined_type(field)
+    if udt is not None:
+        return UserDefinedTypeConverter(field.type, udt)
+    return _get_converter(field.type)
 
 
 def _raise_for_row(data: Any):
@@ -299,10 +383,36 @@ class BinaryConverter(ScalarConverter):
         return _to_bytes(data)
 
 
+class UserDefinedTypeConverter(Converter):
+    """Converts the values of a user-defined type, which are stored as values of its SQL type."""
+
+    def __init__(self, data_type: pa.DataType, udt: UserDefinedType):
+        super().__init__(data_type)
+        self._converter = _get_converter(data_type)
+        self._udt = udt
+
+    def to_pyspark(self, data: pa.Array) -> Sequence[Any]:
+        return [None if x is None else self._udt.deserialize(x) for x in self._converter.to_pyspark(data)]
+
+    def from_pyspark(self, data: Sequence[Any]) -> pa.Array:
+        # The values returned by a Python UDF are already serialized by the PySpark worker.
+        return self._converter.from_pyspark([self._udt.serialize(x) if hasattr(x, "__UDT__") else x for x in data])
+
+
+class _ConvertedType(DataType):
+    """The type of a struct field whose values are already converted, such as a user-defined type."""
+
+    def needConversion(self) -> bool:  # noqa: N802
+        return False
+
+    def fromInternal(self, obj: Any) -> Any:  # noqa: N802
+        return obj
+
+
 class ArrayConverter(Converter):
     def __init__(self, data_type: _PyArrowListType):
         super().__init__(data_type)
-        self._value_converter = _get_converter(data_type.value_type)
+        self._value_converter = _get_field_converter(data_type.value_field)
 
     def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, _PYARROW_LIST_ARRAY_TYPES):
@@ -342,8 +452,8 @@ class ArrayConverter(Converter):
 class MapConverter(Converter):
     def __init__(self, data_type: pa.MapType):
         super().__init__(data_type)
-        self._key_converter = _get_converter(data_type.key_type)
-        self._value_converter = _get_converter(data_type.item_type)
+        self._key_converter = _get_field_converter(data_type.key_field)
+        self._value_converter = _get_field_converter(data_type.item_field)
 
     def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, pa.MapArray):
@@ -451,8 +561,14 @@ class StructConverter(Converter):
             self._fields = data_type.fields
         except AttributeError:
             self._fields = [data_type.field(i) for i in range(data_type.num_fields)]
-        self._field_converters = [_get_converter(f.type) for f in self._fields]
-        self._spark_data_type = from_arrow_type(data_type)
+        self._field_converters = [_get_field_converter(f) for f in self._fields]
+        spark_data_type = from_arrow_type(data_type)
+        self._spark_data_type = StructType(
+            [
+                StructField(f.name, _ConvertedType(), f.nullable) if isinstance(c, UserDefinedTypeConverter) else f
+                for f, c in zip(spark_data_type.fields, self._field_converters, strict=True)
+            ]
+        )
 
     def to_pyspark(self, array: pa.Array) -> Sequence[Any]:
         if not isinstance(array, pa.StructArray):
@@ -670,9 +786,9 @@ def _named_arrays_to_pandas(
 
 
 class PySparkBatchUdf:
-    def __init__(self, udf: Callable[..., Any], input_types: Sequence[pa.DataType], output_type: pa.DataType):
+    def __init__(self, udf: Callable[..., Any], input_fields: Sequence[pa.Field], output_type: pa.DataType):
         self._udf = udf
-        self._input_converters = [_get_converter(t) for t in input_types]
+        self._input_converters = [_get_field_converter(f) for f in input_fields]
         self._output_converter = _get_converter(output_type)
 
     def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:

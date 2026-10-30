@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field};
 use datafusion::functions::expr_fn::{coalesce, isnan};
 use datafusion::functions_aggregate::{
-    approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, stddev, sum,
-    variance,
+    approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
+    covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -20,7 +19,7 @@ use datafusion_expr::{
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
-use sail_common::spec::SAIL_LIST_FIELD_NAME;
+use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_SPARK_UDT_METADATA_KEY};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
@@ -63,15 +62,32 @@ lazy_static! {
 fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let (args, null_treatment) =
         get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
-    if args
+    let arg_type = args
         .first()
         .map(|arg| arg.get_type(input.function_context.schema))
-        .transpose()?
-        == Some(DataType::Null)
-    {
+        .transpose()?;
+    if arg_type == Some(DataType::Null) {
         return Ok(lit(ScalarValue::Null));
     }
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+    // The decimal average of DataFusion truncates the result, while Spark rounds it half up.
+    // The average is computed with one more digit and then cast to the result type, which
+    // rounds half up. This is only done when the result type has room for the extra digit.
+    let rounding = match arg_type {
+        Some(DataType::Decimal128(precision, scale))
+            if precision <= DECIMAL128_MAX_PRECISION - 5 && scale <= DECIMAL128_MAX_SCALE - 5 =>
+        {
+            Some((precision, scale))
+        }
+        _ => None,
+    };
+    let args = match rounding {
+        Some((precision, scale)) => args
+            .into_iter()
+            .map(|arg| cast(arg, DataType::Decimal128(precision + 1, scale + 1)))
+            .collect(),
+        None => args,
+    };
+    let avg = expr::Expr::AggregateFunction(AggregateFunction {
         func: average::avg_udaf(),
         params: AggregateFunctionParams {
             args,
@@ -80,7 +96,11 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             order_by: input.order_by,
             null_treatment,
         },
-    }))
+    });
+    Ok(match rounding {
+        Some((precision, scale)) => cast(avg, DataType::Decimal128(precision + 4, scale + 4)),
+        None => avg,
+    })
 }
 
 fn vector_aggregate(input: AggFunctionInput, func: AggregateUDF) -> PlanResult<expr::Expr> {
@@ -453,6 +473,44 @@ fn percentile_disc(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+/// Spark's `percentile_approx` returns values of the column, and the exact percentile is
+/// within any accuracy, so it is computed with `percentile_disc`. The percentage can be
+/// an array, which returns an array of percentiles of the column type.
+fn percentile_approx(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let (value, percentage) = match input.arguments.as_slice() {
+        [value, percentage] | [value, percentage, _] => (value.clone(), percentage.clone()),
+        _ => {
+            return Err(PlanError::invalid(format!(
+                "percentile_approx requires 2 or 3 arguments, got {}",
+                input.arguments.len()
+            )));
+        }
+    };
+    let value_type = value.get_type(schema)?;
+    let return_type = match percentage.get_type(schema)? {
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            DataType::List(Arc::new(Field::new(
+                SAIL_LIST_FIELD_NAME,
+                value_type,
+                false,
+            )))
+        }
+        _ => value_type,
+    };
+    let percentile = expr::Expr::AggregateFunction(AggregateFunction {
+        func: percentile_disc_udaf(input.function_context.plan_config.ansi_mode),
+        params: AggregateFunctionParams {
+            args: vec![value.clone(), percentage],
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: vec![value.sort(true, false)],
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    });
+    Ok(cast(percentile, return_type))
+}
+
 fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
@@ -709,6 +767,7 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
     let element_type = arg.get_type(schema)?;
+    let element_field = arg.to_field(schema)?.1;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs
@@ -734,7 +793,10 @@ fn collect_set(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg, &element_type))
+    Ok(with_element_udt(
+        coalesce_to_empty_array(agg, &element_type),
+        &element_field,
+    ))
 }
 
 fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -743,6 +805,7 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let ignore_nulls = input.ignore_nulls.or(Some(true));
     let arg = input.arguments.one()?;
     let element_type = arg.get_type(schema)?;
+    let element_field = arg.to_field(schema)?.1;
 
     // WORKAROUND: DataFusion's array_agg doesn't properly handle null_treatment when distinct=true
     // So we need to add an explicit filter for NULLs when both distinct and ignore_nulls are true
@@ -768,7 +831,10 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             null_treatment,
         },
     });
-    Ok(coalesce_to_empty_array(agg, &element_type))
+    Ok(with_element_udt(
+        coalesce_to_empty_array(agg, &element_type),
+        &element_field,
+    ))
 }
 
 /// Spark's `collect_list`/`collect_set` return an empty array for a group with no (non-NULL)
@@ -777,6 +843,22 @@ fn array_agg_compacted(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn coalesce_to_empty_array(agg: expr::Expr, element_type: &DataType) -> expr::Expr {
     let empty = ScalarValue::List(ScalarValue::new_list_nullable(&[], element_type));
     coalesce(vec![agg, lit(empty)])
+}
+
+/// Keeps the user-defined type of the collected values, which is only in the metadata of the
+/// field and is lost in the array type that `array_agg` returns.
+fn with_element_udt(agg: expr::Expr, element_field: &Field) -> expr::Expr {
+    match element_field.metadata().get(SAIL_SPARK_UDT_METADATA_KEY) {
+        Some(udt) => cast(
+            agg,
+            DataType::List(Arc::new(
+                Field::new_list_field(element_field.data_type().clone(), true).with_metadata(
+                    HashMap::from([(SAIL_SPARK_UDT_METADATA_KEY.to_string(), udt.clone())]),
+                ),
+            )),
+        ),
+        None => agg,
+    }
 }
 
 fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -867,11 +949,26 @@ fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    // The optional relative standard deviation only tunes the precision of the estimate.
+    let (value, _) = input.arguments.clone().at_least_one()?;
+    // DataFusion cannot count floating-point values, so they are counted by their string
+    // representation, which is unique for each value once `-0.0` is normalized to `0.0`
+    // as Spark does.
+    let value = match value.get_type(input.function_context.schema)? {
+        data_type @ (DataType::Float16 | DataType::Float32 | DataType::Float64) => {
+            let zero = cast(lit(0.0), data_type);
+            cast(
+                when(value.clone().eq(zero.clone()), zero).otherwise(value)?,
+                DataType::Utf8,
+            )
+        }
+        _ => value,
+    };
     Ok(cast(
         expr::Expr::AggregateFunction(AggregateFunction {
             func: approx_distinct::approx_distinct_udaf(),
             params: AggregateFunctionParams {
-                args: input.arguments.clone(),
+                args: vec![value],
                 distinct: input.distinct,
                 order_by: input.order_by,
                 filter: input.filter,
@@ -962,10 +1059,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("any", F::default(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
         ("approx_count_distinct", F::custom(approx_count_distinct)),
-        (
-            "approx_percentile",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("approx_percentile", F::custom(percentile_approx)),
         ("array_agg", F::custom(array_agg_compacted)),
         ("avg", F::custom(avg)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
@@ -1016,17 +1110,14 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("listagg", F::custom(listagg)),
         ("max", F::custom(max_value)),
         ("max_by", F::custom(max_by)),
-        ("mean", F::default(average::avg_udaf)),
+        ("mean", F::custom(avg)),
         ("measure", F::unknown("measure")),
         ("median", F::custom(median)),
         ("min", F::custom(min_value)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
-        (
-            "percentile_approx",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("percentile_approx", F::custom(percentile_approx)),
         ("percentile_cont", F::custom(percentile_cont)),
         ("percentile_disc", F::custom(percentile_disc)),
         ("product", F::custom(product)),

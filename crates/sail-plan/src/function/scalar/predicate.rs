@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, ScalarUDF, expr, lit, not};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::math::spark_isnan::SparkIsNaN;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 
 use crate::error::{PlanError, PlanResult};
@@ -114,7 +114,7 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
         //  we can remove that from the built-in functions,
         //  and instead resolve it to spec::Expr::InList in the proto converter.
         ("in", F::custom(is_in_list)), // Spark passes isin as in
-        ("isnan", F::unary(expr_fn::isnan)),
+        ("isnan", F::udf(SparkIsNaN::new())),
         (
             "isnotnull",
             F::unary(|x| expr::Expr::IsNotNull(Box::new(x))),

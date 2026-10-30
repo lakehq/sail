@@ -436,6 +436,11 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
             }
             "~" => Ok(format!("{name}{}", arguments.one()?)),
+            // Spark adds the identity function as the finish function when it is not given.
+            "aggregate" | "reduce" if arguments.len() == 3 => Ok(format!(
+                "{name}({}, lambdafunction(namedlambdavariable(), namedlambdavariable()))",
+                arguments.join(", ")
+            )),
             "+" | "-" => {
                 if arguments.len() < 2 {
                     Ok(format!("({name} {})", arguments.one()?))
@@ -485,6 +490,7 @@ impl PlanFormatter for SparkPlanFormatter {
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
             // Spark always names the time window column `window`.
             "window" => Ok("window".to_string()),
+            "session_window" => Ok("session_window".to_string()),
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {

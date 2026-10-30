@@ -191,6 +191,10 @@ impl PlanResolver<'_> {
                 .iter()
                 .map(|result| {
                     let cur_map_type = result[idx].get_type(&schema)?;
+                    // A NULL row does not decide the map type; it is cast to the type of the others.
+                    if matches!(cur_map_type, DataType::Null) {
+                        return Ok(None);
+                    }
                     Ok(
                         if matches!(cur_map_type.clone(), DataType::Map(inner_type, _)
                         if matches!(inner_type.data_type(), DataType::Struct(fields)

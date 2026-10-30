@@ -1,4 +1,25 @@
-Feature: array_contains output schema
+Feature: array_contains
+
+  Rule: Null elements
+
+    Scenario Outline: array_contains(<array>, <value>)
+      When query
+        """
+        SELECT array_contains(<array>, <value>) AS result
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | array                       | value                | result |
+        | array('a', 'ab')            | 'ab'                 | true   |
+        | array('x', NULL)            | 'ab'                 | NULL   |
+        | array('x', NULL)            | 'x'                  | true   |
+        | array('x', 'y')             | 'ab'                 | false  |
+        | array('x', 'y')             | CAST(NULL AS STRING) | NULL   |
+        | CAST(NULL AS ARRAY<INT>)    | 1                    | NULL   |
+        | CAST(array() AS ARRAY<INT>) | 1                    | false  |
 
   @function(nullability)
   Rule: Output schema

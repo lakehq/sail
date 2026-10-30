@@ -1,4 +1,4 @@
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
@@ -7,7 +7,7 @@ use sail_common::spec;
 
 use crate::cereal::{
     PySparkVersion, build_input_types_json, check_python_udf_version, get_pyspark_version,
-    should_write_config, supports_kwargs, write_conf, write_kwarg,
+    input_types_to_fields, should_write_config, supports_kwargs, write_conf, write_kwarg,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};
@@ -59,6 +59,29 @@ impl PySparkUdfPayload {
         kwarg_names: &[Option<String>],
         config: &PySparkUdfConfig,
     ) -> PyUdfResult<Vec<u8>> {
+        Self::build_with_input_fields(
+            python_version,
+            command,
+            eval_type,
+            arg_offsets,
+            &input_types_to_fields(input_types),
+            kwarg_names,
+            config,
+        )
+    }
+
+    /// Builds the payload with the input fields, which have the user-defined types
+    /// of the arguments in their metadata.
+    pub fn build_with_input_fields(
+        python_version: &str,
+        command: &[u8],
+        eval_type: spec::PySparkUdfType,
+        arg_offsets: &[usize],
+        input_fields: &[FieldRef],
+        // Per-argument kwarg name: None for positional, Some(key) for keyword
+        kwarg_names: &[Option<String>],
+        config: &PySparkUdfConfig,
+    ) -> PyUdfResult<Vec<u8>> {
         check_python_udf_version(python_version)?;
         let pyspark_version = get_pyspark_version()?;
         let mut data: Vec<u8> = Vec::new();
@@ -73,7 +96,7 @@ impl PySparkUdfPayload {
                 if eval_type == spec::PySparkUdfType::ArrowBatched {
                     eval_conf.push((
                         "input_type".to_string(),
-                        build_input_types_json(input_types, config.arrow_use_large_var_types)?,
+                        build_input_types_json(input_fields, config.arrow_use_large_var_types)?,
                     ))
                 }
                 write_conf(&mut data, eval_conf);
@@ -89,7 +112,7 @@ impl PySparkUdfPayload {
                     && eval_type == spec::PySparkUdfType::ArrowBatched
                 {
                     let schema_json =
-                        build_input_types_json(input_types, config.arrow_use_large_var_types)?;
+                        build_input_types_json(input_fields, config.arrow_use_large_var_types)?;
                     data.extend((schema_json.len() as i32).to_be_bytes());
                     data.extend(schema_json.as_bytes());
                 }

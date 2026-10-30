@@ -14,8 +14,8 @@ use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
-use crate::resolver::expression::NamedExpr;
 use crate::resolver::expression::attribute::qualifier_matches;
+use crate::resolver::expression::{NamedExpr, take_auto_generated_alias};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::exists::ExistsRewriter;
@@ -45,6 +45,7 @@ impl PlanResolver<'_> {
         };
         let (input, expr) = self.resolve_projection_list(input, expr, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
+        let input = Self::drop_rows_without_session_time(input, &expr)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
@@ -178,7 +179,7 @@ impl PlanResolver<'_> {
             let expanded = if matches!(named.expr, Expr::Wildcard { .. }) {
                 self.rewrite_wildcard(input.clone(), vec![named], state)?.1
             } else {
-                vec![named]
+                vec![named.with_auto_generated_alias(&expression)]
             };
             let expanded = self.rewrite_multi_expr(expanded)?;
             for named in expanded {
@@ -768,8 +769,9 @@ impl PlanResolver<'_> {
                 let NamedExpr {
                     name,
                     expr,
-                    metadata,
+                    mut metadata,
                 } = e;
+                let auto_generated_alias = take_auto_generated_alias(&mut metadata);
                 let name = if name.len() == 1 {
                     name.one()?
                 } else {
@@ -783,6 +785,9 @@ impl PlanResolver<'_> {
                 } else {
                     state.register_field_name(name)
                 };
+                if auto_generated_alias {
+                    state.set_auto_generated_alias(&field_id)?;
+                }
                 let qualifier = if let Expr::Column(column) = &expr {
                     column
                         .relation

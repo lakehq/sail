@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion_common::Column;
+use datafusion::arrow::datatypes::{DataType, Fields};
+use datafusion_common::{Column, ScalarValue};
 use datafusion_expr::{
     Expr, ExprSchemable, LogicalPlan, Projection, UNNAMED_TABLE, cast, col, lit,
 };
@@ -40,13 +41,36 @@ impl PlanResolver<'_> {
         let mut projected_exprs = Vec::new();
         for target_field in target_schema.fields() {
             let target_name = target_field.name();
-            let input_idx = input_names
+            let Some(input_idx) = input_names
                 .iter()
                 .position(|input_name| input_name.eq_ignore_ascii_case(target_name))
-                .ok_or_else(|| {
-                    PlanError::invalid(format!("field not found in input schema: {target_name}"))
-                })?;
+            else {
+                // As in Spark, a missing column is filled with nulls if the field is nullable.
+                if !target_field.is_nullable() {
+                    return Err(PlanError::analysis(format!(
+                        "[UNRESOLVED_COLUMN] A column with name `{target_name}` cannot be resolved"
+                    )));
+                }
+                projected_exprs.push(
+                    cast(lit(ScalarValue::Null), target_field.data_type().clone())
+                        .alias(state.register_field_name(target_name)),
+                );
+                continue;
+            };
             let (input_qualifier, input_field) = input.schema().qualified_field(input_idx);
+            if input_field.is_nullable() && !target_field.is_nullable() {
+                return Err(PlanError::analysis(format!(
+                    "[NULLABLE_COLUMN_OR_FIELD] Column or field `{target_name}` is nullable while it's required to be non-nullable"
+                )));
+            }
+            if !can_store_assign(input_field.data_type(), target_field.data_type()) {
+                return Err(PlanError::analysis(format!(
+                    "[INVALID_COLUMN_OR_FIELD_DATA_TYPE] Column or field `{target_name}` is of type \"{}\" \
+                     while it's required to be \"{}\".",
+                    spark_sql_type_name(input_field.data_type()),
+                    spark_sql_type_name(target_field.data_type()),
+                )));
+            }
             let expr = Expr::Column(Column::from((input_qualifier, input_field)));
             let expr = if input_field.data_type() == target_field.data_type() {
                 expr
@@ -352,5 +376,185 @@ impl PlanResolver<'_> {
             self.rewrite_named_expressions(replace_exprs, state)?,
             Arc::new(input),
         )?))
+    }
+}
+
+/// Returns whether a column of the type `from` can be assigned to a field of the type `to`, as in
+/// Spark's `Cast.canANSIStoreAssign`, which `DataFrame.to()` uses. Numeric types are converted to
+/// each other, and every other atomic type to a string, but a string is not converted to
+/// any other type. The fields of structs are compared by position.
+fn can_store_assign(from: &DataType, to: &DataType) -> bool {
+    use DataType::*;
+
+    fn is_string(data_type: &DataType) -> bool {
+        matches!(data_type, Utf8 | LargeUtf8 | Utf8View)
+    }
+    fn is_numeric(data_type: &DataType) -> bool {
+        data_type.is_numeric()
+    }
+    fn is_datetime(data_type: &DataType) -> bool {
+        matches!(data_type, Date32 | Date64 | Timestamp(_, _))
+    }
+    fn is_nested(data_type: &DataType) -> bool {
+        matches!(
+            data_type,
+            List(_)
+                | LargeList(_)
+                | FixedSizeList(_, _)
+                | ListView(_)
+                | LargeListView(_)
+                | Struct(_)
+                | Map(_, _)
+                | Union(_, _)
+                | Dictionary(_, _)
+                | RunEndEncoded(_, _)
+        )
+    }
+    fn resolvable_nullability(from: bool, to: bool) -> bool {
+        !from || to
+    }
+    fn can_store_assign_fields(from: &Fields, to: &Fields) -> bool {
+        from.len() == to.len()
+            && from.iter().zip(to.iter()).all(|(from, to)| {
+                resolvable_nullability(from.is_nullable(), to.is_nullable())
+                    && can_store_assign(from.data_type(), to.data_type())
+            })
+    }
+
+    if from == to || matches!(from, Null) {
+        return true;
+    }
+    if is_numeric(from) && is_numeric(to) {
+        return true;
+    }
+    if is_string(to) && !is_nested(from) {
+        return true;
+    }
+    if is_datetime(from) && is_datetime(to) {
+        return true;
+    }
+    match (from, to) {
+        (List(from) | LargeList(from), List(to) | LargeList(to)) => {
+            resolvable_nullability(from.is_nullable(), to.is_nullable())
+                && can_store_assign(from.data_type(), to.data_type())
+        }
+        (Map(from, _), Map(to, _)) => match (from.data_type(), to.data_type()) {
+            (Struct(from), Struct(to)) => can_store_assign_fields(from, to),
+            _ => false,
+        },
+        (Struct(from), Struct(to)) => can_store_assign_fields(from, to),
+        _ => false,
+    }
+}
+
+/// Returns the name of the type in Spark SQL, as used in Spark error messages.
+fn spark_sql_type_name(data_type: &DataType) -> String {
+    use DataType::*;
+
+    match data_type {
+        Null => "VOID".to_string(),
+        Boolean => "BOOLEAN".to_string(),
+        Int8 => "TINYINT".to_string(),
+        Int16 => "SMALLINT".to_string(),
+        Int32 => "INT".to_string(),
+        Int64 => "BIGINT".to_string(),
+        Float32 => "FLOAT".to_string(),
+        Float64 => "DOUBLE".to_string(),
+        Decimal128(precision, scale) | Decimal256(precision, scale) => {
+            format!("DECIMAL({precision},{scale})")
+        }
+        Utf8 | LargeUtf8 | Utf8View => "STRING".to_string(),
+        Binary | LargeBinary | BinaryView | FixedSizeBinary(_) => "BINARY".to_string(),
+        Date32 | Date64 => "DATE".to_string(),
+        Timestamp(_, Some(_)) => "TIMESTAMP".to_string(),
+        Timestamp(_, None) => "TIMESTAMP_NTZ".to_string(),
+        List(field) | LargeList(field) | FixedSizeList(field, _) => {
+            format!("ARRAY<{}>", spark_sql_type_name(field.data_type()))
+        }
+        Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    format!(
+                        "{}: {}",
+                        field.name(),
+                        spark_sql_type_name(field.data_type())
+                    )
+                })
+                .collect::<Vec<_>>();
+            format!("STRUCT<{}>", fields.join(", "))
+        }
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Fields, TimeUnit};
+
+    use super::{can_store_assign, spark_sql_type_name};
+
+    #[test]
+    fn test_atomic_assignments() {
+        assert!(can_store_assign(&DataType::Int32, &DataType::Int64));
+        assert!(can_store_assign(&DataType::Int64, &DataType::Int32));
+        assert!(can_store_assign(&DataType::Float64, &DataType::Int64));
+        assert!(can_store_assign(
+            &DataType::Int64,
+            &DataType::Decimal128(10, 2)
+        ));
+        assert!(can_store_assign(&DataType::Int32, &DataType::Utf8));
+        assert!(can_store_assign(&DataType::Boolean, &DataType::Utf8));
+        assert!(can_store_assign(&DataType::Date32, &DataType::Utf8));
+        assert!(can_store_assign(
+            &DataType::Date32,
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        ));
+        assert!(!can_store_assign(&DataType::Utf8, &DataType::Int64));
+        assert!(!can_store_assign(&DataType::Utf8, &DataType::Date32));
+        assert!(!can_store_assign(&DataType::Boolean, &DataType::Int32));
+        assert!(!can_store_assign(&DataType::Int32, &DataType::Boolean));
+    }
+
+    #[test]
+    fn test_nested_assignments() {
+        let list = |data_type: DataType, nullable: bool| {
+            DataType::List(Arc::new(Field::new("item", data_type, nullable)))
+        };
+        assert!(can_store_assign(
+            &list(DataType::Int32, false),
+            &list(DataType::Int64, true)
+        ));
+        assert!(!can_store_assign(
+            &list(DataType::Int32, true),
+            &list(DataType::Int64, false)
+        ));
+        assert!(!can_store_assign(
+            &list(DataType::Int32, true),
+            &DataType::Utf8
+        ));
+        let record = |data_type: DataType| {
+            DataType::Struct(Fields::from(vec![Field::new("a", data_type, true)]))
+        };
+        assert!(can_store_assign(
+            &record(DataType::Int32),
+            &record(DataType::Int64)
+        ));
+        assert!(!can_store_assign(
+            &record(DataType::Utf8),
+            &record(DataType::Int64)
+        ));
+    }
+
+    #[test]
+    fn test_spark_sql_type_names() {
+        assert_eq!(spark_sql_type_name(&DataType::Int64), "BIGINT");
+        assert_eq!(spark_sql_type_name(&DataType::Utf8), "STRING");
+        assert_eq!(
+            spark_sql_type_name(&DataType::Decimal128(10, 2)),
+            "DECIMAL(10,2)"
+        );
     }
 }

@@ -1,11 +1,16 @@
-use datafusion::logical_expr::InvariantLevel;
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::logical_expr::{Expr, InvariantLevel};
 use datafusion::optimizer::AnalyzerRule;
 use datafusion::optimizer::analyzer::function_rewrite::ApplyFunctionRewrites;
 use datafusion::prelude::SessionContext;
-use log::warn;
+use prost::Message;
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::rename::schema::rename_schema;
+use sail_common_datafusion::rename::schema::rename_schema_with_metadata;
 use sail_plan::explain::{ExplainOptions, explain_string};
 use sail_plan::resolver::PlanResolver;
 use sail_plan::resolver::plan::NamedPlan;
@@ -34,12 +39,16 @@ use crate::spark::connect::analyze_plan_response::{
     SemanticHash as SemanticHashResponse, SparkVersion as SparkVersionResponse,
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
-use crate::spark::connect::{StorageLevel, plan};
+use crate::spark::connect::plan;
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let spark = ctx.extension::<SparkSession>()?;
     let resolver = PlanResolver::new(ctx, spark.plan_config()?);
-    let NamedPlan { mut plan, fields } = resolver
+    let NamedPlan {
+        mut plan,
+        fields,
+        field_metadata,
+    } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
     let session_state = ctx.state();
@@ -61,7 +70,7 @@ async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc:
             .map_err(|error| error.context(rule.name()))?;
     }
     let schema = if let Some(fields) = fields {
-        rename_schema(plan.schema().inner(), fields.as_slice())?
+        rename_schema_with_metadata(plan.schema().inner(), &fields, &field_metadata)?
     } else {
         plan.schema().inner().clone()
     };
@@ -170,50 +179,147 @@ pub(crate) async fn handle_analyze_ddl_parse(
     })
 }
 
+/// Returns the resolved logical plan as text, without the aliases of user-facing names and
+/// with the generated field IDs (`#<n>`) and relation IDs (`#relation:<uuid>`) numbered in
+/// the order they first appear. So plans that differ only in aliases or in the IDs of their
+/// resolution have the same canonical form, as with the canonicalized plans of Spark.
+async fn canonical_plan(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<String> {
+    let spark = ctx.extension::<SparkSession>()?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let NamedPlan { plan, .. } = resolver
+        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
+        .await?;
+    let plan = plan
+        .transform_up(|node| {
+            node.map_expressions(|expr| {
+                expr.transform_up(|expr| match expr {
+                    Expr::Alias(alias) if !alias.name.starts_with('#') => {
+                        Ok(Transformed::yes(*alias.expr))
+                    }
+                    expr => Ok(Transformed::no(expr)),
+                })
+            })
+        })?
+        .data;
+    Ok(renumber_generated_ids(
+        &plan.display_indent_schema().to_string(),
+    ))
+}
+
+fn renumber_generated_ids(text: &str) -> String {
+    const RELATION: &str = "#relation:";
+    let mut fields = HashMap::new();
+    let mut relations = HashMap::new();
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('#') {
+        output.push_str(&rest[..start]);
+        rest = &rest[start..];
+        if let Some(after) = rest.strip_prefix(RELATION) {
+            let end = after
+                .find(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
+                .unwrap_or(after.len());
+            let next = relations.len();
+            let id = *relations.entry(&after[..end]).or_insert(next);
+            output.push_str(&format!("{RELATION}{id}"));
+            rest = &after[end..];
+        } else {
+            let digits = rest[1..]
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len() - 1);
+            if digits == 0 {
+                output.push('#');
+            } else {
+                let next = fields.len();
+                let id = *fields.entry(&rest[1..=digits]).or_insert(next);
+                output.push_str(&format!("#{id}"));
+            }
+            rest = &rest[1 + digits..];
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
 pub(crate) async fn handle_analyze_same_semantics(
-    _ctx: &SessionContext,
-    _request: SameSemanticsRequest,
+    ctx: &SessionContext,
+    request: SameSemanticsRequest,
 ) -> SparkResult<SameSemanticsResponse> {
-    Err(SparkError::todo("handle analyze same semantics"))
+    let SameSemanticsRequest {
+        target_plan,
+        other_plan,
+    } = request;
+    let target = canonical_plan(ctx, target_plan.required("target plan")?).await?;
+    let other = canonical_plan(ctx, other_plan.required("other plan")?).await?;
+    Ok(SameSemanticsResponse {
+        result: target == other,
+    })
 }
 
 pub(crate) async fn handle_analyze_semantic_hash(
-    _ctx: &SessionContext,
-    _request: SemanticHashRequest,
+    ctx: &SessionContext,
+    request: SemanticHashRequest,
 ) -> SparkResult<SemanticHashResponse> {
-    Err(SparkError::todo("handle analyze semantic hash"))
+    let SemanticHashRequest { plan } = request;
+    let plan = canonical_plan(ctx, plan.required("plan")?).await?;
+    // The default hasher has fixed keys, so the hash is the same across sessions.
+    let mut hasher = DefaultHasher::new();
+    plan.hash(&mut hasher);
+    Ok(SemanticHashResponse {
+        result: hasher.finish() as i32,
+    })
 }
 
+// The data of a persisted plan is not materialized. Only the storage level is kept,
+// with the plan identified by its serialized form, so that it is reported as in Spark.
+
 pub(crate) async fn handle_analyze_persist(
-    _ctx: &SessionContext,
-    _request: PersistRequest,
+    ctx: &SessionContext,
+    request: PersistRequest,
 ) -> SparkResult<PersistResponse> {
-    // TODO: Implement
-    warn!("Persist operation is not yet supported and is a no-op");
+    let PersistRequest {
+        relation,
+        storage_level,
+    } = request;
+    let relation = relation.required("relation")?;
+    let storage_level = match storage_level {
+        Some(level) => level.try_into()?,
+        None => "MEMORY_AND_DISK".parse()?,
+    };
+    ctx.extension::<CatalogManager>()?
+        .cache_plan(relation.encode_to_vec(), storage_level)?;
     Ok(PersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_unpersist(
-    _ctx: &SessionContext,
-    _request: UnpersistRequest,
+    ctx: &SessionContext,
+    request: UnpersistRequest,
 ) -> SparkResult<UnpersistResponse> {
-    // TODO: Implement
-    warn!("Unpersist operation is not yet supported and is a no-op");
+    let UnpersistRequest {
+        relation,
+        blocking: _,
+    } = request;
+    let relation = relation.required("relation")?;
+    ctx.extension::<CatalogManager>()?
+        .uncache_plan(&relation.encode_to_vec())?;
     Ok(UnpersistResponse {})
 }
 
 pub(crate) async fn handle_analyze_get_storage_level(
-    _ctx: &SessionContext,
-    _request: GetStorageLevelRequest,
+    ctx: &SessionContext,
+    request: GetStorageLevelRequest,
 ) -> SparkResult<GetStorageLevelResponse> {
+    let GetStorageLevelRequest { relation } = request;
+    let relation = relation.required("relation")?;
+    let storage_level = match ctx
+        .extension::<CatalogManager>()?
+        .get_cached_plan_storage_level(&relation.encode_to_vec())?
+    {
+        Some(level) => level,
+        None => "NONE".parse()?,
+    };
     Ok(GetStorageLevelResponse {
-        storage_level: Some(StorageLevel {
-            use_disk: false,
-            use_memory: true,
-            use_off_heap: true,
-            deserialized: false,
-            replication: 1,
-        }),
+        storage_level: Some(storage_level.try_into()?),
     })
 }
 
@@ -350,5 +456,25 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
         spec::QueryNode::LateralJoin { left, right, .. } => {
             is_streaming_query_plan(left) || is_streaming_query_plan(right)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::renumber_generated_ids;
+
+    #[test]
+    fn test_renumber_generated_ids() {
+        let a = "Projection: #12 AS #15 [#15:Int64]\n  TableScan: #relation:3f2b6c1e-0a4d-4e8f-9b7a-2c5d8e1f4a6b projection=[#12]";
+        let b = "Projection: #4 AS #9 [#9:Int64]\n  TableScan: #relation:9d1e7a2b-5c3f-4b6e-8a0d-1f2e3c4b5a69 projection=[#4]";
+        let expected = "Projection: #0 AS #1 [#1:Int64]\n  TableScan: #relation:0 projection=[#0]";
+        assert_eq!(renumber_generated_ids(a), expected);
+        assert_eq!(renumber_generated_ids(b), expected);
+    }
+
+    #[test]
+    fn test_renumber_generated_ids_keeps_other_text() {
+        assert_eq!(renumber_generated_ids("a # b #"), "a # b #");
+        assert_eq!(renumber_generated_ids("#7 + #7 * #8"), "#0 + #0 * #1");
     }
 }

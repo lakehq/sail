@@ -39,6 +39,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
     }
     let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let branch_values = coerce_decimal_to_spark_wider_type(branch_values, function_context.schema)?;
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -72,7 +73,60 @@ fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context,
     } = input;
     let arguments = coerce_string_temporal_values(arguments, &function_context)?;
+    let arguments = coerce_decimal_to_spark_wider_type(arguments, function_context.schema)?;
     Ok(expr_fn::coalesce(arguments))
+}
+
+/// Casts numeric arguments that mix decimals with other numeric types to Spark's wider type.
+/// The wider type of a decimal and a floating-point type is `double`. The wider type of
+/// decimals and integers is the decimal with the most integral digits and the largest scale,
+/// where an integer has as many digits as its type can hold.
+pub(super) fn coerce_decimal_to_spark_wider_type(
+    arguments: Vec<expr::Expr>,
+    schema: &datafusion_common::DFSchemaRef,
+) -> PlanResult<Vec<expr::Expr>> {
+    let data_types = arguments
+        .iter()
+        .map(|arg| arg.get_type(schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !data_types
+        .iter()
+        .any(|t| matches!(t, DataType::Decimal128(..)))
+    {
+        return Ok(arguments);
+    }
+    let target = if data_types.iter().any(DataType::is_floating) {
+        DataType::Float64
+    } else {
+        let mut integral_digits = 0;
+        let mut scale = 0;
+        for data_type in &data_types {
+            let (p, s) = match data_type {
+                DataType::Decimal128(p, s) => (i16::from(*p), i16::from(*s)),
+                DataType::Int8 => (3, 0),
+                DataType::Int16 => (5, 0),
+                DataType::Int32 => (10, 0),
+                DataType::Int64 => (20, 0),
+                _ => continue,
+            };
+            integral_digits = integral_digits.max(p - s);
+            scale = scale.max(s);
+        }
+        let precision = (integral_digits + scale).min(38);
+        let scale = scale.min(precision);
+        DataType::Decimal128(precision as u8, scale as i8)
+    };
+    Ok(arguments
+        .into_iter()
+        .zip(data_types)
+        .map(|(arg, data_type)| {
+            if data_type.is_numeric() && data_type != target {
+                cast(arg, target.clone())
+            } else {
+                arg
+            }
+        })
+        .collect())
 }
 
 /// Spark defines `nvl2` as `if` on whether the first argument is not null.

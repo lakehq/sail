@@ -165,6 +165,20 @@ pub enum CatalogCommand {
         database: Vec<String>,
         extended: bool,
     },
+    IsCached {
+        table: Vec<String>,
+    },
+    CacheTable {
+        table: Vec<String>,
+    },
+    UncacheTable {
+        table: Vec<String>,
+        if_exists: bool,
+    },
+    ClearCache,
+    RefreshTable {
+        table: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -212,6 +226,11 @@ impl CatalogCommand {
             CatalogCommand::DescribeTable { .. } => "DescribeTable",
             CatalogCommand::TruncateTable { .. } => "TruncateTable",
             CatalogCommand::DescribeDatabase { .. } => "DescribeDatabase",
+            CatalogCommand::IsCached { .. } => "IsCached",
+            CatalogCommand::CacheTable { .. } => "CacheTable",
+            CatalogCommand::UncacheTable { .. } => "UncacheTable",
+            CatalogCommand::ClearCache => "ClearCache",
+            CatalogCommand::RefreshTable { .. } => "RefreshTable",
         }
     }
 
@@ -245,7 +264,11 @@ impl CatalogCommand {
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
             | CatalogCommand::RegisterFunction { .. }
-            | CatalogCommand::RegisterTableFunction { .. } => display.empty().schema()?,
+            | CatalogCommand::RegisterTableFunction { .. }
+            | CatalogCommand::CacheTable { .. }
+            | CatalogCommand::UncacheTable { .. }
+            | CatalogCommand::ClearCache
+            | CatalogCommand::RefreshTable { .. } => display.empty().schema()?,
             CatalogCommand::CurrentCatalog | CatalogCommand::CurrentDatabase => {
                 display.strings().schema()?
             }
@@ -269,6 +292,7 @@ impl CatalogCommand {
             | CatalogCommand::DropFunction { .. }
             | CatalogCommand::DropTemporaryView { .. }
             | CatalogCommand::DropView { .. }
+            | CatalogCommand::IsCached { .. }
             | CatalogCommand::TruncateTable { .. } => display.bools().schema()?,
         };
         Ok(schema)
@@ -790,12 +814,12 @@ impl CatalogCommand {
                 is_global,
                 options,
             } => {
-                if is_global {
-                    manager.drop_global_temporary_view(&view, options).await?;
+                let dropped = if is_global {
+                    manager.drop_global_temporary_view(&view, options).await?
                 } else {
-                    manager.drop_temporary_view(&view, options).await?;
-                }
-                display.bools().to_record_batch(vec![true])?
+                    manager.drop_temporary_view(&view, options).await?
+                };
+                display.bools().to_record_batch(vec![dropped])?
             }
             CatalogCommand::DropView { view, options } => {
                 manager.drop_maybe_temporary_view(&view, options).await?;
@@ -826,6 +850,28 @@ impl CatalogCommand {
             CatalogCommand::CreateView { view, options } => {
                 manager.create_view(&view, options).await?;
                 display.bools().to_record_batch(vec![true])?
+            }
+            CatalogCommand::IsCached { table } => {
+                let value = manager.is_table_cached(&table).await?;
+                display.bools().to_record_batch(vec![value])?
+            }
+            CatalogCommand::CacheTable { table } => {
+                manager.cache_table(&table).await?;
+                display.empty().to_record_batch(vec![])?
+            }
+            CatalogCommand::UncacheTable { table, if_exists } => {
+                manager.uncache_table(&table, if_exists).await?;
+                display.empty().to_record_batch(vec![])?
+            }
+            CatalogCommand::ClearCache => {
+                manager.clear_cache()?;
+                display.empty().to_record_batch(vec![])?
+            }
+            CatalogCommand::RefreshTable { table } => {
+                // The cached data is not materialized, so there is nothing to refresh,
+                // but the table or view must exist as in Spark.
+                manager.get_table_or_view(&table).await?;
+                display.empty().to_record_batch(vec![])?
             }
             CatalogCommand::TruncateTable { table } => {
                 // Resolve views first, as Spark does, so that a temporary view cannot

@@ -7,7 +7,7 @@ use datafusion_common::Result;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
-use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_common_datafusion::rename::physical_plan::rename_physical_plan_with_metadata;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
@@ -39,7 +39,11 @@ pub async fn resolve_and_execute_plan(
 ) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
     let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    let NamedPlan {
+        plan,
+        fields,
+        field_metadata,
+    } = resolver.resolve_named_plan(plan).await?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, plan) = df.into_parts();
@@ -55,7 +59,7 @@ pub async fn resolve_and_execute_plan(
         .create_physical_plan(&plan, &session_state)
         .await?;
     let plan = if let Some(fields) = fields {
-        rename_physical_plan(plan, &fields)?
+        rename_physical_plan_with_metadata(plan, &fields, &field_metadata)?
     } else {
         plan
     };
