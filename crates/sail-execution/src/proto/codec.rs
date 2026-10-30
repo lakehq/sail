@@ -8048,6 +8048,129 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_distributed_zip_with_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_zip_with::SparkArrayZipWith;
+
+        let left = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i32>::from_lengths(vec![2]),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        );
+        let right = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::<i32>::from_lengths(vec![2]),
+            Arc::new(Int32Array::from(vec![10, 20])),
+            None,
+        );
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let left_value = Expr::LambdaVariable(LambdaVariable::new(
+            "l".to_string(),
+            Some(Arc::new(Field::new("l", DataType::Int32, true))),
+        ));
+        let right_value = Expr::LambdaVariable(LambdaVariable::new(
+            "r".to_string(),
+            Some(Arc::new(Field::new("r", DataType::Int32, true))),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayZipWith::new())),
+            vec![
+                col("left"),
+                col("right"),
+                lambda(["l", "r"], left_value + right_value),
+            ],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_eq!(as_hof(&decoded)?.name(), "zip_with");
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
+    fn test_round_trip_distributed_map_zip_with_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Int32Builder, MapBuilder};
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{Expr, HigherOrderUDF, col, lambda};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::map::spark_map_zip_with::SparkMapZipWith;
+
+        let mut left_builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        left_builder.keys().append_value(1);
+        left_builder.values().append_value(10);
+        left_builder.append(true)?;
+        let left = left_builder.finish();
+        let mut right_builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new());
+        right_builder.keys().append_value(1);
+        right_builder.values().append_value(20);
+        right_builder.append(true)?;
+        let right = right_builder.finish();
+        let fields = vec![
+            Field::new("left", left.data_type().clone(), true),
+            Field::new("right", right.data_type().clone(), true),
+        ];
+        let schema = Arc::new(Schema::new(fields.clone()));
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+        let right_value = Expr::LambdaVariable(LambdaVariable::new(
+            "v2".to_string(),
+            Some(Arc::new(Field::new("v2", DataType::Int32, true))),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkMapZipWith::new())),
+            vec![
+                col("left"),
+                col("right"),
+                lambda(["k", "v1", "v2"], right_value),
+            ],
+        ));
+        let physical = create_physical_expr(
+            &logical,
+            &dfschema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let decoded = round_trip_expr(&physical, &schema)?;
+
+        assert_eq!(as_hof(&decoded)?.name(), "map_zip_with");
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema,
+            vec![Arc::new(left), Arc::new(right)],
+        )
+    }
+
+    #[test]
     fn test_round_trip_distributed_map_filter_value_only() -> Result<()> {
         use std::collections::HashMap;
 
