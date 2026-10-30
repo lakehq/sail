@@ -2,14 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::expr::{self, FieldMetadata, Sort, WindowFunctionParams};
+use datafusion_expr::expr::{FieldMetadata, Sort};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
-    Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition, col, lit, when,
+    Projection, ScalarUDF, col, lit, when,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -36,10 +34,11 @@ use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
-use sail_function::scalar::math::spark_try_add::SparkTryAdd;
-use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
+use sail_logical_plan::identity::{
+    identity_next_value, identity_row_number as make_identity_row_number, identity_value_expr,
+};
 
 use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
@@ -1137,19 +1136,7 @@ impl PlanResolver<'_> {
             None
         };
         let plan_for_final_projection = if let Some(alias) = identity_row_number.as_deref() {
-            let row_number_window = Expr::WindowFunction(Box::new(expr::WindowFunction {
-                fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                params: WindowFunctionParams {
-                    args: vec![],
-                    partition_by: vec![],
-                    order_by: vec![],
-                    window_frame: WindowFrame::new(None),
-                    filter: None,
-                    null_treatment: Some(NullTreatment::RespectNulls),
-                    distinct: false,
-                },
-            }))
-            .alias(alias);
+            let row_number_window = make_identity_row_number(vec![]).alias(alias);
             LogicalPlanBuilder::from(intermediate)
                 .window(vec![row_number_window])?
                 .build()?
@@ -1667,29 +1654,19 @@ impl PlanResolver<'_> {
         row_number_alias: &str,
         schema: &DFSchema,
     ) -> PlanResult<Expr> {
-        let base = match identity.high_water_mark {
-            Some(high_water_mark) => high_water_mark.checked_add(identity.step).ok_or_else(|| {
-                PlanError::invalid(format!(
-                    "identity column `{column_name}` cannot generate a next value without overflowing BIGINT"
-                ))
-            })?,
-            None => identity.start,
-        };
-        let row_number = col(Column::from_name(row_number_alias))
-            .cast_to(&datafusion::arrow::datatypes::DataType::Int64, schema)?;
-        let row_offset = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(row_number),
-            Operator::Minus,
-            Box::new(lit(1_i64)),
-        ));
-        let product =
-            ScalarUDF::from(SparkTryMult::new()).call(vec![row_offset, lit(identity.step)]);
-        let value = ScalarUDF::from(SparkTryAdd::new()).call(vec![lit(base), product.clone()]);
-        let err_msg = format!(
-            "[DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW] identity column `{column_name}` overflowed BIGINT while generating values"
-        );
-        let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
-        Ok(when(product.is_null().or(value.clone().is_null()), raise).otherwise(value)?)
+        // Preserve INSERT's existing eager exhausted-watermark validation.
+        let base = identity_next_value(identity).ok_or_else(|| {
+            PlanError::invalid(format!(
+                "identity column `{column_name}` cannot generate a next value without overflowing BIGINT"
+            ))
+        })?;
+        Ok(identity_value_expr(
+            column_name,
+            Some(base),
+            identity.step,
+            col(Column::from_name(row_number_alias)),
+            schema,
+        )?)
     }
 
     pub(super) fn resolve_partition_by_expression(

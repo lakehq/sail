@@ -1,29 +1,35 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::Schema;
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Result, plan_err};
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 use log::trace;
+use parquet::arrow::ArrowSchemaConverter;
+use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction, RowLevelWriteMode,
 };
 use sail_logical_plan::merge::{
-    MergePlanRequirements, expand_merge, validate_merge_internal_columns,
+    MergePlanRequirements, expand_merge, merge_generates_identity, validate_merge_internal_columns,
 };
 use sail_logical_plan::row_level::{
     RowLevelEffectPlans, RowLevelEffectRequirements, RowLevelWriteNode,
 };
 
 use crate::logical::table_source::DeltaTableSource;
+use crate::spec::DataSkippingNumIndexedCols;
+use crate::writer::variant_shredding::variant_top_level_columns;
 
 /// Expand MERGE information into a unified row-level write node for Delta.
-pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
+pub fn expand_merge_node(mut info: MergeInfo) -> Result<LogicalPlan> {
     validate_merge_internal_columns(&info, &[MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN])?;
     let change_data = change_data_enabled(&info.target)?;
+    validate_identity_merge(&mut info, change_data)?;
     let mode = select_delta_row_level_write_mode(&info.target)?;
     let row_index_column = ((merge_has_delete_actions(&info) || merge_has_update_actions(&info))
         && matches!(mode, RowLevelWriteMode::MergeOnRead))
@@ -127,6 +133,89 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(write_node),
     }))
+}
+
+/// Allocation and commit must use the same snapshot, and every generated column
+/// must contribute exact min/max evidence to the atomic metadata/file commit.
+fn validate_identity_merge(info: &mut MergeInfo, change_data: bool) -> Result<()> {
+    let mut identities = info.options.identity_columns.clone();
+    let mut validated = false;
+    info.target.apply(|node| {
+        let LogicalPlan::TableScan(scan) = node else {
+            return Ok(TreeNodeRecursion::Continue);
+        };
+        let Some(source) = scan.source.downcast_ref::<DeltaTableSource>() else {
+            return Ok(TreeNodeRecursion::Continue);
+        };
+        let snapshot = source.snapshot();
+        let identity_count = snapshot.schema().fields().iter()
+            .filter(|field| ColumnFeatures::from_field(field).identity().is_some()).count();
+        if identity_count != identities.len() {
+            return plan_err!("MERGE identity columns do not match the pinned target snapshot");
+        }
+        let props = snapshot.table_properties();
+        let partitions = snapshot.metadata().partition_columns();
+        let file_schema = Arc::new(Schema::new(snapshot.schema().fields().iter()
+            .filter(|field| !partitions.contains(field.name()))
+            .cloned().collect::<Vec<_>>()));
+        for (resolved_name, identity) in &mut identities {
+            let index = info.options.resolved_target_schema.index_of_column_by_name(None, resolved_name)
+                .ok_or_else(|| datafusion_common::DataFusionError::Plan("Missing MERGE identity field".into()))?;
+            let name = &info.options.resolved_target_field_names[index];
+            let field = snapshot.schema().field_with_name(name)?;
+            let Some(pinned_identity) = ColumnFeatures::from_field(field).identity() else {
+                return plan_err!("MERGE identity metadata does not match the pinned target snapshot");
+            };
+            if pinned_identity.start != identity.start || pinned_identity.step != identity.step
+                || pinned_identity.allow_explicit_insert != identity.allow_explicit_insert {
+                return plan_err!("MERGE identity metadata does not match the pinned target snapshot");
+            }
+            // Catalog schemas may retain the creation-time watermark. Read allocation
+            // state from the exact scan snapshot that the commit context will pin.
+            *identity = pinned_identity;
+            if let Some(hwm) = identity.high_water_mark {
+                let offset = i128::from(hwm) - i128::from(identity.start);
+                if offset % i128::from(identity.step) != 0 || offset / i128::from(identity.step) < 0 {
+                    return plan_err!("Invalid identity watermark for `{name}`");
+                }
+            }
+            if !merge_generates_identity(&info.options, resolved_name) {
+                continue;
+            }
+            if change_data {
+                return plan_err!("Identity-generating MERGE with change data feed is not supported");
+            }
+            let has_stats = if partitions.contains(name) {
+                false
+            } else if let Some(columns) = &props.data_skipping_stats_columns {
+                columns.iter().any(|column| column.path().len() == 1 && column.path()[0].eq_ignore_ascii_case(name))
+            } else {
+                match props.data_skipping_num_indexed_cols.unwrap_or(DataSkippingNumIndexedCols::NumColumns(32)) {
+                    DataSkippingNumIndexedCols::AllColumns => true,
+                    DataSkippingNumIndexedCols::NumColumns(count) => {
+                        // Variant shredding can change physical leaf positions.
+                        if !variant_top_level_columns(&file_schema).is_empty() {
+                            false
+                        } else {
+                            ArrowSchemaConverter::new().convert(&file_schema)?.columns().iter()
+                                .take(usize::try_from(count).unwrap_or(usize::MAX))
+                                .any(|column| column.path().parts() == [name.clone()])
+                        }
+                    }
+                }
+            };
+            if !has_stats {
+                return plan_err!("Identity-generating MERGE requires min/max statistics for identity column `{name}`");
+            }
+        }
+        validated = true;
+        Ok(TreeNodeRecursion::Stop)
+    })?;
+    if !validated && !identities.is_empty() {
+        return plan_err!("MERGE identity allocation requires a pinned Delta target snapshot");
+    }
+    info.options.identity_columns = identities;
+    Ok(())
 }
 
 fn merge_has_delete_actions(info: &MergeInfo) -> bool {

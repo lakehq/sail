@@ -40,6 +40,30 @@ def test_dataframe_merge_into_basic(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+def test_dataframe_merge_into_omitted_identity(spark, tmp_path):
+    table_name = "delta_merge_into_df_identity"
+    table_path = tmp_path / "identity_target"
+    table_path_literal = escape_sql_string_literal(str(table_path))
+    spark.sql(f"""
+        CREATE TABLE {table_name} (id BIGINT GENERATED ALWAYS AS IDENTITY, k INT, value INT)
+        USING DELTA LOCATION '{table_path_literal}'
+    """)
+    try:
+        spark.sql(f"INSERT INTO {table_name} (k,value) VALUES (1,10)")  # noqa: S608
+        source = spark.createDataFrame([(1, 11), (2, 22)], "src_k INT, src_value INT")
+        (
+            source.mergeInto(table_name, F.expr("k = src_k"))
+            .whenMatched()
+            .update(assignments={"value": F.col("src_value")})
+            .whenNotMatched()
+            .insert(assignments={"k": F.col("src_k"), "value": F.col("src_value")})
+            .merge()
+        )
+        assert spark.read.format("delta").load(str(table_path)).orderBy("k").collect() == [(1, 1, 11), (2, 2, 22)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 def test_dataframe_merge_into_insert_all_and_delete(spark, tmp_path):
     table_name = "delta_merge_into_df_insert_all_delete"
     table_path = tmp_path / "delta_merge_target_insert_all_delete"
