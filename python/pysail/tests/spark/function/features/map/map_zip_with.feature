@@ -16,6 +16,19 @@ Feature: map_zip_with higher-order function
         | result                 |
         | {a -> 1, b -> 5, c -> 4} |
 
+    Scenario: Preserve left key order and append right-only keys
+      When query
+        """
+        SELECT map_keys(map_zip_with(
+          map(1, 'left-1', 3, 'left-3'),
+          map(2, 'right-2', 3, 'right-3'),
+          (k, v1, v2) -> coalesce(v1, v2)
+        )) AS result
+        """
+      Then query result
+        | result    |
+        | [1, 3, 2] |
+
     Scenario: Coerce integral map key types to a common type
       When query
         """

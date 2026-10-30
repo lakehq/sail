@@ -76,7 +76,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
         let (left, right, lambda) = map_zip_args(self.name(), args.arg_fields)?;
-        let (left_key, _, ordered) = map_fields(self.name(), left)?;
+        let (left_key, _, _) = map_fields(self.name(), left)?;
         let (right_key, _, _) = map_fields(self.name(), right)?;
         same_key_type(self.name(), &left_key, &right_key)?;
         let fields = Fields::from(vec![
@@ -95,7 +95,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
                     DataType::Struct(fields),
                     false,
                 )),
-                ordered,
+                false,
             ),
             left.is_nullable() || right.is_nullable(),
         )))
@@ -368,6 +368,7 @@ fn offsets_to_row_indices(offsets: &OffsetBuffer<i32>) -> datafusion::arrow::arr
 #[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{Int32Array, StringArray};
+    use datafusion_expr::HigherOrderReturnFieldArgs;
 
     use super::*;
 
@@ -414,6 +415,29 @@ mod tests {
     }
 
     #[test]
+    fn map_zip_with_does_not_claim_union_keys_are_sorted() -> Result<()> {
+        let DataType::Map(entries, _) = return_type() else {
+            return exec_err!("test map type is not a map");
+        };
+        let sorted_map = Arc::new(Field::new("map", DataType::Map(entries, true), true));
+        let fields = [
+            ValueOrLambda::Value(Arc::clone(&sorted_map)),
+            ValueOrLambda::Value(Arc::clone(&sorted_map)),
+            ValueOrLambda::Lambda(Arc::new(Field::new("", DataType::Int32, true))),
+        ];
+        let scalar_arguments = [None, None, None];
+        let result = SparkMapZipWith::new().return_field_from_args(HigherOrderReturnFieldArgs {
+            arg_fields: &fields,
+            scalar_arguments: &scalar_arguments,
+        })?;
+        let DataType::Map(_, sorted) = result.data_type() else {
+            return exec_err!("map_zip_with return type is not a map");
+        };
+        assert!(!sorted);
+        Ok(())
+    }
+
+    #[test]
     fn builds_union_inputs_with_typed_nulls() -> Result<()> {
         let left = string_i32_map(vec!["a", "b"], vec![1, 2], vec![2]);
         let right = string_i32_map(vec!["b", "c"], vec![3, 4], vec![2]);
@@ -440,6 +464,19 @@ mod tests {
                 .downcast_ref::<Int32Array>()
                 .unwrap(),
             &Int32Array::from(vec![None, Some(3), Some(4)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_left_key_order_then_appends_right_only_keys() -> Result<()> {
+        let left = string_i32_map(vec!["a", "c"], vec![1, 3], vec![2]);
+        let right = string_i32_map(vec!["b", "c"], vec![2, 4], vec![2]);
+        let inputs = build_lambda_inputs("map_zip_with", &left, &right, &return_type())?;
+
+        assert_eq!(
+            inputs.keys.as_any().downcast_ref::<StringArray>().unwrap(),
+            &StringArray::from(vec!["a", "c", "b"])
         );
         Ok(())
     }
