@@ -32,6 +32,7 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, MetadataPointerAuthority,
     ScanAuthority,
 };
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     BucketBy, DataSource, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
     create_sort_order, find_path_in_options,
@@ -64,6 +65,7 @@ use crate::operations::bootstrap::{
 use crate::operations::metadata_commit::{PreviousMetadataFile, previous_metadata_log_entry};
 use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::IcebergWriterExecOptions;
+use crate::physical_plan::action_schema::iceberg_action_schema;
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::write_context::{
     input_schema_with_logical_metadata, prepare_iceberg_write_context,
@@ -123,6 +125,7 @@ impl DataSource for IcebergLakeSource {
         };
         let SinkInfo {
             input,
+            sql_insert,
             mode,
             partition_by,
             bucket_by,
@@ -138,6 +141,11 @@ impl DataSource for IcebergLakeSource {
             node: Arc::new(IcebergWriteNode::new(
                 Arc::new(input),
                 IcebergWriteNodeOptions {
+                    output: if sql_insert {
+                        CommandOutput::Empty
+                    } else {
+                        CommandOutput::Count
+                    },
                     path,
                     mode,
                     partition_by,
@@ -150,7 +158,7 @@ impl DataSource for IcebergLakeSource {
                     target_file_size: None,
                     preserve_input_partitions: false,
                 },
-            )),
+            )?),
         }))
     }
 }
@@ -324,6 +332,7 @@ impl LakeSource for IcebergLakeSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        _config: &datafusion::prelude::SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
         let LakeSourceCreateTableInfo {
@@ -520,6 +529,7 @@ impl LakeSource for IcebergLakeSource {
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct IcebergWriteNodeOptions {
+    pub output: CommandOutput,
     pub path: String,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
@@ -547,12 +557,20 @@ pub struct IcebergWriteNode {
 }
 
 impl IcebergWriteNode {
-    pub fn new(input: Arc<LogicalPlan>, options: IcebergWriteNodeOptions) -> Self {
-        Self {
+    pub fn new(input: Arc<LogicalPlan>, options: IcebergWriteNodeOptions) -> Result<Self> {
+        let schema = if options.defer_commit {
+            // Deferred writers feed action batches to a coordinator, not command results.
+            Arc::new(datafusion_common::DFSchema::try_from(
+                iceberg_action_schema()?.as_ref().clone(),
+            )?)
+        } else {
+            options.output.df_schema()
+        };
+        Ok(Self {
             input,
+            schema,
             options,
-            schema: Arc::new(datafusion_common::DFSchema::empty()),
-        }
+        })
     }
 
     pub fn options(&self) -> &IcebergWriteNodeOptions {
@@ -747,6 +765,7 @@ pub(crate) async fn plan_iceberg_write(
     use datafusion::physical_plan::empty::EmptyExec;
 
     let IcebergWriteNodeOptions {
+        output,
         path,
         mode,
         partition_by,
@@ -826,7 +845,9 @@ pub(crate) async fn plan_iceberg_write(
             return plan_err!("Iceberg table already exists at path: {table_url}");
         }
         PhysicalSinkMode::IgnoreIfExists if table_exists => {
-            return Ok(Arc::new(EmptyExec::new(physical_input.schema())));
+            return Ok(Arc::new(EmptyExec::new(Arc::new(
+                node.schema().as_arrow().clone(),
+            ))));
         }
         _ => {}
     }
@@ -927,7 +948,7 @@ pub(crate) async fn plan_iceberg_write(
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
-    let write_context = prepare_iceberg_write_context(
+    let mut write_context = prepare_iceberg_write_context(
         &table_url,
         table.as_ref().map(Table::metadata),
         &options,
@@ -935,6 +956,9 @@ pub(crate) async fn plan_iceberg_write(
         &mode,
         writer_input_schema.as_ref(),
     )?;
+    if !defer_commit && matches!(mode, PhysicalSinkMode::Append) {
+        write_context.operation = Some(crate::operation_metrics::IcebergOperation::Insert);
+    }
     let table_config = IcebergTableConfig {
         table_url,
         partition_columns: resolved_partition_columns,
@@ -949,7 +973,8 @@ pub(crate) async fn plan_iceberg_write(
         mode.clone(),
         physical_sort,
         ctx,
-    );
+    )
+    .with_output(output);
     if preserve_input_partitions {
         builder = builder.preserve_input_partitions();
     }
@@ -1535,6 +1560,43 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn deferred_writes_advertise_action_schema() -> Result<()> {
+        let input = datafusion_expr::LogicalPlanBuilder::empty(false).build()?;
+        for output in [CommandOutput::Empty, CommandOutput::Count] {
+            for defer_commit in [false, true] {
+                let node = IcebergWriteNode::new(
+                    Arc::new(input.clone()),
+                    IcebergWriteNodeOptions {
+                        output,
+                        path: "file:///unused".to_string(),
+                        mode: SinkMode::Append,
+                        partition_by: vec![],
+                        bucket_by: None,
+                        sort_order: vec![],
+                        options: vec![],
+                        lakehouse_table: None,
+                        planned_metadata_location: None,
+                        defer_commit,
+                        target_file_size: None,
+                        preserve_input_partitions: false,
+                    },
+                )?;
+                let expected = if defer_commit {
+                    iceberg_action_schema()?
+                } else {
+                    output.schema()
+                };
+                assert_eq!(node.schema().as_arrow(), expected.as_ref());
+                let rebuilt = node.with_exprs_and_inputs(vec![], vec![input.clone()])?;
+                assert_eq!(rebuilt.schema(), node.schema());
+                assert_eq!(rebuilt.options().defer_commit, defer_commit);
+                assert_eq!(rebuilt.options().output, output);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn metadata_relation_capability_distinguishes_resolution_outcomes() -> Result<()> {

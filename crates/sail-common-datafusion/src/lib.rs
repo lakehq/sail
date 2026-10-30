@@ -2,6 +2,7 @@ pub mod array;
 pub mod catalog;
 pub mod column_change;
 pub mod column_features;
+pub mod command;
 pub mod datasource;
 pub mod display;
 pub mod error;
@@ -27,3 +28,5 @@ pub mod type_coercion;
 pub mod udf;
 pub mod utils;
 pub mod variant;
+
+pub const OPTIMIZER_CORRELATION_KEY_PREFIX: &str = "__sail_correlation_key";

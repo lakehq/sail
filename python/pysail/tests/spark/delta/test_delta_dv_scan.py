@@ -30,13 +30,12 @@ def test_dv_scan_pruning_projection_and_repeated_dml(spark, tmp_path, metadata_a
     assert [row.id for row in read().where("id >= 4000").select("id").orderBy("id").collect()] == [
         i for i in live if i >= 4000
     ]
-    metadata_rows = (
+    metadata_frame = (
         read()
         .where("id >= 4000")
         .selectExpr("id", "input_file_name()", "input_file_block_start()", "input_file_block_length()")
-        .orderBy("id")
-        .collect()
     )
+    metadata_rows = metadata_frame.orderBy("id").collect()
     data_files = [path / "part-0.parquet", path / "part-1.parquet"]
     assert [tuple(row) for row in metadata_rows] == [
         (i, data_file.as_uri(), 0, data_file.stat().st_size)
@@ -44,6 +43,13 @@ def test_dv_scan_pruning_projection_and_repeated_dml(spark, tmp_path, metadata_a
         if i >= 4000
         for data_file in [data_files[0 if i < 4096 else 1]]
     ]
+    limited = metadata_frame.limit(3).collect()
+    assert len(limited) == len({row.id for row in limited}) == 3
+    for row in limited:
+        assert row.id in live
+        assert row.id >= 4000
+        data_file = data_files[0 if row.id < 4096 else 1]
+        assert tuple(row) == (row.id, data_file.as_uri(), 0, data_file.stat().st_size)
     assert len(read().selectExpr("1 AS present").limit(1).collect()) == 1
     assert read().where("id = 0").selectExpr("1 AS present").limit(1).collect() == []
     assert read().limit(0).collect() == []

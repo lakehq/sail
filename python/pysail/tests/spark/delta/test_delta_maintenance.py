@@ -5,6 +5,7 @@ import os
 import shutil
 import time
 from urllib.parse import quote, unquote, urlparse
+from urllib.request import url2pathname
 from uuid import uuid4
 
 import pyarrow as pa
@@ -46,7 +47,7 @@ def _active_files(path):
 
 def _paths(rows):
     # Hadoop Path strings may contain a literal '#'.
-    return {unquote(row.path.removeprefix("file:").removeprefix("//")) for row in rows}
+    return {os.path.normpath(url2pathname(row.path.removeprefix("file:"))) for row in rows}
 
 
 @pytest.fixture
@@ -63,6 +64,7 @@ def maintenance_table(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("suffix", "default", "value"),
     [
@@ -277,6 +279,7 @@ def test_optimize_preserves_quoted_partition_columns(spark, tmp_path, column):
         spark.sql(f"DROP TABLE IF EXISTS {name}").collect()
 
 
+@pytest.mark.integration
 def test_optimize_matches_jvm_schema_and_artifacts(spark, delta_jvm_spark, tmp_path):
     jvm = delta_jvm_spark
     reference = tmp_path / "reference"
@@ -335,6 +338,7 @@ def test_optimize_failed_bin_does_not_commit(spark, maintenance_table):
     assert {row.path for row in _active_files(path)} == {row.path for row in files}
 
 
+@pytest.mark.integration
 def test_optimize_materializes_dvs_and_vacuum_protects_them(spark, delta_jvm_spark, tmp_path):
     path = tmp_path / "mapped % # dv"
     jvm = delta_jvm_spark
@@ -527,6 +531,7 @@ def test_vacuum_dry_run_returns_all_candidates(spark, maintenance_table):
     assert spark.table(name).collect() == [Row(id=1, part="a")]
 
 
+@pytest.mark.integration
 def test_vacuum_retention_dry_run_and_audit(spark, delta_jvm_spark, maintenance_table):
     name, path = maintenance_table
     spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('delta.deletedFileRetentionDuration' = 'interval 1 hours')")

@@ -1,7 +1,9 @@
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{Result, not_impl_err};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{
+    Accumulator, AggregateUDFImpl, Signature, TypeSignature, Volatility,
+};
 
 #[derive(PartialEq, Eq, Hash, Debug)]
 pub struct GroupingIdFunction {
@@ -17,7 +19,10 @@ impl Default for GroupingIdFunction {
 impl GroupingIdFunction {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![TypeSignature::Nullary, TypeSignature::VariadicAny],
+                Volatility::Immutable,
+            ),
         }
     }
 }

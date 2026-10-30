@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, StringArray};
@@ -123,7 +124,7 @@ impl PlanResolver<'_> {
         };
         let manager = self.ctx.extension::<CatalogManager>()?;
         let parts: Vec<String> = table.into();
-        let is_path = matches!(parts.as_slice(), [source, path] if source.eq_ignore_ascii_case(&format) && (path.starts_with('/') || path.contains(":/")));
+        let is_path = matches!(parts.as_slice(), [source, path] if source.eq_ignore_ascii_case(&format) && is_procedure_path(path));
         let catalog = if is_path {
             manager.resolve_catalog_reference(None)?.to_string()
         } else {
@@ -240,7 +241,7 @@ impl PlanResolver<'_> {
                     LakeProcedureTarget::TableOrPath { .. }
                 ) && let [format, path] = table_reference.as_slice()
                     && format.eq_ignore_ascii_case(&lake_source_name)
-                    && (path.starts_with('/') || path.contains(":/"))
+                    && is_procedure_path(path)
                 {
                     let info = procedure_path_source(path.clone());
                     (
@@ -650,6 +651,10 @@ fn table_name_for_display(status: &sail_common_datafusion::catalog::TableStatus)
         .cloned()
         .collect::<Vec<_>>()
         .join(".")
+}
+
+fn is_procedure_path(path: &str) -> bool {
+    Path::new(path).is_absolute() || path.starts_with('/') || path.contains(":/")
 }
 
 fn procedure_path_source(path: String) -> SourceInfo {

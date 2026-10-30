@@ -19,6 +19,7 @@ pub mod io;
 pub mod lake_source;
 pub mod logical;
 pub(crate) mod metadata_relation;
+pub mod operation_metrics;
 pub mod operations;
 pub mod options;
 pub mod physical;

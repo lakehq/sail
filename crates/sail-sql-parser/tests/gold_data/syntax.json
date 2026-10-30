@@ -1017,6 +1017,9 @@
                     "sequence": [
                       {
                         "nonTerminal": "Operator(Asterisk)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Keyword(Except), Operator(LeftParenthesis), Sequence(Identifier, Operator(Comma)), Operator(RightParenthesis)))"
                       }
                     ]
                   },
@@ -7728,19 +7731,6 @@
               }
             },
             {
-              "name": "OptimizeWhereClause",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Keyword(Where)"
-                  },
-                  {
-                    "nonTerminal": "Expression"
-                  }
-                ]
-              }
-            },
-            {
               "name": "Option(AliasClause)",
               "node": {
                 "optional": {
@@ -8205,14 +8195,6 @@
               }
             },
             {
-              "name": "Option(OptimizeWhereClause)",
-              "node": {
-                "optional": {
-                  "nonTerminal": "OptimizeWhereClause"
-                }
-              }
-            },
-            {
               "name": "Option(OrderDirection)",
               "node": {
                 "optional": {
@@ -8449,6 +8431,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Keyword(Escaped), Keyword(By), StringLiteral)"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(Keyword(Except), Operator(LeftParenthesis), Sequence(Identifier, Operator(Comma)), Operator(RightParenthesis)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Except), Operator(LeftParenthesis), Sequence(Identifier, Operator(Comma)), Operator(RightParenthesis))"
                 }
               }
             },
@@ -10369,7 +10359,7 @@
                         "nonTerminal": "Option(Keyword(Full))"
                       },
                       {
-                        "nonTerminal": "Option(OptimizeWhereClause)"
+                        "nonTerminal": "Option(WhereClause)"
                       },
                       {
                         "nonTerminal": "Option(ZOrderClause)"
@@ -12212,6 +12202,25 @@
                   },
                   {
                     "nonTerminal": "StringLiteral"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Keyword(Except), Operator(LeftParenthesis), Sequence(Identifier, Operator(Comma)), Operator(RightParenthesis))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Except)"
+                  },
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(Identifier, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
                   }
                 ]
               }

@@ -18,6 +18,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -49,7 +52,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after replace_distinct_aggregate:
-    Aggregate: groupBy=[[#2]], aggr=[[]]
+    Aggregate: groupBy=[[t.#2]], aggr=[[]]
       Projection: t.#1 AS #2
         SubqueryAlias: t
           Projection: #0 AS #1
@@ -60,6 +63,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -114,15 +123,15 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Aggregate: groupBy=[[#2]], aggr=[[]]
+    Aggregate: groupBy=[[t.#2]], aggr=[[]]
       Projection: t.#1 AS #2
         SubqueryAlias: t
           Projection: column1 AS #1
             Values: (Binary("1")), (Binary("1"))
 
     logical_plan after rewrite_binary_grouping:
-    Projection: CAST(CAST(#2 || LargeBinary("") AS BinaryView) AS Binary) AS #2
-      Aggregate: groupBy=[[CAST(#2 AS LargeBinary) AS #2]], aggr=[[]]
+    Projection: CAST(CAST(t.#2 || LargeBinary("") AS BinaryView) AS Binary) AS #2
+      Aggregate: groupBy=[[CAST(t.#2 AS LargeBinary) AS #2]], aggr=[[]]
         Projection: t.#1 AS #2
           SubqueryAlias: t
             Projection: column1 AS #1
@@ -153,6 +162,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -216,8 +231,8 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Projection: CAST(CAST(#2 || LargeBinary("") AS BinaryView) AS Binary) AS #2
-      Aggregate: groupBy=[[CAST(#2 AS LargeBinary) AS #2]], aggr=[[]]
+    Projection: CAST(CAST(t.#2 || LargeBinary("") AS BinaryView) AS Binary) AS #2
+      Aggregate: groupBy=[[CAST(t.#2 AS LargeBinary) AS #2]], aggr=[[]]
         Projection: t.#1 AS #2
           SubqueryAlias: t
             Projection: column1 AS #1
@@ -273,6 +288,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -351,6 +369,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:

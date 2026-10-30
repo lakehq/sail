@@ -106,10 +106,12 @@ def test_parquet_merges_view_and_plain_columns(spark, tmp_path, force_view_types
     ]
 
 
-def test_parquet_read_write_basic(spark, sample_df, tmp_path):
-    path = str(tmp_path / "parquet_basic")
-    sample_df.write.parquet(path, mode="overwrite")
-    read_df = spark.read.parquet(path)
+@pytest.mark.parametrize("file_uri", [False, True], ids=["native-path", "file-uri"])
+def test_parquet_read_write_basic(spark, sample_df, tmp_path, file_uri):
+    path = tmp_path / "parquet % # space"
+    sample_df.write.parquet(str(path), mode="overwrite")
+    # Path.as_uri() has no trailing slash even though the path is a directory.
+    read_df = spark.read.parquet(path.as_uri() if file_uri else str(path))
     assert sample_df.count() == read_df.count()
     assert sample_df.schema == read_df.schema
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)

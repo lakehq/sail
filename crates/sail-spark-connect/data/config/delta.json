@@ -1,5 +1,9 @@
 [
   {
+    "key": "spark.databricks.delta.commitInfo.userMetadata",
+    "doc": "Optional user-defined metadata to include in Delta commitInfo."
+  },
+  {
     "key": "spark.databricks.delta.optimize.maxDeletedRowsRatio",
     "doc": "OPTIMIZE rewrites files whose deleted-row ratio exceeds this threshold.",
     "defaultValue": "0.05"

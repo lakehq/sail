@@ -62,8 +62,12 @@ impl PlanResolver<'_> {
             join_criteria,
             join_data_type,
         } = join;
-        let left = self.resolve_query_plan(*left, state).await?;
-        let right = self.resolve_query_plan(*right, state).await?;
+        let left = self
+            .resolve_query_plan_with_hidden_fields(*left, state)
+            .await?;
+        let right = self
+            .resolve_query_plan_with_hidden_fields(*right, state)
+            .await?;
         let join_type = match join_type {
             spec::JoinType::Inner => Some(JoinType::Inner),
             spec::JoinType::LeftOuter => Some(JoinType::Left),
@@ -78,7 +82,7 @@ impl PlanResolver<'_> {
 
         match (join_type, join_criteria) {
             (None, Some(_)) => Err(PlanError::invalid("cross join with join criteria")),
-            // When the join criteria are not specified, any join type has the semantics of a cross join.
+            // An absent condition is TRUE, but still preserves the requested join type.
             (Some(_), None) | (None, None) => {
                 if join_data_type.is_some() {
                     return Err(PlanError::invalid("cross join with join data type"));
@@ -90,7 +94,14 @@ impl PlanResolver<'_> {
                         IMPLICIT_CARTESIAN_PRODUCT_MSG.to_string(),
                     ));
                 }
-                Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
+                match join_type {
+                    None | Some(JoinType::Inner) => {
+                        Ok(LogicalPlanBuilder::from(left).cross_join(right)?.build()?)
+                    }
+                    Some(join_type) => Ok(LogicalPlanBuilder::from(left)
+                        .join_on(right, join_type, Some(datafusion_expr::lit(true)))?
+                        .build()?),
+                }
             }
             (Some(join_type), Some(spec::JoinCriteria::On(condition))) => {
                 // Use Inner to build the schema for resolving the ON condition,
@@ -149,9 +160,15 @@ impl PlanResolver<'_> {
             (Some(join_type), Some(spec::JoinCriteria::Natural)) => {
                 let left_names = Self::get_field_names(left.schema(), state)?;
                 let right_names = Self::get_field_names(right.schema(), state)?;
+                let mut seen = std::collections::HashSet::new();
                 let using = left_names
                     .iter()
-                    .filter(|name| right_names.contains(name))
+                    .filter(|name| {
+                        right_names
+                            .iter()
+                            .any(|right| self.merge_name_key(name) == self.merge_name_key(right))
+                    })
+                    .filter(|name| seen.insert(self.merge_name_key(name)))
                     .map(|x| x.clone().into())
                     .collect::<Vec<_>>();
                 // We let the column resolver return errors when either plan contains
@@ -178,8 +195,17 @@ impl PlanResolver<'_> {
         using
             .into_iter()
             .map(|name| {
-                let left_column = self.resolve_one_column(left.schema(), name.as_ref(), state)?;
-                let right_column = self.resolve_one_column(right.schema(), name.as_ref(), state)?;
+                // USING chooses the first matching output, even for duplicate names.
+                let resolve = |plan: &LogicalPlan| {
+                    self.resolve_column_candidates(plan.schema(), name.as_ref(), None, state)
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| {
+                            PlanError::analysis(format!("Cannot resolve USING column {name:?}"))
+                        })
+                };
+                let left_column = resolve(left)?;
+                let right_column = resolve(right)?;
                 Ok((name.into(), (left_column, right_column)))
             })
             .collect()
@@ -238,15 +264,19 @@ impl PlanResolver<'_> {
             .columns()
             .into_iter()
             .map(|col| {
-                if left_columns.iter().any(|x| x.name == col.name)
-                    || right_columns.iter().any(|x| x.name == col.name)
-                {
+                if left_columns.iter().chain(&right_columns).any(|x| {
+                    state
+                        .get_field_info(&x.name)
+                        .ok()
+                        .zip(state.get_field_info(&col.name).ok())
+                        .is_some_and(|(key, candidate)| key.origin() == candidate.origin())
+                }) {
                     let info = state.get_field_info(col.name())?.clone();
                     let field_id = state.register_hidden_field_name(info.name());
                     for plan_id in info.plan_ids() {
                         state.register_plan_id_for_field(&field_id, plan_id)?;
                     }
-                    Ok(Expr::Column(col).alias(field_id))
+                    Ok(Expr::Column(col.clone()).alias_qualified(col.relation, field_id))
                 } else {
                     Ok(Expr::Column(col))
                 }
@@ -259,8 +289,11 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|(name, (left, right))| {
                         let column = if uses_right { right } else { left };
-                        Expr::Column(column).alias(state.register_field_name(name))
+                        Ok(Expr::Column(column.clone())
+                            .alias(state.register_identity_field(name, column.name())?))
                     })
+                    .collect::<PlanResult<Vec<_>>>()?
+                    .into_iter()
                     .chain(hidden_columns);
                 builder.project(projections)?
             }
@@ -320,8 +353,11 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|(name, (left, right))| {
                         let col = if uses_right { right } else { left };
-                        Expr::Column(col).alias(state.register_field_name(name))
+                        Ok(Expr::Column(col.clone())
+                            .alias(state.register_identity_field(name, col.name())?))
                     })
+                    .collect::<PlanResult<Vec<_>>>()?
+                    .into_iter()
                     .chain(hidden_columns);
                 builder.project(projections)?
             }

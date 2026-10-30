@@ -935,21 +935,77 @@ pub fn try_type_union_resolution_with_struct(data_types: &[DataType]) -> Result<
 /// [`comparison_coercion`], which prefers numeric types so that ordering and
 /// equality follow numeric semantics.
 pub fn type_union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    type_union_coercion_inner(lhs_type, rhs_type, type_union_coercion)
+}
+
+/// Spark set operations unify numeric/string pairs numerically in ANSI mode and
+/// keep timestamps in microseconds, including inside arrays and structs. LTZ/NTZ
+/// inputs must first be aligned using the session's timestamp cast semantics.
+pub fn set_operation_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    ansi_mode: bool,
+    session_timezone: &str,
+) -> Option<DataType> {
+    use DataType::*;
+
+    let string_other = match (lhs_type, rhs_type) {
+        (string @ (Utf8 | LargeUtf8 | Utf8View), other)
+        | (other, string @ (Utf8 | LargeUtf8 | Utf8View)) => Some((string, other)),
+        _ => None,
+    };
+    if let Some((string, other)) = string_other {
+        match other {
+            _ if ansi_mode && other.is_integer() => return Some(Int64),
+            _ if ansi_mode && other.is_numeric() => return Some(Float64),
+            Boolean if ansi_mode => return Some(Boolean),
+            Date32 | Date64 | Timestamp(_, _) if !ansi_mode => return Some(string.clone()),
+            Date32 | Date64 => return Some(Date32),
+            Timestamp(_, timezone) => {
+                return Some(Timestamp(
+                    Microsecond,
+                    timezone.as_ref().map(|_| session_timezone.into()),
+                ));
+            }
+            _ => {}
+        }
+    }
+    match (lhs_type, rhs_type) {
+        (Date32 | Date64, Timestamp(_, timezone)) | (Timestamp(_, timezone), Date32 | Date64) => {
+            Some(Timestamp(
+                Microsecond,
+                timezone.as_ref().map(|_| session_timezone.into()),
+            ))
+        }
+        _ => type_union_coercion_inner(lhs_type, rhs_type, |left, right| {
+            set_operation_coercion(left, right, ansi_mode, session_timezone)
+        }),
+    }
+}
+
+fn type_union_coercion_inner<F>(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     if lhs_type.equals_datatype(rhs_type) {
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, type_union_coercion))
-        .or_else(|| ree_coercion(lhs_type, rhs_type, true, type_union_coercion))
+        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, coerce_fn))
+        .or_else(|| ree_coercion(lhs_type, rhs_type, true, coerce_fn))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| list_coercion(lhs_type, rhs_type, type_union_coercion))
+        .or_else(|| list_coercion(lhs_type, rhs_type, coerce_fn))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_union_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
-        .or_else(|| struct_coercion(lhs_type, rhs_type, type_union_coercion))
-        .or_else(|| map_coercion(lhs_type, rhs_type, type_union_coercion))
+        .or_else(|| struct_coercion(lhs_type, rhs_type, coerce_fn))
+        .or_else(|| map_coercion(lhs_type, rhs_type, coerce_fn))
 }
 
 /// Coerce `lhs_type` and `rhs_type` to a common type for comparison

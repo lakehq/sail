@@ -39,6 +39,7 @@ use sail_function::aggregate::theta_sketch::{
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::vector::avg::VectorAvg;
+use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
@@ -154,6 +155,23 @@ fn spark_sum(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             distinct,
         },
     })))
+}
+
+fn vector_sum(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    if input.distinct {
+        return Err(PlanError::unsupported(
+            "DISTINCT window functions are not supported: vector_sum",
+        ));
+    }
+    Ok(aggregate_udf_window_expr(
+        Arc::new(AggregateUDF::from(VectorSum::new())),
+        input.arguments,
+        input.partition_by,
+        input.order_by,
+        input.window_frame,
+        input.ignore_nulls,
+        false,
+    ))
 }
 
 fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
@@ -849,6 +867,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             "vector_avg",
             F::aggregate(|| Arc::new(AggregateUDF::from(VectorAvg::new()))),
         ),
+        ("vector_sum", F::custom(vector_sum)),
     ]
 }
 
