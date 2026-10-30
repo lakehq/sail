@@ -9,6 +9,7 @@ use datafusion::logical_expr::StringifiedPlan;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_common_datafusion::session::config::SessionConfigProvider;
+use sail_lineage::LineageSessionOptions;
 use sail_plan::config::PlanConfig;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
@@ -110,6 +111,14 @@ impl SparkSession {
                 Ok(ConfigKeyValue { key, value })
             })
             .collect::<SparkResult<Vec<_>>>()
+    }
+
+    /// Returns the lineage options set by the client.
+    pub(crate) fn lineage_options(&self) -> SparkResult<LineageSessionOptions> {
+        let state = self.state.lock()?;
+        Ok(LineageSessionOptions::from_spark_config(|key| {
+            state.config.get_option(key).map(|x| x.to_string())
+        }))
     }
 
     pub(crate) fn get_config_option(&self, keys: Vec<String>) -> SparkResult<Vec<ConfigKeyValue>> {

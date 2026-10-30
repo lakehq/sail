@@ -32,6 +32,7 @@ sail-system-store = { path = "../sail-system-store" }
 sail-object-store = { path = "../sail-object-store" }
 sail-cache = { path = "../sail-cache" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+sail-lineage = { path = "../sail-lineage" }
 
 async-trait = { workspace = true }
 readonly = { workspace = true }

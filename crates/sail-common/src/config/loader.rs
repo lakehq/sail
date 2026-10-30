@@ -59,6 +59,15 @@ where
     }
 }
 
+pub fn deserialize_non_empty_secret<'de, D>(
+    deserializer: D,
+) -> Result<Option<secrecy::SecretString>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(deserialize_non_empty_string(deserializer)?.map(secrecy::SecretString::from))
+}
+
 pub fn deserialize_non_zero<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,

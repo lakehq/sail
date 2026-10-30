@@ -39,14 +39,15 @@ fn tokenize<'a>(
 }
 
 macro_rules! parse {
-    ($input:ident, $parser:ident $(,)?) => {{
-        let options = ParserOptions::default();
+    ($input:ident, $parser:ident $(,)?) => {{ parse!($input, $parser, &ParserOptions::default()) }};
+    ($input:ident, $parser:ident, $options:expr $(,)?) => {{
+        let options: &ParserOptions = $options;
         let length = $input.len();
-        let tokens = tokenize($input, &options)?;
+        let tokens = tokenize($input, options)?;
         let tokens = tokens
             .as_slice()
             .map((length..length).into(), map_parser_input);
-        let parser = $parser::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
+        let parser = $parser::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(options);
         parser.parse(tokens).into_result().map_err(SqlError::parser)
     }};
 }
@@ -108,6 +109,15 @@ pub fn parse_native_config_value(s: &str) -> SqlResult<String> {
 
 pub fn parse_statements(s: &str) -> SqlResult<Vec<Statement>> {
     parse!(s, create_parser)
+}
+
+/// Parses a SQL string into statements with custom parser options,
+/// e.g. for SQL that is not in the Spark SQL dialect.
+pub fn parse_statements_with_options(
+    s: &str,
+    options: &ParserOptions,
+) -> SqlResult<Vec<Statement>> {
+    parse!(s, create_parser, options)
 }
 
 /// Parses a SQL string containing exactly one statement into an AST.

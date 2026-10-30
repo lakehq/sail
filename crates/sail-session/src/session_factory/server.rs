@@ -17,6 +17,7 @@ use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
+use sail_lineage::LineageService;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_telemetry::telemetry::global_system_store_reader;
 
@@ -33,6 +34,8 @@ pub struct ServerSessionInfo {
     pub user_id: String,
     pub session_manager: ActorHandle<SessionManagerActor>,
     pub job_runner: Option<Box<dyn JobRunner>>,
+    /// The lineage service shared by all sessions, if lineage is enabled.
+    pub lineage_service: Option<Arc<LineageService>>,
 }
 
 pub trait ServerSessionMutator: Send {
@@ -125,6 +128,9 @@ impl ServerSessionFactory {
             )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
+        if let Some(service) = &info.lineage_service {
+            config = config.with_extension(Arc::clone(service));
+        }
         self.apply_execution_config(&mut config)?;
         super::apply_parquet_config(
             &mut config.options_mut().execution.parquet,

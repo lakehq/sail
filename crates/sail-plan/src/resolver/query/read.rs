@@ -217,6 +217,11 @@ impl PlanResolver<'_> {
                     ],
                     read_case_sensitive: self.config.case_sensitive,
                 };
+                let lineage = self.lineage_source_datasets(
+                    &info,
+                    &format,
+                    Some(catalog_reference.as_slice()),
+                );
                 let table_source = match lake_relation {
                     Some((relation_provider, relation)) => {
                         relation_provider
@@ -230,6 +235,7 @@ impl PlanResolver<'_> {
                             .await?
                     }
                 };
+                self.register_lineage_source(&table_source, lineage);
                 self.resolve_table_source_with_rename(
                     table_source,
                     table_reference,
@@ -579,11 +585,13 @@ impl PlanResolver<'_> {
             }],
             read_case_sensitive: self.config.case_sensitive,
         };
+        let lineage = self.lineage_source_datasets(&info, &format, None);
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let table_source = registry
             .get_data_source(&format)?
             .create_source(&self.ctx.state(), info)
             .await?;
+        self.register_lineage_source(&table_source, lineage);
         self.resolve_table_source_with_rename(
             table_source,
             UNNAMED_TABLE,
@@ -639,7 +647,10 @@ impl PlanResolver<'_> {
                 ))
             })?;
             let names = state.register_fields(schema.fields());
-            provider_as_source(Arc::new(RenameTableProvider::try_new(provider, names)?))
+            let wrapper =
+                provider_as_source(Arc::new(RenameTableProvider::try_new(provider, names)?));
+            self.register_lineage_source_alias(&table_source, &wrapper);
+            wrapper
         } else {
             table_source
         };
