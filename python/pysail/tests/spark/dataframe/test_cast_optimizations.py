@@ -1,9 +1,14 @@
+import operator
+import struct
 from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from pyspark.errors import SparkRuntimeException
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import FloatType, IntegerType, StructField, StructType
 
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
@@ -317,3 +322,156 @@ def test_mixed_arithmetic_keeps_analyzed_protocol_arrow_nullability_and_metadata
         assert table.column("value").to_pylist() == [33554433.0] + ([None] if nullable else [])
         assert table.column("k").to_pylist() == [16777216.0] + ([None] if nullable else [])
         assert table.column("g").to_pylist() == [16777217] + ([None] if nullable else [])
+
+
+def _predicate_source(spark, tmp_path, unsigned, *, memory=False):
+    bits = [0, 0x80000000, 0x3FA00000, 0x4B800000, 0x7F800001, 0xFFC01234, 0x7F800000, 0xFF800000, None]
+    validity = bytes([0xFF, 0])
+    values = pa.Array.from_buffers(
+        pa.float32(),
+        len(bits),
+        [pa.py_buffer(validity), pa.py_buffer(b"".join(struct.pack("<I", x or 0) for x in bits))],
+    )
+    integers = [0, 0, 2, 16777217, 0, 1, (1 << 64) - 1 if unsigned else (1 << 63) - 1, None, 5]
+    table = pa.table(
+        {
+            "seq": pa.array(range(len(bits)), type=pa.int32()),
+            "k": values,
+            "g": pa.array(integers, type=pa.uint64() if unsigned else pa.int64()),
+        }
+    )
+    if memory:
+        assert not unsigned
+        return spark.createDataFrame(table.to_pylist(), "seq int,k float,g bigint")
+    path = tmp_path / f"predicate-source-{unsigned}.parquet"
+    pq.write_table(table, path)
+    return spark.read.parquet(str(path))
+
+
+def _predicate_reference(spark, source, arithmetic, path):
+    # Materialization prevents the reference comparison from fusing with arithmetic.
+    table, _ = _to_table(source.select("seq", arithmetic.alias("value")))
+    pq.write_table(table, path)
+    return spark.read.parquet(str(path))
+
+
+def _assert_predicate_rows_and_schema(actual, expected):
+    actual_table, actual_protocol = _to_table(actual)
+    expected_table, expected_protocol = _to_table(expected)
+    assert actual.schema == actual_protocol == expected.schema == expected_protocol
+    assert actual_table.schema.equals(expected_table.schema, check_metadata=True)
+    assert actual_table.to_pylist() == expected_table.to_pylist()
+    assert actual_table.column_names == actual.columns == expected.columns
+
+
+_PREDICATE_COMPARISONS = [
+    ("eq", operator.eq),
+    ("ne", operator.ne),
+    ("lt", operator.lt),
+    ("le", operator.le),
+    ("gt", operator.gt),
+    ("ge", operator.ge),
+]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Compare Sail's native NaN payload ordering and unsigned input types")
+@pytest.mark.parametrize(
+    ("arithmetic_name", "arithmetic_operator"), [("add", "+"), ("subtract", "-"), ("multiply", "*")]
+)
+@pytest.mark.parametrize(("comparison_name", "compare"), _PREDICATE_COMPARISONS)
+@pytest.mark.parametrize("literal_left", [False, True])
+def test_mixed_predicates_match_native_comparisons(
+    spark, tmp_path, arithmetic_name, arithmetic_operator, comparison_name, compare, literal_left
+):
+    arithmetic = F.expr(f"CAST(k AS DOUBLE) {arithmetic_operator} CAST(g AS DOUBLE)")
+    swapped = {"eq": "eq", "ne": "ne", "lt": "gt", "le": "ge", "gt": "lt", "ge": "le"}
+    suffix = swapped[comparison_name] if literal_left else comparison_name
+    with _configuration(spark, **{"spark.sql.ansi.enabled": "true"}):
+        for unsigned in [False, True]:
+            source = _predicate_source(spark, tmp_path, unsigned)
+            native = _predicate_reference(spark, source, arithmetic, tmp_path / f"native-{unsigned}.parquet")
+            bound = F.lit(100.0)
+            predicate = compare(bound, arithmetic) if literal_left else compare(arithmetic, bound)
+            reference = compare(bound, F.col("value")) if literal_left else compare(F.col("value"), bound)
+            actual = source.select("seq", predicate.alias("matched")).orderBy("seq")
+            expected = native.select("seq", reference.alias("matched")).orderBy("seq")
+            _assert_predicate_rows_and_schema(actual, expected)
+            # Parquet can absorb projections; the retained FilterExec is the eligible fusion site.
+            filtered = source.filter(predicate).select("seq").orderBy("seq")
+            native_filtered = native.filter(reference).select("seq").orderBy("seq")
+            _assert_predicate_rows_and_schema(filtered, native_filtered)
+            plan = filtered._explain_string(mode="formatted")  # noqa: SLF001
+            assert f"mixed_numeric_{arithmetic_name}_{suffix}(" in plan
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Preserve Sail's native NaN payload ordering across the physical codec")
+def test_mixed_predicate_literal_bits_and_nulls(spark, tmp_path):
+    arithmetic = F.expr("CAST(k AS DOUBLE) - CAST(g AS DOUBLE)")
+    source = _predicate_source(spark, tmp_path, False, memory=True)
+    values = source.select("seq", arithmetic.alias("value"))
+    table, _ = _to_table(values)
+    native = spark.createDataFrame(table.to_pylist(), values.schema)
+    thresholds = [
+        -0.0,
+        struct.unpack("<d", struct.pack("<Q", 0x7FF8000020000000))[0],
+        struct.unpack("<d", struct.pack("<Q", 0xFFF8000000001234))[0],
+        None,
+    ]
+    for threshold in thresholds:
+        bound = F.lit(threshold).cast("double")
+        for name, compare in _PREDICATE_COMPARISONS:
+            for literal_left in [False, True]:
+                predicate = compare(bound, arithmetic) if literal_left else compare(arithmetic, bound)
+                reference = compare(bound, F.col("value")) if literal_left else compare(F.col("value"), bound)
+                actual = source.select("seq", predicate.alias("matched")).orderBy("seq")
+                expected = native.select("seq", reference.alias("matched")).orderBy("seq")
+                _assert_predicate_rows_and_schema(actual, expected)
+                if threshold is not None and name == "eq":
+                    assert "mixed_numeric_subtract_eq(" in actual._explain_string(mode="formatted")  # noqa: SLF001
+                # NULL comparisons can legitimately fold away before physical specialization.
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Verify Sail physical specialization fallback and public fields")
+def test_mixed_predicate_fallbacks_preserve_values_and_fields(spark, tmp_path):
+    rows = [(0, 99.0, 1, 100.0), (1, -0.0, 2, -0.0), (2, None, 3, None), (3, 1.0, None, 1.0)]
+    with _view(spark, "predicate_fallbacks", rows, "seq int,k float,g int,bound double"):
+        source_path = tmp_path / "fallback-source.parquet"
+        table, _ = _to_table(spark.table("predicate_fallbacks"))
+        pq.write_table(table, source_path)
+        for index, (ansi, arithmetic, comparison, reference) in enumerate(
+            [
+                (False, "k+g", "(k+g)>100", "value>100"),
+                (
+                    True,
+                    "CAST(k AS DOUBLE)/CAST(g AS DOUBLE)",
+                    "(CAST(k AS DOUBLE)/CAST(g AS DOUBLE))>100D",
+                    "value>100D",
+                ),
+                (
+                    True,
+                    "CAST(k AS DOUBLE)+CAST(g AS DOUBLE)",
+                    "(CAST(k AS DOUBLE)+CAST(g AS DOUBLE))>bound",
+                    "value>bound",
+                ),
+                (
+                    True,
+                    "CAST(k AS DOUBLE)+CAST(g AS DOUBLE)",
+                    "(CAST(k AS DOUBLE)+CAST(g AS DOUBLE))<=>100D",
+                    "value<=>100D",
+                ),
+            ]
+        ):
+            with _configuration(spark, **{"spark.sql.ansi.enabled": str(ansi).lower()}):
+                source = spark.read.parquet(str(source_path))
+                table, _ = _to_table(source.selectExpr("seq", "bound", f"{arithmetic} AS value"))
+                path = tmp_path / f"fallback-native-{index}.parquet"
+                pq.write_table(table, path)
+                actual = source.selectExpr("seq", f"{comparison} AS matched").orderBy("seq")
+                expected = spark.read.parquet(str(path)).selectExpr("seq", f"{reference} AS matched").orderBy("seq")
+                _assert_predicate_rows_and_schema(actual, expected)
+                plan = actual._explain_string(mode="formatted")  # noqa: SLF001
+                assert not any(
+                    f"mixed_numeric_{operation}_{suffix}(" in plan
+                    for operation in ["add", "subtract", "multiply"]
+                    for suffix, _ in _PREDICATE_COMPARISONS
+                )
