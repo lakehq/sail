@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, MapArray, StructArray};
+use datafusion::arrow::array::{Array, ArrayRef, MapArray, StructArray, new_empty_array};
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
@@ -64,7 +64,13 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         Ok(LambdaParametersProgress::Complete(vec![vec![
             Arc::new(left_key.as_ref().clone().with_nullable(false)),
             Arc::new(left_value.as_ref().clone().with_nullable(true)),
-            Arc::new(map_fields(self.name(), right)?.1.as_ref().clone().with_nullable(true)),
+            Arc::new(
+                map_fields(self.name(), right)?
+                    .1
+                    .as_ref()
+                    .clone()
+                    .with_nullable(true),
+            ),
         ]]))
     }
 
@@ -116,7 +122,11 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
             .into_array(keys.len())?;
 
         let DataType::Map(entries_field, ordered) = args.return_field.data_type() else {
-            return exec_err!("{} expected map return type, got {}", self.name(), args.return_field);
+            return exec_err!(
+                "{} expected map return type, got {}",
+                self.name(),
+                args.return_field
+            );
         };
         let DataType::Struct(fields) = entries_field.data_type() else {
             return exec_err!("{} expected map entries struct", self.name());
@@ -179,7 +189,10 @@ fn map_fields_from_type(
         return plan_err!("{name} expected a map as the {position} argument, got {data_type}");
     };
     let DataType::Struct(fields) = entries.data_type() else {
-        return plan_err!("{name} expected map entries struct, got {}", entries.data_type());
+        return plan_err!(
+            "{name} expected map entries struct, got {}",
+            entries.data_type()
+        );
     };
     let field_refs = fields.iter().collect::<Vec<_>>();
     let [key, value] = field_refs.as_slice() else {
@@ -204,11 +217,21 @@ fn build_lambda_inputs(
     left: &MapArray,
     right: &MapArray,
     return_type: &DataType,
-) -> Result<(ArrayRef, ArrayRef, ArrayRef, OffsetBuffer<i32>, Option<NullBuffer>)> {
+) -> Result<(
+    ArrayRef,
+    ArrayRef,
+    ArrayRef,
+    OffsetBuffer<i32>,
+    Option<NullBuffer>,
+)> {
     let left_rows = left.offsets().len() - 1;
     let right_rows = right.offsets().len() - 1;
     if left_rows != right_rows {
-        return exec_err!("{name} expected map arguments with the same row count, got {} and {}", left_rows, right_rows);
+        return exec_err!(
+            "{name} expected map arguments with the same row count, got {} and {}",
+            left_rows,
+            right_rows
+        );
     }
     let DataType::Map(entries_field, _) = return_type else {
         return exec_err!("{name} expected map return type, got {return_type}");
@@ -275,19 +298,29 @@ fn build_lambda_inputs(
             left_values.push(left_value);
             right_values.push(right_value);
             current = current.checked_add(1).ok_or_else(|| {
-                datafusion_common::DataFusionError::Execution("map_zip_with map is too large".to_owned())
+                datafusion_common::DataFusionError::Execution(
+                    "map_zip_with map is too large".to_owned(),
+                )
             })?;
         }
         offsets.push(current);
     }
 
     Ok((
-        cast_array(ScalarValue::iter_to_array(keys)?, &key_type)?,
-        cast_array(ScalarValue::iter_to_array(left_values)?, &left_value_type)?,
-        cast_array(ScalarValue::iter_to_array(right_values)?, &right_value_type)?,
+        scalar_values_to_array(keys, &key_type)?,
+        scalar_values_to_array(left_values, &left_value_type)?,
+        scalar_values_to_array(right_values, &right_value_type)?,
         OffsetBuffer::new(offsets.into()),
         Some(NullBuffer::from(nulls)),
     ))
+}
+
+fn scalar_values_to_array(values: Vec<ScalarValue>, data_type: &DataType) -> Result<ArrayRef> {
+    if values.is_empty() {
+        Ok(new_empty_array(data_type))
+    } else {
+        cast_array(ScalarValue::iter_to_array(values)?, data_type)
+    }
 }
 
 fn cast_array(array: ArrayRef, data_type: &DataType) -> Result<ArrayRef> {
@@ -302,13 +335,19 @@ fn cast_scalar(value: ScalarValue, data_type: &DataType) -> Result<ScalarValue> 
     if value.data_type() == *data_type {
         Ok(value)
     } else {
-        ScalarValue::try_from_array(&cast(&ScalarValue::iter_to_array(vec![value])?, data_type)?, 0)
+        ScalarValue::try_from_array(
+            &cast(&ScalarValue::iter_to_array(vec![value])?, data_type)?,
+            0,
+        )
     }
 }
 
 fn repeat_captures(arrays: &[ArrayRef], offsets: &OffsetBuffer<i32>) -> Result<Vec<ArrayRef>> {
     let indices = offsets_to_row_indices(offsets);
-    arrays.iter().map(|array| Ok(take(array, &indices, None)?)).collect()
+    arrays
+        .iter()
+        .map(|array| Ok(take(array, &indices, None)?))
+        .collect()
 }
 
 fn offsets_to_row_indices(offsets: &OffsetBuffer<i32>) -> datafusion::arrow::array::UInt32Array {

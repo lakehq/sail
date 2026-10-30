@@ -4,7 +4,7 @@
 /// shorter array are represented by typed nulls.
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, ListArray, new_null_array};
+use datafusion::arrow::array::{Array, ArrayRef, ListArray, new_null_array};
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{concat, take_arrays};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
@@ -103,7 +103,9 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         let right_param = || Ok(Arc::clone(&right_values));
         let params: [&dyn Fn() -> Result<ArrayRef>; 2] = [&left_param, &right_param];
         let output = lambda
-            .evaluate(&params, |arrays| Ok(take_arrays(arrays, &row_numbers, None)?))?
+            .evaluate(&params, |arrays| {
+                Ok(take_arrays(arrays, &row_numbers, None)?)
+            })?
             .into_array(left_values.len())?;
 
         let DataType::List(element_field) = args.return_field.data_type() else {
@@ -195,15 +197,15 @@ fn build_zipped_values(
         let left_start = left_list.offsets()[row] as usize;
         let left_len = (left_list.offsets()[row + 1] - left_list.offsets()[row]) as usize;
         let right_start = right_list.offsets()[row] as usize;
-        let right_len =
-            (right_list.offsets()[row + 1] - right_list.offsets()[row]) as usize;
+        let right_len = (right_list.offsets()[row + 1] - right_list.offsets()[row]) as usize;
         let length = left_len.max(right_len);
         let left_part = left_values.slice(left_start, left_len);
         let right_part = right_values.slice(right_start, right_len);
         left_parts.push(pad_part(&left_part, length)?);
         right_parts.push(pad_part(&right_part, length)?);
-        let length = i32::try_from(length)
-            .map_err(|_| datafusion_common::DataFusionError::Execution("zip_with array is too large".to_owned()))?;
+        let length = i32::try_from(length).map_err(|_| {
+            datafusion_common::DataFusionError::Execution("zip_with array is too large".to_owned())
+        })?;
         total = total.checked_add(length).ok_or_else(|| {
             datafusion_common::DataFusionError::Execution("zip_with array is too large".to_owned())
         })?;
