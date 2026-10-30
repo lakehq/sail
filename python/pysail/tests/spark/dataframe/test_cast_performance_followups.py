@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 from pyspark.sql.types import FloatType, IntegerType, StructField, StructType
 
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 @contextmanager
@@ -27,6 +27,13 @@ def _view(spark, name, rows, schema):
         yield
     finally:
         spark.catalog.dropTempView(name)
+
+
+def _to_table(frame):
+    if pyspark_version() < (4,):
+        client = frame._session.client  # noqa: SLF001
+        return client.to_table(frame._plan.to_proto(client))  # noqa: SLF001
+    return frame._to_table()  # noqa: SLF001
 
 
 def _physical_plan(spark, query):
@@ -85,8 +92,7 @@ def test_mixed_arithmetic_count_filter_and_sum_shapes(spark, ansi):
         if not is_jvm_spark():
             assert ("mixed_numeric_add(" in _physical_plan(spark, count_query)) is ansi
             # The Rust aggregate test inspects actual SUM arguments; its display keeps the original name.
-            client = frame._session.client  # noqa: SLF001
-            table, execution_schema = client.to_table(frame._plan.to_proto(client))  # noqa: SLF001
+            table, execution_schema = _to_table(frame)
             assert execution_schema == frame.schema
             assert table.column_names == frame.columns
             assert table.schema.field(0).nullable == frame.schema[0].nullable
@@ -275,8 +281,7 @@ def test_mixed_arithmetic_keeps_analyzed_protocol_arrow_nullability_and_metadata
         assert frame.schema["value"].nullable is nullable
         assert frame.schema["k"].metadata == {"source": "raw-float"}
         assert frame.schema["g"].metadata == {"source": "raw-int"}
-        client = frame._session.client  # noqa: SLF001
-        table, execution_schema = client.to_table(frame._plan.to_proto(client))  # noqa: SLF001
+        table, execution_schema = _to_table(frame)
         assert (execution_schema or frame.schema).jsonValue() == frame.schema.jsonValue()
         assert table.schema.field("value").nullable is nullable
         assert table.column("value").to_pylist() == [33554433.0] + ([None] if nullable else [])
