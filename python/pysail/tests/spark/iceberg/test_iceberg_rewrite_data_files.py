@@ -3,6 +3,8 @@
 # Semantic coverage: Apache Iceberg 1.11.0 TestRewriteDataFilesAction
 # testBinPackWithV2PositionDeletes, testBinPackWithDVs, testBinPackWithDeleteAllData,
 # removeDanglingDVsFromDeleteManifest and testRewriteDataFilesPreservesLineage.
+from itertools import pairwise
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -34,6 +36,9 @@ from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
 
+FORMAT_VERSION_WITH_ROW_LINEAGE = 3
+FRAGMENTED_DELETE_STRIDE = 2
+
 
 def _rewrite(spark, name, options=None):
     options = options or {"rewrite-all": "true", "target-file-size-bytes": "1048576"}
@@ -56,9 +61,11 @@ def _delete_files(path):
         if manifest["content"] != "deletes":
             continue
         with AvroFile(_pyarrow_input_file(io, manifest["manifest-path"]), schema) as entries:
-            for entry in entries:
-                if entry[0] != ManifestEntryStatus.DELETED:
-                    files.append({field.name: entry[4][index] for index, field in enumerate(fields)})
+            files.extend(
+                {field.name: entry[4][index] for index, field in enumerate(fields)}
+                for entry in entries
+                if entry[0] != ManifestEntryStatus.DELETED
+            )
     return files
 
 
@@ -93,7 +100,7 @@ def _assert_rewrite_commit(path, before, old_files, result, removed_deletes):
         # V3 uses the new sequence for null lineage from upgraded files; V2 pins the starting sequence.
         expected_sequence = (
             snapshot["sequence-number"]
-            if after["format-version"] == 3
+            if after["format-version"] == FORMAT_VERSION_WITH_ROW_LINEAGE
             else _current_snapshot(before)["sequence-number"]
         )
         assert new_files[name].sequence_number == expected_sequence
@@ -192,7 +199,7 @@ def test_rewrite_thresholds_apply_after_group_size_limit(spark, tmp_path, files_
     spark.sql(f"CREATE TABLE {name} (id BIGINT) USING iceberg LOCATION '{location}'")
     try:
         for value in range(6):
-            spark.sql(f"INSERT INTO {name} VALUES ({value})")  # noqa: S608
+            spark.sql(f"INSERT INTO {name} VALUES ({value})")
         files = spark.table(f"{name}.files").select("file_path", "file_size_in_bytes").orderBy("file_path").collect()
         snapshots = spark.table(f"{name}.snapshots").orderBy("snapshot_id").collect()
         group_size = max(row.file_size_in_bytes for row in files) * files_per_group
@@ -219,8 +226,13 @@ def test_rewrite_thresholds_apply_after_group_size_limit(spark, tmp_path, files_
 
 
 @pytest.mark.parametrize("version", [2, 3], ids=["position-deletes", "deletion-vectors"])
-@pytest.mark.parametrize("delete_stride", [2, 1000], ids=["fragmented-fallback", "row-selection"])
+@pytest.mark.parametrize(
+    "delete_stride", [FRAGMENTED_DELETE_STRIDE, 1000], ids=["fragmented-fallback", "row-selection"]
+)
 def test_rewrite_mor_preserves_rows_lineage_history_and_subsequent_dml(spark, tmp_path, version, delete_stride):
+    selection_run_limit = 4096
+    merge_id = 8192
+    subsequent_update_id = 8193
     name = "rewrite_mor_lifecycle"
     path = tmp_path / name
     location = escape_sql_string_literal(str(path))
@@ -232,27 +244,28 @@ def test_rewrite_mor_preserves_rows_lineage_history_and_subsequent_dml(spark, tm
         spark.sql(f"INSERT INTO {name} SELECT /*+ COALESCE(1) */ id AS id, id AS value FROM range(18000)")
         original = _find_latest_metadata(path)
         parquets = [pq.ParquetFile(_local_file_path(file)) for file in _data_entries(path)]
-        assert parquets and all(parquet.metadata.num_row_groups > 1 for parquet in parquets)
+        assert parquets
+        assert all(parquet.metadata.num_row_groups > 1 for parquet in parquets)
         # Include the old positions removed by UPDATE/MERGE when checking the selection-run bound.
-        if delete_stride == 2:
+        if delete_stride == FRAGMENTED_DELETE_STRIDE:
             run_counts = []
             for parquet in parquets:
                 deleted = [
-                    row["id"] % delete_stride == 0 or row["id"] in (8191, 8192, 16383)
+                    row["id"] % delete_stride == 0 or row["id"] in (8191, merge_id, 16383)
                     for row in parquet.read(columns=["id"]).to_pylist()
                 ]
-                run_counts.append(1 + sum(left != right for left, right in zip(deleted, deleted[1:], strict=False)))
-            assert max(run_counts) > 4096
+                run_counts.append(1 + sum(left != right for left, right in pairwise(deleted)))
+            assert max(run_counts) > selection_run_limit
         spark.sql(f"UPDATE {name} SET value=-1 WHERE id IN (8191, 16383)").collect()
-        spark.sql(f"""MERGE INTO {name} t USING (SELECT 8192L AS id) s ON t.id=s.id
+        spark.sql(f"""MERGE INTO {name} t USING (SELECT {merge_id}L AS id) s ON t.id=s.id
             WHEN MATCHED THEN UPDATE SET value=-2""").collect()
         spark.sql(f"DELETE FROM {name} WHERE id % {delete_stride} = 0").collect()
         expected = [
-            (i, -1 if i in (8191, 16383) else -2 if i == 8192 else i) for i in range(18000) if i % delete_stride
+            (i, -1 if i in (8191, 16383) else -2 if i == merge_id else i) for i in range(18000) if i % delete_stride
         ]
         before = _find_latest_metadata(path)
         schema = spark.table(name).schema
-        lineage = _current_row_lineage(path) if version == 3 else None
+        lineage = _current_row_lineage(path) if version == FORMAT_VERSION_WITH_ROW_LINEAGE else None
         delete_paths = {file["file_path"] for file in _delete_files(path)}
         for _ in range(2):
             old_files = _data_entries(path)
@@ -263,7 +276,7 @@ def test_rewrite_mor_preserves_rows_lineage_history_and_subsequent_dml(spark, tm
             assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
             assert spark.table(name).schema == schema
             assert all(_local_file_path(name).exists() for name in delete_paths)
-            if version == 3:
+            if version == FORMAT_VERSION_WITH_ROW_LINEAGE:
                 assert _current_row_lineage(path) == lineage
                 assert _current_deletion_vectors(path) == {}
                 for entry in _data_entries(path).values():
@@ -277,20 +290,23 @@ def test_rewrite_mor_preserves_rows_lineage_history_and_subsequent_dml(spark, tm
                     )
         historical = spark.read.format("iceberg").option("snapshot-id", original["current-snapshot-id"]).load(str(path))
         assert [tuple(row) for row in historical.orderBy("id").collect()] == [(i, i) for i in range(18000)]
-        spark.sql(f"UPDATE {name} SET value=99 WHERE id=8193").collect()
-        expected = [(i, 99 if i == 8193 else value) for i, value in expected]
+        spark.sql(f"UPDATE {name} SET value=99 WHERE id={subsequent_update_id}").collect()
+        expected = [(i, 99 if i == subsequent_update_id else value) for i, value in expected]
         assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
         if lineage is not None:
             updated = _current_row_lineage(path)
-            assert updated[8193] == (lineage[8193][0], _find_latest_metadata(path)["last-sequence-number"])
-            assert {i: pair for i, pair in updated.items() if i != 8193} == {
-                i: pair for i, pair in lineage.items() if i != 8193
+            assert updated[subsequent_update_id] == (
+                lineage[subsequent_update_id][0],
+                _find_latest_metadata(path)["last-sequence-number"],
+            )
+            assert {i: pair for i, pair in updated.items() if i != subsequent_update_id} == {
+                i: pair for i, pair in lineage.items() if i != subsequent_update_id
             }
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
-@pytest.mark.parametrize("scope,evolution", [("shared", "none"), ("global", "reuse"), ("partition", "rename")])
+@pytest.mark.parametrize(("scope", "evolution"), [("shared", "none"), ("global", "reuse"), ("partition", "rename")])
 def test_rewrite_applies_equality_deletes_by_id_and_scope(spark, sql_catalog, scope, evolution):
     name = f"rewrite_equality_{scope}"
     table = sql_catalog.create_table(
@@ -361,7 +377,7 @@ def test_rewrite_all_deleted_file_commits_removal_and_then_is_noop(spark, tmp_pa
         assert old_files
         before = _find_latest_metadata(path)
         removed = _removed_delete_count(_delete_files(path), old_files)
-        assert removed == (1 if version == 3 else 0)
+        assert removed == (1 if version == FORMAT_VERSION_WITH_ROW_LINEAGE else 0)
         result = _rewrite(spark, name)
         after = _assert_rewrite_commit(path, before, old_files, result, removed)
         assert result.added_data_files_count == 0
@@ -400,7 +416,8 @@ def test_rewrite_selected_files_preserves_shared_puffin_siblings(spark, tmp_path
         shared_sizes = next(sizes for sizes in sizes_by_puffin.values() if len(sizes) > 1)
         cutoff = max(shared_sizes)
         selected = {name for name, entry in old_files.items() if entry.data_file.file_size_in_bytes < cutoff}
-        assert selected and selected < old_files.keys()
+        assert selected
+        assert selected < old_files.keys()
         selected_puffins = {file for file, _, _, target in blobs if target in selected}
         untouched_puffins = {file for file, _, _, target in blobs if target not in selected}
         assert selected_puffins & untouched_puffins
@@ -431,6 +448,8 @@ def test_rewrite_selected_files_preserves_shared_puffin_siblings(spark, tmp_path
 
 @pytest.mark.parametrize("with_deletes", [False, True])
 def test_rewrite_after_v3_upgrade_assigns_lineage_with_new_commit_sequence(spark, tmp_path, with_deletes):
+    deleted_id = 3
+    updated_id = 2
     name = "rewrite_upgrade"
     path = tmp_path / name
     spark.sql(f"""CREATE TABLE {name} (id BIGINT, value BIGINT) USING iceberg
@@ -441,11 +460,11 @@ def test_rewrite_after_v3_upgrade_assigns_lineage_with_new_commit_sequence(spark
         spark.sql(f"INSERT INTO {name} VALUES (3, 30), (4, 40)")
         legacy = _find_latest_metadata(path)
         if with_deletes:
-            spark.sql(f"DELETE FROM {name} WHERE id % 3 = 0").collect()
+            spark.sql(f"DELETE FROM {name} WHERE id % {deleted_id} = 0").collect()
         spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
         before = _find_latest_metadata(path)
         assert before["next-row-id"] == 0
-        expected = [(i, i * 10) for i in range(1, 5) if not with_deletes or i != 3]
+        expected = [(i, i * 10) for i in range(1, 5) if not with_deletes or i != deleted_id]
         old_files = _data_entries(path)
         removed = _removed_delete_count(_delete_files(path), old_files)
         result = _rewrite(spark, name)
@@ -463,11 +482,11 @@ def test_rewrite_after_v3_upgrade_assigns_lineage_with_new_commit_sequence(spark
         # A second rewrite materializes the inherited values; it must not assign them again.
         _rewrite(spark, name)
         assert _current_row_lineage(path) == lineage
-        spark.sql(f"UPDATE {name} SET value=99 WHERE id=2").collect()
+        spark.sql(f"UPDATE {name} SET value=99 WHERE id={updated_id}").collect()
         current = _current_row_lineage(path)
-        assert current[2] == (lineage[2][0], _find_latest_metadata(path)["last-sequence-number"])
+        assert current[updated_id] == (lineage[updated_id][0], _find_latest_metadata(path)["last-sequence-number"])
         assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == [
-            (i, 99 if i == 2 else value) for i, value in expected
+            (i, 99 if i == updated_id else value) for i, value in expected
         ]
         history = spark.read.format("iceberg").option("snapshot-id", legacy["current-snapshot-id"]).load(str(path))
         assert [tuple(row) for row in history.orderBy("id").collect()] == [(i, i * 10) for i in range(1, 5)]
@@ -477,6 +496,7 @@ def test_rewrite_after_v3_upgrade_assigns_lineage_with_new_commit_sequence(spark
 
 @pytest.mark.parametrize("nested", [False, True], ids=["scalar-key", "dropped-nested-key"])
 def test_partial_rewrite_respects_shared_global_equality_delete_sequences(spark, sql_catalog, nested):
+    older_batch_count = 2
     name = "rewrite_partial_equality"
     key_field = (
         NestedField(2, "payload", StructType(NestedField(3, "key", LongType()), NestedField(4, "kept", LongType())))
@@ -519,7 +539,7 @@ def test_partial_rewrite_respects_shared_global_equality_delete_sequences(spark,
                 )
                 rows.append(row)
                 # The delete applies only to the two older files, including the untouched partition.
-                if batch_index >= 2 or key not in (7, None):
+                if batch_index >= older_batch_count or key not in (7, None):
                     expected.append(
                         {**row, "payload": None if key is None else {"kept": row_id * 10}} if nested else row
                     )
@@ -544,7 +564,7 @@ def test_partial_rewrite_respects_shared_global_equality_delete_sequences(spark,
             delete_rows,
             [equality_id],
             partition_spec=global_spec,
-            data_sequence_number=sequences[2],
+            data_sequence_number=sequences[older_batch_count],
             assign_root_ids=not nested,
         )
         spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
@@ -558,7 +578,7 @@ def test_partial_rewrite_respects_shared_global_equality_delete_sequences(spark,
         assert all(old_files[file].data_file.file_size_in_bytes < cutoff for file in selected)
         old_deletes = _current_manifest_entries(path, ManifestContent.DELETES)
         assert len(old_deletes) == 1
-        assert old_deletes[0].sequence_number == sequences[2]
+        assert old_deletes[0].sequence_number == sequences[older_batch_count]
         before = _find_latest_metadata(path)
         schema = spark.table(name).schema
         expected.sort(key=lambda row: row["id"])
@@ -595,13 +615,15 @@ def test_partial_rewrite_respects_shared_global_equality_delete_sequences(spark,
 
 
 def test_first_v3_partial_rewrite_assigns_untouched_legacy_lineage_then_preserves_it(spark, tmp_path):
+    selected_file_count = 2
+    selected_row_count = 6
     name = "rewrite_partial_upgrade"
     path = tmp_path / name
     spark.sql(f"""CREATE TABLE {name} (id BIGINT, value BIGINT, part STRING) USING iceberg PARTITIONED BY (part)
         LOCATION '{escape_sql_string_literal(str(path))}' TBLPROPERTIES (
           'format-version'='2', 'write.update.mode'='merge-on-read')""")
     try:
-        for start, end, part in [(0, 3, "A"), (3, 6, "A"), (6, 106, "B")]:
+        for start, end, part in [(0, 3, "A"), (3, selected_row_count, "A"), (selected_row_count, 106, "B")]:
             spark.sql(
                 f"INSERT INTO {name} SELECT /*+ COALESCE(1) */ id AS id, id AS value, '{part}' AS part FROM range({start}, {end})"
             )
@@ -609,7 +631,7 @@ def test_first_v3_partial_rewrite_assigns_untouched_legacy_lineage_then_preserve
         old_files = _data_entries(path)
         selected = {file for file, entry in old_files.items() if entry.data_file.partition[0] == "A"}
         untouched = old_files.keys() - selected
-        assert len(selected) == 2
+        assert len(selected) == selected_file_count
         assert len(untouched) == 1
         untouched_sequence = old_files[next(iter(untouched))].sequence_number
         spark.sql(f"ALTER TABLE {name} SET TBLPROPERTIES ('format-version'='3')")
@@ -622,11 +644,15 @@ def test_first_v3_partial_rewrite_assigns_untouched_legacy_lineage_then_preserve
         lineage = _current_row_lineage(path)
         assert set(lineage) == set(range(106))
         assert {row_id for row_id, _ in lineage.values()} == set(range(106))
-        assert {sequence for row_id, (_, sequence) in lineage.items() if row_id < 6} == {after["last-sequence-number"]}
-        assert {sequence for row_id, (_, sequence) in lineage.items() if row_id >= 6} == {untouched_sequence}
+        assert {sequence for row_id, (_, sequence) in lineage.items() if row_id < selected_row_count} == {
+            after["last-sequence-number"]
+        }
+        assert {sequence for row_id, (_, sequence) in lineage.items() if row_id >= selected_row_count} == {
+            untouched_sequence
+        }
         for file in untouched:
             assert "_row_id" not in pq.ParquetFile(_local_file_path(file)).schema_arrow.names
-        expected = [(i, i, "A" if i < 6 else "B") for i in range(106)]
+        expected = [(i, i, "A" if i < selected_row_count else "B") for i in range(106)]
         assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
         files = _data_entries(path)
         result = _rewrite(spark, name)
