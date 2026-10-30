@@ -10,6 +10,7 @@ use sail_common::actor::{ActorHandle, ActorSystem};
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::{DriverGateway, DriverGatewayOptions};
+use sail_lineage::LineageService;
 use sail_telemetry::telemetry::global_system_event_reporter;
 use tokio::sync::oneshot;
 
@@ -26,6 +27,7 @@ pub type ServerSessionFactoryFn =
 #[derive(Clone)]
 pub struct SessionManager {
     handle: ActorHandle<SessionManagerActor>,
+    lineage_service: Option<Arc<LineageService>>,
 }
 
 impl fmt::Debug for SessionManager {
@@ -40,8 +42,12 @@ impl SessionManager {
         components: SessionManagerComponents,
         system: &mut ActorSystem,
     ) -> SessionResult<Self> {
+        let lineage_service = options.lineage_service.clone();
         let handle = system.spawn::<SessionManagerActor>((options, components));
-        Ok(Self { handle })
+        Ok(Self {
+            handle,
+            lineage_service,
+        })
     }
 
     pub async fn get_or_create_session_context(
@@ -80,6 +86,11 @@ impl SessionManager {
         rx.await.map_err(|e| {
             SessionError::internal(format!("failed to shut down session manager: {e}"))
         })?;
+        // The lineage service is shut down after the sessions so that application runs
+        // of the remaining sessions are completed and all queued events are delivered.
+        if let Some(lineage_service) = &self.lineage_service {
+            lineage_service.shutdown().await;
+        }
         Ok(())
     }
 }
@@ -107,13 +118,16 @@ pub async fn create_session_manager(
                 })?,
         )
     };
+    let lineage_service = LineageService::try_from_config(&config.lineage, &runtime)
+        .map_err(|e| SessionError::internal(format!("failed to create lineage service: {e}")))?;
     let options = SessionManagerOptions::new(runtime)
         .with_session_timeout(session_timeout)
         .with_options(
             config
                 .raw()
                 .map_err(|e| SessionError::internal(e.to_string()))?,
-        );
+        )
+        .with_lineage_service(lineage_service);
     let components = SessionManagerComponents {
         session_factory,
         job_runner_factory,

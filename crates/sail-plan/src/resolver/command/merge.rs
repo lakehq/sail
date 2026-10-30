@@ -12,6 +12,7 @@ use sail_common_datafusion::datasource::{DataSourceRegistry, MergeInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_lineage::{LineageDataset, LineageOperation};
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
@@ -180,6 +181,21 @@ impl PlanResolver<'_> {
             .await?;
 
         let target_format = target_metadata.format.clone();
+        self.record_lineage_output(
+            LineageOperation::Merge,
+            LineageDataset {
+                identifier: None,
+                location: Some(target_metadata.location.clone()),
+                table: target_metadata
+                    .lakehouse_table
+                    .as_ref()
+                    // Path-based targets (e.g. `delta.`/path``) are not catalog tables.
+                    .map(|x| x.catalog_table().to_vec()),
+                format: Some(target_format.clone()),
+                schema: None,
+                lifecycle: None,
+            },
+        );
         let options = MergeIntoOptions {
             target_alias: target_alias_string,
             source_alias: source_alias_string,
