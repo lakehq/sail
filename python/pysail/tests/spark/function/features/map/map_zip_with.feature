@@ -42,6 +42,15 @@ Feature: map_zip_with higher-order function
         | result                    |
         | {1 -> 11, 2 -> 222, 3 -> 303} |
 
+    Scenario: Use only the second map value in the lambda
+      When query
+        """
+        SELECT map_zip_with(map('a', 1), map('a', 2), (k, v1, v2) -> v2) AS result
+        """
+      Then query result
+        | result   |
+        | {a -> 2} |
+
     Scenario: Zip maps with a missing string value on one side
       When query
         """
@@ -82,3 +91,17 @@ Feature: map_zip_with higher-order function
       Then query result
         | result |
         | NULL   |
+
+  Rule: Lambda arity errors
+
+    Scenario Outline: Reject a lambda with incorrect arity
+      When query
+        """
+        SELECT map_zip_with(map('a', 1), map('a', 2), <lambda>)
+        """
+      Then query error .*<expected>.*
+
+      Examples:
+        | lambda                  | expected                               |
+        | (k, v) -> v             | map_zip_with lambda function expects 3 arguments |
+        | (k, v1, v2, v3) -> v2   | only 3 are supported                   |

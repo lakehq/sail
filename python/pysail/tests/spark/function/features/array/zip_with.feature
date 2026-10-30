@@ -108,3 +108,17 @@ Feature: zip_with higher-order function
       Then query result
         | result |
         | NULL   |
+
+  Rule: Lambda arity errors
+
+    Scenario Outline: Reject a lambda with incorrect arity
+      When query
+        """
+        SELECT zip_with(array(1), array(2), <lambda>)
+        """
+      Then query error .*<expected>.*
+
+      Examples:
+        | lambda         | expected                           |
+        | x -> x         | zip_with lambda function expects 2 arguments |
+        | (x, y, z) -> x | only 2 are supported               |
