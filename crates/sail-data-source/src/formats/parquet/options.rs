@@ -5,6 +5,7 @@ use datafusion::parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 use datafusion_common::config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions};
 use datafusion_common::parquet_config::DFParquetWriterVersion;
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::session::parquet::ParquetReadConfig;
 
 use crate::error::{DataSourceError, DataSourceResult};
 use crate::options::r#gen::{
@@ -36,6 +37,8 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
             reorder_filters: Some(self.global.reorder_filters),
             schema_force_view_types: Some(self.global.schema_force_view_types),
             binary_as_string: Some(self.global.binary_as_string),
+            // Resolved from the session in `ParquetReadOptions::resolve`.
+            trust_sorting_columns: None,
             coerce_int96: self.global.coerce_int96.map(Some),
             bloom_filter_on_read: Some(self.global.bloom_filter_on_read),
             max_predicate_cache_size: Some(self.global.max_predicate_cache_size),
@@ -55,6 +58,7 @@ impl ParquetReadOptions {
             reorder_filters,
             schema_force_view_types,
             binary_as_string,
+            trust_sorting_columns: _,
             coerce_int96,
             bloom_filter_on_read,
             max_predicate_cache_size,
@@ -280,11 +284,16 @@ impl ParquetWriteOptions {
 impl ResolveOptions for ParquetReadOptions {
     fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
         let mut partial = ParquetReadPartialOptions::initialize();
-        partial.merge(
-            ctx.default_table_options()
-                .parquet
-                .build_partial_options()?,
+        let mut defaults: ParquetReadPartialOptions = ctx
+            .default_table_options()
+            .parquet
+            .build_partial_options()?;
+        defaults.trust_sorting_columns = Some(
+            ctx.config()
+                .get_extension::<ParquetReadConfig>()
+                .is_some_and(|config| config.trust_sorting_columns()),
         );
+        partial.merge(defaults);
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }
@@ -310,9 +319,11 @@ impl ResolveOptions for ParquetWriteOptions {
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
+    use std::sync::Arc;
 
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_common::parquet_config::DFParquetWriterVersion;
+    use sail_common_datafusion::session::parquet::ParquetReadConfig;
 
     use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
     use crate::options::{ResolveOptions, option_list};
@@ -365,6 +376,32 @@ mod tests {
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_trust_sorting_columns() -> datafusion_common::Result<()> {
+        let state = SessionContext::default().state();
+        let options = ParquetReadOptions::resolve(&state, vec![option_list(&[])])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert!(!options.trust_sorting_columns);
+
+        let kv = option_list(&[("trust_sorting_columns", "true")]);
+        let options = ParquetReadOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert!(options.trust_sorting_columns);
+
+        let config = SessionConfig::new().with_extension(Arc::new(ParquetReadConfig::new(true)));
+        let state = SessionContext::new_with_config(config).state();
+        let options = ParquetReadOptions::resolve(&state, vec![option_list(&[])])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert!(options.trust_sorting_columns);
+
+        let kv = option_list(&[("trustSortingColumns", "false")]);
+        let options = ParquetReadOptions::resolve(&state, vec![kv])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert!(!options.trust_sorting_columns);
 
         Ok(())
     }
