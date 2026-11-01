@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::Column;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::{Alias, Sort};
 use datafusion_expr::expr_rewriter::rewrite_sort_cols_by_aggs;
 use datafusion_expr::{
@@ -363,6 +363,34 @@ impl PlanResolver<'_> {
         })
     }
 
+    fn rebase_column_to_projection_input(e: Expr, projection: &[Expr]) -> Transformed<Expr> {
+        let Expr::Column(col) = &e else {
+            return Transformed::no(e);
+        };
+        let aliased = projection.iter().find_map(|expr| {
+            if let Expr::Alias(Alias {
+                expr,
+                relation,
+                name,
+                ..
+            }) = expr
+                && relation == &col.relation
+                && name == &col.name
+            {
+                return Some(expr.as_ref().clone());
+            }
+            None
+        });
+        match aliased {
+            // The expression comes from the projection, so it is already written in terms of the
+            // plan below it and must not be rebased again. Descending into it would not terminate
+            // for a projection that aliases an expression to the name of a column the expression
+            // itself reads.
+            Some(expr) => Transformed::new(expr, true, TreeNodeRecursion::Jump),
+            None => Transformed::no(e),
+        }
+    }
+
     fn rebase_sort_to_projection_input(sort: Sort, projection: &[Expr]) -> PlanResult<Sort> {
         Ok(Sort {
             expr: Self::rebase_to_projection_input(sort.expr, projection)?,
@@ -371,32 +399,9 @@ impl PlanResolver<'_> {
     }
 
     fn rebase_to_projection_input(expr: Expr, projection: &[Expr]) -> PlanResult<Expr> {
-        let find = |col: &Column| -> Option<Expr> {
-            projection.iter().find_map(|expr| {
-                if let Expr::Alias(Alias {
-                    expr,
-                    relation,
-                    name,
-                    ..
-                }) = expr
-                    && relation == &col.relation
-                    && name == &col.name
-                {
-                    return Some(expr.as_ref().clone());
-                }
-                None
-            })
-        };
-        expr.transform_down(|e| {
-            if let Expr::Column(ref col) = e
-                && let Some(expr) = find(col)
-            {
-                return Ok(Transformed::yes(expr));
-            }
-            Ok(Transformed::no(e))
-        })
-        .data()
-        .map_err(Into::into)
+        expr.transform_down(|e| Ok(Self::rebase_column_to_projection_input(e, projection)))
+            .data()
+            .map_err(Into::into)
     }
 
     fn rebase_sort_to_projection_output(sort: Sort, projection: &[Expr]) -> PlanResult<Sort> {
@@ -447,5 +452,39 @@ impl PlanResolver<'_> {
             asc,
             nulls_first,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::arrow::datatypes::DataType;
+    use datafusion_common::tree_node::TreeNodeRecursion;
+    use datafusion_expr::{cast, col};
+
+    use crate::resolver::PlanResolver;
+
+    #[test]
+    fn substituted_column_is_not_rebased_again() {
+        // A projection whose output field has the same ID as the column it reads: rebasing
+        // `#3` yields `CAST(#3)`, which contains `#3` and would be substituted again forever.
+        let aliased = cast(col("#3"), DataType::Int64);
+        let projection = vec![aliased.clone().alias("#3")];
+
+        let rebased = PlanResolver::rebase_column_to_projection_input(col("#3"), &projection);
+
+        assert!(rebased.transformed);
+        assert_eq!(rebased.tnr, TreeNodeRecursion::Jump);
+        assert_eq!(rebased.data, aliased);
+    }
+
+    #[test]
+    fn column_not_defined_by_the_projection_is_left_alone() {
+        let projection = vec![cast(col("#3"), DataType::Int64).alias("#3")];
+
+        let rebased = PlanResolver::rebase_column_to_projection_input(col("#4"), &projection);
+
+        assert!(!rebased.transformed);
+        assert_eq!(rebased.tnr, TreeNodeRecursion::Continue);
+        assert_eq!(rebased.data, col("#4"));
     }
 }
