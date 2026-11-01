@@ -39,6 +39,7 @@ mod explicit_repartition;
 mod filter_pushdown;
 mod input_file_name;
 mod join_reorder;
+mod mixed_numeric;
 mod offset;
 mod projection_pushdown;
 mod scan_partitions;

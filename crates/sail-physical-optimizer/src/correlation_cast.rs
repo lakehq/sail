@@ -145,7 +145,7 @@ fn rewrite_projection(
     Ok(Transformed::yes(result))
 }
 
-fn same_properties(before: &PlanProperties, after: &PlanProperties) -> bool {
+pub(crate) fn same_properties(before: &PlanProperties, after: &PlanProperties) -> bool {
     let partitioning = match (&before.partitioning, &after.partitioning) {
         (Partitioning::UnknownPartitioning(a), Partitioning::UnknownPartitioning(b)) => a == b,
         (a, b) => a == b,
@@ -508,6 +508,13 @@ mod tests {
             (DataType::Decimal128(10, 2), DataType::Decimal128(18, 1)),
             (DataType::Float64, DataType::Decimal128(12, 2)),
             (DataType::Float64, DataType::Decimal128(30, 15)),
+            (DataType::Float32, DataType::Decimal128(12, 2)),
+            (DataType::Int32, DataType::Decimal128(9, 0)),
+            (DataType::Int64, DataType::Decimal128(38, 20)),
+            (DataType::UInt8, DataType::Decimal128(9, 0)),
+            (DataType::UInt16, DataType::Decimal128(9, 0)),
+            (DataType::UInt32, DataType::Decimal128(9, 0)),
+            (DataType::UInt64, DataType::Decimal128(38, 20)),
             (DataType::Utf8, DataType::Float64),
             (DataType::LargeUtf8, DataType::Float64),
             (DataType::Utf8View, DataType::Float64),
@@ -545,8 +552,7 @@ mod tests {
                 let old = correlation_projection(from.clone(), to.clone(), case)?;
                 let new = super::rewrite_projection(Arc::clone(&old), &Arc::default())?.data;
                 assert_eq!(old.schema(), new.schema(), "schema {from:?}->{to:?} {case}");
-                // Float64-to-decimal stays native after a measured cluster regression.
-                let eligible = from != DataType::Float64 && matches!(case, "regular" | "notnull");
+                let eligible = matches!(case, "regular" | "notnull");
                 assert_eq!(
                     !Arc::ptr_eq(&old, &new),
                     eligible,
@@ -574,7 +580,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!((accepted, declined), (32, 148));
+        assert_eq!((accepted, declined), (50, 200));
         Ok(())
     }
 }
@@ -622,6 +628,13 @@ mod codec_contracts {
             (DataType::Float32, DataType::Float64, false),
             (DataType::Decimal128(10, 2), DataType::Float64, false),
             (DataType::Float64, DataType::Decimal128(30, 15), false),
+            (DataType::Float32, DataType::Decimal128(12, 2), false),
+            (DataType::Int32, DataType::Decimal128(9, 0), false),
+            (DataType::Int64, DataType::Decimal128(38, 20), false),
+            (DataType::UInt8, DataType::Decimal128(9, 0), false),
+            (DataType::UInt16, DataType::Decimal128(9, 0), false),
+            (DataType::UInt32, DataType::Decimal128(9, 0), false),
+            (DataType::UInt64, DataType::Decimal128(38, 20), false),
             (DataType::Utf8, DataType::Float64, false),
             (DataType::Utf8, DataType::Decimal128(19, 0), false),
             (
@@ -704,8 +717,7 @@ mod codec_contracts {
                             // Native type-only CAST strips extension tags, retains ordinary metadata,
                             // and inherits source nullability. Explicit incompatible fields must decline.
                             let expected_active = bridge
-                                || (from != DataType::Float64
-                                    && source_metadata != 1
+                                || (source_metadata != 1
                                     && target_metadata != 1
                                     && (target_metadata == 2
                                         || source_nullable == target_nullable));
@@ -750,7 +762,7 @@ mod codec_contracts {
                 }
             }
         }
-        assert_eq!((checked, activated), (1152, 948));
+        assert_eq!((checked, activated), (1404, 1044));
         Ok(())
     }
 
