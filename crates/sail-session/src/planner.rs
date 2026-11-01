@@ -215,6 +215,7 @@ impl ScalarSubqueryKey {
                     sources.push(Arc::as_ptr(&scan.source).cast::<()>());
                 }
                 // Extension node equality may ignore sources or nondeterminism.
+                // TODO: share bodies with extension nodes whose equality is known to be exact.
                 LogicalPlan::Extension(_) => {
                     shareable = false;
                     return Ok(TreeNodeRecursion::Stop);
