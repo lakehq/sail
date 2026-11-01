@@ -4,10 +4,14 @@ import pytest
 from pyspark.errors.exceptions.connect import SparkConnectGrpcException
 from pyspark.sql import SparkSession
 
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+
+pytestmark = [
+    pytest.mark.skipif(pyspark_version() < (4,), reason="Server-side session tracking requires PySpark 4+"),
+    pytest.mark.skipif(is_jvm_spark(), reason="PySpark allows only one remote per process in local mode"),
+]
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="PySpark allows only one remote per process in local mode")
 def test_same_user_same_session_id(remote: str) -> None:
     sid = str(uuid4())
     spark1 = SparkSession.builder.remote(_url(remote, "user1", sid)).create()
@@ -35,7 +39,6 @@ def test_same_user_same_session_id(remote: str) -> None:
         spark1.stop()
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="PySpark allows only one remote per process in local mode")
 def test_different_users_same_session_id(remote: str) -> None:
     sid = str(uuid4())
     spark1 = SparkSession.builder.remote(_url(remote, "user1", sid)).create()
@@ -62,7 +65,6 @@ def test_different_users_same_session_id(remote: str) -> None:
         spark1.stop()
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="PySpark allows only one remote per process in local mode")
 def test_server_restart_detection(remote: str) -> None:
     spark = SparkSession.builder.remote(remote).create()
     try:
