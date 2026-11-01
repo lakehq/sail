@@ -191,7 +191,13 @@ impl PlanResolver<'_> {
                         name: status.name,
                         format: format.clone(),
                         location: location.clone(),
-                        properties: properties.clone(),
+                        // The properties of a table have unique keys, but some catalogs
+                        // return them in an arbitrary order.
+                        properties: {
+                            let mut properties = properties.clone();
+                            properties.sort_by(|a, b| a.0.cmp(&b.0));
+                            properties
+                        },
                         options: options.clone(),
                         temporal_options: temporal_options.clone(),
                     });

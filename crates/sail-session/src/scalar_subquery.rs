@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::datasource::{TableProvider, source_as_provider};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_plan::ExecutionPlan;
@@ -10,6 +11,8 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{Expr, LogicalPlan, Subquery, Volatility};
 use datafusion_physical_expr::projection::ProjectionExpr;
+use sail_common_datafusion::rename::table_provider::RenameTableProvider;
+use sail_data_source::formats::python::PythonTableProvider;
 
 /// Identifies what a scalar subquery computes, regardless of its output names.
 #[derive(PartialEq, Eq, Hash)]
@@ -42,6 +45,13 @@ impl ScalarSubqueryKey {
         subquery.subquery.apply_with_subqueries(|plan| {
             match plan {
                 LogicalPlan::TableScan(scan) => {
+                    // Python data sources are read once for each reference, as in Spark.
+                    if source_as_provider(&scan.source)
+                        .is_ok_and(|provider| is_python_table_provider(provider.as_ref()))
+                    {
+                        shareable = false;
+                        return Ok(TreeNodeRecursion::Stop);
+                    }
                     sources.push(Arc::as_ptr(&scan.source).cast::<()>());
                 }
                 // Extension node equality may ignore sources or nondeterminism.
@@ -127,6 +137,16 @@ impl ScalarSubqueryKey {
             literal_types,
             fields,
         }))
+    }
+}
+
+fn is_python_table_provider(provider: &dyn TableProvider) -> bool {
+    if provider.is::<PythonTableProvider>() {
+        true
+    } else if let Some(rename) = provider.downcast_ref::<RenameTableProvider>() {
+        is_python_table_provider(rename.inner().as_ref())
+    } else {
+        false
     }
 }
 
