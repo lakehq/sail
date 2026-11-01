@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::catalog::Session;
 use datafusion::common::config::TableParquetOptions;
@@ -87,6 +86,12 @@ use crate::scalar_subquery::{
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
 
+pub struct ExtensionPhysicalPlanner;
+
+pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
+    Arc::new(ExtensionQueryPlanner {})
+}
+
 #[async_trait]
 impl QueryPlanner for ExtensionQueryPlanner {
     async fn create_physical_plan(
@@ -120,8 +125,6 @@ impl QueryPlanner for ExtensionQueryPlanner {
         ensure_scalar_subquery_nullability(plan)
     }
 }
-
-pub struct ExtensionPhysicalPlanner;
 
 #[async_trait]
 impl ExtensionPlanner for ExtensionPhysicalPlanner {
@@ -630,10 +633,6 @@ fn plan_explicit_partitioning(
             Ok(Partitioning::Hash(expressions, num_partitions))
         }
     }
-}
-
-pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
-    Arc::new(ExtensionQueryPlanner {})
 }
 
 #[cfg(test)]
