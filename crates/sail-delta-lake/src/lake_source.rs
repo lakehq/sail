@@ -81,6 +81,10 @@ impl DataSource for DeltaLakeSource {
         Some(self)
     }
 
+    fn supports_source_reuse(&self) -> bool {
+        true
+    }
+
     async fn create_source(
         &self,
         ctx: &dyn Session,

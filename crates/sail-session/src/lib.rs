@@ -146,4 +146,127 @@ mod tests {
 
         Ok(())
     }
+
+    // This test is defined in this crate because it needs the catalog manager and the plan resolver.
+    #[tokio::test]
+    async fn test_repeated_catalog_table_references_share_one_source()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use async_trait::async_trait;
+        use datafusion::catalog::Session;
+        use datafusion::datasource::empty::EmptyTable;
+        use datafusion::datasource::provider_as_source;
+        use datafusion::logical_expr::TableSource;
+        use datafusion_common::{plan_datafusion_err, plan_err};
+        use sail_common::spec;
+        use sail_common_datafusion::datasource::{DataSource, SinkInfo, SourceInfo};
+        use sail_common_datafusion::extension::SessionExtensionAccessor;
+
+        struct CountingDataSource {
+            name: &'static str,
+            reuse: bool,
+            calls: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl DataSource for CountingDataSource {
+            fn name(&self) -> &str {
+                self.name
+            }
+
+            fn supports_source_reuse(&self) -> bool {
+                self.reuse
+            }
+
+            async fn create_source(
+                &self,
+                _ctx: &dyn Session,
+                info: SourceInfo,
+            ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let schema = info
+                    .schema
+                    .ok_or_else(|| plan_datafusion_err!("missing table schema"))?;
+                Ok(provider_as_source(Arc::new(EmptyTable::new(Arc::new(
+                    schema,
+                )))))
+            }
+
+            async fn create_writer(
+                &self,
+                _ctx: &dyn Session,
+                _info: SinkInfo,
+            ) -> datafusion_common::Result<LogicalPlan> {
+                plan_err!("the counting data source does not write")
+            }
+        }
+
+        let session = create_session()?;
+        let shared = Arc::new(CountingDataSource {
+            name: "shared",
+            reuse: true,
+            calls: AtomicUsize::new(0),
+        });
+        let unshared = Arc::new(CountingDataSource {
+            name: "unshared",
+            reuse: false,
+            calls: AtomicUsize::new(0),
+        });
+        let registry = session.extension::<DataSourceRegistry>()?;
+        registry.register_data_source(Arc::clone(&shared) as Arc<dyn DataSource>)?;
+        registry.register_data_source(Arc::clone(&unshared) as Arc<dyn DataSource>)?;
+        let resolver = PlanResolver::new(&session, Arc::new(PlanConfig::default()));
+        for sql in [
+            "CREATE TABLE s (k BIGINT, v BIGINT) USING shared",
+            "CREATE TABLE u (k BIGINT, v BIGINT) USING unshared",
+            "CREATE VIEW sv AS SELECT * FROM s",
+        ] {
+            let plan = from_ast_statement(parse_one_statement(sql)?)?;
+            let plan = resolver.resolve_named_plan(plan).await?.plan;
+            session.execute_logical_plan(plan).await?.collect().await?;
+        }
+        let read = |name: &str, options: Vec<(String, String)>| {
+            spec::QueryPlan::new(spec::QueryNode::Read {
+                is_streaming: false,
+                read_type: spec::ReadType::NamedTable(Box::new(spec::ReadNamedTable {
+                    name: spec::ObjectName::bare(name),
+                    temporal: None,
+                    sample: None,
+                    options,
+                })),
+            })
+        };
+        let union = |left: spec::QueryPlan, right: spec::QueryPlan| {
+            spec::Plan::Query(spec::QueryPlan::new(spec::QueryNode::SetOperation(
+                spec::SetOperation {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    set_op_type: spec::SetOpType::Union,
+                    is_all: true,
+                    by_name: false,
+                    allow_missing_columns: false,
+                },
+            )))
+        };
+        let count_calls = async |source: &CountingDataSource, plan: spec::Plan| {
+            let before = source.calls.load(Ordering::SeqCst);
+            resolver.resolve_named_plan(plan).await?;
+            Ok::<_, Box<dyn std::error::Error>>(source.calls.load(Ordering::SeqCst) - before)
+        };
+
+        // References in subqueries and in views share the source.
+        let sql = "SELECT (SELECT max(v) FROM s), (SELECT max(v) FROM s), (SELECT max(v) FROM sv)";
+        let plan = from_ast_statement(parse_one_statement(sql)?)?;
+        assert_eq!(count_calls(&shared, plan.clone()).await?, 1);
+        // Each query creates its own source.
+        assert_eq!(count_calls(&shared, plan).await?, 1);
+        // References with different read options do not share the source.
+        let plan = union(read("s", vec![]), read("s", vec![("k".into(), "v".into())]));
+        assert_eq!(count_calls(&shared, plan).await?, 2);
+        // Data sources that do not support reuse create a source for each reference.
+        let plan = union(read("u", vec![]), read("u", vec![]));
+        assert_eq!(count_calls(&unshared, plan).await?, 2);
+        Ok(())
+    }
 }

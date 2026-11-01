@@ -156,6 +156,10 @@ impl<T: FormatFactory> DataSource for ListingDataSource<T> {
         T::name()
     }
 
+    fn supports_source_reuse(&self) -> bool {
+        true
+    }
+
     async fn create_source(
         &self,
         ctx: &dyn Session,
