@@ -16,6 +16,8 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    from pyspark.sql import SparkSession
+
     from pysail.testing._dev.containers.celeborn import MasterService, WorkerService
 
 pytestmark = [
@@ -54,6 +56,15 @@ def remote(
         yield server.remote
 
 
+def _server_session_id(spark: SparkSession) -> str:
+    rows = spark.sql(
+        "select session_id from system.session.sessions where client_session_id = :id",
+        args={"id": spark.session_id},
+    ).collect()
+    assert len(rows) == 1
+    return rows[0].session_id
+
+
 def _master_shuffle_ids(master: MasterService) -> list[str]:
     with urlopen(f"http://{master.host}:{master.http_port}/api/v1/shuffles", timeout=5) as response:
         return json.load(response)["shuffleIds"]
@@ -89,7 +100,7 @@ def test_consumed_celeborn_shuffle_data_is_removed(spark, celeborn_master: Maste
         time.sleep(2)
         return value
 
-    session_id = spark._client._server_session_id  # noqa: SLF001
+    session_id = _server_session_id(spark)
     assert _application_shuffle_ids(celeborn_master, session_id) == []
 
     with ThreadPoolExecutor(max_workers=1) as executor:
