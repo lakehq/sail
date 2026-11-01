@@ -4,6 +4,7 @@ pub mod formats;
 pub mod optimizer;
 pub mod planner;
 pub mod runtime;
+mod scalar_subquery;
 pub mod session_factory;
 pub mod session_manager;
 
