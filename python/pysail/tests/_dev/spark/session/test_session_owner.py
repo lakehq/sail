@@ -81,4 +81,5 @@ def test_server_restart_detection(remote: str) -> None:
 
 
 def _url(remote: str, user_id: str, session_id: str) -> str:
-    return f"{remote}/;user_id={user_id};session_id={session_id}"
+    sep = ";" if remote.endswith("/") or "/;" in remote else "/;"
+    return f"{remote}{sep}user_id={user_id};session_id={session_id}"
