@@ -18,7 +18,9 @@ use crate::id::{JobId, TaskStreamKey};
 use crate::shuffle::ShuffleCompression;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
+use crate::stream::writer::{
+    TaskStreamChannelSink, TaskStreamSinkCompletion, TaskStreamWriteState,
+};
 
 /// Object-storage implementation for a blocking shuffle stream. Every task attempt owns a
 /// directory, allowing retries to be selected by the task scheduler without overwriting an
@@ -215,6 +217,7 @@ struct StorageStreamSink {
     writer: Option<StreamWriter<Vec<u8>>>,
     file_index: usize,
     has_batches: bool,
+    stored_bytes: u64,
 }
 
 impl StorageStreamSink {
@@ -237,6 +240,7 @@ impl StorageStreamSink {
             writer: Some(writer),
             file_index: 0,
             has_batches: false,
+            stored_bytes: 0,
         })
     }
 
@@ -262,11 +266,13 @@ impl StorageStreamSink {
             .prefix
             .clone()
             .join(format!("part-{:020}.arrow", self.file_index));
+        let size = bytes.len() as u64;
         self.store
             .put(&path, PutPayload::from(bytes))
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         self.file_index += 1;
+        self.stored_bytes += size;
         self.has_batches = false;
         self.writer = Some(self.new_writer()?);
         Ok(())
@@ -292,8 +298,12 @@ impl TaskStreamChannelSink for StorageStreamSink {
         Ok(TaskStreamWriteState::Active)
     }
 
-    async fn commit(mut self: Box<Self>) -> Result<()> {
-        self.flush_file().await
+    async fn commit(mut self: Box<Self>) -> Result<TaskStreamSinkCompletion> {
+        self.flush_file().await?;
+        Ok(TaskStreamSinkCompletion {
+            complete: true,
+            stored_bytes: Some(self.stored_bytes),
+        })
     }
 
     async fn abort(self: Box<Self>) -> Result<()> {
@@ -340,6 +350,55 @@ fn shuffle_prefix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn committed_bytes_match_compressed_objects_and_include_final_flush() -> Result<()> {
+        use datafusion::arrow::array::{ArrayRef, Int64Array};
+        use object_store::memory::InMemory;
+
+        let batch = RecordBatch::try_from_iter([(
+            "id",
+            Arc::new(Int64Array::from(vec![42; 100])) as ArrayRef,
+        )])?;
+        for compression in [
+            ShuffleCompression::None,
+            ShuffleCompression::Lz4,
+            ShuffleCompression::Zstd,
+        ] {
+            for max_file_size in [1, usize::MAX] {
+                let store = Arc::new(InMemory::new());
+                let mut sink = Box::new(StorageStreamSink::new(
+                    store.clone(),
+                    Path::from("output"),
+                    batch.schema(),
+                    compression.ipc_write_options()?,
+                    max_file_size,
+                )?);
+                sink.write(batch.clone()).await?;
+                sink.write(batch.clone()).await?;
+                let completion = sink.commit().await?;
+                let objects = store.list(None).try_collect::<Vec<_>>().await?;
+                assert_eq!(objects.len(), if max_file_size == 1 { 2 } else { 1 });
+                assert!(completion.complete);
+                assert_eq!(
+                    completion.stored_bytes,
+                    Some(objects.iter().map(|o| o.size).sum())
+                );
+                let empty = Box::new(StorageStreamSink::new(
+                    store,
+                    Path::from("empty"),
+                    batch.schema(),
+                    compression.ipc_write_options()?,
+                    max_file_size,
+                )?)
+                .commit()
+                .await?;
+                assert!(empty.complete);
+                assert_eq!(empty.stored_bytes, Some(0));
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn shuffle_prefix_decodes_url_path() {

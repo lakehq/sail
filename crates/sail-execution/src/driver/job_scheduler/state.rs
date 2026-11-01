@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlanProperties;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_system_store::types::TaskOutputStatistics;
 
 use crate::driver::job_scheduler::topology::JobTopology;
 use crate::driver::output::{JobOutputManager, JobOutputOutcome};
@@ -129,6 +130,29 @@ pub struct TaskDescriptor {
     pub attempts: Vec<TaskAttemptDescriptor>,
 }
 
+impl TaskDescriptor {
+    /// Accept a single immutable output report from the current successful attempt.
+    /// Missing, stale, malformed, failed and canceled reports remain unknown.
+    pub fn record_output(
+        &mut self,
+        attempt: usize,
+        channels: usize,
+        statistics: &TaskOutputStatistics,
+    ) -> bool {
+        if self.attempts.len().checked_sub(1) != Some(attempt)
+            || statistics.partitions.len() != channels
+        {
+            return false;
+        }
+        let current = &mut self.attempts[attempt];
+        if !matches!(current.state, TaskState::Succeeded) || current.output_statistics.is_some() {
+            return false;
+        }
+        current.output_statistics = Some(statistics.clone());
+        true
+    }
+}
+
 #[derive(Debug)]
 pub struct TaskAttemptDescriptor {
     pub state: TaskState,
@@ -138,6 +162,7 @@ pub struct TaskAttemptDescriptor {
     /// This will always be false if the task does not belong to
     /// the final stages of the job.
     pub job_output_fetched: bool,
+    pub output_statistics: Option<TaskOutputStatistics>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,5 +210,65 @@ impl TaskState {
             TaskState::Succeeded | TaskState::Failed | TaskState::Canceled => true,
             TaskState::Created | TaskState::Scheduled | TaskState::Running => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_system_store::types::TaskOutputPartitionStatistics;
+
+    use super::*;
+
+    fn attempt(state: TaskState) -> TaskAttemptDescriptor {
+        TaskAttemptDescriptor {
+            state,
+            messages: vec![],
+            cause: None,
+            job_output_fetched: false,
+            output_statistics: None,
+        }
+    }
+
+    #[test]
+    fn output_statistics_require_current_successful_attempt() {
+        let stats = TaskOutputStatistics {
+            complete: true,
+            partitions: vec![TaskOutputPartitionStatistics::default(); 2],
+        };
+        for state in [
+            TaskState::Created,
+            TaskState::Scheduled,
+            TaskState::Running,
+            TaskState::Failed,
+            TaskState::Canceled,
+        ] {
+            let mut task = TaskDescriptor {
+                attempts: vec![attempt(state)],
+            };
+            assert!(!task.record_output(0, 2, &stats));
+            assert!(task.attempts[0].output_statistics.is_none());
+        }
+        let mut task = TaskDescriptor {
+            attempts: vec![attempt(TaskState::Succeeded), attempt(TaskState::Succeeded)],
+        };
+        assert!(!task.record_output(0, 2, &stats));
+        assert!(!task.record_output(2, 2, &stats));
+        assert!(!task.record_output(1, 3, &stats));
+        assert!(task.record_output(1, 2, &stats));
+        let mut duplicate = stats.clone();
+        duplicate.partitions[0].num_rows = 123;
+        assert!(!task.record_output(1, 2, &duplicate));
+        assert_eq!(task.attempts[1].output_statistics.as_ref(), Some(&stats));
+        assert!(task.attempts[0].output_statistics.is_none());
+        // A retry has no inherited statistics. Its observed prefix may be recorded,
+        // but must retain the incomplete marker rather than becoming exact empty.
+        task.attempts.push(attempt(TaskState::Succeeded));
+        assert!(!task.record_output(1, 2, &stats));
+        let partial = TaskOutputStatistics {
+            complete: false,
+            ..stats
+        };
+        assert!(task.record_output(2, 2, &partial));
+        assert_eq!(task.attempts[2].output_statistics.as_ref(), Some(&partial));
     }
 }

@@ -14,7 +14,8 @@ use crate::id::{JobId, TaskKey};
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{
-    MultiChannelTaskStreamSink, TaskStreamChannelSink, TaskStreamSink, TaskStreamWriteState,
+    MultiChannelTaskStreamSink, TaskStreamChannelSink, TaskStreamSink, TaskStreamSinkCompletion,
+    TaskStreamWriteState,
 };
 
 #[derive(Clone)]
@@ -212,8 +213,11 @@ impl TaskStreamChannelSink for CelebornStreamSink {
         Ok(TaskStreamWriteState::Active)
     }
 
-    async fn commit(self: Box<Self>) -> Result<()> {
-        Ok(())
+    async fn commit(self: Box<Self>) -> Result<TaskStreamSinkCompletion> {
+        Ok(TaskStreamSinkCompletion {
+            complete: true,
+            stored_bytes: None,
+        })
     }
 
     async fn abort(self: Box<Self>) -> Result<()> {
@@ -236,8 +240,8 @@ impl TaskStreamSink for CelebornTaskStreamSink {
         self.channels.write(batches).await
     }
 
-    async fn commit(self: Box<Self>) -> Result<()> {
-        Box::new(self.channels).commit().await?;
+    async fn commit(self: Box<Self>) -> Result<Vec<TaskStreamSinkCompletion>> {
+        let completions = Box::new(self.channels).commit().await?;
         self.client
             .mapper_end(
                 self.shuffle_id,
@@ -246,7 +250,8 @@ impl TaskStreamSink for CelebornTaskStreamSink {
                 self.num_mappers,
             )
             .await
-            .map_err(|error| DataFusionError::External(Box::new(error)))
+            .map_err(|error| DataFusionError::External(Box::new(error)))?;
+        Ok(completions)
     }
 
     async fn abort(self: Box<Self>) -> Result<()> {

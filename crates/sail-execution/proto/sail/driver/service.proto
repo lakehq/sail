@@ -40,7 +40,24 @@ message ReportTaskStatusRequest {
   optional string message = 7;
   // An optional JSON string that contains the cause of the task failure.
   optional string cause = 8;
+  // Present only after successful task execution and output finalization.
+  TaskOutputStatistics output_statistics = 9;
   uint64 sequence = 101;
+}
+
+message TaskOutputStatistics {
+  // True only after input EOF and successful commit of every output channel.
+  bool complete = 1;
+  // Ordered by output channel, including empty channels.
+  repeated TaskOutputPartitionStatistics partitions = 2;
+}
+
+message TaskOutputPartitionStatistics {
+  uint64 num_rows = 1;
+  // Sum of Arrow buffer sizes, deduplicated within each batch only.
+  uint64 batch_bytes = 2;
+  // Physical storage bytes, including IPC framing and compression, if available.
+  optional uint64 stored_bytes = 3;
 }
 
 enum TaskStatus {

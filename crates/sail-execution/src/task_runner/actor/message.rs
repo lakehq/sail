@@ -5,6 +5,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::TaskContext;
 use sail_common::telemetry::{SpanAssociation, SpanAttribute};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_system_store::types::TaskOutputStatistics;
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
@@ -33,6 +34,7 @@ pub enum TaskRunnerMessage {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        output_statistics: Option<TaskOutputStatistics>,
     },
     ProbePendingLocalStream {
         key: TaskStreamKey,
@@ -162,6 +164,7 @@ impl SpanAssociation for TaskRunnerMessage {
                 status,
                 message,
                 cause,
+                output_statistics: _,
             } => {
                 properties.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
                 properties.push((SpanAttribute::EXECUTION_STAGE, stage.to_string()));

@@ -10,6 +10,7 @@ use sail_celeborn::lifecycle::{LifecycleManagerActor, LocalLifecycleManager};
 use sail_common::actor::{ActorAction, ActorContext, ActorHandle};
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
+use sail_system_store::types::TaskOutputStatistics;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -242,6 +243,7 @@ impl DriverActor {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        output_statistics: Option<TaskOutputStatistics>,
         sequence: Option<u64>,
     ) -> ActorAction {
         if let Some(sequence) = sequence {
@@ -265,6 +267,9 @@ impl DriverActor {
             TaskStatus::Succeeded => {
                 self.job_scheduler
                     .update_task(&key, TaskState::Succeeded, message, cause);
+                if let Some(statistics) = output_statistics {
+                    self.job_scheduler.record_task_output(&key, statistics);
+                }
                 self.unassign_task(ctx, &key);
                 self.refresh_job(ctx, key.job_id);
                 self.run_tasks(ctx);
@@ -331,6 +336,7 @@ impl DriverActor {
                     message: Some(message),
                     cause: Some(cause),
                     sequence: None,
+                    output_statistics: None,
                 })
             }
         }
@@ -419,6 +425,7 @@ impl DriverActor {
                             message: Some(e.to_string()),
                             cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
                             sequence: None,
+                            output_statistics: None,
                         });
                     }
                     return;
@@ -621,6 +628,7 @@ impl DriverActor {
                         message: Some("task region not found".into()),
                         cause: None,
                         sequence: None,
+                        output_statistics: None,
                     });
                     continue;
                 };
@@ -661,6 +669,7 @@ impl DriverActor {
                             message: Some(message.clone()),
                             cause: Some(cause.clone()),
                             sequence: None,
+                            output_statistics: None,
                         });
                     }
                     continue;
@@ -717,6 +726,7 @@ impl DriverActor {
                                     message: Some(error.to_string()),
                                     cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
                                     sequence: None,
+                                    output_statistics: None,
                                 })
                                 .await;
                         }

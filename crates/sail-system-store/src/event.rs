@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::types::StageInput;
+use crate::types::{StageInput, TaskOutputStatistics};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -49,6 +49,7 @@ pub enum SystemEvent {
         mode: String,
         distribution: String,
         placement: String,
+        plan: String,
         status: String,
         created_at: DateTime<Utc>,
     },
@@ -76,6 +77,14 @@ pub enum SystemEvent {
         attempt: u64,
         status: String,
         updated_at: DateTime<Utc>,
+    },
+    TaskOutputRecorded {
+        session_id: String,
+        job_id: u64,
+        stage: u64,
+        partition: u64,
+        attempt: u64,
+        statistics: TaskOutputStatistics,
     },
     WorkerCreated {
         session_id: String,

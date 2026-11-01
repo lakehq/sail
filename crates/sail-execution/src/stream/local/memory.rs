@@ -10,7 +10,9 @@ use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::stream::error::TaskStreamResult;
 use crate::stream::reader::TaskStreamSource;
-use crate::stream::writer::{TaskStreamChannelSink, TaskStreamWriteState};
+use crate::stream::writer::{
+    TaskStreamChannelSink, TaskStreamSinkCompletion, TaskStreamWriteState,
+};
 
 /// A memory stream that can be read multiple times.
 /// It maintains multiple replicas of the stream internally.
@@ -139,23 +141,31 @@ impl TaskStreamChannelSink for MemoryStreamReplicaSender {
         })
     }
 
-    async fn commit(self: Box<Self>) -> Result<()> {
+    async fn commit(self: Box<Self>) -> Result<TaskStreamSinkCompletion> {
         // Replicas can be consumed at different times or left unread entirely.
         // Flush them independently, dropping each sender as soon as it finishes
         // so that its consumer sees EOF without waiting for the other replicas.
-        join_all(self.senders.into_iter().zip(self.overflow).map(
+        let complete = join_all(self.senders.into_iter().zip(self.overflow).map(
             |(sender, overflow)| async move {
                 if let Some(tx) = sender {
                     for item in overflow {
                         if tx.send(item).await.is_err() {
-                            break;
+                            return false;
                         }
                     }
+                    true
+                } else {
+                    false
                 }
             },
         ))
-        .await;
-        Ok(())
+        .await
+        .into_iter()
+        .all(|x| x);
+        Ok(TaskStreamSinkCompletion {
+            complete,
+            stored_bytes: None,
+        })
     }
 
     async fn abort(self: Box<Self>) -> Result<()> {

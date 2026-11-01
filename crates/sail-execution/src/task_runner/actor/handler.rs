@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::common::DataFusionError;
@@ -8,6 +8,7 @@ use log::{error, warn};
 use prost::Message;
 use sail_common::actor::{ActorAction, ActorContext};
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_system_store::types::TaskOutputStatistics;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverMessage, TaskStatus};
@@ -65,10 +66,12 @@ impl TaskRunnerActor {
         self.tasks.record_batch(job_id, stage, &tasks);
         for task in tasks {
             let key = task.task_key(job_id, stage);
+            let output_statistics = Arc::new(OnceLock::new());
             let stream = TaskPreparation {
                 session_id: self.session_id.clone(),
                 handle: ctx.handle().clone(),
                 celeborn: self.extensions.celeborn_streams.is_some(),
+                output_statistics: output_statistics.clone(),
             }
             .stream(
                 key.clone(),
@@ -78,7 +81,10 @@ impl TaskRunnerActor {
             );
             let (tx, rx) = oneshot::channel();
             self.signals.insert(key.clone(), tx);
-            ctx.spawn(TaskMonitor::new(ctx.handle().clone(), key, stream, rx).supervise());
+            ctx.spawn(
+                TaskMonitor::new(ctx.handle().clone(), key, stream, rx, output_statistics)
+                    .supervise(),
+            );
         }
         Ok(())
     }
@@ -105,6 +111,7 @@ impl TaskRunnerActor {
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
+        output_statistics: Option<TaskOutputStatistics>,
     ) -> ActorAction {
         if !matches!(status, TaskStatus::Running) {
             self.signals.remove(&key);
@@ -120,6 +127,7 @@ impl TaskRunnerActor {
                             message,
                             cause,
                             sequence: None,
+                            output_statistics,
                         })
                         .await;
                 });
@@ -149,9 +157,17 @@ impl TaskRunnerActor {
                             let key = key.clone();
                             let message = message.clone();
                             let cause = cause.clone();
+                            let output_statistics = output_statistics.clone();
                             async move {
                                 driver
-                                    .report_task_status(key, status, message, cause, seq)
+                                    .report_task_status(
+                                        key,
+                                        status,
+                                        message,
+                                        cause,
+                                        output_statistics,
+                                        seq,
+                                    )
                                     .await
                             }
                         })

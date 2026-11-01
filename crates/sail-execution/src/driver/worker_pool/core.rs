@@ -353,6 +353,7 @@ impl WorkerPool {
                         message: Some(format!("failed to dispatch task batch: {error}")),
                         cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
                         sequence: None,
+                        output_statistics: None,
                     });
                 }
                 return;
@@ -372,6 +373,7 @@ impl WorkerPool {
                             message: Some(format!("failed to run task batch: {error}")),
                             cause: Some(CommonErrorCause::new::<PyErrExtractor>(&error)),
                             sequence: None,
+                            output_statistics: None,
                         })
                         .await;
                 }
