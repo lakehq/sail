@@ -360,6 +360,13 @@ impl SparkErrorClass {
 /// gRPC headers in addition to the duplicated status message.
 const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 2500;
 
+/// The maximum size of metadata fields in `ErrorInfo`.
+///
+/// Matches the default of Spark's `spark.connect.grpc.maxMetadataSize`.
+/// Like Spark, `errorClass` and `messageParameters` are omitted together
+/// when the serialized parameters exceed this size.
+const MAX_METADATA_SIZE: usize = 1024;
+
 const TRUNCATED_MARKER: &str = "\n[truncated]\n";
 
 /// Truncate a gRPC status message to at most [`MAX_GRPC_STATUS_MESSAGE_LEN`] bytes.
@@ -395,9 +402,11 @@ impl From<SparkThrowable> for Status {
         metadata.insert("classes".into(), format!("[\"{class}\"]"));
 
         if let Some(error_class) = throwable.error_class() {
-            let message_parameters = serde_json::json!(error_class.message_parameters);
-            metadata.insert("errorClass".into(), error_class.name.to_string());
-            metadata.insert("messageParameters".into(), message_parameters.to_string());
+            let message_parameters = serde_json::json!(error_class.message_parameters).to_string();
+            if message_parameters.len() <= MAX_METADATA_SIZE {
+                metadata.insert("errorClass".into(), error_class.name.to_string());
+                metadata.insert("messageParameters".into(), message_parameters);
+            }
             metadata.insert("sqlState".into(), error_class.sql_state.to_string());
         }
 
@@ -557,6 +566,42 @@ mod tests {
         assert!(truncated.starts_with("python traceback start\n"));
         assert!(truncated.contains(TRUNCATED_MARKER));
         assert!(truncated.ends_with("[UDTF_ARROW_TYPE_CONVERSION_ERROR]\n"));
+    }
+
+    #[test]
+    fn error_class_metadata_is_added() -> Result<(), String> {
+        let sid = "00000000-0000-0000-0000-000000000000".to_string();
+        let status = Status::from(SparkError::InvalidHandle(sid, InvalidHandle::SessionClosed));
+        let info = status
+            .get_details_error_info()
+            .ok_or("missing error info")?;
+        let error_class = info.metadata.get("errorClass");
+        assert_eq!(
+            error_class.ok_or("missing error class")?,
+            "INVALID_HANDLE.SESSION_CLOSED"
+        );
+        let message_parameters = info.metadata.get("messageParameters");
+        assert_eq!(
+            message_parameters.ok_or("missing message parameters")?,
+            "{\"handle\":\"00000000-0000-0000-0000-000000000000\"}"
+        );
+        let sql_state = info.metadata.get("sqlState");
+        assert_eq!(sql_state.ok_or("missing sql state")?, "HY000");
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_message_parameters_are_omitted() -> Result<(), String> {
+        let sid = "x".repeat(MAX_METADATA_SIZE + 1);
+        let status = Status::from(SparkError::InvalidHandle(sid, InvalidHandle::SessionClosed));
+        let info = status
+            .get_details_error_info()
+            .ok_or("missing error info")?;
+        assert!(!info.metadata.contains_key("errorClass"));
+        assert!(!info.metadata.contains_key("messageParameters"));
+        let sql_state = info.metadata.get("sqlState");
+        assert_eq!(sql_state.ok_or("missing sql state")?, "HY000");
+        Ok(())
     }
 
     #[test]
