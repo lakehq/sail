@@ -51,6 +51,7 @@ pub fn create_catalog_manager(
                     warehouse,
                     prefix,
                     namespace_separator,
+                    access_delegation,
                     oauth_access_token,
                     bearer_access_token,
                     bearer_access_token_file,
@@ -68,6 +69,12 @@ pub fn create_catalog_manager(
                         properties.insert(
                             "namespace-separator".to_string(),
                             namespace_separator.to_string(),
+                        );
+                    }
+                    if let Some(access_delegation) = access_delegation {
+                        properties.insert(
+                            "access-delegation".to_string(),
+                            access_delegation.to_string(),
                         );
                     }
                     let credentials = iceberg_rest_credentials(

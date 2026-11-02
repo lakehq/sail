@@ -872,6 +872,10 @@ pub enum CatalogType {
         prefix: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         namespace_separator: Option<String>,
+        /// The value of the `X-Iceberg-Access-Delegation` header sent when loading a table.
+        /// Set this to `none` to omit the header for servers that reject it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        access_delegation: Option<String>,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
