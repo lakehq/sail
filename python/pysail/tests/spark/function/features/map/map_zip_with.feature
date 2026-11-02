@@ -129,6 +129,15 @@ Feature: map_zip_with higher-order function
         | result           |
         | {a -> 5, b -> 5} |
 
+    Scenario: Preserve an enclosing lambda capture
+      When query
+        """
+        SELECT transform(array(1, 2), x -> map_zip_with(map('a', 10), map('b', 20), x)) AS result
+        """
+      Then query result collected
+        | result                                 |
+        | [{'a': 1, 'b': 1}, {'a': 2, 'b': 2}] |
+
     Scenario: An untyped NULL input with an ordinary body returns NULL
       When query
         """
@@ -151,6 +160,20 @@ Feature: map_zip_with higher-order function
       Then query result
         | result  |
         | [01, 1] |
+
+    Scenario: Non-ANSI mode formats timestamp keys with Spark semantics
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT size(map_zip_with(
+          map(TIMESTAMP '2024-01-01 00:00:00', 1),
+          map('2024-01-01 00:00:00', 2),
+          (k, v1, v2) -> coalesce(v1, 0) + coalesce(v2, 0)
+        )) AS result
+        """
+      Then query result
+        | result |
+        | 1      |
 
     Scenario: ANSI mode promotes string timestamp keys in the session time zone
       Given config spark.sql.ansi.enabled = true
@@ -205,6 +228,21 @@ Feature: map_zip_with higher-order function
       Then query result
         | result |
         | NULL   |
+
+    Scenario: A NULL left map skips right argument evaluation in ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT map_zip_with(map_value, map(1, 1 / divisor), (k, x, y) -> y) AS result
+        FROM VALUES
+          (CAST(NULL AS MAP<INT, INT>), 0),
+          (map(1, 10), 1)
+        AS t(map_value, divisor)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | {1 -> 1.0} |
 
     Scenario: Empty and NULL maps skip lambda evaluation when there are no keys
       When query
