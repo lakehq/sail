@@ -94,7 +94,7 @@ def test_identity_partition_defaults_survive_reads_and_cow(spark, sql_catalog, t
     from pyiceberg.transforms import IdentityTransform
     from pyiceberg.typedef import Record
 
-    from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
+    from pysail.tests.spark.iceberg.utils import _current_manifest_entries, _local_file_path
 
     identifier = "default.identity_defaults"
     name = "identity_defaults"

@@ -156,6 +156,7 @@ pub struct IcebergCommitExec {
     lakehouse_table: Option<LakehouseExecutionContext>,
     snapshot_update_kind: SnapshotUpdateKind,
     expected_snapshot_id: Option<Option<i64>>,
+    table_replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
     removed_data_file_paths: Vec<String>,
     dynamic_partition_overwrite: bool,
     output: CommitOutput,
@@ -186,11 +187,26 @@ impl IcebergCommitExec {
             lakehouse_table,
             snapshot_update_kind,
             expected_snapshot_id: None,
+            table_replacement: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
             output: CommitOutput::Command(CommandOutput::Count),
             cache,
         }
+    }
+
+    pub fn with_table_replacement(
+        mut self,
+        replacement: Option<crate::operations::replacement::IcebergTableReplacement>,
+    ) -> Self {
+        self.table_replacement = replacement;
+        self
+    }
+
+    pub fn table_replacement(
+        &self,
+    ) -> Option<&crate::operations::replacement::IcebergTableReplacement> {
+        self.table_replacement.as_ref()
     }
 
     pub fn with_output(mut self, output: CommandOutput) -> Self {
@@ -696,6 +712,7 @@ impl ExecutionPlan for IcebergCommitExec {
             self.snapshot_update_kind,
         )
         .with_expected_snapshot_id(self.expected_snapshot_id)
+        .with_table_replacement(self.table_replacement.clone())
         .with_removed_data_file_paths(self.removed_data_file_paths.clone())
         .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite);
         if let CommitOutput::Command(output) = &self.output {
@@ -737,6 +754,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let lakehouse_table = self.lakehouse_table.clone();
         let snapshot_update_kind = self.snapshot_update_kind;
         let expected_snapshot_id = self.expected_snapshot_id;
+        let table_replacement = self.table_replacement.clone();
         let planned_removed_data_file_paths = self.removed_data_file_paths.clone();
         let dynamic_partition_overwrite = self.dynamic_partition_overwrite;
         let output = self.output.clone();
@@ -799,6 +817,22 @@ impl ExecutionPlan for IcebergCommitExec {
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
+            if let Some(replacement) = table_replacement {
+                crate::operations::replacement::commit_replacement(
+                    &context,
+                    &table_url,
+                    &store_ctx,
+                    replacement,
+                    &commit_info,
+                )
+                .await?;
+                return commit_output_batch(
+                    schema,
+                    &output,
+                    commit_info.row_count,
+                    added_data_files_count,
+                );
+            }
             if let Some(requirement) = expected_snapshot_requirement(expected_snapshot_id)
                 && !commit_info.requirements.contains(&requirement)
             {
@@ -1439,7 +1473,16 @@ impl DisplayAs for IcebergCommitExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "IcebergCommitExec(table_path={})", self.table_url)
+                write!(
+                    f,
+                    "IcebergCommitExec(table_path={}{})",
+                    self.table_url,
+                    if self.table_replacement.is_some() {
+                        ", replacement=true"
+                    } else {
+                        ""
+                    }
+                )
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: iceberg")?;

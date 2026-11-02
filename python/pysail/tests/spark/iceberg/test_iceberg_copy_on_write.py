@@ -16,8 +16,11 @@ from pysail.testing.spark.steps.iceberg import (
 )
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
-from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
-from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
+from pysail.tests.spark.iceberg.utils import (
+    _current_manifest_entries,
+    _local_file_path,
+    pyiceberg_file_io_properties,
+)
 
 
 @pytest.mark.yamlsnapshot(group="plan")

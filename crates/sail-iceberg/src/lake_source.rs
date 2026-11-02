@@ -779,7 +779,12 @@ pub(crate) async fn plan_iceberg_write(
         preserve_input_partitions,
     } = node.options().clone();
 
+    let replacement = match &mode {
+        SinkMode::ReplaceTable(replacement) => Some((**replacement).clone()),
+        _ => None,
+    };
     let mut mode = match mode {
+        SinkMode::ReplaceTable(_) => PhysicalSinkMode::Overwrite,
         SinkMode::ErrorIfExists => PhysicalSinkMode::ErrorIfExists,
         SinkMode::IgnoreIfExists => PhysicalSinkMode::IgnoreIfExists,
         SinkMode::Append => PhysicalSinkMode::Append,
@@ -798,7 +803,9 @@ pub(crate) async fn plan_iceberg_write(
     let variant_shredding_option_presence =
         IcebergWriterExecOptions::variant_shredding_option_presence(&clean_options);
     let iceberg_options = IcebergWriteOptions::resolve(ctx, clean_options)?;
-    if let Some(overwrite_mode) = iceberg_options.overwrite_mode.as_deref() {
+    if let Some(overwrite_mode) = iceberg_options.overwrite_mode.as_deref()
+        && replacement.is_none()
+    {
         match overwrite_mode.to_ascii_lowercase().as_str() {
             "dynamic"
                 if matches!(mode, PhysicalSinkMode::Overwrite)
@@ -839,6 +846,12 @@ pub(crate) async fn plan_iceberg_write(
         _ => find_latest_metadata_file(&store, &table_url).await,
     };
     let table_exists = exists_res.is_ok();
+    if replacement.is_some()
+        && let Err(error) = &exists_res
+        && !error.to_string().contains("No metadata files found")
+    {
+        return plan_err!("cannot resolve Iceberg replacement base: {error}");
+    }
 
     match mode {
         PhysicalSinkMode::ErrorIfExists if table_exists => {
@@ -895,6 +908,7 @@ pub(crate) async fn plan_iceberg_write(
     };
 
     if let Some(existing_partitions) = &existing_partition_columns
+        && replacement.is_none()
         && !partition_by.is_empty()
         && partition_by != *existing_partitions
     {
@@ -919,7 +933,7 @@ pub(crate) async fn plan_iceberg_write(
         }
     }
 
-    let resolved_partition_columns = if !partition_by.is_empty() {
+    let resolved_partition_columns = if replacement.is_some() || !partition_by.is_empty() {
         partition_by
     } else {
         existing_partition_columns.unwrap_or_default()
@@ -927,8 +941,8 @@ pub(crate) async fn plan_iceberg_write(
 
     // An overwrite that replaces the schema has no existing columns to keep, like the schema mode
     // that `get_schema_mode` gives it.
-    let replaces_schema =
-        matches!(mode, PhysicalSinkMode::Overwrite) && iceberg_options.overwrite_schema;
+    let replaces_schema = replacement.is_some()
+        || (matches!(mode, PhysicalSinkMode::Overwrite) && iceberg_options.overwrite_schema);
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
@@ -948,14 +962,42 @@ pub(crate) async fn plan_iceberg_write(
     let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
     let writer_input_schema =
         input_schema_with_logical_metadata(physical_input.schema(), Some(&logical_input_schema));
+    let replacement = replacement
+        .map(|catalog| {
+            crate::operations::replacement::prepare_replacement(
+                &table_url,
+                catalog,
+                exists_res.as_ref().ok().cloned(),
+                table.as_ref().map(Table::metadata),
+                writer_input_schema.as_ref(),
+            )
+        })
+        .transpose()?;
+    if let Some(replacement) = &replacement {
+        // Replacement owns the definition irrespective of ordinary write schema options.
+        options.merge_schema = false;
+        options.overwrite_schema = false;
+        options.table_properties = replacement.catalog.properties.clone();
+    }
     let mut write_context = prepare_iceberg_write_context(
         &table_url,
-        table.as_ref().map(Table::metadata),
+        replacement
+            .as_ref()
+            .map(|replacement| &replacement.metadata)
+            .or_else(|| table.as_ref().map(Table::metadata)),
         &options,
         &resolved_partition_columns,
         &mode,
         writer_input_schema.as_ref(),
     )?;
+    if replacement.is_some() {
+        if !table_exists {
+            write_context.base_table = None;
+        }
+        write_context.commit_writer_schema = true;
+        write_context.commit_writer_partition_spec = true;
+        write_context.requirements.clear();
+    }
     if !defer_commit && matches!(mode, PhysicalSinkMode::Append) {
         write_context.operation = Some(crate::operation_metrics::IcebergOperation::Insert);
     }
@@ -974,7 +1016,8 @@ pub(crate) async fn plan_iceberg_write(
         physical_sort,
         ctx,
     )
-    .with_output(output);
+    .with_output(output)
+    .with_table_replacement(replacement);
     if preserve_input_partitions {
         builder = builder.preserve_input_partitions();
     }

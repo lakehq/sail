@@ -14,8 +14,7 @@ from pyiceberg.types import BinaryType, DecimalType, DoubleType, IntegerType, Lo
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.tests.spark.iceberg.test_iceberg_data_skipping import unavailable_iceberg_files
 from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
-from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
-from pysail.tests.spark.iceberg.utils import create_sql_catalog
+from pysail.tests.spark.iceberg.utils import _current_manifest_entries, _local_file_path, create_sql_catalog
 
 
 @pytest.fixture

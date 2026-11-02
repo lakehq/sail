@@ -4,6 +4,49 @@
 #   SparkWriteOptions:  https://raw.githubusercontent.com/apache/iceberg/apache-iceberg-1.10.1/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/SparkWriteOptions.java
 
 ### Read-Only Options ###
+# Snapshot selectors are mutually exclusive. Legacy Sail aliases remain supported.
+# Spark 4.1: https://github.com/apache/iceberg/blob/6976e020b894f6a6777704df2b8c4458cb291ae9/spark/v4.1/spark/src/main/java/org/apache/iceberg/spark/source/SparkTable.java
+
+- key: version_as_of
+  description: |
+    Select a snapshot ID or named branch/tag. Branches use the current schema;
+    snapshot IDs and tags use the historical snapshot schema.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [version_as_of, versionAsOf]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: branch
+  description: Select a branch to read using the current table schema.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [branch]
+      parser: crate::options::parsers::parse_optional_string
+
+- key: tag
+  description: Select a tag to read using its historical snapshot schema.
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_string
+  supported: true
+  rust_type: "Option<String>"
+  scopes: [read]
+  origins:
+    - type: option
+      keys: [tag]
+      parser: crate::options::parsers::parse_optional_string
 
 - key: use_ref
   description: |
@@ -21,8 +64,6 @@
       keys:
         - use_ref
         - ref
-        - branch
-        - tag
         - iceberg.ref
       parser: crate::options::parsers::parse_optional_string
 
@@ -42,8 +83,6 @@
         - snapshot_id
         - snapshot-id
         - snapshotId
-        - version_as_of
-        - versionAsOf
       parser: crate::options::parsers::parse_optional_i64
 
 - key: timestamp_as_of

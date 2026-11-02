@@ -273,6 +273,7 @@ impl PlanResolver<'_> {
             lakehouse_table: None,
         };
         let mut preconditions = vec![];
+        let mut table_replacement = None;
         match target {
             WriteTarget::DataSource => {
                 if !table_properties.is_empty() {
@@ -416,6 +417,15 @@ impl PlanResolver<'_> {
                         }
                     }
                     if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
+                        if write_format.eq_ignore_ascii_case("iceberg")
+                            && matches!(mode, WriteMode::Replace { .. })
+                            && let Some(requested) = find_path_in_options(&sink_info.options)
+                            && requested != *location
+                        {
+                            return Err(PlanError::unsupported(
+                                "relocating an Iceberg table during replacement",
+                            ));
+                        }
                         sink_info.options.push(OptionLayer::OptionList {
                             items: vec![("path".to_string(), location.clone())],
                         });
@@ -508,6 +518,16 @@ impl PlanResolver<'_> {
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,
                     };
+                    if write_format.eq_ignore_ascii_case("iceberg")
+                        && matches!(mode, WriteMode::Replace { .. })
+                    {
+                        table_replacement = Some(
+                            self.ctx
+                                .extension::<CatalogManager>()?
+                                .stage_table_replacement(&catalog_table, create_options.clone())
+                                .await?,
+                        );
+                    }
                     let create_plan = self
                         .ctx
                         .extension::<CatalogManager>()?
@@ -533,11 +553,13 @@ impl PlanResolver<'_> {
                             .execution
                             .for_operation(LakehouseOperation::Write),
                     );
-                    let command = CatalogCommand::CreateTable {
-                        table: table.clone().into(),
-                        options: create_options,
-                    };
-                    preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
+                    if table_replacement.is_none() {
+                        let command = CatalogCommand::CreateTable {
+                            table: table.clone().into(),
+                            options: create_options,
+                        };
+                        preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
+                    }
                 }
 
                 if sink_info.lakehouse_table.is_none() {
@@ -547,9 +569,12 @@ impl PlanResolver<'_> {
                         .map(|context| context.for_operation(LakehouseOperation::Write));
                 }
 
-                sink_info.mode = self
-                    .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
-                    .await?;
+                sink_info.mode = if let Some(replacement) = table_replacement {
+                    SinkMode::ReplaceTable(Box::new(replacement))
+                } else {
+                    self.resolve_write_mode(mode, schema_for_cond.as_ref(), state)
+                        .await?
+                };
             }
         };
         input = self
@@ -885,10 +910,15 @@ impl PlanResolver<'_> {
         let has_default_values = Self::plan_has_default_column_value(&input)?;
         let requires_delta_not_null_metadata =
             info.format.eq_ignore_ascii_case("delta") && info.columns.iter().any(|c| !c.nullable);
-        let missing_lakehouse_columns = (info.format.eq_ignore_ascii_case("iceberg")
-            || info.format.eq_ignore_ascii_case("delta"))
-            && matches!(&column_match, WriteColumnMatch::ByColumns { .. })
-            && input.schema().fields().len() < info.columns.len();
+        let missing_lakehouse_columns = input.schema().fields().len() < info.columns.len()
+            && match &column_match {
+                WriteColumnMatch::ByName => info.format.eq_ignore_ascii_case("iceberg"),
+                WriteColumnMatch::ByColumns { .. } => {
+                    info.format.eq_ignore_ascii_case("iceberg")
+                        || info.format.eq_ignore_ascii_case("delta")
+                }
+                WriteColumnMatch::ByPosition => false,
+            };
         if has_column_expressions
             || has_default_values
             || requires_delta_not_null_metadata
@@ -1268,8 +1298,9 @@ impl PlanResolver<'_> {
     ///
     /// - `ByPosition`:
     ///   - If input has `table_field_count` fields: column `i` maps to input `i`.
-    ///   - If input has `required_count` fields: the input lines up with the
-    ///     required table columns in table order; generated/default/identity columns get `None`.
+    ///   - For non-Iceberg tables, if input has `required_count` fields: the input lines up
+    ///     with required table columns; generated/default/identity columns get `None`.
+    ///     Iceberg positional writes require the full table arity, even with defaults.
     ///   - Otherwise: error.
     /// - `ByName`: each table column looks up (case-insensitive) in the input schema.
     ///   Columns not found map to `None` (allowed only for generated/default/identity cols).
@@ -1302,7 +1333,9 @@ impl PlanResolver<'_> {
                     for (i, input_col) in input_cols.iter().enumerate() {
                         out[i] = Some(col(input_col.clone()));
                     }
-                } else if input_field_count == required_count {
+                } else if input_field_count == required_count
+                    && !info.format.eq_ignore_ascii_case("iceberg")
+                {
                     let mut required_idx = 0usize;
                     for (i, table_col) in info.columns.iter().enumerate() {
                         if info.column_is_omittable(table_col, column_match) {
@@ -1319,6 +1352,18 @@ impl PlanResolver<'_> {
                 }
             }
             WriteColumnMatch::ByName => {
+                for field in input.schema().fields() {
+                    if !info
+                        .columns
+                        .iter()
+                        .any(|column| column.name.eq_ignore_ascii_case(field.name()))
+                    {
+                        return Err(PlanError::invalid(format!(
+                            "column not found in target table: {}",
+                            field.name()
+                        )));
+                    }
+                }
                 for (i, table_col) in info.columns.iter().enumerate() {
                     let mut matches = input
                         .schema()

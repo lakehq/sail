@@ -4,9 +4,13 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import pandas as pd
+import pytest
 from pyiceberg.catalog import load_catalog
 from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.manifest import ManifestContent, read_manifest_list
 from pyiceberg.typedef import EMPTY_DICT, Properties
+
+from pysail.testing.spark.steps.iceberg import _current_snapshot, _find_latest_metadata, _pyarrow_input_file
 
 _WINDOWS_DRIVE_PREFIX_LENGTH = 2
 _PYICEBERG_FILE_IO_IMPL = f"{__name__}.WindowsLocalPyArrowFileIO"
@@ -30,6 +34,24 @@ class WindowsLocalPyArrowFileIO(PyArrowFileIO):
             path = _preserve_encoded_windows_colons(path)
             return uri.scheme, uri.netloc, path
         return PyArrowFileIO.parse_location(location, properties)
+
+
+def _local_file_path(uri: str) -> Path:
+    parsed = urlparse(uri)
+    if parsed.scheme not in ("", "file"):
+        pytest.fail(f"cannot inspect non-local file URI: {uri}")
+    return Path(url2pathname(f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path))
+
+
+def _current_manifest_entries(table_path: Path, content: ManifestContent):
+    metadata = _find_latest_metadata(table_path)
+    snapshot = _current_snapshot(metadata)
+    io = WindowsLocalPyArrowFileIO()
+    entries = []
+    for manifest in read_manifest_list(_pyarrow_input_file(io, snapshot["manifest-list"])):
+        if manifest.content == content:
+            entries.extend(manifest.fetch_manifest_entry(io))
+    return entries
 
 
 def pyiceberg_file_io_properties() -> dict[str, str]:

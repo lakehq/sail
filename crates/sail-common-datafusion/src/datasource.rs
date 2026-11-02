@@ -187,6 +187,7 @@ pub trait MergeCapableSource: Send + Sync {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
+    ReplaceTable(Box<crate::catalog::TableReplacement>),
     ErrorIfExists,
     IgnoreIfExists,
     Append,

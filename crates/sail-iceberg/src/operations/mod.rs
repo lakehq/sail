@@ -16,6 +16,9 @@ pub mod bootstrap;
 pub mod helpers;
 pub(crate) mod metadata_commit;
 pub mod overwrite;
+pub mod replacement;
+#[cfg(test)]
+mod replacement_test_support;
 pub mod snapshot;
 pub mod write;
 

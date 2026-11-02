@@ -1644,6 +1644,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url,
                 lakehouse_table_json,
+                table_replacement_json,
                 validate_read_snapshot,
                 expected_snapshot_id,
                 snapshot_update_kind,
@@ -1665,7 +1666,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             validate_read_snapshot.then_some(expected_snapshot_id),
                         )
                         .with_dynamic_partition_overwrite(dynamic_partition_overwrite)
-                        .with_removed_data_file_paths(removed_data_file_paths);
+                        .with_removed_data_file_paths(removed_data_file_paths)
+                        .with_table_replacement(
+                            table_replacement_json
+                                .map(|json| {
+                                    serde_json::from_str(&json).map_err(|error| {
+                                        plan_datafusion_err!("invalid Iceberg replacement: {error}")
+                                    })
+                                })
+                                .transpose()?,
+                        );
                 use r#gen::iceberg_commit_exec_node::Output;
                 let commit = match output {
                     Some(Output::CommandOutput(output)) => {
@@ -3130,6 +3140,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ),
                 dynamic_partition_overwrite: iceberg_commit_exec.dynamic_partition_overwrite(),
                 removed_data_file_paths: iceberg_commit_exec.removed_data_file_paths().to_vec(),
+                table_replacement_json: iceberg_commit_exec.table_replacement().map(serde_json::to_string)
+                    .transpose().map_err(|error| plan_datafusion_err!("failed to encode Iceberg replacement: {error}"))?,
                 output: Some(match iceberg_commit_exec.output() {
                     sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::Command(output) =>
                         r#gen::iceberg_commit_exec_node::Output::CommandOutput(Self::encode_command_output(*output)),
@@ -7027,6 +7039,71 @@ mod tests {
                 .as_ref()
                 .and_then(|base| base.current_snapshot_id),
             Some(42)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_round_trip_preserves_catalog_base_and_history() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::catalog::{
+            CatalogPartitionField, PartitionTransform, TableReplacement,
+        };
+        use sail_iceberg::operations::replacement::IcebergTableReplacement;
+        let replacement = IcebergTableReplacement {
+            catalog: TableReplacement {
+                catalog_table: vec!["catalog".into(), "namespace".into(), "table".into()],
+                catalog_generation: 11, database_generation: 22, table_generation: 33,
+                require_existing: true, existing: true,
+                columns: vec![("id".into(), DataType::Int64, false)],
+                location: "file:///tmp/replacement-codec/".into(),
+                partition_by: vec![CatalogPartitionField { column: "id".into(), transform: Some(PartitionTransform::Identity) }],
+                sort_by: vec![], properties: vec![("owner".into(), "test".into())],
+                property_updates: vec![("owner".into(), "requested".into())], is_external: true,
+            },
+            base_metadata_file: Some("tmp/replacement-codec/metadata/v7.metadata.json".into()),
+            metadata: serde_json::from_value(serde_json::json!({
+                "format-version":2, "table-uuid":"12345678-1234-1234-1234-123456789abc",
+                "location":"file:///tmp/replacement-codec/", "last-sequence-number":8,
+                "last-updated-ms":100, "last-column-id":5,"current-schema-id":2,
+                "schemas":[{"type":"struct","schema-id":1,"fields":[{"id":1,"name":"old","required":false,"type":"int"}]},{"type":"struct","schema-id":2,"fields":[{"id":5,"name":"id","required":true,"type":"long"}]}],
+                "partition-specs":[{"spec-id":3,"fields":[{"source-id":5,"field-id":1001,"name":"id","transform":"identity"}]}],
+                "default-spec-id":3,"last-partition-id":1001,"current-snapshot-id":null,
+                "snapshots":[{"snapshot-id":42,"sequence-number":8,"timestamp-ms":100,"manifest-list":"file:///tmp/old.avro","summary":{"operation":"append"},"schema-id":1}],
+                "snapshot-log":[{"timestamp-ms":100,"snapshot-id":42}],
+                "metadata-log":[{"timestamp-ms":90,"metadata-file":"file:///tmp/replacement-codec/metadata/v6.metadata.json"}],
+                "refs":{"audit":{"snapshot-id":42,"type":"tag"}}
+            })).map_err(|e| plan_datafusion_err!("{e}"))?,
+        };
+        let expected =
+            serde_json::to_value(&replacement).map_err(|e| plan_datafusion_err!("{e}"))?;
+        assert_ne!(
+            replacement.catalog.properties,
+            replacement.catalog.property_updates
+        );
+        let serde_round_trip: IcebergTableReplacement =
+            serde_json::from_value(expected.clone()).map_err(|e| plan_datafusion_err!("{e}"))?;
+        assert_eq!(serde_round_trip.catalog, replacement.catalog);
+        let plan = IcebergCommitExec::new(
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty()))),
+            Url::parse("file:///tmp/replacement-codec/")
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            None,
+            SnapshotUpdateKind::Truncate,
+        )
+        .with_table_replacement(Some(replacement));
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let commit = decoded.downcast_ref::<IcebergCommitExec>().unwrap();
+        assert_eq!(
+            serde_json::to_value(commit.table_replacement().unwrap())
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            expected
+        );
+        assert_eq!(
+            commit.properties().output_partitioning().partition_count(),
+            1
         );
         Ok(())
     }

@@ -1,12 +1,10 @@
 from pathlib import Path
-from urllib.parse import urlparse
-from urllib.request import url2pathname
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
-from pyiceberg.manifest import DataFileContent, ManifestContent, read_manifest_list
+from pyiceberg.manifest import DataFileContent, ManifestContent
 from pyiceberg.schema import Schema
 from pyiceberg.table import TableProperties
 from pyiceberg.typedef import Record
@@ -19,23 +17,15 @@ from pysail.testing.spark.steps.iceberg import (
     _find_latest_metadata,
     _latest_metadata_path,
     _metadata_file_version,
-    _pyarrow_input_file,
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests.spark.iceberg.utils import WindowsLocalPyArrowFileIO
+from pysail.tests.spark.iceberg.utils import _current_manifest_entries, _local_file_path
 
 UNPARTITIONED_LAST_PARTITION_ID = 999
 
 
 def _uri_sql(path: Path) -> str:
     return escape_sql_string_literal(path.as_uri())
-
-
-def _local_file_path(uri: str) -> Path:
-    parsed = urlparse(uri)
-    if parsed.scheme not in ("", "file"):
-        pytest.fail(f"cannot inspect non-local file URI: {uri}")
-    return Path(url2pathname(f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path))
 
 
 def _drop_table(spark, name: str) -> None:
@@ -65,17 +55,6 @@ def _current_manifests(table_path: Path) -> list[dict]:
 
 def _manifest_count(manifests: list[dict], *, content: str, key: str) -> int:
     return sum(manifest.get(key) or 0 for manifest in manifests if manifest.get("content") == content)
-
-
-def _current_manifest_entries(table_path: Path, content: ManifestContent):
-    metadata = _find_latest_metadata(table_path)
-    snapshot = _current_snapshot(metadata)
-    io = WindowsLocalPyArrowFileIO()
-    entries = []
-    for manifest in read_manifest_list(_pyarrow_input_file(io, snapshot["manifest-list"])):
-        if manifest.content == content:
-            entries.extend(manifest.fetch_manifest_entry(io))
-    return entries
 
 
 def _assert_current_snapshot_metadata(
