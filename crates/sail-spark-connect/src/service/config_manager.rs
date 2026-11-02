@@ -162,6 +162,27 @@ async fn reset_native_config(
     spark.remove_native_config_key(key)
 }
 
+/// Mirrors `spark.sql.parquet.binaryAsString` onto the DataFusion session configuration, which is
+/// where Parquet read options take their session defaults from. Sail otherwise keeps the key in the
+/// Spark session only, so setting it has no effect on reads. The value set in the session overrides
+/// the Sail `parquet.binary_as_string` option, and unsetting it restores that option. A read option
+/// still overrides both, since option layers are merged after the session defaults.
+fn sync_parquet_binary_as_string(ctx: &SessionContext, spark: &SparkSession) -> SparkResult<()> {
+    let key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING;
+    let value = match spark.get_config_if_set(key)? {
+        Some(value) => value.trim().to_lowercase().parse::<bool>()?,
+        None => spark.options().parquet_binary_as_string,
+    };
+    ctx.state_ref()
+        .write()
+        .config_mut()
+        .options_mut()
+        .execution
+        .parquet
+        .binary_as_string = value;
+    Ok(())
+}
+
 pub(crate) fn handle_config_get(
     ctx: &SessionContext,
     keys: Vec<String>,
@@ -189,6 +210,10 @@ pub(crate) fn handle_config_set(
         let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
         kv.iter().any(|pair| pair.key == key)
     };
+    let sets_parquet_binary_as_string = {
+        let key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING.to_string();
+        kv.iter().any(|pair| pair.key == key)
+    };
     spark.set_config(kv)?;
     if sets_session_timezone {
         // Mirror `spark.sql.session.timeZone` onto the DataFusion session configuration. Parquet
@@ -203,6 +228,9 @@ pub(crate) fn handle_config_set(
             .options_mut()
             .execution
             .time_zone = Some(session_timezone);
+    }
+    if sets_parquet_binary_as_string {
+        sync_parquet_binary_as_string(ctx, &spark)?;
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
@@ -271,6 +299,10 @@ pub(crate) fn handle_config_unset(
         let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
         keys.iter().any(|k| k == &key)
     };
+    let unsets_parquet_binary_as_string = {
+        let key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING.to_string();
+        keys.iter().any(|k| k == &key)
+    };
     spark.unset_config(keys)?;
     if unsets_session_timezone {
         // Unsetting `spark.sql.session.timeZone` reverts it toward the default, so re-sync
@@ -283,6 +315,9 @@ pub(crate) fn handle_config_unset(
             .options_mut()
             .execution
             .time_zone = Some(session_timezone);
+    }
+    if unsets_parquet_binary_as_string {
+        sync_parquet_binary_as_string(ctx, &spark)?;
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),

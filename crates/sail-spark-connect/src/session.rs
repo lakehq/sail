@@ -23,6 +23,9 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
+    /// The Sail `parquet.binary_as_string` option, which applies while
+    /// `spark.sql.parquet.binaryAsString` is not set in the session.
+    pub parquet_binary_as_string: bool,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
@@ -140,6 +143,15 @@ impl SparkSession {
             })
             .collect();
         Ok(kv)
+    }
+
+    /// Returns the value set in the session, ignoring the default of the configuration entry.
+    pub(crate) fn get_config_if_set(&self, key: &str) -> SparkResult<Option<String>> {
+        let state = self.state.lock()?;
+        Ok(state
+            .config
+            .get_with_default(key, None)
+            .map(|x| x.to_string()))
     }
 
     pub(crate) fn set_config(&self, kv: Vec<ConfigKeyValue>) -> SparkResult<()> {
