@@ -64,9 +64,14 @@ We describe scenarios with `Given`, `When`, and `Then`. We assert user-facing ou
 
 The BDD tests are structured as follows:
 
-- `python/pysail/tests/**/*.feature` (test case definitions)
-- `python/pysail/tests/**/test*_features.py` (test loaders)
-- `python/pysail/testing/**/steps/*.py` (step implementations)
+- `python/pysail/tests/_dev/**/*.feature` (test case definitions)
+- `python/pysail/tests/_dev/**/test*_features.py` (test loaders)
+- `python/pysail/testing/_dev/**/steps/*.py` (step implementations)
+
+Sanity tests remain in `python/pysail/tests`. Shared helpers used by these tests live in
+`python/pysail/testing`. Development-only helpers live in `python/pysail/testing/_dev`.
+To test an installed wheel with a source checkout, set `PYSAIL_SOURCE_PATH` to the
+`python/pysail` directory in the checkout and run `pytest --pyargs pysail.tests pysail.tests._dev`.
 
 Python tests are suitable for Spark DataFrame APIs. The BDD tests should already cover Spark SQL features comprehensively, and Python unit tests additionally ensure that the _interface_ is working properly.
 
