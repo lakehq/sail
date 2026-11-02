@@ -4,9 +4,10 @@ use std::sync::Arc;
 use datafusion::common::{Result, plan_datafusion_err};
 use datafusion_common::plan_err;
 use sail_catalog::credentials::{
-    CatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials, StaticCatalogCredentials,
+    BasicCatalogCredentials, CatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials,
+    StaticCatalogCredentials,
 };
-use sail_catalog::error::CatalogResult;
+use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{
     CachingCatalogProvider, CatalogCacheManager, CatalogProvider, RuntimeAwareCatalogProvider,
@@ -54,6 +55,8 @@ pub fn create_catalog_manager(
                     oauth_access_token,
                     bearer_access_token,
                     bearer_access_token_file,
+                    basic_username,
+                    basic_password,
                     cache,
                 } => {
                     let mut properties = HashMap::new();
@@ -74,7 +77,9 @@ pub fn create_catalog_manager(
                         bearer_access_token_file.as_ref(),
                         bearer_access_token.as_ref(),
                         oauth_access_token.as_ref(),
-                    );
+                        basic_username.as_ref(),
+                        basic_password.as_ref(),
+                    )?;
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
@@ -316,23 +321,52 @@ fn wrap_catalog_provider(
 
 /// Credentials for an Iceberg REST catalog. A token file takes precedence over
 /// a static token: its contents are re-read per request, so a rotated projected
-/// service account token is picked up without a restart.
+/// service account token is picked up without a restart. Basic authentication
+/// uses a different `Authorization` scheme, so it is rejected together with the
+/// token options instead of one silently winning over the other.
 fn iceberg_rest_credentials(
     bearer_access_token_file: Option<&String>,
     bearer_access_token: Option<&SecretString>,
     oauth_access_token: Option<&SecretString>,
-) -> Arc<dyn CatalogCredentials> {
+    basic_username: Option<&String>,
+    basic_password: Option<&SecretString>,
+) -> CatalogResult<Arc<dyn CatalogCredentials>> {
+    match (basic_username, basic_password) {
+        (Some(username), Some(password)) => {
+            if bearer_access_token_file.is_some()
+                || bearer_access_token.is_some()
+                || oauth_access_token.is_some()
+            {
+                return Err(CatalogError::InvalidArgument(
+                    "Iceberg REST catalog options 'basic_username' and 'basic_password' cannot be \
+                     combined with a token option"
+                        .to_string(),
+                ));
+            }
+            return Ok(Arc::new(BasicCatalogCredentials::new(
+                username,
+                password.expose_secret(),
+            )));
+        }
+        (None, None) => {}
+        _ => {
+            return Err(CatalogError::InvalidArgument(
+                "Iceberg REST catalog options 'basic_username' and 'basic_password' must be set together"
+                    .to_string(),
+            ));
+        }
+    }
     if let Some(path) = bearer_access_token_file {
-        Arc::new(FileCatalogCredentials::new(path)) as Arc<dyn CatalogCredentials>
+        Ok(Arc::new(FileCatalogCredentials::new(path)) as Arc<dyn CatalogCredentials>)
     } else {
-        bearer_access_token
+        Ok(bearer_access_token
             .or(oauth_access_token)
             .map(|token| {
                 Arc::new(StaticCatalogCredentials::new(
                     token.expose_secret().to_string(),
                 )) as Arc<dyn CatalogCredentials>
             })
-            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials))
+            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials)))
     }
 }
 
@@ -440,7 +474,8 @@ mod tests {
         let path = path.to_string_lossy().to_string();
         let static_token = SecretString::from("static-token".to_string());
 
-        let credentials = iceberg_rest_credentials(Some(&path), Some(&static_token), None);
+        let credentials =
+            iceberg_rest_credentials(Some(&path), Some(&static_token), None, None, None).unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("file-token".to_string())
@@ -450,7 +485,7 @@ mod tests {
     #[tokio::test]
     async fn iceberg_credentials_use_the_static_bearer_token() {
         let token = SecretString::from("static-token".to_string());
-        let credentials = iceberg_rest_credentials(None, Some(&token), None);
+        let credentials = iceberg_rest_credentials(None, Some(&token), None, None, None).unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("static-token".to_string())
@@ -460,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn iceberg_credentials_fall_back_to_the_oauth_token() {
         let token = SecretString::from("oauth-token".to_string());
-        let credentials = iceberg_rest_credentials(None, None, Some(&token));
+        let credentials = iceberg_rest_credentials(None, None, Some(&token), None, None).unwrap();
         assert_eq!(
             credentials.retrieve().await.unwrap(),
             Some("oauth-token".to_string())
@@ -469,7 +504,44 @@ mod tests {
 
     #[tokio::test]
     async fn iceberg_credentials_are_empty_without_any_token() {
-        let credentials = iceberg_rest_credentials(None, None, None);
+        let credentials = iceberg_rest_credentials(None, None, None, None, None).unwrap();
         assert_eq!(credentials.retrieve().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_use_basic_authentication() {
+        let username = "user".to_string();
+        let password = SecretString::from("pass".to_string());
+        let credentials =
+            iceberg_rest_credentials(None, None, None, Some(&username), Some(&password)).unwrap();
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("dXNlcjpwYXNz".to_string())
+        );
+        assert_eq!(credentials.scheme(), "Basic");
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_reject_an_incomplete_basic_configuration() {
+        let username = "user".to_string();
+        let error = iceberg_rest_credentials(None, None, None, Some(&username), None).unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::InvalidArgument(message) if message.contains("must be set together")),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn iceberg_credentials_reject_basic_authentication_with_a_token() {
+        let username = "user".to_string();
+        let password = SecretString::from("pass".to_string());
+        let token = SecretString::from("static-token".to_string());
+        let error =
+            iceberg_rest_credentials(None, Some(&token), None, Some(&username), Some(&password))
+                .unwrap_err();
+        assert!(
+            matches!(&error, CatalogError::InvalidArgument(message) if message.contains("cannot be combined")),
+            "unexpected error: {error:?}"
+        );
     }
 }

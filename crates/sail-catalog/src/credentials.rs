@@ -1,11 +1,20 @@
 use std::fmt::Debug;
 use std::path::PathBuf;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+
 use crate::error::{CatalogError, CatalogResult};
 
 #[async_trait::async_trait]
 pub trait CatalogCredentials: Debug + Send + Sync + 'static {
     async fn retrieve(&self) -> CatalogResult<Option<String>>;
+
+    /// The HTTP authentication scheme of the retrieved credential, used as the
+    /// prefix of the `Authorization` header value.
+    fn scheme(&self) -> &str {
+        "Bearer"
+    }
 }
 
 #[derive(Debug, Default)]
@@ -33,6 +42,33 @@ impl StaticCatalogCredentials {
 impl CatalogCredentials for StaticCatalogCredentials {
     async fn retrieve(&self) -> CatalogResult<Option<String>> {
         Ok(Some(self.credential.clone()))
+    }
+}
+
+/// Credentials for a server that accepts only HTTP Basic authentication, such
+/// as Apache Gravitino. The user name and password are joined and encoded as
+/// `base64(username:password)` for the `Authorization` header.
+#[derive(Debug)]
+pub struct BasicCatalogCredentials {
+    credential: String,
+}
+
+impl BasicCatalogCredentials {
+    pub fn new(username: &str, password: &str) -> Self {
+        Self {
+            credential: BASE64_STANDARD.encode(format!("{username}:{password}")),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CatalogCredentials for BasicCatalogCredentials {
+    async fn retrieve(&self) -> CatalogResult<Option<String>> {
+        Ok(Some(self.credential.clone()))
+    }
+
+    fn scheme(&self) -> &str {
+        "Basic"
     }
 }
 
@@ -90,6 +126,16 @@ mod tests {
     fn write_token(path: &Path, contents: &str) {
         let mut file = File::create(path).unwrap();
         file.write_all(contents.as_bytes()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn retrieve_returns_encoded_basic_credential() {
+        let credentials = BasicCatalogCredentials::new("user", "pass");
+        assert_eq!(
+            credentials.retrieve().await.unwrap(),
+            Some("dXNlcjpwYXNz".to_string())
+        );
+        assert_eq!(credentials.scheme(), "Basic");
     }
 
     #[tokio::test]

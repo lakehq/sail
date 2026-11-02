@@ -157,7 +157,8 @@ impl IcebergRestCatalogProvider {
             reqwest::header::HeaderValue::from_static(SAIL_USER_AGENT),
         );
         if let Some(credential) = credentials.retrieve().await? {
-            let header = reqwest::header::HeaderValue::from_str(&format!("Bearer {credential}"))
+            let scheme = credentials.scheme();
+            let header = reqwest::header::HeaderValue::from_str(&format!("{scheme} {credential}"))
                 .map_err(|e| {
                     CatalogError::External(format!("Failed to create header value from token: {e}"))
                 })?;
@@ -2277,7 +2278,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use arrow::datatypes::{DataType, Field};
-    use sail_catalog::credentials::{EmptyCatalogCredentials, FileCatalogCredentials};
+    use sail_catalog::credentials::{
+        BasicCatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials,
+    };
     use sail_catalog::lakehouse::TableAccessPurpose;
     use sail_common::spec;
     use sail_common_datafusion::catalog::{
@@ -4477,6 +4480,44 @@ mod tests {
         let config = catalog.resolved_catalog_config().await.unwrap();
         assert_eq!(config.warehouse().as_deref(), Some("s3://iceberg-catalog"));
         assert_eq!(std::fs::read_to_string(&token_path).unwrap(), "token-b");
+    }
+
+    #[tokio::test]
+    async fn basic_credentials_send_a_basic_authorization_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .and(header("authorization", "Basic dXNlcjpwYXNz"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "overrides": { "warehouse": "s3://iceberg-catalog" },
+                "defaults": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces/db1"))
+            .and(header("authorization", "Basic dXNlcjpwYXNz"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespace": ["db1"],
+                "properties": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let properties = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
+        let catalog = IcebergRestCatalogProvider::new(
+            String::new(),
+            IcebergRestCatalogOptions {
+                credentials: Arc::new(BasicCatalogCredentials::new("user", "pass")),
+                properties,
+            },
+        );
+
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let result = catalog.get_database(&namespace).await.unwrap();
+        assert_eq!(result.database, vec!["db1".to_string()]);
     }
 
     #[tokio::test]
