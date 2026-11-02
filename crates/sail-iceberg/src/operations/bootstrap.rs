@@ -199,6 +199,13 @@ pub(crate) async fn prepare_bootstrap_snapshot(
         Some(manifest_metadata),
     )
     .with_bootstrap(true)
+    .with_action_summary_properties(
+        commit_info
+            .action_summary
+            .as_ref()
+            .map(|summary| summary.properties())
+            .unwrap_or_default(),
+    )
     .with_added_delete_files(commit_info.delete_files.clone())
     .with_partition_specs(table_metadata.partition_specs.clone())
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
@@ -283,6 +290,13 @@ pub async fn bootstrap_new_table_with_style(
         Some(manifest_metadata),
     )
     .with_bootstrap(true)
+    .with_action_summary_properties(
+        commit_info
+            .action_summary
+            .as_ref()
+            .map(|summary| summary.properties())
+            .unwrap_or_default(),
+    )
     .with_added_delete_files(commit_info.delete_files.clone())
     .with_partition_specs(vec![partition_spec.clone()])
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
@@ -782,6 +796,7 @@ mod tests {
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: vec![],
+                action_summary: None,
                 table_properties: vec![("format-version".to_string(), "2".to_string())],
                 lakehouse_table: None,
                 snapshot_update_kind: crate::operations::SnapshotUpdateKind::FastAppend,
@@ -838,6 +853,7 @@ mod tests {
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: vec![],
+                action_summary: None,
                 table_properties: vec![
                     ("format-version".to_string(), "2".to_string()),
                     (

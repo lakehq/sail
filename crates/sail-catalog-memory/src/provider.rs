@@ -95,8 +95,7 @@ impl MemoryCatalogProvider {
                             .metadata()
                             .get("comment")
                             .or_else(|| field.metadata().get("doc"))
-                            .cloned()
-                            .or_else(|| inherited.and_then(|column| column.comment.clone())),
+                            .cloned(),
                         // Formats may store typed defaults instead of SQL expressions.
                         default: features
                             .current_default()
@@ -118,6 +117,7 @@ impl MemoryCatalogProvider {
             match &mut updated.kind {
                 TableKind::Table {
                     columns,
+                    comment,
                     properties,
                     partition_by,
                     location,
@@ -197,6 +197,9 @@ impl MemoryCatalogProvider {
                             table, properties, &new_props,
                         )?;
                         for (key, value) in new_props {
+                            if key == "comment" {
+                                *comment = Some(value.clone());
+                            }
                             if let Some(existing) = properties.iter_mut().find(|(k, _)| k == &key) {
                                 existing.1 = value;
                             } else {
@@ -207,12 +210,16 @@ impl MemoryCatalogProvider {
                     }
                     AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
                         for key in &keys {
-                            let found = properties.iter().any(|(k, _)| k == key);
+                            let found = properties.iter().any(|(k, _)| k == key)
+                                || (key == "comment" && comment.is_some());
                             if !found && !if_exists {
                                 return Err(CatalogError::NotFound(
                                     CatalogObject::Table,
                                     format!("property '{key}' not found on table '{table}'"),
                                 ));
+                            }
+                            if key == "comment" {
+                                *comment = None;
                             }
                             properties.retain(|(k, _)| k != key);
                         }

@@ -188,6 +188,20 @@ def test_manifest_wire_schema_and_snapshot_headers(spark, tmp_path, format_versi
         spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+def test_iceberg_io_ignore_mode(spark, tmp_path):
+    path = tmp_path / "iceberg_ignore"
+    # Ignore still creates a table when no table exists.
+    spark.createDataFrame([(1,)], "id INT").write.format("iceberg").mode("ignore").save(str(path))
+    files_before = {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()}
+    spark.createDataFrame([(2,)], "id INT").write.format("iceberg").mode("ignore").save(str(path))
+    # The early no-op must not execute the input or touch any data/metadata files.
+    spark.range(1).selectExpr("raise_error('ignored input was executed') AS id").write.format("iceberg").mode(
+        "ignore"
+    ).option("path", str(path)).save()
+    assert {file.relative_to(path): file.read_bytes() for file in path.rglob("*") if file.is_file()} == files_before
+    assert spark.read.format("iceberg").load(str(path)).collect() == [(1,)]
+
+
 def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
     table_name = "test_table"
 

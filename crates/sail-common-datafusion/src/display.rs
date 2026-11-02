@@ -79,6 +79,8 @@ pub struct FormatOptions<'a> {
     time_format: TimeFormat<'a>,
     /// Duration format
     duration_format: DurationFormat,
+    /// Time zone for timestamp with timezone arrays, instead of the array's own time zone
+    timezone: Option<&'a str>,
 }
 
 impl Default for FormatOptions<'_> {
@@ -98,6 +100,7 @@ impl<'a> FormatOptions<'a> {
             timestamp_tz_format: TimeFormat::Spark,
             time_format: TimeFormat::Spark,
             duration_format: DurationFormat::Spark,
+            timezone: None,
         }
     }
 
@@ -159,6 +162,12 @@ impl<'a> FormatOptions<'a> {
             duration_format,
             ..self
         }
+    }
+
+    /// Overrides the time zone used for [`DataType::Timestamp`] columns with a timezone,
+    /// such as Spark's session time zone
+    pub const fn with_timezone(self, timezone: Option<&'a str>) -> Self {
+        Self { timezone, ..self }
     }
 }
 
@@ -559,9 +568,10 @@ macro_rules! timestamp_display {
 
             fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
                 match self.data_type() {
-                    DataType::Timestamp(_, Some(tz)) => {
-                        Ok((Some(tz.parse()?), options.timestamp_tz_format))
-                    }
+                    DataType::Timestamp(_, Some(tz)) => Ok((
+                        Some(options.timezone.unwrap_or(tz).parse()?),
+                        options.timestamp_tz_format,
+                    )),
                     DataType::Timestamp(_, None) => Ok((None, options.timestamp_format)),
                     _ => unreachable!(),
                 }

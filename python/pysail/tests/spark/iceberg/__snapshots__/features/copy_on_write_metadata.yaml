@@ -61,6 +61,7 @@ data:
       added-data-files: '1'
       added-records: '1'
       operation: append
+      spark.insert.num-inserted-rows: '1'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -77,6 +78,14 @@ data:
       deleted-data-files: '0'
       deleted-records: '0'
       operation: append
+      spark.merge-into.num-target-rows-copied: '0'
+      spark.merge-into.num-target-rows-deleted: '0'
+      spark.merge-into.num-target-rows-inserted: '1'
+      spark.merge-into.num-target-rows-matched-deleted: '0'
+      spark.merge-into.num-target-rows-matched-updated: '0'
+      spark.merge-into.num-target-rows-not-matched-by-source-deleted: '0'
+      spark.merge-into.num-target-rows-not-matched-by-source-updated: '0'
+      spark.merge-into.num-target-rows-updated: '0'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -126,6 +135,14 @@ data:
   deleted-data-files: '0'
   deleted-records: '0'
   operation: append
+  spark.merge-into.num-target-rows-copied: '0'
+  spark.merge-into.num-target-rows-deleted: '0'
+  spark.merge-into.num-target-rows-inserted: '1'
+  spark.merge-into.num-target-rows-matched-deleted: '0'
+  spark.merge-into.num-target-rows-matched-updated: '0'
+  spark.merge-into.num-target-rows-not-matched-by-source-deleted: '0'
+  spark.merge-into.num-target-rows-not-matched-by-source-updated: '0'
+  spark.merge-into.num-target-rows-updated: '0'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -183,6 +200,7 @@ data:
       added-data-files: '1'
       added-records: '1'
       operation: append
+      spark.insert.num-inserted-rows: '1'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -200,6 +218,14 @@ data:
       deleted-data-files: '0'
       deleted-records: '0'
       operation: append
+      spark.merge-into.num-target-rows-copied: '0'
+      spark.merge-into.num-target-rows-deleted: '0'
+      spark.merge-into.num-target-rows-inserted: '1'
+      spark.merge-into.num-target-rows-matched-deleted: '0'
+      spark.merge-into.num-target-rows-matched-updated: '0'
+      spark.merge-into.num-target-rows-not-matched-by-source-deleted: '0'
+      spark.merge-into.num-target-rows-not-matched-by-source-updated: '0'
+      spark.merge-into.num-target-rows-updated: '0'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -252,6 +278,14 @@ data:
   deleted-data-files: '0'
   deleted-records: '0'
   operation: append
+  spark.merge-into.num-target-rows-copied: '0'
+  spark.merge-into.num-target-rows-deleted: '0'
+  spark.merge-into.num-target-rows-inserted: '1'
+  spark.merge-into.num-target-rows-matched-deleted: '0'
+  spark.merge-into.num-target-rows-matched-updated: '0'
+  spark.merge-into.num-target-rows-not-matched-by-source-deleted: '0'
+  spark.merge-into.num-target-rows-not-matched-by-source-updated: '0'
+  spark.merge-into.num-target-rows-updated: '0'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -339,6 +373,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -353,6 +388,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -369,6 +405,8 @@ data:
       deleted-data-files: '1'
       deleted-records: '2'
       operation: overwrite
+      spark.delete.num-copied-rows: '1'
+      spark.delete.num-deleted-rows: '1'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -451,6 +489,8 @@ data:
   deleted-data-files: '1'
   deleted-records: '2'
   operation: overwrite
+  spark.delete.num-copied-rows: '1'
+  spark.delete.num-deleted-rows: '1'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -538,6 +578,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -552,6 +593,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -568,6 +610,14 @@ data:
       deleted-data-files: '1'
       deleted-records: '2'
       operation: overwrite
+      spark.merge-into.num-target-rows-copied: '1'
+      spark.merge-into.num-target-rows-deleted: '0'
+      spark.merge-into.num-target-rows-inserted: '0'
+      spark.merge-into.num-target-rows-matched-deleted: '0'
+      spark.merge-into.num-target-rows-matched-updated: '1'
+      spark.merge-into.num-target-rows-not-matched-by-source-deleted: '0'
+      spark.merge-into.num-target-rows-not-matched-by-source-updated: '0'
+      spark.merge-into.num-target-rows-updated: '1'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -650,6 +700,14 @@ data:
   deleted-data-files: '1'
   deleted-records: '2'
   operation: overwrite
+  spark.merge-into.num-target-rows-copied: '1'
+  spark.merge-into.num-target-rows-deleted: '0'
+  spark.merge-into.num-target-rows-inserted: '0'
+  spark.merge-into.num-target-rows-matched-deleted: '0'
+  spark.merge-into.num-target-rows-matched-updated: '1'
+  spark.merge-into.num-target-rows-not-matched-by-source-deleted: '0'
+  spark.merge-into.num-target-rows-not-matched-by-source-updated: '0'
+  spark.merge-into.num-target-rows-updated: '1'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -737,6 +795,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -751,6 +810,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -767,6 +827,8 @@ data:
       deleted-data-files: '1'
       deleted-records: '2'
       operation: overwrite
+      spark.update.num-copied-rows: '1'
+      spark.update.num-updated-rows: '1'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -849,6 +911,8 @@ data:
   deleted-data-files: '1'
   deleted-records: '2'
   operation: overwrite
+  spark.update.num-copied-rows: '1'
+  spark.update.num-updated-rows: '1'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -918,6 +982,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -933,6 +998,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -950,6 +1016,8 @@ data:
       deleted-data-files: '1'
       deleted-records: '2'
       operation: overwrite
+      spark.delete.num-copied-rows: '1'
+      spark.delete.num-deleted-rows: '1'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -1035,6 +1103,8 @@ data:
   deleted-data-files: '1'
   deleted-records: '2'
   operation: overwrite
+  spark.delete.num-copied-rows: '1'
+  spark.delete.num-deleted-rows: '1'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -1104,6 +1174,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -1119,6 +1190,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -1136,6 +1208,14 @@ data:
       deleted-data-files: '1'
       deleted-records: '2'
       operation: overwrite
+      spark.merge-into.num-target-rows-copied: '1'
+      spark.merge-into.num-target-rows-deleted: '0'
+      spark.merge-into.num-target-rows-inserted: '0'
+      spark.merge-into.num-target-rows-matched-deleted: '0'
+      spark.merge-into.num-target-rows-matched-updated: '1'
+      spark.merge-into.num-target-rows-not-matched-by-source-deleted: '0'
+      spark.merge-into.num-target-rows-not-matched-by-source-updated: '0'
+      spark.merge-into.num-target-rows-updated: '1'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -1221,6 +1301,14 @@ data:
   deleted-data-files: '1'
   deleted-records: '2'
   operation: overwrite
+  spark.merge-into.num-target-rows-copied: '1'
+  spark.merge-into.num-target-rows-deleted: '0'
+  spark.merge-into.num-target-rows-inserted: '0'
+  spark.merge-into.num-target-rows-matched-deleted: '0'
+  spark.merge-into.num-target-rows-matched-updated: '1'
+  spark.merge-into.num-target-rows-not-matched-by-source-deleted: '0'
+  spark.merge-into.num-target-rows-not-matched-by-source-updated: '0'
+  spark.merge-into.num-target-rows-updated: '1'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -1290,6 +1378,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '1'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -1305,6 +1394,7 @@ data:
       added-data-files: '1'
       added-records: '2'
       operation: append
+      spark.insert.num-inserted-rows: '2'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -1322,6 +1412,8 @@ data:
       deleted-data-files: '1'
       deleted-records: '2'
       operation: overwrite
+      spark.update.num-copied-rows: '1'
+      spark.update.num-updated-rows: '1'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -1407,6 +1499,8 @@ data:
   deleted-data-files: '1'
   deleted-records: '2'
   operation: overwrite
+  spark.update.num-copied-rows: '1'
+  spark.update.num-updated-rows: '1'
   total-data-files: '2'
   total-delete-files: '0'
   total-equality-deletes: '0'

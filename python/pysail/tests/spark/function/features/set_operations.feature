@@ -45,9 +45,32 @@ Feature: Set operations (INTERSECT, EXCEPT)
         | 4  |
         | 5  |
 
-  # Note: INTERSECT ALL tests excluded — DataFusion's LogicalPlanBuilder::intersect(is_all=true)
-  # produces extra duplicates compared to Spark. Pre-existing upstream bug.
-  # https://github.com/apache/datafusion/issues/12955
+  Rule: INTERSECT ALL
+
+    Scenario: intersect all matches copies one to one
+      When query
+        """
+        SELECT * FROM VALUES (1), (1), (1), (2) AS l(x)
+        INTERSECT ALL
+        SELECT * FROM VALUES (1), (1), (2), (2) AS r(x)
+        """
+      Then query result
+        | x |
+        | 1 |
+        | 1 |
+        | 2 |
+
+    Scenario: intersect all counts null copies
+      When query
+        """
+        SELECT * FROM VALUES (CAST(NULL AS INT)), (NULL), (1) AS l(x)
+        INTERSECT ALL
+        SELECT * FROM VALUES (CAST(NULL AS INT)), (1), (1) AS r(x)
+        """
+      Then query result
+        | x    |
+        | NULL |
+        | 1    |
 
   Rule: EXCEPT DISTINCT
 

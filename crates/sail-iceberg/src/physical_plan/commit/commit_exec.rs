@@ -30,6 +30,7 @@ use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
 use futures::stream::once;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::command::CommandOutput;
 use url::Url;
 
 use crate::catalog_support::commit::{
@@ -77,9 +78,9 @@ fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> 
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
-#[derive(Debug, Clone)]
-enum CommitOutput {
-    RowCount,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitOutput {
+    Command(CommandOutput),
     RewriteDataFiles {
         rewritten_data_files_count: i32,
         rewritten_bytes_count: i64,
@@ -93,7 +94,9 @@ fn commit_output_batch(
     added_data_files_count: usize,
 ) -> Result<RecordBatch> {
     match output {
-        CommitOutput::RowCount => commit_count_batch(schema, row_count),
+        CommitOutput::Command(CommandOutput::Empty) => Ok(RecordBatch::new_empty(schema)),
+        CommitOutput::Command(CommandOutput::Count) => commit_count_batch(schema, row_count),
+        CommitOutput::Command(_) => internal_err!("unsupported Iceberg command result"),
         CommitOutput::RewriteDataFiles {
             rewritten_data_files_count,
             rewritten_bytes_count,
@@ -185,9 +188,24 @@ impl IcebergCommitExec {
             expected_snapshot_id: None,
             removed_data_file_paths: Vec::new(),
             dynamic_partition_overwrite: false,
-            output: CommitOutput::RowCount,
+            output: CommitOutput::Command(CommandOutput::Count),
             cache,
         }
+    }
+
+    pub fn with_output(mut self, output: CommandOutput) -> Self {
+        self.output = CommitOutput::Command(output);
+        self.cache = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(output.schema()),
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        self
+    }
+
+    pub fn output(&self) -> &CommitOutput {
+        &self.output
     }
 
     pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
@@ -599,6 +617,12 @@ impl IcebergCommitExec {
             return Ok(());
         };
 
+        let action_summary = match (&existing.action_summary, &incoming.action_summary) {
+            (Some(existing), Some(incoming)) => Some(existing.checked_add(incoming)?),
+            (None, None) => None,
+            _ => return internal_err!("Inconsistent Iceberg action summary availability"),
+        };
+        incoming.action_summary.clone_from(&existing.action_summary);
         let incoming_row_count = incoming.row_count;
         let incoming_removals = std::mem::take(&mut incoming.removed_data_file_paths);
         incoming
@@ -610,6 +634,7 @@ impl IcebergCommitExec {
                 "inconsistent commit_meta actions from Iceberg writer partitions".to_string(),
             ));
         }
+        existing.action_summary = action_summary;
         existing.removed_data_file_paths.extend(incoming_removals);
         existing.row_count = existing
             .row_count
@@ -673,6 +698,9 @@ impl ExecutionPlan for IcebergCommitExec {
         .with_expected_snapshot_id(self.expected_snapshot_id)
         .with_removed_data_file_paths(self.removed_data_file_paths.clone())
         .with_dynamic_partition_overwrite(self.dynamic_partition_overwrite);
+        if let CommitOutput::Command(output) = &self.output {
+            commit = commit.with_output(*output);
+        }
         if let CommitOutput::RewriteDataFiles {
             rewritten_data_files_count,
             rewritten_bytes_count,
@@ -758,6 +786,7 @@ impl ExecutionPlan for IcebergCommitExec {
             let mut commit_info = IcebergCommitInfo {
                 table_uri: commit_meta.table_uri,
                 row_count: commit_meta.row_count,
+                action_summary: commit_meta.action_summary,
                 data_files: added_data_files,
                 delete_files: added_delete_files,
                 manifest_path: String::new(),
@@ -1221,6 +1250,13 @@ impl ExecutionPlan for IcebergCommitExec {
                     Some(store_ctx.clone()),
                     Some(manifest_meta),
                 )
+                .with_action_summary_properties(
+                    commit_info
+                        .action_summary
+                        .as_ref()
+                        .map(|summary| summary.properties())
+                        .unwrap_or_default(),
+                )
                 .with_added_delete_files(commit_info.delete_files.clone())
                 .with_removed_data_file_paths(removed_data_file_paths.clone())
                 .with_partition_specs(table_meta.partition_specs.clone())
@@ -1534,6 +1570,7 @@ mod tests {
             let action_batch = encode_commit_meta(CommitMeta {
                 table_uri: table_url.to_string(),
                 row_count: 0,
+                action_summary: None,
                 removed_data_file_paths: vec![],
                 skip_empty_commit: false,
                 requirements: vec![],
@@ -1933,6 +1970,51 @@ mod tests {
     }
 
     #[test]
+    fn commit_aggregates_action_summaries_before_comparing_metadata() -> Result<()> {
+        use crate::operation_metrics::{IcebergActionSummary, IcebergOperation};
+        let mut first_summary = IcebergActionSummary::new(IcebergOperation::Insert);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+            vec![Arc::new(Int64Array::from(vec![1, 2]))],
+        )?;
+        first_summary.add_batch(&batch, None)?;
+        let first = CommitMeta {
+            table_uri: "file:///summary/".to_string(),
+            action_summary: Some(first_summary.clone()),
+            ..Default::default()
+        };
+        let empty = CommitMeta {
+            action_summary: Some(IcebergActionSummary::new(IcebergOperation::Insert)),
+            ..first.clone()
+        };
+        let mut accumulated = None;
+        for partition in [first.clone(), empty, first.clone()] {
+            let encoded = crate::physical_plan::action_schema::encode_commit_meta(partition)?;
+            let (_, _, decoded) = decode_actions_and_meta_from_batch(&encoded)?;
+            for meta in decoded {
+                IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, meta)?;
+            }
+        }
+        assert_eq!(
+            accumulated
+                .as_ref()
+                .and_then(|meta| meta.action_summary.as_ref()),
+            Some(&first_summary.checked_add(&first_summary)?)
+        );
+        let different = CommitMeta {
+            action_summary: Some(IcebergActionSummary::new(IcebergOperation::Merge)),
+            ..first.clone()
+        };
+        assert!(IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, different).is_err());
+        let missing = CommitMeta {
+            action_summary: None,
+            ..first
+        };
+        assert!(IcebergCommitExec::merge_writer_commit_meta(&mut accumulated, missing).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn empty_predicate_overwrite_validates_expected_snapshot() {
         for skip_empty_commit in [false, true] {
             futures::executor::block_on(async {
@@ -1966,6 +2048,7 @@ mod tests {
                 let action_batch = encode_commit_meta(CommitMeta {
                     table_uri: table_url.to_string(),
                     row_count: 0,
+                    action_summary: None,
                     removed_data_file_paths: vec![],
                     skip_empty_commit,
                     requirements: vec![],
@@ -2241,6 +2324,7 @@ mod tests {
                     encode_commit_meta(CommitMeta {
                         table_uri: table_url.to_string(),
                         row_count: 1,
+                        action_summary: None,
                         removed_data_file_paths: vec![],
                         skip_empty_commit: false,
                         requirements: vec![],

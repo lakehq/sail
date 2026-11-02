@@ -330,31 +330,27 @@ async fn delete_orphaned_sidecars(
 ) -> DeltaResult<usize> {
     let sidecars_path = sidecars_dir_path();
     let one_day_ago = Utc::now().timestamp_millis() - 86_400_000;
-    let mut deleted_count = 0;
     let sidecar_metas: Vec<ObjectMeta> = object_store
         .list(Some(&sidecars_path))
         .try_collect()
         .await?;
-    for meta in sidecar_metas {
-        let filename = sidecar_file_name(meta.location.as_ref());
-        // Keep sidecars that are referenced by any checkpoint.
-        if referenced_sidecars.contains(&filename) {
-            continue;
-        }
-        // Keep sidecars created less than 24 hours ago (safety buffer for concurrent writes).
-        let file_millis = meta.last_modified.timestamp_millis();
-        if file_millis > one_day_ago {
-            continue;
-        }
-        match object_store.delete(&meta.location).await {
-            Ok(()) => {
+    let locations = sidecar_metas
+        .into_iter()
+        .filter(|meta| {
+            !referenced_sidecars.contains(&sidecar_file_name(meta.location.as_ref()))
+                && meta.last_modified.timestamp_millis() <= one_day_ago
+        })
+        .map(|meta| Ok(meta.location))
+        .collect::<Vec<_>>();
+    let mut results = object_store.delete_stream(futures::stream::iter(locations).boxed());
+    let mut deleted_count = 0;
+    while let Some(result) = results.next().await {
+        match result {
+            Ok(_) => {
                 deleted_count += 1;
             }
             Err(err) => {
-                log::warn!(
-                    "Failed to delete orphaned sidecar file {}: {err}",
-                    meta.location
-                );
+                log::warn!("Failed to delete orphaned sidecar file: {err}");
             }
         }
     }

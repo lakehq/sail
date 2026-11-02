@@ -39,6 +39,22 @@ impl IcebergTableSource {
         }
     }
 
+    /// Preserve file provenance without invalidating the prepared file selection.
+    pub fn with_input_file_metadata_required(&self) -> Self {
+        if self.scan.input_file_metadata_required() {
+            return self.clone();
+        }
+        Self {
+            scan: Arc::new(
+                self.scan
+                    .as_ref()
+                    .clone()
+                    .with_input_file_metadata_required(),
+            ),
+            prepared: self.prepared.clone(),
+        }
+    }
+
     pub fn scan(&self) -> &Arc<IcebergScan> {
         &self.scan
     }

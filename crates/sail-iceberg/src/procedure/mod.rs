@@ -39,6 +39,10 @@ impl LakeProcedureProvider for IcebergLakeSource {
         if namespace.len() != 1 || !namespace[0].eq_ignore_ascii_case("system") {
             return LakeProcedureResolution::Unrecognized;
         }
+        self.get_procedure(name)
+    }
+
+    fn get_procedure(&self, name: &str) -> LakeProcedureResolution {
         let Some(procedure_type) = IcebergProcedureType::parse(name) else {
             return LakeProcedureResolution::Unrecognized;
         };
@@ -64,7 +68,7 @@ impl LakeProcedureProvider for IcebergLakeSource {
                 ))
             })?;
         if matches!(procedure_type, IcebergProcedureType::RewriteDataFiles) {
-            let LakeProcedurePlanningTarget::Table(info) = target else {
+            let LakeProcedurePlanningTarget::Table { info, .. } = target else {
                 return plan_err!("Iceberg system procedures require a table target");
             };
             let (worker_plan, rewrite_plan) = plan_rewrite_data_files(session, *info, call).await?;
@@ -78,7 +82,7 @@ impl LakeProcedureProvider for IcebergLakeSource {
             return Ok(LakeProcedurePlan::coordinator(implementation));
         }
         let planned_table = match target {
-            LakeProcedurePlanningTarget::Table(info) => {
+            LakeProcedurePlanningTarget::Table { info, .. } => {
                 let table = ProcedureTable::from_source_info(*info).await?;
                 match call.invocation.procedure.access {
                     LakeProcedureAccess::MetadataRead => Some(table),

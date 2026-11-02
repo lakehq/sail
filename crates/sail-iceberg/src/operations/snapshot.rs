@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;
+use crate::operation_metrics::IcebergOperation;
 use crate::spec::manifest::{ManifestEntry, ManifestWriter, ManifestWriterBuilder};
 use crate::spec::manifest_list::{ManifestListWriteContext, ManifestListWriter};
 use crate::spec::{
@@ -341,7 +342,11 @@ impl SnapshotChanges {
 }
 
 impl SnapshotUpdateKind {
-    fn summary_operation(self, changes: SnapshotChanges) -> Operation {
+    fn summary_operation(
+        self,
+        changes: SnapshotChanges,
+        operation: Option<IcebergOperation>,
+    ) -> Operation {
         match self {
             Self::Truncate => Operation::Delete,
             Self::FastAppend => Operation::Append,
@@ -360,6 +365,20 @@ impl SnapshotUpdateKind {
                 Operation::Append
             }
             Self::CopyOnWrite | Self::RowLevelRewrite if changes.adds_data_files() => {
+                Operation::Overwrite
+            }
+            Self::RowLevelRewrite
+                if !changes.adds_delete_files()
+                    && changes.removed_data_files == 0
+                    && matches!(
+                        operation,
+                        Some(
+                            IcebergOperation::Update
+                                | IcebergOperation::Delete
+                                | IcebergOperation::Merge
+                        )
+                    ) =>
+            {
                 Operation::Overwrite
             }
             Self::CopyOnWrite | Self::RowLevelRewrite => Operation::Delete,
@@ -404,6 +423,7 @@ pub struct SnapshotProducer<'a> {
     pub is_bootstrap: bool,
     pub row_lineage_start_row_id: Option<i64>,
     pub dynamic_partition_overwrite: bool,
+    action_summary_properties: crate::operation_metrics::ActionSummaryProperties,
 }
 
 pub(crate) struct PreparedSnapshotCommit {
@@ -528,7 +548,16 @@ impl<'a> SnapshotProducer<'a> {
             is_bootstrap: false,
             row_lineage_start_row_id: None,
             dynamic_partition_overwrite: false,
+            action_summary_properties: Default::default(),
         }
+    }
+
+    pub(crate) fn with_action_summary_properties(
+        mut self,
+        properties: crate::operation_metrics::ActionSummaryProperties,
+    ) -> Self {
+        self.action_summary_properties = properties;
+        self
     }
 
     pub fn with_write_path_mode(mut self, mode: crate::utils::WritePathMode) -> Self {
@@ -959,7 +988,8 @@ impl<'a> SnapshotProducer<'a> {
             removed_data_file_paths.len(),
             self.dynamic_partition_overwrite,
         );
-        let operation = update_kind.summary_operation(changes);
+        let operation =
+            update_kind.summary_operation(changes, self.action_summary_properties.operation());
         let added_data_file_count = self.added_data_files.len();
         let added_records = self
             .added_data_files
@@ -1339,6 +1369,9 @@ impl<'a> SnapshotProducer<'a> {
             self.tx.snapshot().schema_id().unwrap_or_default()
         };
 
+        for (key, value) in self.action_summary_properties.iter() {
+            summary = summary.with_property(key, value);
+        }
         let mut snapshot_builder = SnapshotBuilder::new()
             .with_snapshot_id(new_snapshot_id)
             .with_sequence_number(new_sequence_number)
@@ -1589,14 +1622,71 @@ mod tests {
                 Operation::Overwrite,
             ),
         ] {
+            for operation in [
+                None,
+                Some(IcebergOperation::Insert),
+                Some(IcebergOperation::Update),
+                Some(IcebergOperation::Delete),
+                Some(IcebergOperation::Merge),
+            ] {
+                assert_eq!(
+                    kind.summary_operation(
+                        SnapshotChanges {
+                            added_data_files: added,
+                            added_delete_files: 0,
+                            removed_data_files: removed,
+                            dynamic_partition_overwrite: dynamic,
+                        },
+                        operation,
+                    ),
+                    expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_row_level_rewrite_requires_command_identity() {
+        for (operation, row_level_expected) in [
+            (None, Operation::Delete),
+            (Some(IcebergOperation::Insert), Operation::Delete),
+            (Some(IcebergOperation::Update), Operation::Overwrite),
+            (Some(IcebergOperation::Delete), Operation::Overwrite),
+            (Some(IcebergOperation::Merge), Operation::Overwrite),
+        ] {
+            for (kind, expected) in [
+                (SnapshotUpdateKind::RowLevelRewrite, row_level_expected),
+                (SnapshotUpdateKind::CopyOnWrite, Operation::Delete),
+                (SnapshotUpdateKind::FastAppend, Operation::Append),
+                (SnapshotUpdateKind::FullOverwrite, Operation::Overwrite),
+                (SnapshotUpdateKind::RowDelta, Operation::Overwrite),
+                (SnapshotUpdateKind::Truncate, Operation::Delete),
+                (SnapshotUpdateKind::RewriteDataFiles, Operation::Replace),
+            ] {
+                assert_eq!(
+                    kind.summary_operation(
+                        SnapshotChanges {
+                            added_data_files: 0,
+                            added_delete_files: 0,
+                            removed_data_files: 0,
+                            dynamic_partition_overwrite: false,
+                        },
+                        operation,
+                    ),
+                    expected
+                );
+            }
             assert_eq!(
-                kind.summary_operation(SnapshotChanges {
-                    added_data_files: added,
-                    added_delete_files: 0,
-                    removed_data_files: removed,
-                    dynamic_partition_overwrite: dynamic,
-                }),
-                expected
+                SnapshotUpdateKind::RowLevelRewrite.summary_operation(
+                    SnapshotChanges {
+                        added_data_files: 0,
+                        added_delete_files: 1,
+                        removed_data_files: 0,
+                        dynamic_partition_overwrite: false,
+                    },
+                    operation,
+                ),
+                Operation::Delete
             );
         }
     }

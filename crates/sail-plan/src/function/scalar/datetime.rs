@@ -13,7 +13,9 @@ use datafusion_expr::{
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
-use sail_common::utils::datetime::{MICROS_PER_DAY, time_unit_to_multiplier};
+use sail_common::utils::datetime::{
+    MICROS_PER_DAY, is_fixed_zero_offset_timezone, time_unit_to_multiplier,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzLazy};
@@ -33,6 +35,9 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
+use sail_function::scalar::datetime::timestamp_cast::{
+    cast_timestamp_ltz_to_ntz, cast_timestamp_ntz_to_ltz,
+};
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_python_udf::udf::expr_contains_python_udf;
@@ -44,6 +49,9 @@ use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     ScalarFunction, ScalarFunctionInput, expr_contains_spark_cast_to_variant,
+};
+use crate::function::datetime_utils::{
+    add_interval_in_session_timezone, has_constant_offset, with_session_timezone_label,
 };
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
@@ -86,15 +94,28 @@ fn trunc_part_conversion(part: Expr) -> Expr {
     })
 }
 
-fn trunc(date: Expr, part: Expr) -> Expr {
-    cast(
+fn trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (date, part) = input.arguments.two()?;
+    // Spark truncates the date of a TIMESTAMP in the session time zone.
+    let date = with_session_timezone_label(
+        date,
+        input.function_context.schema,
+        &input.function_context.plan_config.session_timezone_label(),
+    )?;
+    Ok(cast(
         expr_fn::date_trunc(trunc_part_conversion(part), date),
         DataType::Date32,
-    )
+    ))
 }
 
 fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (part, timestamp) = input.arguments.two()?;
+    // Spark truncates TIMESTAMP in the session time zone, whatever zone labels the values.
+    let timestamp = with_session_timezone_label(
+        timestamp,
+        input.function_context.schema,
+        &input.function_context.plan_config.session_timezone_label(),
+    )?;
     let truncated =
         ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
     let truncated = match truncated.get_type(input.function_context.schema)? {
@@ -241,13 +262,27 @@ fn timestampadd_with_name(input: ScalarFunctionInput, function_name: &str) -> Pl
         }
     };
     let interval = timestampadd_interval(function_name, &unit, quantity)?;
-    Ok(cast(
+    // Spark adds to a TIMESTAMP_NTZ value as a wall-clock time, and keeps its type.
+    if let DataType::Timestamp(_, None) = timestamp.get_type(input.function_context.schema)? {
+        return Ok(timestamp + interval);
+    }
+    let timezone = input.function_context.plan_config.session_timezone_label();
+    let timestamp = cast(
         timestamp,
-        DataType::Timestamp(
-            TimeUnit::Microsecond,
-            Some(input.function_context.plan_config.session_timezone.clone()),
-        ),
-    ) + interval)
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(&timezone))),
+    );
+    // Spark adds days, weeks, months, quarters and years to the wall-clock time in the session
+    // time zone, and shorter units to the instant (`DateTimeUtils.timestampAdd`).
+    let calendar_unit = matches!(
+        unit.trim().to_uppercase().as_str(),
+        "DAY" | "DAYOFYEAR" | "WEEK" | "MONTH" | "QUARTER" | "YEAR"
+    );
+    if calendar_unit && !has_constant_offset(&timezone) {
+        return Ok(add_interval_in_session_timezone(
+            timestamp, interval, false, &timezone,
+        ));
+    }
+    Ok(timestamp + interval)
 }
 
 fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -298,41 +333,75 @@ fn timestamp_micros(expr: Expr) -> Expr {
     )
 }
 
+/// Spark's `LocalDateTime.until(end, DAYS)`, which counts whole days and truncates toward zero.
+fn timestamp_day_diff(start: Expr, end: Expr) -> Expr {
+    let day = lit(86_400_000_000_i64);
+    let day_number = |value: Expr| {
+        let micros = timestamp_micros(value);
+        micros.clone() / day.clone()
+            - when((micros.clone() % day.clone()).lt(lit(0_i64)), lit(1_i64))
+                .otherwise(lit(0_i64))
+                .unwrap_or(lit(0_i64))
+    };
+    let start = cast(start, DataType::Timestamp(TimeUnit::Microsecond, None));
+    let end = cast(end, DataType::Timestamp(TimeUnit::Microsecond, None));
+    let days = day_number(end.clone()) - day_number(start.clone());
+    let (start_time, end_time) = (timestamp_time_micros(start), timestamp_time_micros(end));
+    days.clone()
+        - when(
+            days.clone()
+                .gt(lit(0_i64))
+                .and(end_time.clone().lt(start_time.clone())),
+            lit(1_i64),
+        )
+        .when(
+            days.lt(lit(0_i64)).and(end_time.gt(start_time)),
+            lit(-1_i64),
+        )
+        .otherwise(lit(0_i64))
+        .unwrap_or(lit(0_i64))
+}
+
+/// Microseconds since midnight. `date_trunc` works in nanoseconds, which fail outside 1677-2262.
 fn timestamp_time_micros(expr: Expr) -> Expr {
-    timestamp_micros(expr.clone()) - timestamp_micros(expr_fn::date_trunc(lit("DAY"), expr))
+    let day = lit(86_400_000_000_i64);
+    ((timestamp_micros(expr) % day.clone()) + day.clone()) % day
 }
 
 fn timestamp_months(expr: Expr) -> Expr {
     integer_part(expr.clone(), "YEAR") * lit(12) + integer_part(expr, "MONTH")
 }
 
-fn timestamp_day_time_is_before(left: Expr, right: Expr) -> Expr {
-    let left_day = integer_part(left.clone(), "DAY");
-    let right_day = integer_part(right.clone(), "DAY");
-    left_day.clone().lt(right_day.clone()).or(left_day
-        .eq(right_day)
-        .and(timestamp_time_micros(left).lt(timestamp_time_micros(right))))
-}
-
+/// Spark's `LocalDateTime.until(end, MONTHS)`, which moves the end date a day toward the start when
+/// its time of day is not reached, and then counts whole months by the day of month.
 fn timestamp_month_diff(start: Expr, end: Expr) -> PlanResult<Expr> {
     let start = cast(start, DataType::Timestamp(TimeUnit::Microsecond, None));
     let end = cast(end, DataType::Timestamp(TimeUnit::Microsecond, None));
-    let months = cast(
-        timestamp_months(end.clone()) - timestamp_months(start.clone()),
-        DataType::Int64,
+    let start_date = cast(start.clone(), DataType::Date32);
+    let end_date = cast(end.clone(), DataType::Date32);
+    let start_time = timestamp_time_micros(start);
+    let end_time = timestamp_time_micros(end);
+    let end_day = cast(end_date.clone(), DataType::Int32);
+    let end_date = cast(
+        when(
+            end_date
+                .clone()
+                .gt(start_date.clone())
+                .and(end_time.clone().lt(start_time.clone())),
+            end_day.clone() - lit(1_i32),
+        )
+        .when(
+            end_date.lt(start_date.clone()).and(end_time.gt(start_time)),
+            end_day.clone() + lit(1_i32),
+        )
+        .otherwise(end_day)?,
+        DataType::Date32,
     );
-    let incomplete_positive_month = months
-        .clone()
-        .gt(lit(0_i64))
-        .and(timestamp_day_time_is_before(end.clone(), start.clone()));
-    let incomplete_negative_month = months
-        .clone()
-        .lt(lit(0_i64))
-        .and(timestamp_day_time_is_before(start, end));
-    Ok(when(incomplete_positive_month, months.clone() - lit(1_i64))
-        .when(incomplete_negative_month, months.clone() + lit(1_i64))
-        .when(lit(true), months)
-        .end()?)
+    let packed = |date: Expr| {
+        cast(timestamp_months(date.clone()), DataType::Int64) * lit(32_i64)
+            + cast(integer_part(date, "DAY"), DataType::Int64)
+    };
+    Ok((packed(end_date) - packed(start_date)) / lit(32_i64))
 }
 
 fn timestampdiff_calendar_unit(unit: &str, start: Expr, end: Expr) -> PlanResult<Expr> {
@@ -369,7 +438,10 @@ fn timestampdiff_fixed_unit(unit: &str, start: Expr, end: Expr) -> Expr {
 }
 
 fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let args = input.arguments;
+    let ScalarFunctionInput {
+        arguments: args,
+        function_context,
+    } = input;
     match args.len() {
         2 => {
             let [start, end] = <[Expr; 2]>::try_from(args)
@@ -390,11 +462,56 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 }
             };
             match unit_str.as_str() {
-                "DAY" => Ok(date_days_arithmetic(end, start, Operator::Minus)),
-                "HOUR" | "MINUTE" | "SECOND" | "WEEK" => {
-                    Ok(timestampdiff_fixed_unit(&unit_str, start, end))
+                // Spark counts every unit between the wall-clock times in the session time zone.
+                "DAY" | "MONTH" | "YEAR" | "QUARTER" | "HOUR" | "MINUTE" | "SECOND" | "WEEK" => {
+                    // The session time zone as configured, which `ConvertTz` reads like Spark. The
+                    // label would read an offset with seconds as UTC.
+                    let session_timezone = &function_context.plan_config.session_timezone;
+                    let timezone = session_timezone.as_ref();
+                    let is_fixed_offset =
+                        timezone.starts_with(['+', '-']) || is_fixed_zero_offset_timezone(timezone);
+                    let is_ltz = |value: &Expr| {
+                        matches!(
+                            value.get_type(function_context.schema),
+                            Ok(DataType::Timestamp(_, Some(_)))
+                        )
+                    };
+                    let has_ltz = is_ltz(&start) || is_ltz(&end);
+                    let local = |value: Expr| -> PlanResult<Expr> {
+                        Ok(match value.get_type(function_context.schema)? {
+                            DataType::Timestamp(_, Some(_)) => {
+                                cast_timestamp_ltz_to_ntz(value, session_timezone, false)
+                            }
+                            // Spark casts TIMESTAMP_NTZ to TIMESTAMP when the other value is one,
+                            // which moves a wall-clock time in a DST gap forward, and fails with
+                            // long overflow near the ends of the range, also at a fixed offset.
+                            DataType::Timestamp(_, None)
+                                if has_ltz && !is_fixed_zero_offset_timezone(timezone) =>
+                            {
+                                cast_timestamp_ltz_to_ntz(
+                                    cast_timestamp_ntz_to_ltz(value, session_timezone, false),
+                                    session_timezone,
+                                    false,
+                                )
+                            }
+                            _ => value,
+                        })
+                    };
+                    // A fixed offset moves both wall-clock times of TIMESTAMP values alike.
+                    let same_offset = is_fixed_offset && is_ltz(&start) && is_ltz(&end);
+                    match unit_str.as_str() {
+                        "DAY" => Ok(timestamp_day_diff(local(start)?, local(end)?)),
+                        "HOUR" | "MINUTE" | "SECOND" | "WEEK" if same_offset => {
+                            Ok(timestampdiff_fixed_unit(&unit_str, start, end))
+                        }
+                        "HOUR" | "MINUTE" | "SECOND" | "WEEK" => Ok(timestampdiff_fixed_unit(
+                            &unit_str,
+                            local(start)?,
+                            local(end)?,
+                        )),
+                        _ => timestampdiff_calendar_unit(&unit_str, local(start)?, local(end)?),
+                    }
                 }
-                "MONTH" | "YEAR" | "QUARTER" => timestampdiff_calendar_unit(&unit_str, start, end),
                 other => Err(PlanError::unsupported(format!("datediff unit: {other}"))),
             }
         }
@@ -410,6 +527,18 @@ fn session_timezone(input: &ScalarFunctionInput) -> Expr {
         .plan_config
         .session_timezone
         .to_string())
+}
+
+/// Formats the date of a value. `to_char` formats TIMESTAMP values in nanoseconds, which fail
+/// before 1677, so they are cast to the date in the time zone of their label, which `to_char`
+/// would read.
+fn date_to_char(input: ScalarFunctionInput, format: &str) -> PlanResult<Expr> {
+    let value = input.arguments.one()?;
+    let value = match value.get_type(input.function_context.schema)? {
+        DataType::Timestamp(_, Some(_)) => cast(value, DataType::Date32),
+        _ => value,
+    };
+    Ok(expr_fn::to_char(value, lit(format)))
 }
 
 fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -912,7 +1041,12 @@ fn from_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         input.function_context.plan_config.ansi_mode,
     )?;
     let ts = convert_tz(lit("UTC"), to_tz, ts, false, false)?;
-    let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
+    // The wall-clock time in UTC is the instant. Arrow's cast would compute it with Chrono, which
+    // does not represent Spark's full range.
+    let ts = cast(
+        cast(ts, DataType::Int64),
+        DataType::Timestamp(unit, Some(Arc::from("UTC"))),
+    );
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
 
@@ -926,7 +1060,12 @@ fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         input.function_context.plan_config.ansi_mode,
     )?;
     let ts = convert_tz(from_tz, lit("UTC"), ts, false, false)?;
-    let ts = cast(ts, DataType::Timestamp(unit, Some(Arc::from("UTC"))));
+    // The wall-clock time in UTC is the instant. Arrow's cast would compute it with Chrono, which
+    // does not represent Spark's full range.
+    let ts = cast(
+        cast(ts, DataType::Int64),
+        DataType::Timestamp(unit, Some(Arc::from("UTC"))),
+    );
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
 
@@ -1003,12 +1142,40 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let seconds_in_month = cast(lit(31 * seconds_per_day), DataType::Float64);
 
     // helper functions:
+    let seconds_in_day = |dt: Expr, tu: TimeUnit| {
+        (cast(dt.clone(), DataType::Int64)
+            - cast(expr_fn::date_trunc(lit("DAY"), dt), DataType::Int64))
+            / lit(time_unit_to_multiplier(&tu))
+    };
+
+    // Spark reads TIMESTAMP values in the session time zone, and counts the seconds of a day
+    // since its start, which is not the wall-clock time on a DST day.
+    // The session time zone as configured, which `ConvertTz` reads like Spark. The label would read
+    // an offset with seconds as UTC.
+    let session_timezone = &function_context.plan_config.session_timezone;
     let ensure_timestamp = |dt: Expr| match dt.get_type(function_context.schema) {
-        Ok(DataType::Timestamp(time_unit, _tz)) => (dt.clone(), time_unit),
-        _ => (
-            cast(dt.clone(), DataType::Timestamp(TimeUnit::Microsecond, None)),
-            TimeUnit::Microsecond,
-        ),
+        Ok(DataType::Timestamp(_, Some(_))) => {
+            let local = cast_timestamp_ltz_to_ntz(dt.clone(), session_timezone, false);
+            let day_start = cast_timestamp_ntz_to_ltz(
+                cast(
+                    timestamp_micros(local.clone()) - timestamp_time_micros(local.clone()),
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                ),
+                session_timezone,
+                false,
+            );
+            let seconds = (timestamp_micros(dt) - timestamp_micros(day_start)) / lit(1_000_000_i64);
+            (local, seconds)
+        }
+        Ok(DataType::Timestamp(time_unit, _tz)) => {
+            let seconds = seconds_in_day(dt.clone(), time_unit);
+            (dt, seconds)
+        }
+        _ => {
+            let dt = cast(dt, DataType::Timestamp(TimeUnit::Microsecond, None));
+            let seconds = seconds_in_day(dt.clone(), TimeUnit::Microsecond);
+            (dt, seconds)
+        }
     };
 
     let date_to_months =
@@ -1020,15 +1187,9 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
             .eq(cast(dt, DataType::Date32))
     };
 
-    let seconds_in_day = |dt: Expr, tu: TimeUnit| {
-        (cast(dt.clone(), DataType::Int64)
-            - cast(expr_fn::date_trunc(lit("DAY"), dt), DataType::Int64))
-            / lit(time_unit_to_multiplier(&tu))
-    };
-
     // prerequisites
-    let (date1, tu1) = ensure_timestamp(date1.clone());
-    let (date2, tu2) = ensure_timestamp(date2.clone());
+    let (date1, seconds1) = ensure_timestamp(date1.clone());
+    let (date2, seconds2) = ensure_timestamp(date2.clone());
 
     // calculations:
     let days1 = integer_part(date1.clone(), "DAY");
@@ -1039,9 +1200,7 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
         DataType::Float64,
     );
 
-    let seconds_diff = (days1.clone() - days2.clone()) * lit(seconds_per_day)
-        + seconds_in_day(date1.clone(), tu1)
-        - seconds_in_day(date2.clone(), tu2);
+    let seconds_diff = (days1.clone() - days2.clone()) * lit(seconds_per_day) + seconds1 - seconds2;
 
     let months_between = when(
         days1
@@ -1292,7 +1451,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("datediff", F::custom(datediff)),
         ("datepart", F::binary(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
-        ("dayname", F::unary(|arg| expr_fn::to_char(arg, lit("%a")))),
+        ("dayname", F::custom(|input| date_to_char(input, "%a"))),
         ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
         (
             "dayofweek",
@@ -1333,10 +1492,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("make_ym_interval", F::udf(SparkMakeYmInterval::new())),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
-        (
-            "monthname",
-            F::unary(|arg| expr_fn::to_char(arg, lit("%b"))),
-        ),
+        ("monthname", F::custom(|input| date_to_char(input, "%b"))),
         ("months_between", F::custom(months_between)),
         ("next_day", F::custom(next_day)),
         ("now", F::custom(current_timestamp_microseconds)),
@@ -1406,7 +1562,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
-        ("trunc", F::binary(trunc)),
+        ("trunc", F::custom(trunc)),
         ("try_make_interval", F::udf(SparkMakeInterval::new())),
         (
             "try_make_timestamp",
@@ -1458,7 +1614,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("weekday", F::unary(|arg| integer_part(arg, "DOW") - lit(1))),
         (
             "weekofyear",
-            F::unary(|arg| cast(expr_fn::to_char(arg, lit("%V")), DataType::Int32)),
+            F::custom(|input| Ok(cast(date_to_char(input, "%V")?, DataType::Int32))),
         ),
         ("window", F::custom(window)),
         ("window_time", F::custom(window_time)),

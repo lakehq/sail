@@ -114,6 +114,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -167,6 +170,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -274,6 +283,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -425,6 +440,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -538,6 +556,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -625,6 +646,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -678,6 +702,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -785,6 +815,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -936,6 +972,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -1041,6 +1080,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:
@@ -1137,6 +1179,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -1190,6 +1235,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -1297,6 +1348,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -1448,6 +1505,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -1555,6 +1615,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -1649,6 +1712,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -1702,6 +1768,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -1809,6 +1881,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -1960,6 +2038,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -2073,6 +2154,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -2160,6 +2244,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -2213,6 +2300,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -2320,6 +2413,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -2471,6 +2570,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -2578,6 +2680,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -2672,6 +2777,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -2725,6 +2833,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -2832,6 +2946,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -2983,6 +3103,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -3090,6 +3213,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -3184,6 +3310,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -3237,6 +3366,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -3344,6 +3479,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -3493,6 +3634,9 @@ data:
 
 
     physical_plan after LimitedDistinctAggregation:
+    SAME TEXT AS ABOVE
+
+    physical_plan after optimize_correlation_casts:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown:
@@ -3608,6 +3752,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -3695,6 +3842,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -3748,6 +3898,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -3855,6 +4011,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -4006,6 +4168,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -4113,6 +4278,9 @@ data:
     physical_plan after FilterPushdown(Post):
     SAME TEXT AS ABOVE
 
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
+    SAME TEXT AS ABOVE
+
     physical_plan after RewriteInputFileMetadataFallback:
     SAME TEXT AS ABOVE
 
@@ -4207,6 +4375,9 @@ data:
     logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
 
+    logical_plan after normalize_subquery_aliases:
+    SAME TEXT AS ABOVE
+
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
 
@@ -4260,6 +4431,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -4367,6 +4544,12 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after decorrelate_predicate_subquery:
+    SAME TEXT AS ABOVE
+
+    logical_plan after decorrelate_limit:
+    SAME TEXT AS ABOVE
+
+    logical_plan after normalize_scalar_subquery_domain:
     SAME TEXT AS ABOVE
 
     logical_plan after normalize_scalar_subquery_keys:
@@ -4518,6 +4701,9 @@ data:
     physical_plan after LimitedDistinctAggregation:
     SAME TEXT AS ABOVE
 
+    physical_plan after optimize_correlation_casts:
+    SAME TEXT AS ABOVE
+
     physical_plan after FilterPushdown:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ProjectionExec: expr=[#1@0 as #5]
@@ -4623,6 +4809,9 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after FilterPushdown(Post):
+    SAME TEXT AS ABOVE
+
+    physical_plan after PushDownStreamedJoinInputFileMetadata:
     SAME TEXT AS ABOVE
 
     physical_plan after RewriteInputFileMetadataFallback:

@@ -23,6 +23,7 @@ use datafusion_expr::{
 use educe::Educe;
 use log::trace;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
@@ -352,6 +353,7 @@ pub fn expand_merge(
                 target_type,
                 options.case_sensitive,
                 StructFieldAlignment::FillMissingWithNull,
+                &arrow_timezone_label(&options.session_timezone),
             )?
             .alias(desired.clone()))
         })
@@ -729,10 +731,17 @@ fn build_default_merge_expansion(
     requirements: MergePlanRequirements,
 ) -> Result<MergeExpansion> {
     let target_schema = target_plan.schema();
+    // Unconditional matched DELETE needs only source presence, not source values.
+    // Count and delete each physical target once even when several source rows match.
+    let unconditional_matched_delete = matches!(
+        options.matched_clauses.as_slice(),
+        [clause] if clause.condition.is_none() && matches!(clause.action, MergeMatchedAction::Delete)
+    );
     let should_preserve_cow_target_rows_by_existence_join = requirements
         .preserve_unmodified_target_rows
-        && options.matched_clauses.is_empty()
-        && !options.not_matched_by_source_clauses.is_empty();
+        && (unconditional_matched_delete
+            || (options.matched_clauses.is_empty()
+                && !options.not_matched_by_source_clauses.is_empty()));
     let include_source_only_rows = !options.not_matched_by_target_clauses.is_empty();
     let source_schema = source_plan.schema().clone();
 
@@ -1417,7 +1426,7 @@ fn align_merge_value(
     value: Expr,
     target_field: &datafusion_common::arrow::datatypes::Field,
     value_schema: &DFSchemaRef,
-    case_sensitive: bool,
+    options: &MergeIntoOptions,
 ) -> Result<Expr> {
     let source_type = value.get_type(value_schema)?;
     if &source_type == target_field.data_type() {
@@ -1427,8 +1436,9 @@ fn align_merge_value(
         value,
         &source_type,
         target_field.data_type(),
-        case_sensitive,
+        options.case_sensitive,
         StructFieldAlignment::FillMissingWithNull,
+        &arrow_timezone_label(&options.session_timezone),
     )
 }
 
@@ -1479,7 +1489,7 @@ fn build_insert_only_projection(
             };
             branches.push((
                 pred,
-                align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                align_merge_value(value, field, value_schema, options)?,
             ));
         }
 
@@ -1906,7 +1916,7 @@ fn build_merge_projection(
                     if let Some(v) = cases.get_mut(field.name()) {
                         v.push((
                             pred.clone(),
-                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                            align_merge_value(value, field, value_schema, options)?,
                         ));
                     }
                 }
@@ -1926,7 +1936,7 @@ fn build_merge_projection(
                                 assignment.value.clone(),
                                 field,
                                 value_schema,
-                                options.case_sensitive,
+                                options,
                             )?,
                         ));
                     }
@@ -1957,7 +1967,7 @@ fn build_merge_projection(
                                 assignment.value.clone(),
                                 field,
                                 value_schema,
-                                options.case_sensitive,
+                                options,
                             )?,
                         ));
                     }
@@ -1979,7 +1989,7 @@ fn build_merge_projection(
                     if let Some(v) = cases.get_mut(field.name()) {
                         v.push((
                             pred.clone(),
-                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                            align_merge_value(value, field, value_schema, options)?,
                         ));
                     }
                 }
@@ -1997,7 +2007,7 @@ fn build_merge_projection(
                             .unwrap_or_else(|| merge_insert_value(options, field.name()));
                         v.push((
                             pred.clone(),
-                            align_merge_value(value, field, value_schema, options.case_sensitive)?,
+                            align_merge_value(value, field, value_schema, options)?,
                         ));
                     }
                 }

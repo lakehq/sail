@@ -251,6 +251,8 @@ impl SourceInfo {
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
     pub input: LogicalPlan,
+    /// SQL INSERT has a format-selected result, unlike CTAS and internal writes.
+    pub sql_insert: bool,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
@@ -318,6 +320,8 @@ pub struct MergeIntoOptions {
     pub target: RowLevelTarget,
     pub with_schema_evolution: bool,
     pub case_sensitive: bool,
+    /// The time zone of the session, in which TIMESTAMP values cast to TIMESTAMP_NTZ.
+    pub session_timezone: Arc<str>,
     /// Resolved logical schemas from analysis time (before any rewrites)
     pub resolved_target_schema: DFSchemaRef,
     pub resolved_source_schema: DFSchemaRef,

@@ -48,7 +48,31 @@ def test_vector_normalize_extreme_values(spark):
     assert spark.sql("SELECT vector_normalize(array(3.0e19F, 4.0e19F))").first()[0] == [0.0, 0.0]
     assert spark.sql("SELECT vector_normalize(array(1.0e-39F, 0.0F))").first()[0] is None
     actual = spark.sql("SELECT vector_normalize(array(float('nan'), 1.0F), float('inf'))").first()[0]
-    assert all(math.isnan(value) for value in actual)
+    assert math.isnan(actual[0])
+    assert actual[1:] == [1.0]
+
+
+@pytest.mark.parametrize(
+    ("vector", "expected"),
+    [
+        pytest.param([float("nan"), 1.0], [float("nan"), 1.0], id="nan-first"),
+        pytest.param([1.0, float("nan")], [1.0, float("nan")], id="nan-last"),
+        pytest.param([float("nan")], None, id="only-nan"),
+        pytest.param([float("nan"), 0.0], None, id="nan-and-zero"),
+        pytest.param([float("nan"), float("inf")], [float("nan"), float("nan")], id="nan-and-infinity"),
+        pytest.param([float("inf"), float("nan")], [float("nan"), float("nan")], id="infinity-and-nan"),
+    ],
+)
+def test_vector_normalize_infinity_nan_columns(spark, vector, expected):
+    data = [(vector,)] * 4
+    df = spark.createDataFrame(data, "v ARRAY<FLOAT>").repartition(4)
+    actual = df.selectExpr("vector_normalize(v, float('inf')) AS result").collect()
+    assert len(actual) == len(data)
+    for row in actual:
+        if expected is None:
+            assert row.result is None
+        else:
+            assert row.result == pytest.approx(expected, nan_ok=True)
 
 
 def test_vector_normalize_rejects_invalid_degree(spark):

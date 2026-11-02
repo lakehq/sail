@@ -1336,6 +1336,7 @@ impl TryFrom<RelType> for RelationNode {
             RelType::RelationChanges(_) => Err(SparkError::unsupported("relation changes")),
             RelType::NearestByJoin(_) => Err(SparkError::unsupported("nearest-by join")),
             RelType::MlRelation(_) => Err(SparkError::unsupported("ML relation")),
+            // TODO: Lower Delta Connect relation extensions for scans, inspection, and maintenance.
             RelType::Extension(_) => Err(SparkError::unsupported("extension relation")),
             RelType::Unknown(_) => Err(SparkError::unsupported("unknown relation")),
         }

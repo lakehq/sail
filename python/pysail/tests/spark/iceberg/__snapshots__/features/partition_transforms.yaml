@@ -55,6 +55,7 @@ data:
       added-data-files: '3'
       added-records: '4'
       operation: append
+      spark.insert.num-inserted-rows: '4'
       total-data-files: '3'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -129,6 +130,7 @@ data:
       added-data-files: '4'
       added-records: '4'
       operation: append
+      spark.insert.num-inserted-rows: '4'
       total-data-files: '4'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -210,6 +212,7 @@ data:
       added-data-files: '3'
       added-records: '4'
       operation: append
+      spark.insert.num-inserted-rows: '4'
       total-data-files: '3'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -276,6 +279,7 @@ data:
       added-data-files: '3'
       added-records: '4'
       operation: append
+      spark.insert.num-inserted-rows: '4'
       total-data-files: '3'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -342,6 +346,7 @@ data:
       added-data-files: '3'
       added-records: '4'
       operation: append
+      spark.insert.num-inserted-rows: '4'
       total-data-files: '3'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -358,6 +363,7 @@ data:
   added-data-files: '3'
   added-records: '4'
   operation: append
+  spark.insert.num-inserted-rows: '4'
   total-data-files: '3'
   total-delete-files: '0'
   total-equality-deletes: '0'
@@ -419,6 +425,7 @@ data:
       added-data-files: '2'
       added-records: '4'
       operation: append
+      spark.insert.num-inserted-rows: '4'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'
@@ -496,6 +503,7 @@ data:
       added-data-files: '2'
       added-records: '4'
       operation: append
+      spark.insert.num-inserted-rows: '4'
       total-data-files: '2'
       total-delete-files: '0'
       total-equality-deletes: '0'

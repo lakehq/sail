@@ -8,6 +8,7 @@ from pyspark.errors.exceptions.connect import SparkConnectGrpcException
 from pyspark.sql import Row
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_identifier
 
 
@@ -280,31 +281,170 @@ def test_csv_read_options(spark, tmp_path, infer_schema):
     assert read_df.collect()[0].col2 == expected_col2_value
 
 
-@pytest.mark.parametrize("infer_schema", [True, False])
-def test_csv_read_truncated_rows(spark, tmp_path, infer_schema):
-    path = tmp_path / f"csv_read_truncated_rows_{infer_schema}"
-    path.mkdir()
-    data_path = path / "data.csv"
-    with open(data_path, "w") as f:
-        f.write("col1,col2\n")
-        f.write("x,10\n")
-        f.write("y\n")
+# A row with fewer fields than the header, a row with only the first field,
+# and a blank line between them, which Spark skips.
+TRUNCATED_ROWS_CSV = "a,b,c\nx,1,2\ny,3\n\nz\n"
 
-    df = spark.read.option("header", "true").option("inferSchema", infer_schema).csv(str(path))
-    # Without `allowTruncatedRows`, a row that has fewer fields than the
-    # header must error out. The exact error message depends on whether
-    # type inference runs, so we only pin the exception type.
+
+def read_truncated_rows_csv(spark, tmp_path, infer_schema, options):
+    path = tmp_path / "csv_read_truncated_rows"
+    path.mkdir()
+    (path / "data.csv").write_text(TRUNCATED_ROWS_CSV)
+    reader = spark.read.option("header", "true").option("inferSchema", infer_schema)
+    for key, value in options.items():
+        reader = reader.option(key, value)
+    return reader.csv(str(path)).orderBy("a")
+
+
+def full_row(infer_schema):
+    return Row(a="x", b=1, c=2) if infer_schema else Row(a="x", b="1", c="2")
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize("mode", [None, "PERMISSIVE", "permissive", "unknown"])
+def test_csv_read_truncated_rows(spark, tmp_path, infer_schema, mode):
+    # Spark's `PERMISSIVE` mode, the default and the fallback for an unknown
+    # mode, reads a row that has fewer fields than the header, and fills the
+    # missing fields with nulls.
+    options = {} if mode is None else {"mode": mode}
+    df = read_truncated_rows_csv(spark, tmp_path, infer_schema, options)
+    assert df.collect() == [
+        full_row(infer_schema),
+        Row(a="y", b=3 if infer_schema else "3", c=None),
+        Row(a="z", b=None, c=None),
+    ]
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize("mode", ["FAILFAST", "failFast"])
+def test_csv_read_truncated_rows_failfast(spark, tmp_path, infer_schema, mode):
+    df = read_truncated_rows_csv(spark, tmp_path, infer_schema, {"mode": mode})
+    # The error message differs from Spark, so we only pin the exception type.
     with pytest.raises(SparkConnectGrpcException):
         df.collect()
 
-    df = (
-        spark.read.option("header", "true")
-        .option("inferSchema", infer_schema)
-        .option("allowTruncatedRows", "true")
-        .csv(str(path))
+
+@pytest.mark.xfail(not is_jvm_spark(), reason="DROPMALFORMED fails on malformed rows in Sail", strict=True)
+@pytest.mark.parametrize("infer_schema", [True, False])
+def test_csv_read_truncated_rows_dropmalformed(spark, tmp_path, infer_schema):
+    df = read_truncated_rows_csv(spark, tmp_path, infer_schema, {"mode": "DROPMALFORMED"})
+    assert df.collect() == [full_row(infer_schema)]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="`allowTruncatedRows` is a Sail-only option")
+@pytest.mark.parametrize("infer_schema", [True, False])
+def test_csv_read_truncated_rows_disallowed(spark, tmp_path, infer_schema):
+    df = read_truncated_rows_csv(spark, tmp_path, infer_schema, {"allowTruncatedRows": "false"})
+    # The exact error message depends on whether type inference runs,
+    # so we only pin the exception type.
+    with pytest.raises(SparkConnectGrpcException):
+        df.collect()
+
+
+@pytest.mark.parametrize("infer_schema", [True, False])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "a,b,c\nx,1,2\n   \ny,3\n",
+        "a,b,c\nx,1,2\n\t\ny,3\n",
+        "a,b,c\nx,1,2\ny,3\n   ",
+        "a,b,c\nx,1,2\ny,3\n\t",
+        # Spark trims only spaces when it looks for the header (`CSVUtils.filterCommentAndEmpty`
+        # on a `Dataset`), so a tab-only line before the header is not covered here.
+        "   \na,b,c\nx,1,2\ny,3\n",
+    ],
+    ids=["spaces between rows", "tab between rows", "spaces at end", "tab at end", "spaces before header"],
+)
+def test_csv_read_skips_whitespace_only_lines(spark, tmp_path, infer_schema, content):
+    # Spark drops the lines that are empty after `String.trim` before it parses rows
+    # (`CSVExprUtils.filterCommentAndEmpty`), so a whitespace-only line is not read as a short row.
+    (tmp_path / "data.csv").write_text(content)
+    df = spark.read.option("header", "true").option("inferSchema", infer_schema).csv(str(tmp_path)).orderBy("a")
+    if infer_schema:
+        assert df.collect() == [Row(a="x", b=1, c=2), Row(a="y", b=3, c=None)]
+    else:
+        assert df.collect() == [Row(a="x", b="1", c="2"), Row(a="y", b="3", c=None)]
+
+
+def test_csv_infer_schema_skips_whitespace_only_lines(spark, tmp_path):
+    # The tab-only line would make the first column a string if it reached type inference.
+    (tmp_path / "data.csv").write_text("a,b\n1,2\n\t\n3,4\n")
+    df = spark.read.option("header", "true").option("inferSchema", "true").csv(str(tmp_path)).orderBy("a")
+    assert [tuple(r) for r in df.collect()] == [(1, 2), (3, 4)]
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark splits quoted values at line breaks without `multiLine`")
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("p\n\nq", "p\n\nq"), ("p\n   \nq", "p\nq")],
+    ids=["empty line", "whitespace-only line"],
+)
+def test_csv_read_quoted_value_with_line_breaks(spark, tmp_path, value, expected):
+    # Without `multiLine`, Spark reads such a value as broken rows. Sail parses the quotes across
+    # lines, but drops whitespace-only lines before parsing, inside quotes as well.
+    (tmp_path / "data.csv").write_text(f'a,b\n"{value}",1\n', newline="\n")
+    df = spark.read.option("header", "true").csv(str(tmp_path))
+    assert df.collect() == [Row(a=expected, b="1")]
+
+
+def test_csv_read_multiline_keeps_whitespace_only_lines(spark, tmp_path):
+    # With `multiLine`, Spark parses the file as one stream instead of line by line,
+    # so a whitespace-only line is a record with one field.
+    (tmp_path / "data.csv").write_text("a,b,c\nx,1,2\n   \ny,3\n")
+    df = spark.read.option("header", "true").option("multiLine", "true").csv(str(tmp_path)).orderBy("a")
+    assert df.collect() == [
+        Row(a="   ", b=None, c=None),
+        Row(a="x", b="1", c="2"),
+        Row(a="y", b="3", c=None),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("a,b,c\ny,\n", [Row(a="y", b=None, c=None)]),
+        ('a,b,c\n"y",3\n', [Row(a="y", b="3", c=None)]),
+        ("a,b,c\r\ny,3\r\n", [Row(a="y", b="3", c=None)]),
+        ("a,b,c\n", []),
+    ],
+)
+def test_csv_read_truncated_rows_shapes(spark, tmp_path, content, expected):
+    (tmp_path / "data.csv").write_bytes(content.encode())
+    assert spark.read.option("header", "true").csv(str(tmp_path)).collect() == expected
+
+
+@pytest.mark.parametrize("mode", ["FAILFAST", "DROPMALFORMED"])
+def test_csv_read_strict_modes_on_clean_file(spark, tmp_path, mode):
+    (tmp_path / "data.csv").write_text("a,b,c\nx,1,2\n")
+    df = spark.read.option("header", "true").option("mode", mode).csv(str(tmp_path))
+    assert df.collect() == [Row(a="x", b="1", c="2")]
+
+
+def test_csv_table_truncated_rows(spark, tmp_path):
+    # Table options reach the reader as table properties, through the same
+    # `mode` handling as reader options.
+    path = tmp_path / "csv_table_truncated_rows"
+    path.mkdir()
+    (path / "data.csv").write_text(TRUNCATED_ROWS_CSV)
+    columns = "a STRING, b INT, c STRING"
+    spark.sql(
+        f"CREATE TABLE csv_truncated_rows ({columns}) USING csv OPTIONS (header 'true') LOCATION '{path.as_uri()}'"
     )
-    expected_x_col2 = 10 if infer_schema else "10"
-    assert sorted(df.collect()) == [Row(col1="x", col2=expected_x_col2), Row(col1="y", col2=None)]
+    spark.sql(
+        f"CREATE TABLE csv_truncated_rows_failfast ({columns}) USING csv "
+        f"OPTIONS (header 'true', mode 'FAILFAST') LOCATION '{path.as_uri()}'"
+    )
+    try:
+        assert spark.sql("SELECT * FROM csv_truncated_rows ORDER BY a").collect() == [
+            Row(a="x", b=1, c="2"),
+            Row(a="y", b=3, c=None),
+            Row(a="z", b=None, c=None),
+        ]
+        with pytest.raises(SparkConnectGrpcException):
+            spark.sql("SELECT * FROM csv_truncated_rows_failfast").collect()
+    finally:
+        spark.sql("DROP TABLE IF EXISTS csv_truncated_rows")
+        spark.sql("DROP TABLE IF EXISTS csv_truncated_rows_failfast")
 
 
 def test_csv_infer_schema_false(spark, tmp_path):

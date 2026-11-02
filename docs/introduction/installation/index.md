@@ -5,6 +5,8 @@ rank: 3
 
 # Installation
 
+<RunOnLakeSail />
+
 To quickly get started, you can install Sail from PyPI using `pip`.
 
 ```bash-vue
@@ -59,6 +61,8 @@ for more information about the compiler options that can be specified via the `R
 <script setup>
 import { useData } from "vitepress";
 import { computed } from "vue";
+
+import RunOnLakeSail from "@theme/components/RunOnLakeSail.vue";
 
 const { site } = useData();
 

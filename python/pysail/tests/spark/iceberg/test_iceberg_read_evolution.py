@@ -18,7 +18,9 @@ from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equa
 
 @pytest.mark.parametrize("list_type", [pa.list_, pa.large_list], ids=["list", "large_list"])
 @pytest.mark.parametrize("metadata_as_data", [False, True])
-def test_list_offset_widths_preserve_values_and_field_ids(spark, sql_catalog, tmp_path, list_type, metadata_as_data):
+def test_list_offset_widths_preserve_values_and_spark_null_spelling(
+    spark, sql_catalog, tmp_path, list_type, metadata_as_data
+):
     identifier = "default.list_offsets"
     table = sql_catalog.create_table(
         identifier,
@@ -71,10 +73,10 @@ def test_list_offset_widths_preserve_values_and_field_ids(spark, sql_catalog, tm
             {"id": 4, "tags": [None], "items": [None]},
         ]
         assert [tuple(row) for row in frame.selectExpr("id", "CAST(tags AS STRING)").orderBy("id").collect()] == [
-            (1, "[alpha, NULL, 中文]"),
+            (1, "[alpha, null, 中文]"),
             (2, "[]"),
             (3, None),
-            (4, "[NULL]"),
+            (4, "[null]"),
         ]
         assert [row.id for row in frame.filter("array_contains(tags, 'alpha')").collect()] == [1]
         assert frame.selectExpr("get(items, 0).value AS value").filter("value = 10").collect()[0].value == 10  # noqa: PLR2004

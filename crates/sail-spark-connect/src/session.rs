@@ -3,10 +3,12 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
+use sail_common_datafusion::session::config::SessionConfigProvider;
 use sail_plan::config::PlanConfig;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
@@ -46,6 +48,19 @@ impl Debug for SparkSession {
 impl SessionExtension for SparkSession {
     fn name() -> &'static str {
         "spark session"
+    }
+}
+
+impl SessionConfigProvider for SparkSession {
+    fn get_options(&self, keys: &[&str]) -> Result<Vec<Option<String>>> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(keys
+            .iter()
+            .map(|key| state.config.get_option(key).map(str::to_owned))
+            .collect())
     }
 }
 
