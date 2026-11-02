@@ -59,6 +59,33 @@ def test_partition_regions_preserve_union_input_partition_indices(spark):
 
 
 @pytest.mark.timeout(30)
+def test_replay_stages_run_partition_pairs_with_limited_slots(spark):
+    query = """
+        SELECT /*+ SHUFFLE_REPLICATE_NL(l) */ l.id AS a, r.id AS b, spark_partition_id() AS pid
+        FROM range(0, 6, 1, 3) l CROSS JOIN range(0, 4, 1, 2) r
+    """
+    rows = spark.sql(query).collect()
+    assert sorted((r.a, r.b) for r in rows) == [(a, b) for a in range(6) for b in range(4)]
+    assert len({r.pid for r in rows}) == 6  # noqa: PLR2004
+    left = spark.sql(query).selectExpr("a AS id")
+    right = spark.range(40, 44, numPartitions=4)
+    assert sorted(r.id for r in left.union(right).collect()) == sorted(list(range(6)) * 4 + list(range(40, 44)))
+    # Do not materialize the 100-million-row Cartesian result before LIMIT.
+    limited = spark.sql("""
+        SELECT /*+ SHUFFLE_REPLICATE_NL(l) */ l.id AS a, r.id AS b
+        FROM range(0, 10000, 1, 3) l CROSS JOIN range(0, 10000, 1, 2) r
+    """).limit(1)
+    assert len(limited.collect()) == 1
+
+
+@pytest.mark.timeout(30)
+def test_range_replay_stages_keep_producer_local_indices(spark):
+    source = spark.range(15, numPartitions=5)
+    result = source.repartitionByRange(7, "id")
+    assert sorted(r.id for r in result.union(spark.range(15, 20, numPartitions=2)).collect()) == list(range(20))
+
+
+@pytest.mark.timeout(30)
 def test_task_batch_failure_leaves_session_usable(spark, worker_task_slots):
     if worker_task_slots < 4:  # noqa: PLR2004
         pytest.skip("the shuffle region needs four slots")

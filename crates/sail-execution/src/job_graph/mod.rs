@@ -54,7 +54,10 @@ impl JobGraph {
                     .iter()
                     .filter(|input| input.stage == stage)
                     .map(|input| match input.mode {
-                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale { .. } => 1,
+                        InputMode::Forward
+                        | InputMode::Replay
+                        | InputMode::Shuffle
+                        | InputMode::Rescale { .. } => 1,
                         InputMode::Merge | InputMode::Broadcast => {
                             x.plan.output_partitioning().partition_count()
                         }
@@ -147,6 +150,9 @@ pub enum InputMode {
     /// For each partition in the current stage, execute the same partition to fetch the input
     /// which reads all channels from the corresponding partition in the input stage.
     Forward,
+    /// Independently reopen the producer-local partition requested by execute().
+    /// Unlike Forward, this index need not equal the enclosing task's index.
+    Replay,
     /// For each partition in the current stage, execute all partitions to fetch the input
     /// which each reads all channels from the corresponding partition in the input stage.
     Merge,
@@ -166,6 +172,7 @@ impl fmt::Display for InputMode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             InputMode::Forward => write!(f, "Forward"),
+            InputMode::Replay => write!(f, "Replay"),
             InputMode::Merge => write!(f, "Merge"),
             InputMode::Shuffle => write!(f, "Shuffle"),
             InputMode::Broadcast => write!(f, "Broadcast"),
@@ -178,6 +185,8 @@ impl fmt::Display for InputMode {
 pub enum OutputMode {
     Pipelined,
     Blocking,
+    /// Committed local spill files, served through worker Flight regardless of shuffle backend.
+    MaterializedLocal,
 }
 
 impl fmt::Display for OutputMode {
@@ -185,6 +194,7 @@ impl fmt::Display for OutputMode {
         match self {
             OutputMode::Pipelined => write!(f, "Pipelined"),
             OutputMode::Blocking => write!(f, "Blocking"),
+            OutputMode::MaterializedLocal => write!(f, "MaterializedLocal"),
         }
     }
 }

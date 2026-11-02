@@ -4,7 +4,7 @@ use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -56,18 +56,55 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let output_schema = Arc::clone(input.schema());
+        let sort_options = partition_expressions
+            .iter()
+            .map(|expr| match expr {
+                spec::Expr::SortOrder(sort) => {
+                    Some((sort.direction.clone(), sort.null_ordering.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let range = sort_options.iter().any(Option::is_some);
+        let num_partitions = if range {
+            Some(num_partitions.unwrap_or(self.config.shuffle_partitions))
+        } else {
+            num_partitions
+        };
+        if range && sort_options.iter().any(Option::is_none) {
+            return Err(PlanError::analysis(
+                "range partitioning requires sort orders for all partition expressions",
+            ));
+        }
         // Like a filter, Spark recovers partitioning attributes removed by the input.
         let (expr, input) = self
             .resolve_expressions_with_missing_inputs(partition_expressions, input, state)
             .await?;
         let (input, expr) = self.rewrite_partition_expressions(input, expr, state)?;
+        let ordering = if range {
+            expr.iter()
+                .cloned()
+                .zip(sort_options)
+                .map(|(expr, options)| {
+                    let (direction, null_ordering) =
+                        options.ok_or_else(|| PlanError::internal("missing range sort order"))?;
+                    let sort = Self::sort_with_options(expr, direction, null_ordering);
+                    Ok((!sort.asc, sort.nulls_first))
+                })
+                .collect::<PlanResult<Vec<_>>>()?
+        } else {
+            vec![]
+        };
+        let kind = if range {
+            ExplicitRepartitionKind::Range
+        } else {
+            ExplicitRepartitionKind::Hash
+        };
         let plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(ExplicitRepartitionNode::new(
-                Arc::new(input),
-                num_partitions,
-                ExplicitRepartitionKind::Hash,
-                expr,
-            )),
+            node: Arc::new(
+                ExplicitRepartitionNode::new(Arc::new(input), num_partitions, kind, expr)
+                    .with_range_ordering(ordering),
+            ),
         });
         Self::restore_missing_input_output(plan, output_schema)
     }

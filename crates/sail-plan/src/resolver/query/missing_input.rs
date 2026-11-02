@@ -5,6 +5,7 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef};
 use datafusion_expr::{Distinct, Expr, LogicalPlan, Projection};
 use sail_common::spec;
+use sail_logical_plan::join_hint::JoinHintNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
@@ -148,7 +149,8 @@ impl MissingInputBoundaries {
             | LogicalPlan::Unnest(_) => true,
             LogicalPlan::Extension(extension) => {
                 let node = extension.node.as_any();
-                node.is::<ExplicitRepartitionNode>()
+                node.is::<JoinHintNode>()
+                    || node.is::<ExplicitRepartitionNode>()
                     || node.is::<SortWithinPartitionsNode>()
                     || node.is::<RequiredSortNode>()
                     || node.is::<MonotonicIdNode>()

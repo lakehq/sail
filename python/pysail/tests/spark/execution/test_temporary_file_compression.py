@@ -28,6 +28,17 @@ def remote(request, execution_mode):
         yield server.remote
 
 
+def test_range_repartition_spools_wide_payload(spark):
+    rows = 120_000
+    source = spark.range(rows, numPartitions=4).selectExpr("id", "lpad(CAST(id AS STRING), 512, '0') AS payload")
+    result = source.repartitionByRange(4, "id")
+    # The 60 MiB payload exceeds the 32 MiB pool; keys alone determine boundaries.
+    result.createOrReplaceTempView("range_payload")
+    actual = spark.sql("SELECT count(*), sum(id), sum(length(payload)), max(payload) FROM range_payload").first()
+    assert tuple(actual) == (rows, rows * (rows - 1) // 2, rows * 512, str(rows - 1).zfill(512))
+    assert result.limit(1).first().payload is not None
+
+
 def test_sort_temporary_file_compression(spark):
     rows = 120_000
     # Retain the padded keys in buffered rows; row ranks verify merge order after spilling.

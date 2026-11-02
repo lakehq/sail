@@ -30,8 +30,14 @@ use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
+use sail_physical_plan::partition_pair_join::PartitionPairJoinExec;
+use sail_physical_plan::range_repartition::{
+    RangeAssignExec, RangeBoundsExec, RangeSampleExec, SampledRangeRepartitionExec,
+    destination_partitioning,
+};
 use sail_physical_plan::remote_checkpoint::RemoteCheckpointCommitExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::replay::ReplayExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -308,6 +314,9 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
 enum PartitionUsage {
     /// Each partition of the plan is only used once.
     Once,
+    /// Materializing a replay source: an implicit merge must not gang-schedule
+    /// its producers with the replay writer (including LIMIT pushdown).
+    Replay,
     /// The same partition may be used multiple times when producing partitions
     /// for the parent physical plan.
     ///
@@ -408,6 +417,10 @@ fn plan_job_graph_stages(
         return build_barrier_job_graph(barrier, usage, graph, scalar_context);
     }
 
+    if let Some(range) = plan.downcast_ref::<SampledRangeRepartitionExec>() {
+        return build_sampled_range(range, usage, graph, scalar_context);
+    }
+
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
     let children = if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
@@ -476,6 +489,15 @@ fn plan_job_graph_stages(
                 scalar_context,
             )?,
         ]
+    } else if plan.is::<ReplayExec>() {
+        let child = plan.children().one()?;
+        vec![plan_job_graph_stages(
+            child.clone(),
+            PartitionUsage::Replay,
+            graph,
+            DriverStageHandling::CreateStage,
+            scalar_context,
+        )?]
     } else if plan.is::<RepartitionExec>()
         || plan.is::<ExplicitRepartitionExec>()
         || plan.is::<CoalescePartitionsExec>()
@@ -521,10 +543,25 @@ fn plan_job_graph_stages(
     let subtree = rebuild_subtree(plan, children)?;
 
     let consumption = match usage {
-        PartitionUsage::Once => ShuffleConsumption::Single,
+        PartitionUsage::Once | PartitionUsage::Replay => ShuffleConsumption::Single,
         PartitionUsage::Shared => ShuffleConsumption::Multiple,
     };
-    let plan = if let Some(repartition) = subtree.plan.downcast_ref::<RepartitionExec>() {
+    let plan = if let Some(replay) = subtree.plan.downcast_ref::<ReplayExec>() {
+        let properties = replay.properties().clone();
+        let child = wrap_pending_scalar_subqueries(subtree.only_child()?, scalar_context);
+        let stage = push_stage(
+            child,
+            graph,
+            OutputDistribution::RoundRobinBatch { channels: 1 },
+            TaskPlacement::Worker,
+            OutputMode::MaterializedLocal,
+        )?;
+        PlannedSubtree::without_pending_scalar_subquery_expr(stage_input_exec(
+            stage,
+            InputMode::Replay,
+            properties,
+        ))
+    } else if let Some(repartition) = subtree.plan.downcast_ref::<RepartitionExec>() {
         let ordering = repartition
             .preserve_order()
             .then(|| repartition.properties().output_ordering().cloned())
@@ -593,7 +630,19 @@ fn plan_job_graph_stages(
         let properties = coalesce.properties().clone();
         let fetch = coalesce.fetch();
         let child = subtree.only_child()?;
-        let shuffled = create_shuffle(child, graph, properties, consumption, scalar_context)?;
+        let shuffled = if matches!(usage, PartitionUsage::Replay) {
+            let child = wrap_pending_scalar_subqueries(child, scalar_context);
+            let stage = push_stage(
+                child,
+                graph,
+                OutputDistribution::RoundRobinBatch { channels: 1 },
+                TaskPlacement::Worker,
+                OutputMode::MaterializedLocal,
+            )?;
+            stage_input_exec(stage, InputMode::Shuffle, properties)
+        } else {
+            create_shuffle(child, graph, properties, consumption, scalar_context)?
+        };
         if let Some(f) = fetch {
             PlannedSubtree::without_pending_scalar_subquery_expr(Arc::new(GlobalLimitExec::new(
                 shuffled,
@@ -634,6 +683,92 @@ fn plan_job_graph_stages(
         subtree.into_planned_subtree()
     };
     Ok(plan)
+}
+
+fn build_sampled_range(
+    range: &SampledRangeRepartitionExec,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
+) -> ExecutionResult<PlannedSubtree> {
+    let source = plan_job_graph_stages(
+        range.input().clone(),
+        PartitionUsage::Replay,
+        graph,
+        DriverStageHandling::CreateStage,
+        scalar_context,
+    )?;
+    let prepared = range.prepared_input(source.plan)?;
+    let pending =
+        source.has_pending_scalar_subquery_expr || plan_node_has_scalar_subquery_expr(&prepared)?;
+    let prepared =
+        wrap_pending_scalar_subqueries(PlannedSubtree::new(prepared, pending), scalar_context);
+    let source_properties = prepared.properties().clone();
+    let source_stage = push_stage(
+        prepared,
+        graph,
+        OutputDistribution::RoundRobinBatch { channels: 1 },
+        TaskPlacement::Worker,
+        OutputMode::MaterializedLocal,
+    )?;
+    let source = stage_input_exec(source_stage, InputMode::Replay, source_properties);
+
+    let samples = Arc::new(RangeSampleExec::try_new(
+        source.clone(),
+        range.key_columns(),
+    )?);
+    let sample_properties = samples.properties().clone();
+    let sample_stage = push_stage(
+        samples,
+        graph,
+        OutputDistribution::RoundRobinBatch { channels: 1 },
+        TaskPlacement::Worker,
+        OutputMode::MaterializedLocal,
+    )?;
+    let samples = stage_input_exec(sample_stage, InputMode::Replay, sample_properties);
+    let bounds = Arc::new(RangeBoundsExec::try_new(
+        samples,
+        range.partitions(),
+        range.keys().iter().map(|key| key.options).collect(),
+    )?);
+    let bound_properties = bounds.properties().clone();
+    let bound_stage = push_stage(
+        bounds,
+        graph,
+        OutputDistribution::RoundRobinBatch { channels: 1 },
+        TaskPlacement::Worker,
+        OutputMode::MaterializedLocal,
+    )?;
+    let bounds = stage_input_exec(bound_stage, InputMode::Replay, bound_properties);
+    let assigned = Arc::new(RangeAssignExec::try_new(
+        source,
+        bounds,
+        range.key_columns(),
+    )?);
+    let partitioning =
+        destination_partitioning(assigned.schema().fields().len() - 1, range.partitions())?;
+    let properties = Arc::new(
+        assigned
+            .properties()
+            .as_ref()
+            .clone()
+            .with_partitioning(Partitioning::UnknownPartitioning(range.partitions())),
+    );
+    let stage = push_stage(
+        assigned,
+        graph,
+        OutputDistribution::Range { partitioning },
+        TaskPlacement::Worker,
+        shuffle_output_mode(graph),
+    )?;
+    let mode = match usage {
+        PartitionUsage::Once | PartitionUsage::Replay => InputMode::Shuffle,
+        PartitionUsage::Shared => InputMode::Broadcast,
+    };
+    let shuffled = create_shuffle_input(stage, mode, properties, graph)?;
+    Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+        range.drop_internal_columns(shuffled)?,
+    ))
 }
 
 fn rebuild_subtree(
@@ -1013,6 +1148,24 @@ fn push_stage(
     placement: TaskPlacement,
     mode: OutputMode,
 ) -> ExecutionResult<usize> {
+    // Keep replay consumers independently schedulable, including exchanges above
+    // a pair join or range assignment. Ordinary shuffles retain their backend.
+    let materialized = plan.exists(|node| {
+        Ok(node.is::<PartitionPairJoinExec>()
+            || node
+                .downcast_ref::<StageInputExec<StageInput>>()
+                .is_some_and(|input| {
+                    matches!(
+                        graph.stages[input.input().stage].mode,
+                        OutputMode::MaterializedLocal
+                    )
+                }))
+    })?;
+    let mode = if matches!(mode, OutputMode::Pipelined) && materialized {
+        OutputMode::MaterializedLocal
+    } else {
+        mode
+    };
     let (plan, inputs) = rewrite_inputs(plan)?;
     let stage = Stage {
         inputs,
@@ -1149,6 +1302,48 @@ mod tests {
                 partition_split_threshold: 1_i64 << 30,
                 partition_split_mode: PartitionSplitMode::Soft,
             },
+        }
+    }
+
+    #[test]
+    fn replay_source_merge_is_blocking_but_terminal_pair_output_streams() {
+        use sail_physical_plan::partition_pair_join::PartitionPairJoinExec;
+        use sail_physical_plan::replay::ReplayExec;
+
+        for options in [
+            flight_shuffle_options(),
+            blocking_shuffle_options(),
+            celeborn_shuffle_options(),
+        ] {
+            let source = UnionExec::try_new(vec![empty_plan(); 3]).unwrap();
+            let source = Arc::new(CoalescePartitionsExec::new(source).with_fetch(Some(1)));
+            let pair = Arc::new(
+                PartitionPairJoinExec::try_new(
+                    Arc::new(ReplayExec::try_new(source).unwrap()),
+                    Arc::new(ReplayExec::try_new(empty_plan()).unwrap()),
+                    None,
+                    None,
+                )
+                .unwrap(),
+            );
+            let graph = JobGraph::try_new(pair, options).unwrap();
+            assert_eq!(graph.stages.len(), 4);
+            assert!(
+                graph.stages[..3]
+                    .iter()
+                    .all(|stage| matches!(stage.mode, OutputMode::MaterializedLocal))
+            );
+            assert_eq!(
+                graph.stages[0].plan.output_partitioning().partition_count(),
+                3
+            );
+            assert!(matches!(graph.stages[3].mode, OutputMode::Pipelined));
+            assert!(
+                graph.stages[3]
+                    .inputs
+                    .iter()
+                    .all(|input| matches!(input.mode, InputMode::Replay))
+            );
         }
     }
 

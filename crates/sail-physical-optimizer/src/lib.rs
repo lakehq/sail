@@ -38,6 +38,7 @@ mod correlation_cast;
 mod explicit_repartition;
 mod filter_pushdown;
 mod input_file_name;
+mod join_hint;
 mod join_reorder;
 mod mixed_numeric;
 mod offset;
@@ -65,6 +66,7 @@ pub fn get_physical_optimizers(
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(SelectSemiJoinBuildSide));
+    rules.push(Arc::new(join_hint::ApplyJoinHints));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
     rules.push(Arc::new(correlation_cast::OptimizeCorrelationCasts));
     rules.push(Arc::new(FilterPushdown::new()));

@@ -42,7 +42,7 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => {
                 let senders = match entry.get_mut() {
-                    LocalStreamState::Created { .. } => {
+                    LocalStreamState::Created { .. } | LocalStreamState::Materialized { .. } => {
                         return Err(ExecutionError::InternalError(format!(
                             "local stream {} is already created",
                             TaskStreamKeyDisplay(&key)
@@ -84,6 +84,24 @@ impl LocalStreamManager {
         }
     }
 
+    pub fn create_materialized_stream(
+        &mut self,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        context: std::sync::Arc<datafusion::execution::TaskContext>,
+    ) -> ExecutionResult<Box<dyn TaskStreamChannelSink>> {
+        if self.streams.contains_key(&key) {
+            return Err(ExecutionError::InternalError(format!(
+                "materialized stream {} already exists or was read before its producer completed",
+                TaskStreamKeyDisplay(&key)
+            )));
+        }
+        let (stream, sink) = super::spill::SpillStream::try_new(schema, context)?;
+        self.streams
+            .insert(key, LocalStreamState::Materialized { stream });
+        Ok(sink)
+    }
+
     pub fn fetch_stream(
         &mut self,
         ctx: &mut ActorContext<TaskRunnerActor>,
@@ -92,6 +110,7 @@ impl LocalStreamManager {
         match self.streams.entry(key.clone()) {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
+                LocalStreamState::Materialized { stream } => Ok(stream.subscribe()),
                 LocalStreamState::Pending { senders } => {
                     let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
                     senders.push(tx);

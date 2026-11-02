@@ -232,7 +232,7 @@ impl PlanResolver<'_> {
                 };
                 self.resolve_table_source_with_rename(
                     table_source,
-                    table_reference,
+                    table_reference.clone(),
                     None,
                     vec![],
                     None,
@@ -268,6 +268,7 @@ impl PlanResolver<'_> {
             }
         };
 
+        state.register_hint_relation(&plan, table_reference);
         if let Some(table_sample) = sample {
             self.apply_table_sample(plan, table_sample, state).await
         } else {

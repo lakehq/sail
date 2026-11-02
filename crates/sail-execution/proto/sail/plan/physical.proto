@@ -79,7 +79,51 @@ message ExtendedPhysicalPlanNode {
     InputFileMetadataExecNode input_file_metadata = 64;
     DeltaMaintenanceExecNode delta_maintenance = 65;
     DeltaOptimizeRewriteExecNode delta_optimize_rewrite = 66;
+    PartitionPairJoinExecNode partition_pair_join = 67;
+    ReplayExecNode replay = 68;
+    SampledRangeRepartitionExecNode sampled_range_repartition = 69;
+    RangeSampleExecNode range_sample = 70;
+    RangeBoundsExecNode range_bounds = 71;
+    RangeAssignExecNode range_assign = 72;
   }
+}
+
+message RangeKeyColumn {
+  uint64 index = 1;
+  bool descending = 2;
+  bool nulls_first = 3;
+}
+
+message SampledRangeRepartitionExecNode {
+  bytes input = 1;
+  LexOrdering ordering = 2;
+  uint64 partitions = 3;
+}
+
+message RangeSampleExecNode {
+  bytes input = 1;
+  repeated RangeKeyColumn keys = 2;
+}
+
+message RangeBoundsExecNode {
+  bytes input = 1;
+  uint64 partitions = 2;
+  repeated SortOptions ordering = 3;
+}
+
+message RangeAssignExecNode {
+  bytes input = 1;
+  bytes bounds = 2;
+  repeated RangeKeyColumn keys = 3;
+}
+
+message PartitionPairJoinExecNode {
+  // A DataFusion inner NLJ preserves filter, projection, input schemas and expressions.
+  bytes join = 1;
+}
+
+message ReplayExecNode {
+  bytes input = 1;
 }
 
 message InputFileMetadataExecNode {

@@ -135,6 +135,24 @@ impl TaskStreamAccessor {
         .await
     }
 
+    async fn create_materialized_stream(
+        &self,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+    ) -> Result<Box<dyn TaskStreamChannelSink>> {
+        let (result, rx) = oneshot::channel();
+        self.receive(
+            TaskRunnerMessage::CreateMaterializedStream {
+                key,
+                schema,
+                context: self.context.clone(),
+                result,
+            },
+            rx,
+        )
+        .await
+    }
+
     async fn create_storage_stream(
         &self,
         key: TaskStreamKey,
@@ -387,6 +405,15 @@ impl TaskStreamWriter for MultiChannelTaskStreamWriter {
                     self.streams.create_local_stream(
                         self.key.task_stream_key(channel),
                         *replicas,
+                        self.schema.clone(),
+                    )
+                }))
+                .await?
+            }
+            TaskOutputLocator::MaterializedLocal => {
+                try_join_all((0..channels).map(|channel| {
+                    self.streams.create_materialized_stream(
+                        self.key.task_stream_key(channel),
                         self.schema.clone(),
                     )
                 }))

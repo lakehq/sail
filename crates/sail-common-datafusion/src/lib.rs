@@ -18,6 +18,7 @@ pub mod logical_expr;
 pub mod logical_rewriter;
 pub mod metadata_aggregate;
 pub mod rename;
+pub mod replay;
 pub mod scan;
 pub mod schema;
 pub mod schema_evolution;

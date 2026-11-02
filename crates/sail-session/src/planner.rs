@@ -44,6 +44,7 @@ use sail_delta_lake::logical::DeltaMetadataAggregateRewriter;
 use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
+use sail_logical_plan::join_hint::JoinHintNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
@@ -62,10 +63,12 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::join_hint::JoinHintExec;
 use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::range_repartition::SampledRangeRepartitionExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
     checkpoint_storage_schema,
@@ -464,23 +467,63 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.names().to_vec(),
                 node.schema().inner().clone(),
             ))
+        } else if let Some(node) = node.as_any().downcast_ref::<JoinHintNode>() {
+            let [input] = physical_inputs else {
+                return internal_err!("JoinHint requires exactly one physical input");
+            };
+            Arc::new(JoinHintExec {
+                input: Arc::clone(input),
+                strategy: node.strategy,
+            })
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {
                 return internal_err!(
                     "ExplicitRepartitionExec requires exactly one physical input"
                 );
             };
-            let partitioning = plan_explicit_partitioning(
-                planner,
-                UserDefinedLogicalNode::schema(node),
-                input.as_ref(),
-                node.num_partitions(),
-                node.kind(),
-                node.partitioning_expressions(),
-                session,
-                planning_ctx,
-            )?;
-            Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
+            if node.kind() == ExplicitRepartitionKind::Range {
+                let expressions = node.partitioning_expressions();
+                if expressions.len() != node.range_ordering().len() {
+                    return internal_err!("range key ordering does not match expressions");
+                }
+                let keys = expressions
+                    .iter()
+                    .zip(node.range_ordering())
+                    .map(|(expr, &(descending, nulls_first))| {
+                        Ok(PhysicalSortExpr::new(
+                            planner.create_physical_expr(
+                                expr,
+                                UserDefinedLogicalNode::schema(node),
+                                session,
+                                planning_ctx,
+                            )?,
+                            datafusion::arrow::compute::SortOptions {
+                                descending,
+                                nulls_first,
+                            },
+                        ))
+                    })
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
+                Arc::new(SampledRangeRepartitionExec::try_new(
+                    input.clone(),
+                    keys,
+                    node.num_partitions()
+                        .unwrap_or(input.output_partitioning().partition_count())
+                        .max(1),
+                )?)
+            } else {
+                let partitioning = plan_explicit_partitioning(
+                    planner,
+                    UserDefinedLogicalNode::schema(node),
+                    input.as_ref(),
+                    node.num_partitions(),
+                    node.kind(),
+                    node.partitioning_expressions(),
+                    session,
+                    planning_ctx,
+                )?;
+                Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
+            }
         } else if node.as_any().is::<StreamSourceAdapterNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("StreamSourceExec requires exactly one physical input");
@@ -656,6 +699,9 @@ fn plan_explicit_partitioning(
                 internal_err!("explicit round-robin repartition requires a target partition count")
             }
         },
+        ExplicitRepartitionKind::Range => {
+            internal_err!("sampled range repartition requires boundary discovery")
+        }
         ExplicitRepartitionKind::Hash => {
             if expressions.is_empty() {
                 return internal_err!(
