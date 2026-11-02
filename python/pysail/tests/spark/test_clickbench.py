@@ -5,8 +5,8 @@ import pyarrow.parquet as pq
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 
-from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.plan import normalize_plan_text
 
 _CLICKBENCH_SCHEMA = pa.schema(
     [
