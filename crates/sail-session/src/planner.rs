@@ -27,9 +27,7 @@ use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
-use datafusion_physical_expr::{
-    Partitioning, RangePartitioning, SplitPoint, create_physical_sort_exprs,
-};
+use datafusion_physical_expr::{Partitioning, RangePartitioning, create_physical_sort_exprs};
 use sail_cache::remote_checkpoint::RemoteCheckpointRegistry;
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -70,6 +68,7 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::range_repartition::SampledRangeRepartitionExec;
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
     checkpoint_storage_schema,
@@ -482,17 +481,49 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     "ExplicitRepartitionExec requires exactly one physical input"
                 );
             };
-            let partitioning = plan_explicit_partitioning(
-                planner,
-                UserDefinedLogicalNode::schema(node),
-                input.as_ref(),
-                node.num_partitions(),
-                node.kind(),
-                node.partitioning_expressions(),
-                session,
-                planning_ctx,
-            )?;
-            Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
+            if node.kind() == ExplicitRepartitionKind::Range {
+                let expressions = node.partitioning_expressions();
+                if expressions.len() != node.range_ordering().len() {
+                    return internal_err!("range key ordering does not match expressions");
+                }
+                let keys = expressions
+                    .iter()
+                    .zip(node.range_ordering())
+                    .map(|(expr, &(descending, nulls_first))| {
+                        Ok(PhysicalSortExpr::new(
+                            planner.create_physical_expr(
+                                expr,
+                                UserDefinedLogicalNode::schema(node),
+                                session,
+                                planning_ctx,
+                            )?,
+                            datafusion::arrow::compute::SortOptions {
+                                descending,
+                                nulls_first,
+                            },
+                        ))
+                    })
+                    .collect::<datafusion_common::Result<Vec<_>>>()?;
+                Arc::new(SampledRangeRepartitionExec::try_new(
+                    input.clone(),
+                    keys,
+                    node.num_partitions()
+                        .unwrap_or(input.output_partitioning().partition_count())
+                        .max(1),
+                )?)
+            } else {
+                let partitioning = plan_explicit_partitioning(
+                    planner,
+                    UserDefinedLogicalNode::schema(node),
+                    input.as_ref(),
+                    node.num_partitions(),
+                    node.kind(),
+                    node.partitioning_expressions(),
+                    session,
+                    planning_ctx,
+                )?;
+                Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
+            }
         } else if node.as_any().is::<StreamSourceAdapterNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("StreamSourceExec requires exactly one physical input");
@@ -668,7 +699,10 @@ fn plan_explicit_partitioning(
                 internal_err!("explicit round-robin repartition requires a target partition count")
             }
         },
-        ExplicitRepartitionKind::Hash | ExplicitRepartitionKind::Range => {
+        ExplicitRepartitionKind::Range => {
+            internal_err!("sampled range repartition requires boundary discovery")
+        }
+        ExplicitRepartitionKind::Hash => {
             if expressions.is_empty() {
                 return internal_err!(
                     "explicit hash repartitioning requires at least one partitioning expression"
@@ -684,26 +718,7 @@ fn plan_explicit_partitioning(
                 .iter()
                 .map(|e| planner.create_physical_expr(e, schema, session, planning_ctx))
                 .collect::<datafusion_common::Result<Vec<_>>>()?;
-            if kind == ExplicitRepartitionKind::Range {
-                let ordering =
-                    LexOrdering::new(expressions.into_iter().map(PhysicalSortExpr::new_default))
-                        .ok_or_else(|| {
-                            internal_datafusion_err!("range partitioning requires an expression")
-                        })?;
-                let split_points = (1..num_partitions)
-                    .map(|i| {
-                        SplitPoint::new(vec![datafusion_common::ScalarValue::Float64(Some(
-                            i as f64 / num_partitions as f64,
-                        ))])
-                    })
-                    .collect();
-                Ok(Partitioning::Range(RangePartitioning::try_new(
-                    ordering,
-                    split_points,
-                )?))
-            } else {
-                Ok(Partitioning::Hash(expressions, num_partitions))
-            }
+            Ok(Partitioning::Hash(expressions, num_partitions))
         }
     }
 }

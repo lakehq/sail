@@ -298,10 +298,15 @@ use sail_physical_plan::lake_procedure::LakeProcedureExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::partition_pair_join::PartitionPairJoinExec;
 use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::range_repartition::{
+    RangeAssignExec, RangeBoundsExec, RangeSampleExec, SampledRangeRepartitionExec,
+};
 use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
+use sail_physical_plan::replay::ReplayExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
@@ -350,6 +355,31 @@ use crate::proto::encode::{
 };
 #[cfg(test)]
 use crate::proto::encode::{try_encode_physical_expr, try_encode_physical_plan};
+
+fn encode_range_key_columns(keys: &[(usize, SortOptions)]) -> Vec<r#gen::RangeKeyColumn> {
+    keys.iter()
+        .map(|&(index, options)| r#gen::RangeKeyColumn {
+            index: index as u64,
+            descending: options.descending,
+            nulls_first: options.nulls_first,
+        })
+        .collect()
+}
+
+fn decode_range_key_columns(keys: Vec<r#gen::RangeKeyColumn>) -> Result<Vec<(usize, SortOptions)>> {
+    keys.into_iter()
+        .map(|key| {
+            Ok((
+                usize::try_from(key.index)
+                    .map_err(|e| plan_datafusion_err!("invalid range key index: {e}"))?,
+                SortOptions {
+                    descending: key.descending,
+                    nulls_first: key.nulls_first,
+                },
+            ))
+        })
+        .collect()
+}
 
 pub struct RemoteExecutionCodec;
 
@@ -1478,6 +1508,92 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
                     column_name,
                     Arc::new(schema),
+                )?))
+            }
+            NodeKind::SampledRangeRepartition(r#gen::SampledRangeRepartitionExecNode {
+                input,
+                ordering,
+                partitions,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let keys = match ordering {
+                    Some(ordering) => self
+                        .try_decode_lex_ordering(&ordering, &input.schema(), ctx, proto_converter)?
+                        .iter()
+                        .cloned()
+                        .collect(),
+                    None => vec![],
+                };
+                Ok(Arc::new(SampledRangeRepartitionExec::try_new(
+                    input,
+                    keys,
+                    usize::try_from(partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
+                )?))
+            }
+            NodeKind::RangeSample(r#gen::RangeSampleExecNode { input, keys }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                Ok(Arc::new(RangeSampleExec::try_new(
+                    input,
+                    decode_range_key_columns(keys)?,
+                )?))
+            }
+            NodeKind::RangeBounds(r#gen::RangeBoundsExecNode {
+                input,
+                partitions,
+                ordering,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                Ok(Arc::new(RangeBoundsExec::try_new(
+                    input,
+                    usize::try_from(partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
+                    ordering
+                        .into_iter()
+                        .map(|o| SortOptions {
+                            descending: o.descending,
+                            nulls_first: o.nulls_first,
+                        })
+                        .collect(),
+                )?))
+            }
+            NodeKind::RangeAssign(r#gen::RangeAssignExecNode {
+                input,
+                bounds,
+                keys,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let bounds =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &bounds)?;
+                Ok(Arc::new(RangeAssignExec::try_new(
+                    input,
+                    bounds,
+                    decode_range_key_columns(keys)?,
+                )?))
+            }
+            NodeKind::Replay(r#gen::ReplayExecNode { input }) => Ok(Arc::new(ReplayExec::try_new(
+                try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?,
+            )?)),
+            NodeKind::PartitionPairJoin(r#gen::PartitionPairJoinExecNode { join }) => {
+                let plan =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &join)?;
+                let join = plan
+                    .downcast_ref::<datafusion::physical_plan::joins::NestedLoopJoinExec>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("partition-pair join requires an inner NLJ")
+                    })?;
+                if *join.join_type() != datafusion::common::JoinType::Inner {
+                    return Err(plan_datafusion_err!(
+                        "partition-pair join requires an inner NLJ"
+                    ));
+                }
+                Ok(Arc::new(PartitionPairJoinExec::try_new(
+                    join.left().clone(),
+                    join.right().clone(),
+                    join.filter().cloned(),
+                    join.projection().as_ref().map(|p| p.to_vec()),
                 )?))
             }
             NodeKind::Coalesce(r#gen::CoalesceExecNode {
@@ -2897,6 +3013,80 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
+            })
+        } else if let Some(range) = node.downcast_ref::<SampledRangeRepartitionExec>() {
+            let ordering = LexOrdering::new(range.keys().to_vec())
+                .map(|ordering| self.try_encode_lex_ordering(&ordering, proto_converter))
+                .transpose()?;
+            NodeKind::SampledRangeRepartition(r#gen::SampledRangeRepartitionExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    range.input().clone(),
+                )?,
+                ordering,
+                partitions: range.partitions() as u64,
+            })
+        } else if let Some(sample) = node.downcast_ref::<RangeSampleExec>() {
+            NodeKind::RangeSample(r#gen::RangeSampleExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    sample.input().clone(),
+                )?,
+                keys: encode_range_key_columns(sample.keys()),
+            })
+        } else if let Some(bounds) = node.downcast_ref::<RangeBoundsExec>() {
+            NodeKind::RangeBounds(r#gen::RangeBoundsExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    bounds.input().clone(),
+                )?,
+                partitions: bounds.partitions() as u64,
+                ordering: bounds
+                    .ordering()
+                    .iter()
+                    .map(|o| r#gen::SortOptions {
+                        descending: o.descending,
+                        nulls_first: o.nulls_first,
+                    })
+                    .collect(),
+            })
+        } else if let Some(assign) = node.downcast_ref::<RangeAssignExec>() {
+            NodeKind::RangeAssign(r#gen::RangeAssignExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    assign.input().clone(),
+                )?,
+                bounds: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    assign.bounds().clone(),
+                )?,
+                keys: encode_range_key_columns(assign.keys()),
+            })
+        } else if let Some(replay) = node.downcast_ref::<ReplayExec>() {
+            NodeKind::Replay(r#gen::ReplayExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    replay.input().clone(),
+                )?,
+            })
+        } else if let Some(pair) = node.downcast_ref::<PartitionPairJoinExec>() {
+            let join = Arc::new(
+                datafusion::physical_plan::joins::NestedLoopJoinExec::try_new(
+                    pair.left().clone(),
+                    pair.right().clone(),
+                    pair.filter().cloned(),
+                    &datafusion::common::JoinType::Inner,
+                    pair.projection().clone(),
+                )?,
+            );
+            NodeKind::PartitionPairJoin(r#gen::PartitionPairJoinExecNode {
+                join: try_encode_physical_plan_with_converter(self, proto_converter, join)?,
             })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
             let input = try_encode_physical_plan_with_converter(
@@ -6423,6 +6613,115 @@ mod tests {
         assert!(projection_references_input_file_metadata(
             source.metadata_projection()
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn replay_range_and_pair_codec_preserves_semantics() -> Result<()> {
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::BinaryExpr;
+        use datafusion::physical_plan::ExecutionPlanProperties;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::union::UnionExec;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema.clone()));
+        let input: Arc<dyn ExecutionPlan> = UnionExec::try_new(vec![empty; 3])?;
+        let keys = vec![(
+            0,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        )];
+        assert_eq!(
+            decode_range_key_columns(encode_range_key_columns(&keys))?,
+            keys
+        );
+        let replay = Arc::new(ReplayExec::try_new(input.clone())?);
+        let samples = Arc::new(RangeSampleExec::try_new(replay.clone(), keys.clone())?);
+        let bounds = Arc::new(RangeBoundsExec::try_new(
+            samples.clone(),
+            4,
+            vec![keys[0].1],
+        )?);
+        let assigned = Arc::new(RangeAssignExec::try_new(
+            replay.clone(),
+            bounds.clone(),
+            keys,
+        )?);
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("l", 0)),
+                Operator::IsNotDistinctFrom,
+                Arc::new(Column::new("r", 1)),
+            )),
+            JoinFilter::build_column_indices(vec![0], vec![0]),
+            Arc::new(Schema::new(vec![
+                Field::new("l", DataType::Int64, true),
+                Field::new("r", DataType::Int64, true),
+            ])),
+        );
+        let pair = Arc::new(PartitionPairJoinExec::try_new(
+            replay.clone(),
+            replay.clone(),
+            Some(filter),
+            Some(vec![1]),
+        )?);
+        let range = Arc::new(SampledRangeRepartitionExec::try_new(
+            input,
+            vec![PhysicalSortExpr::new(
+                Arc::new(Column::new("id", 0)),
+                SortOptions {
+                    descending: true,
+                    nulls_first: false,
+                },
+            )],
+            4,
+        )?);
+        let plans: Vec<Arc<dyn ExecutionPlan>> =
+            vec![replay, samples, bounds, assigned, pair, range];
+        let codec = RemoteExecutionCodec;
+        for plan in plans {
+            let bytes = try_encode_physical_plan(&codec, plan.clone())?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            assert_eq!(decoded.schema(), plan.schema());
+            assert_eq!(
+                decoded.output_partitioning().partition_count(),
+                plan.output_partitioning().partition_count()
+            );
+            assert_eq!(
+                format!(
+                    "{}",
+                    datafusion::physical_plan::displayable(decoded.as_ref()).indent(true)
+                ),
+                format!(
+                    "{}",
+                    datafusion::physical_plan::displayable(plan.as_ref()).indent(true)
+                )
+            );
+        }
+        let invalid = ExtendedPhysicalPlanNode {
+            node_kind: Some(NodeKind::RangeSample(r#gen::RangeSampleExecNode {
+                input: try_encode_physical_plan(&codec, Arc::new(EmptyExec::new(schema)))?,
+                keys: vec![r#gen::RangeKeyColumn {
+                    index: u64::MAX,
+                    descending: false,
+                    nulls_first: true,
+                }],
+            })),
+        };
+        let converter = datafusion_proto::physical_plan::DefaultPhysicalProtoConverter {};
+        assert!(
+            codec
+                .try_decode(
+                    &invalid.encode_to_vec(),
+                    &[],
+                    &TaskContext::default(),
+                    &converter
+                )
+                .is_err()
+        );
         Ok(())
     }
 

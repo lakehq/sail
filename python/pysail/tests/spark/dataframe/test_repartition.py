@@ -1,3 +1,5 @@
+from itertools import pairwise
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -68,6 +70,52 @@ def test_range_repartition_has_nonoverlapping_ordered_boundaries(spark, descendi
             assert min(groups[lower]) > max(groups[upper])
         else:
             assert max(groups[lower]) < min(groups[upper])
+
+
+def test_range_repartition_mixed_sort_options_and_sparse_peers(spark):
+    data = [(2, None, 0), (2, None, 1), (2, 3, 2), (1, None, 3), (1, 2, 4), (None, 1, 5), (None, 1, 6)]
+    source = spark.createDataFrame(data, "a int, b int, payload int").repartition(5)
+    result = source.repartitionByRange(7, F.col("a").desc_nulls_last(), F.col("b").asc_nulls_first())
+    assert result.schema == source.schema
+    rows = result.select("*", F.spark_partition_id().alias("pid")).collect()
+    assert sorted(((r.a, r.b, r.payload) for r in rows), key=repr) == sorted(data, key=repr)
+    assert sorted(r.payload for r in rows) == list(range(7))
+    ordered = sorted(rows, key=lambda r: r.payload)
+    assert [r.pid for r in ordered] == sorted(r.pid for r in ordered)
+    assert ordered[0].pid == ordered[1].pid
+    assert ordered[5].pid == ordered[6].pid
+
+
+def test_range_repartition_evaluates_changing_source_once(spark, tmp_path):
+    marker_dir = str(tmp_path)
+
+    def changing_source(iterator):
+        from pathlib import Path
+
+        marked = False
+        for pdf in iterator:
+            if not marked and not pdf.empty:
+                with (Path(marker_dir) / str(pdf["source_pid"].iloc[0])).open("x") as marker:
+                    marker.write("evaluated")
+                marked = True
+            yield pdf[["id"]]
+
+    source = (
+        spark.range(60, numPartitions=3)
+        .selectExpr("id", "spark_partition_id() AS source_pid")
+        .mapInPandas(changing_source, "id long")
+        .withColumn("key", F.rand())
+    )
+    rows = (
+        source.repartitionByRange(4, (F.col("key") * 2).desc())
+        .select("*", F.spark_partition_id().alias("pid"))
+        .collect()
+    )
+    assert sorted(r.id for r in rows) == list(range(60))
+    assert len(list(tmp_path.iterdir())) == 3  # noqa: PLR2004
+    groups = [[r.key for r in rows if r.pid == pid] for pid in sorted({r.pid for r in rows})]
+    for left, right in pairwise(groups):
+        assert min(left) > max(right)
 
 
 def test_explicit_repartition_spreads_identical_rows(spark):

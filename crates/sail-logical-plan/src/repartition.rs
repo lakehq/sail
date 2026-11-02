@@ -31,6 +31,8 @@ pub struct ExplicitRepartitionNode {
     num_partitions: Option<usize>,
     kind: ExplicitRepartitionKind,
     partitioning_expressions: Vec<Expr>,
+    // (descending, nulls_first), in partition-key order.
+    range_ordering: Vec<(bool, bool)>,
 }
 
 impl ExplicitRepartitionNode {
@@ -45,7 +47,17 @@ impl ExplicitRepartitionNode {
             num_partitions,
             kind,
             partitioning_expressions,
+            range_ordering: vec![],
         }
+    }
+
+    pub fn with_range_ordering(mut self, ordering: Vec<(bool, bool)>) -> Self {
+        self.range_ordering = ordering;
+        self
+    }
+
+    pub fn range_ordering(&self) -> &[(bool, bool)] {
+        &self.range_ordering
     }
 
     pub fn input(&self) -> &Arc<LogicalPlan> {
@@ -100,12 +112,10 @@ impl UserDefinedLogicalNodeCore for ExplicitRepartitionNode {
         let (Some(input), true) = (inputs.pop(), inputs.is_empty()) else {
             return plan_err!("{} expects exactly one input", self.name());
         };
-        Ok(Self::new(
-            Arc::new(input),
-            self.num_partitions,
-            self.kind,
-            exprs,
-        ))
+        Ok(
+            Self::new(Arc::new(input), self.num_partitions, self.kind, exprs)
+                .with_range_ordering(self.range_ordering.clone()),
+        )
     }
 
     fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {

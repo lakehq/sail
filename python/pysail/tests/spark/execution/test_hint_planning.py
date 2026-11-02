@@ -20,6 +20,17 @@ def test_join_hint_distributed_plan_and_results(spark, snapshot, hint):
     assert normalize_plan_text(distributed) == snapshot
 
 
+def test_shuffle_replicate_nl_preserves_partition_pairs(spark):
+    rows = spark.sql("""
+        SELECT /*+ SHUFFLE_REPLICATE_NL(l) */
+            l.id AS a, r.id AS b, spark_partition_id() AS pid
+        FROM range(0, 6, 1, 3) l CROSS JOIN range(0, 3, 1, 2) r
+    """).collect()
+    assert sorted((row.a, row.b) for row in rows) == [(a, b) for a in range(6) for b in range(3)]
+    # Spark 4.2.0 CartesianProduct executes each of the 3 x 2 nonempty partition pairs.
+    assert len({row.pid for row in rows}) == 6  # noqa: PLR2004
+
+
 @pytest.mark.parametrize("hint", ["REPARTITION_BY_RANGE(3, id)", "REBALANCE(3, id)"])
 @pytest.mark.yamlsnapshot(group="plan")
 def test_partition_hint_distributed_plan_and_results(spark, snapshot, hint):

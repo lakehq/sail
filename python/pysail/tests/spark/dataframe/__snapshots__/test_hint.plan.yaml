@@ -46,16 +46,18 @@ data:
   SHUFFLE_REPLICATE_NL: |-
     == Physical Plan ==
     ProjectionExec: expr=[#7@0 as a, #8@1 as b]
-      ProjectionExec: expr=[#4@0 as #7, #6@1 as #8]
-        NestedLoopJoinExec: join_type=Inner, filter=#6@0 = #3@1, projection=[#4@1, #6@2]
-          CoalescePartitionsExec
+      ProjectionExec: expr=[#4@2 as #7, #6@0 as #8]
+        PartitionPairJoinExec: partitions=2x3, filter=#6@0 = #3@1
+          ReplayExec
+            ProjectionExec: expr=[#5@0 as #6]
+              CooperativeExec
+                RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          ReplayExec
             ProjectionExec: expr=[#2@1 as #3, #1@0 as #4]
               FilterExec: #1@0 > 2
                 ProjectionExec: expr=[#0@0 as #1, #0@0 % 4 as #2]
-                  RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
-          ProjectionExec: expr=[#5@0 as #6]
-            CooperativeExec
-              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+                  CooperativeExec
+                    RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
 ---
 name: "test_join_hint_strategy_precedence_and_scope"
 data:
@@ -200,14 +202,16 @@ data:
   SHUFFLE_REPLICATE_NL(l): |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as a, #4@1 as b]
-      ProjectionExec: expr=[#0@0 as #3, #2@1 as #4]
-        NestedLoopJoinExec: join_type=Inner, filter=#2@0 = #1@2, projection=[#0@0, #2@2]
-          CoalescePartitionsExec
+      ProjectionExec: expr=[#0@1 as #3, #2@0 as #4]
+        PartitionPairJoinExec: partitions=2x3, filter=#2@0 = #1@2
+          ReplayExec
+            ProjectionExec: expr=[#0@0 as #2]
+              CooperativeExec
+                RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+          ReplayExec
             ProjectionExec: expr=[#0@0 as #0, #0@0 % 4 as #1]
-              RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
-          ProjectionExec: expr=[#0@0 as #2]
-            CooperativeExec
-              RangeExec: start=0, end=4, step=1, num_partitions=2, projection=[0]
+              CooperativeExec
+                RangeExec: start=0, end=12, step=1, num_partitions=3, projection=[0]
   SHUFFLE_REPLICATE_NL(l), SHUFFLE_HASH(r): |-
     == Physical Plan ==
     ProjectionExec: expr=[#3@0 as a, #4@1 as b]

@@ -248,8 +248,24 @@ impl JobScheduler {
 
     fn update_task_regions(job: &mut JobDescriptor, task_max_attempts: usize) {
         for (r, region) in job.topology.regions.iter().enumerate() {
+            // Replay outputs and their derived bounds are one attempt-scoped snapshot.
+            // Losing one must fail the job rather than regenerate a changing source.
+            let materialized = region.tasks.iter().any(|t| {
+                matches!(
+                    job.graph.stages()[t.stage].mode,
+                    OutputMode::MaterializedLocal
+                )
+            });
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
+                if materialized
+                    && attempts.iter().any(|attempt| {
+                        attempt.cause.is_some()
+                            || matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
+                    })
+                {
+                    return true;
+                }
                 // A terminal cause can arrive after the attempt was canceled or replaced.
                 if attempts.iter().any(|attempt| {
                     attempt
@@ -473,7 +489,7 @@ impl JobScheduler {
             if let Some(attempt) = Self::get_latest_task_attempt(job, t.stage, t.partition) {
                 let stage = &job.graph.stages()[t.stage];
                 let output = match stage.mode {
-                    OutputMode::Pipelined => TaskOutputKind::Local,
+                    OutputMode::Pipelined | OutputMode::MaterializedLocal => TaskOutputKind::Local,
                     OutputMode::Blocking => match job.graph.shuffle_backend() {
                         ShuffleBackendKind::Storage { .. } => TaskOutputKind::Storage,
                         ShuffleBackendKind::Celeborn { .. } => TaskOutputKind::External,
@@ -800,10 +816,12 @@ impl<'a> TaskInputBuilder<'a> {
 
     fn build(&self) -> ExecutionResult<TaskInput> {
         let locator = match self.producer.mode {
-            OutputMode::Pipelined => match self.producer.placement {
-                TaskPlacement::Driver => self.build_driver_locator()?,
-                TaskPlacement::Worker => self.build_worker_locator()?,
-            },
+            OutputMode::Pipelined | OutputMode::MaterializedLocal => {
+                match self.producer.placement {
+                    TaskPlacement::Driver => self.build_driver_locator()?,
+                    TaskPlacement::Worker => self.build_worker_locator()?,
+                }
+            }
             OutputMode::Blocking => match self.job.graph.shuffle_backend() {
                 ShuffleBackendKind::Storage { .. } => self.build_storage_locator()?,
                 ShuffleBackendKind::Celeborn { .. } => self.build_shuffle_service_locator()?,
@@ -896,7 +914,7 @@ impl<'a> TaskInputBuilder<'a> {
         let input_channels = self.producer.distribution.channels();
 
         match self.input.mode {
-            InputMode::Forward | InputMode::Merge => {
+            InputMode::Forward | InputMode::Merge | InputMode::Replay => {
                 let mut groups = Vec::with_capacity(input_partitions);
                 for partition in 0..input_partitions {
                     // Forward regions are assigned independently. Preserve input-local indices,
@@ -1074,6 +1092,7 @@ impl<'a> TaskOutputBuilder<'a> {
                 replicas: self.job.graph.replicas(self.key.stage),
             },
             OutputMode::Blocking => TaskOutputLocator::Blocking,
+            OutputMode::MaterializedLocal => TaskOutputLocator::MaterializedLocal,
         };
         Ok(TaskOutput {
             distribution,
@@ -1346,6 +1365,60 @@ mod tests {
             JobScheduler::infer_job_failure_cause(&job),
             CommonErrorCause::CommitStateUnknown(message) if message == "ambiguous commit"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn materialized_output_loss_is_terminal_even_after_success() -> crate::error::ExecutionResult<()>
+    {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use sail_physical_plan::replay::ReplayExec;
+
+        use super::{
+            JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskRegionState,
+            TaskState,
+        };
+        use crate::job_graph::{JobGraph, JobGraphOptions};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let input = MemorySourceConfig::try_new_exec(&[vec![]], Arc::new(Schema::empty()), None)?;
+        let graph = JobGraph::try_new(
+            Arc::new(ReplayExec::try_new(input)?),
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        job.stages[0].tasks[0].attempts.push(TaskAttemptDescriptor {
+            state: TaskState::Succeeded,
+            messages: vec![],
+            cause: None,
+            job_output_fetched: false,
+        });
+        JobScheduler::update_task_regions(&mut job, 4);
+        let region = job.topology.task_regions[&super::super::topology::TaskTopology {
+            stage: 0,
+            partition: 0,
+        }];
+        assert!(matches!(
+            job.regions[region].state,
+            TaskRegionState::Succeeded
+        ));
+        job.stages[0].tasks[0].attempts[0].cause = Some(
+            sail_common_datafusion::error::CommonErrorCause::Execution("worker lost".into()),
+        );
+        JobScheduler::update_task_regions(&mut job, 4);
+        assert!(matches!(job.regions[region].state, TaskRegionState::Failed));
         Ok(())
     }
 

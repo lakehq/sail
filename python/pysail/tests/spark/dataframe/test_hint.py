@@ -114,6 +114,26 @@ def test_join_hints_non_equi_and_null_safe(spark, hint_config, hint):  # noqa: A
         assert sorted(result.collect(), key=repr) == sorted(expected.collect(), key=repr)
 
 
+@pytest.mark.parametrize("side", ["l", "r"])
+@pytest.mark.parametrize("right_count", [0, 4])
+def test_partition_pair_join_null_safe_residual_and_projection(spark, side, right_count):
+    query = spark.sql(f"""
+        SELECT /*+ SHUFFLE_REPLICATE_NL({side}) */ r.id AS right_id, l.id + 10 AS shifted
+        FROM range(0, 6, 1, 3) l JOIN range(0, {right_count}, 1, 2) r
+        ON (CASE WHEN l.id % 3 = 0 THEN NULL ELSE l.id % 3 END)
+            <=> (CASE WHEN r.id = 0 THEN NULL ELSE r.id % 3 END)
+        AND l.id > r.id
+    """)  # noqa: S608
+    expected = [
+        (b, a + 10)
+        for a in range(6)
+        for b in range(right_count)
+        if (None if a % 3 == 0 else a % 3) == (None if b == 0 else b % 3) and a > b
+    ]
+    assert query.dtypes == [("right_id", "bigint"), ("shifted", "bigint")]
+    assert sorted(tuple(r) for r in query.collect()) == sorted(expected)
+
+
 @pytest.mark.parametrize("parameter", [1, 1.5, True, [1, 2]])
 def test_join_hint_rejects_non_relation_parameters(spark, parameter):
     with pytest.raises(AnalysisException):

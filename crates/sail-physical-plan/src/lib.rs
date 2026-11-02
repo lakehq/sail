@@ -7,10 +7,16 @@ pub mod lake_procedure;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;
+pub mod partition_pair_join;
 pub mod range;
+pub mod range_repartition;
 pub mod remote_checkpoint;
 pub mod repartition;
+pub mod replay;
 pub mod schema_pivot;
 pub mod show_string;
 pub mod spark_partition_id;
 pub mod streaming;
+
+#[cfg(test)]
+mod replay_tests;

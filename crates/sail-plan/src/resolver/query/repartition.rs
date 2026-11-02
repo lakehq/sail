@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::functions_window::expr_fn::percent_rank;
-use datafusion_common::Column;
-use datafusion_expr::{Expr, ExprFunctionExt, Extension, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
@@ -82,36 +80,31 @@ impl PlanResolver<'_> {
         let (expr, input) = self
             .resolve_expressions_with_missing_inputs(partition_expressions, input, state)
             .await?;
-        let (mut input, mut expr) = self.rewrite_partition_expressions(input, expr, state)?;
-        let kind = if range {
-            let sorts = expr
-                .into_iter()
+        let (input, expr) = self.rewrite_partition_expressions(input, expr, state)?;
+        let ordering = if range {
+            expr.iter()
+                .cloned()
                 .zip(sort_options)
                 .map(|(expr, options)| {
                     let (direction, null_ordering) =
                         options.ok_or_else(|| PlanError::internal("missing range sort order"))?;
-                    Ok(Self::sort_with_options(expr, direction, null_ordering))
+                    let sort = Self::sort_with_options(expr, direction, null_ordering);
+                    Ok((!sort.asc, sort.nulls_first))
                 })
-                .collect::<PlanResult<Vec<_>>>()?;
-            // Exact percentiles give data-dependent range boundaries and keep equal
-            // keys together. The physical shuffle partitions this temporary column.
-            let name = state.register_field_name("__range_percentile");
-            let rank = percent_rank().order_by(sorts).build()?.alias(&name);
-            input = LogicalPlanBuilder::from(input)
-                .window(vec![rank])?
-                .build()?;
-            expr = vec![Expr::Column(Column::from_name(name))];
+                .collect::<PlanResult<Vec<_>>>()?
+        } else {
+            vec![]
+        };
+        let kind = if range {
             ExplicitRepartitionKind::Range
         } else {
             ExplicitRepartitionKind::Hash
         };
         let plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(ExplicitRepartitionNode::new(
-                Arc::new(input),
-                num_partitions,
-                kind,
-                expr,
-            )),
+            node: Arc::new(
+                ExplicitRepartitionNode::new(Arc::new(input), num_partitions, kind, expr)
+                    .with_range_ordering(ordering),
+            ),
         });
         Self::restore_missing_input_output(plan, output_schema)
     }

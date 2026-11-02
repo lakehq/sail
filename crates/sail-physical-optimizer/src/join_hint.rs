@@ -19,6 +19,8 @@ use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::{ExecutionPlan, replace_children_if_necessary};
 use log::warn;
 use sail_physical_plan::join_hint::{JoinHintExec, JoinStrategy};
+use sail_physical_plan::partition_pair_join::PartitionPairJoinExec;
+use sail_physical_plan::replay::ReplayExec;
 
 #[derive(Debug)]
 pub struct ApplyJoinHints;
@@ -239,13 +241,19 @@ impl JoinInput {
                     )?);
                     return self.project(join);
                 }
-                JoinStrategy::Broadcast | JoinStrategy::ShuffleReplicateNl => {
-                    if strategy == JoinStrategy::ShuffleReplicateNl
-                        && self.join_type != JoinType::Inner
-                    {
+                JoinStrategy::ShuffleReplicateNl => {
+                    if self.join_type != JoinType::Inner {
                         warn!("SHUFFLE_REPLICATE_NL requires an inner join");
                         continue;
                     }
+                    return Ok(Arc::new(PartitionPairJoinExec::try_new(
+                        Arc::new(ReplayExec::try_new(self.left.clone())?),
+                        Arc::new(ReplayExec::try_new(self.right.clone())?),
+                        self.nested_loop_filter()?,
+                        self.projection.clone(),
+                    )?));
+                }
+                JoinStrategy::Broadcast => {
                     let swap = hinted_right && (!hinted_left || self.right_is_smaller()?);
                     let join = NestedLoopJoinExec::try_new(
                         Arc::clone(&self.left),
