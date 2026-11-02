@@ -80,12 +80,15 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
                 scalar_subquery_domain::NormalizeScalarSubqueryDomain,
             ));
             custom.push(Arc::new(NormalizeScalarSubqueryKeys));
+            custom.push(rule);
+            continue;
         }
         if rule.name() == DataFusionPushDownLimit::new().name() {
             custom.push(Arc::new(PushDownLimit));
-        } else {
-            custom.push(rule);
+            continue;
         }
+
+        custom.push(rule);
     }
     custom.push(Arc::new(RewriteBinaryGrouping));
     // `ResolveLambdaVariables` must run after the built-in rules: constant
