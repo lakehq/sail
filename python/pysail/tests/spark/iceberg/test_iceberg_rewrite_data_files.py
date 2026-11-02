@@ -33,11 +33,21 @@ from pysail.testing.spark.steps.iceberg import (
     _pyarrow_input_file,
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
+from pysail.tests.spark.iceberg.test_iceberg_equality_delete import (
+    _append_equality_delete_snapshot,
+    _create_nonfinite_nonkey_equality_delete_table,
+)
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
 
 FORMAT_VERSION_WITH_ROW_LINEAGE = 3
 FRAGMENTED_DELETE_STRIDE = 2
+INTERNAL_METADATA_NAMES = [
+    "__sail_file_path",
+    "__sail_file_row_index",
+    "__sail_iceberg_partition_spec_id",
+    "__sail_iceberg_file_metadata",
+    "__sail_iceberg_row_position",
+]
 
 
 def _rewrite(spark, name, options=None):
@@ -671,3 +681,93 @@ def test_first_v3_partial_rewrite_assigns_untouched_legacy_lineage_then_preserve
         assert [tuple(row) for row in history.orderBy("id").collect()] == expected
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize("column", INTERNAL_METADATA_NAMES)
+@pytest.mark.parametrize("with_deletes", [False, True], ids=["no-deletes", "mor-deletes"])
+def test_rewrite_preserves_columns_named_like_internal_dml_metadata(spark, tmp_path, version, column, with_deletes):
+    name = "rewrite_user_metadata_names"
+    path = tmp_path / name
+    write_column = "value" if with_deletes else column
+    spark.sql(f"""CREATE TABLE {name} (id BIGINT, {write_column} STRING) USING iceberg
+        LOCATION '{escape_sql_string_literal(str(path))}' TBLPROPERTIES (
+            'format-version'='{version}', 'write.delete.mode'='merge-on-read')""")
+    try:
+        spark.sql(f"INSERT INTO {name} VALUES (1, 'a'), (2, 'b')")
+        if with_deletes:
+            # DML reserves these names; compaction of an evolved schema must not.
+            spark.sql(f"DELETE FROM {name} WHERE id = 1").collect()
+            spark.sql(f"ALTER TABLE {name} RENAME COLUMN value TO {column}")
+        expected = [(2, "b")] if with_deletes else [(1, "a"), (2, "b")]
+        schema = spark.table(name).schema
+        assert schema.names == ["id", column]
+        assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
+        lineage = _current_row_lineage(path) if version == FORMAT_VERSION_WITH_ROW_LINEAGE else None
+        before = _find_latest_metadata(path)
+        files = _data_entries(path)
+        deletes = _delete_files(path)
+        assert bool(deletes) == with_deletes
+        result = _rewrite(spark, name)
+        _assert_rewrite_commit(path, before, files, result, _removed_delete_count(deletes, files))
+        assert spark.table(name).schema == schema
+        assert [tuple(row) for row in spark.table(name).orderBy("id").collect()] == expected
+        if lineage is not None:
+            assert _current_row_lineage(path) == lineage
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_rewrite_equality_deletes_preserves_user_metadata_names(spark, sql_catalog):
+    name = "rewrite_equality_metadata_names"
+    identifier = f"default.{name}"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(
+            NestedField(1, "id", LongType()),
+            NestedField(2, "key", LongType()),
+            *(NestedField(index, column, LongType()) for index, column in enumerate(INTERNAL_METADATA_NAMES[1:], 3)),
+        ),
+    )
+    try:
+        table.append(
+            pa.table({"id": [1, 2], "key": [7, 8], **{column: [10, 20] for column in INTERNAL_METADATA_NAMES[1:]}})
+        )
+        with table.update_schema() as update:
+            update.rename_column("key", INTERNAL_METADATA_NAMES[0])
+        path = _append_equality_delete_snapshot(table, pa.table({"key": [7]}), [2])
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
+        schema = spark.table(name).schema
+        assert schema.names == ["id", *INTERNAL_METADATA_NAMES]
+        expected = [(2, 8, 20, 20, 20, 20)]
+        assert [tuple(row) for row in spark.table(name).collect()] == expected
+        before = _find_latest_metadata(path)
+        files = _data_entries(path)
+        result = _rewrite(spark, name)
+        _assert_rewrite_commit(path, before, files, result, 0)
+        assert spark.table(name).schema == schema
+        assert [tuple(row) for row in spark.table(name).collect()] == expected
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
+
+
+@pytest.mark.parametrize("value", [float("inf"), -float("inf")], ids=["positive-infinity", "negative-infinity"])
+@pytest.mark.parametrize("with_bounds", [False, True], ids=["no-bounds", "with-bounds"])
+def test_rewrite_equality_deletes_with_nonfinite_nonkey_bounds(spark, sql_catalog, value, with_bounds):
+    name = "rewrite_equality_extra_bounds"
+    identifier = f"default.{name}"
+    try:
+        path = _create_nonfinite_nonkey_equality_delete_table(sql_catalog, identifier, value, with_bounds=with_bounds)
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
+        schema = spark.table(name).schema
+        assert [tuple(row) for row in spark.table(name).collect()] == [(2, 8, 1.0)]
+        before = _find_latest_metadata(path)
+        files = _data_entries(path)
+        result = _rewrite(spark, name)
+        _assert_rewrite_commit(path, before, files, result, 0)
+        assert spark.table(name).schema == schema
+        assert [tuple(row) for row in spark.table(name).collect()] == [(2, 8, 1.0)]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)

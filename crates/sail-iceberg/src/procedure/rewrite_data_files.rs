@@ -18,6 +18,7 @@ use crate::lake_source::{
     load_iceberg_read_table,
 };
 use crate::physical_plan::file_tasks_exec::{IcebergFileTask, RewriteScanContext};
+use crate::spec::delete_index::{EqualityDeleteFile, PositionDeleteFile};
 use crate::spec::{DataContentType, DataFile, DataFileFormat, FormatVersion, Literal, Snapshot};
 use crate::table::files::{balance_by_size, collect_live_entries};
 
@@ -253,8 +254,16 @@ pub(super) async fn plan_rewrite_data_files(
                     serde_json::to_string(&RewriteScanContext {
                         read_schema: arrow_schema,
                         iceberg_schema: read_schema,
-                        positional_deletes: deletes.positional,
-                        equality_deletes: deletes.equality,
+                        positional_deletes: deletes
+                            .positional
+                            .iter()
+                            .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
+                            .collect::<Result<_>>()?,
+                        equality_deletes: deletes
+                            .equality
+                            .iter()
+                            .map(|delete| EqualityDeleteFile::try_from(&delete.data_file))
+                            .collect::<Result<_>>()?,
                         first_row_id: entry.data_file.first_row_id,
                         data_sequence_number: sequence,
                         preserve_lineage,

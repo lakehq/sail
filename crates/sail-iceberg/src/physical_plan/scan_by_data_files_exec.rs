@@ -28,7 +28,6 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
-use sail_common_datafusion::datasource::{MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN};
 use sail_common_datafusion::input_file::{
     InputFileMetadataSource, projection_references_input_file_metadata,
 };
@@ -280,8 +279,8 @@ impl ScanByDataFilesState {
                 file.path.clone(),
                 file.spec_id,
                 String::new(),
-                Some(MERGE_FILE_COLUMN.to_string()),
-                Some(MERGE_ROW_INDEX_COLUMN.to_string()),
+                None,
+                None,
                 lineage,
             )?);
             if !rewrite.positional_deletes.is_empty() || !rewrite.equality_deletes.is_empty() {

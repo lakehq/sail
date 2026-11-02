@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::manifest_scan_exec::manifest_scan_schema;
 pub use crate::datasource::partition_defaults::IdentityPartitionDefaults;
-use crate::spec::delete_index::DeleteFileRef;
+use crate::spec::delete_index::{EqualityDeleteFile, PositionDeleteFile};
 use crate::spec::{DataContentType, DataFile, DataFileFormat, Schema as IcebergSchema};
 
 pub(crate) const COL_IDENTITY_PARTITION_DEFAULTS: &str = "identity_partition_defaults";
@@ -26,8 +26,8 @@ pub(crate) const COL_REWRITE_SCAN_CONTEXT: &str = "rewrite_scan_context";
 pub(crate) struct RewriteScanContext {
     pub read_schema: Schema,
     pub iceberg_schema: IcebergSchema,
-    pub positional_deletes: Vec<DeleteFileRef>,
-    pub equality_deletes: Vec<DeleteFileRef>,
+    pub positional_deletes: Vec<PositionDeleteFile>,
+    pub equality_deletes: Vec<EqualityDeleteFile>,
     pub first_row_id: Option<i64>,
     pub data_sequence_number: i64,
     pub preserve_lineage: bool,
@@ -207,33 +207,29 @@ mod tests {
                 .expect("Arrow schema");
         let read_schema =
             crate::row_lineage::append_lineage_fields(&read_schema).expect("lineage schema");
-        let equality_file = serde_json::from_value(serde_json::json!({
-            "content": DataContentType::EqualityDeletes, "file_path": "data/equality.parquet", "file_format": "PARQUET",
-            "partition": [], "record_count": 1, "file_size_in_bytes": 100, "partition_spec_id": 0,
-            "equality_ids": [2]
-        })).expect("equality file");
-        let equality_delete = DeleteFileRef {
-            data_file: equality_file,
-            data_sequence_number: 8,
-            partition_spec_id: 0,
-            is_unpartitioned_spec: true,
+        let equality_delete = EqualityDeleteFile {
+            path: "data/equality.avro".to_string(),
+            size: 100,
+            file_format: crate::spec::DataFileFormat::Avro,
+            equality_ids: vec![2],
         };
-        let contexts = [4, 36].into_iter().enumerate().map(|(index, offset)| {
-            let file = serde_json::from_value(serde_json::json!({
-                "content": DataContentType::PositionDeletes, "file_path": "data/shared.puffin", "file_format": "PUFFIN",
-                "partition": [], "record_count": 1, "file_size_in_bytes": 256, "partition_spec_id": 0,
-                "referenced_data_file": format!("data/{index}.parquet"),
-                "content_offset": offset, "content_size_in_bytes": 32
-            })).expect("deletion vector");
-            RewriteScanContext {
-                read_schema: read_schema.clone(), iceberg_schema: iceberg_schema.clone(),
-                positional_deletes: vec![DeleteFileRef {
-                    data_file: file, data_sequence_number: 8, partition_spec_id: 0, is_unpartitioned_spec: true,
+        let contexts = [4, 36]
+            .into_iter()
+            .enumerate()
+            .map(|(index, offset)| RewriteScanContext {
+                read_schema: read_schema.clone(),
+                iceberg_schema: iceberg_schema.clone(),
+                positional_deletes: vec![PositionDeleteFile::DeletionVector {
+                    path: "data/shared.puffin".to_string(),
+                    range: offset..offset + 32,
+                    cardinality: 1,
                 }],
                 equality_deletes: vec![equality_delete.clone()],
-                first_row_id: Some(100 + index as i64 * 10), data_sequence_number: 7, preserve_lineage: true,
-            }
-        }).collect::<Vec<_>>();
+                first_row_id: Some(100 + index as i64 * 10),
+                data_sequence_number: 7,
+                preserve_lineage: true,
+            })
+            .collect::<Vec<_>>();
         let tasks = IcebergFileTasksExec::try_new(
             contexts
                 .iter()
@@ -274,10 +270,14 @@ mod tests {
             let context: RewriteScanContext =
                 serde_json::from_str(values.value(0)).expect("typed context");
             assert_eq!(&context, expected);
-            context.positional_deletes[0]
-                .data_file
-                .validate_deletion_vector()
-                .expect("valid DV descriptor");
+            assert_eq!(
+                context.positional_deletes,
+                vec![PositionDeleteFile::DeletionVector {
+                    path: "data/shared.puffin".to_string(),
+                    range: (4 + partition as u64 * 32)..(36 + partition as u64 * 32),
+                    cardinality: 1,
+                }],
+            );
         }
     }
 }

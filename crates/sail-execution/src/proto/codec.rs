@@ -1854,13 +1854,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
-                let positional_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
+                let positional_deletes: Vec<sail_iceberg::spec::delete_index::PositionDeleteFile> =
                     serde_json::from_str(&positional_deletes_json).map_err(|e| {
-                        plan_datafusion_err!("failed to decode positional delete refs: {e}")
+                        plan_datafusion_err!("failed to decode positional delete descriptors: {e}")
                     })?;
-                let equality_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
+                let equality_deletes: Vec<sail_iceberg::spec::delete_index::EqualityDeleteFile> =
                     serde_json::from_str(&equality_deletes_json).map_err(|e| {
-                        plan_datafusion_err!("failed to decode equality delete refs: {e}")
+                        plan_datafusion_err!("failed to decode equality delete descriptors: {e}")
                     })?;
                 let iceberg_schema: sail_iceberg::spec::Schema =
                     serde_json::from_str(&iceberg_schema_json).map_err(|e| {
@@ -3250,10 +3250,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             )?;
             let positional_deletes_json = serde_json::to_string(delete_apply.positional_deletes())
                 .map_err(|e| {
-                    plan_datafusion_err!("failed to encode positional delete refs: {e}")
+                    plan_datafusion_err!("failed to encode positional delete descriptors: {e}")
                 })?;
             let equality_deletes_json = serde_json::to_string(delete_apply.equality_deletes())
-                .map_err(|e| plan_datafusion_err!("failed to encode equality delete refs: {e}"))?;
+                .map_err(|e| {
+                    plan_datafusion_err!("failed to encode equality delete descriptors: {e}")
+                })?;
             let iceberg_schema_json = serde_json::to_string(delete_apply.iceberg_schema())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg schema: {e}"))?;
             let input_file_projection = self.try_encode_physical_projection_exprs(
@@ -6363,6 +6365,74 @@ mod tests {
         let mut buf = vec![];
         codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
+    }
+
+    #[test]
+    fn round_trip_iceberg_delete_descriptors_preserves_keys_and_puffin_ranges() -> Result<()> {
+        use sail_iceberg::spec::delete_index::{EqualityDeleteFile, PositionDeleteFile};
+        use sail_iceberg::spec::{DataFileFormat, NestedField, PrimitiveType, Type};
+
+        let iceberg_schema = sail_iceberg::spec::Schema::builder()
+            .with_fields([Arc::new(NestedField::optional(
+                2,
+                "key",
+                Type::Primitive(PrimitiveType::Long),
+            ))])
+            .build()
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, true)]));
+        let mut positional = vec![
+            PositionDeleteFile::DeletionVector {
+                path: "data/shared.puffin".into(),
+                range: 4..36,
+                cardinality: 1,
+            },
+            PositionDeleteFile::DeletionVector {
+                path: "data/shared.puffin".into(),
+                range: 36..100,
+                cardinality: 3,
+            },
+        ];
+        let formats = [
+            DataFileFormat::Parquet,
+            DataFileFormat::Avro,
+            DataFileFormat::Orc,
+        ];
+        positional.extend(formats.map(|file_format| PositionDeleteFile::File {
+            path: format!("data/positions.{file_format:?}"),
+            size: 123,
+            file_format,
+        }));
+        let equality = formats
+            .map(|file_format| EqualityDeleteFile {
+                path: format!("data/equality.{file_format:?}"),
+                size: 456,
+                file_format,
+                equality_ids: vec![2],
+            })
+            .to_vec();
+        let input = MemorySourceConfig::try_new_exec(&[vec![]], schema.clone(), None)?;
+        let plan = IcebergDeleteApplyExec::new(
+            input,
+            "data/input.parquet".into(),
+            positional.clone(),
+            equality.clone(),
+            "s3://bucket/table".into(),
+            iceberg_schema.clone(),
+        );
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let decoded = decoded
+            .downcast_ref::<IcebergDeleteApplyExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected delete apply"))?;
+        assert_eq!(decoded.positional_deletes(), positional);
+        assert_eq!(decoded.equality_deletes(), equality);
+        assert_eq!(decoded.iceberg_schema(), &iceberg_schema);
+        assert_eq!(decoded.schema(), schema);
+        assert_eq!(decoded.data_file_path(), "data/input.parquet");
+        assert_eq!(decoded.table_url(), "s3://bucket/table");
+        Ok(())
     }
 
     #[test]

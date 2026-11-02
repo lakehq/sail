@@ -58,7 +58,7 @@ use crate::row_level_metadata::{
     MERGE_FILE_METADATA_COLUMN, MERGE_PARTITION_SPEC_ID_COLUMN, RowLevelFileMetadata,
     RowLevelMetadataColumns, parquet_row_position_field,
 };
-use crate::spec::delete_index::DeleteFileRef;
+use crate::spec::delete_index::{DeleteFileRef, EqualityDeleteFile, PositionDeleteFile};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::{Datum, Literal};
 use crate::spec::{DataFile, ManifestContentType, PartitionSpec, Schema, Snapshot};
@@ -1240,8 +1240,14 @@ impl IcebergScan {
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 data_scan,
                 data_file_raw_path,
-                pos_deletes,
-                eq_deletes,
+                pos_deletes
+                    .iter()
+                    .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
+                    .collect::<Result<_>>()?,
+                eq_deletes
+                    .iter()
+                    .map(|delete| EqualityDeleteFile::try_from(&delete.data_file))
+                    .collect::<Result<_>>()?,
                 self.table_uri.clone(),
                 delete_scan.schema.clone(),
             ));
@@ -1495,8 +1501,14 @@ impl IcebergScan {
             let apply: Arc<dyn ExecutionPlan> = Arc::new(IcebergDeleteApplyExec::new(
                 with_metadata,
                 df.file_path.clone(),
-                positional_deletes,
-                equality_deletes,
+                positional_deletes
+                    .iter()
+                    .map(|delete| PositionDeleteFile::try_from(&delete.data_file))
+                    .collect::<Result<_>>()?,
+                equality_deletes
+                    .iter()
+                    .map(|delete| EqualityDeleteFile::try_from(&delete.data_file))
+                    .collect::<Result<_>>()?,
                 self.table_uri.clone(),
                 delete_scan.schema.clone(),
             ));

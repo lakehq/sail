@@ -1,12 +1,16 @@
 # ruff: noqa: S608
 
+import uuid
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from pyiceberg.manifest import ManifestContent
+from pyiceberg.avro.file import AvroFile, AvroOutputFile
+from pyiceberg.manifest import DataFile, DataFileContent, FileFormat, ManifestContent
 from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
-from pyiceberg.types import LongType, NestedField
+from pyiceberg.typedef import Record
+from pyiceberg.types import LongType, NestedField, StringType
 
 from pysail.testing.spark.steps.iceberg import (
     _assert_noop_snapshot,
@@ -15,9 +19,13 @@ from pysail.testing.spark.steps.iceberg import (
     _latest_metadata_path,
 )
 from pysail.testing.spark.steps.plan import normalize_plan_text
-from pysail.tests.spark.iceberg.test_iceberg_equality_delete import _append_equality_delete_snapshot
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
+from pysail.tests.spark.iceberg.test_iceberg_equality_delete import (
+    _append_delete_snapshot,
+    _append_equality_delete_snapshot,
+)
 from pysail.tests.spark.iceberg.test_iceberg_merge import _current_manifest_entries, _local_file_path
-from pysail.tests.spark.iceberg.utils import pyiceberg_file_io_properties
+from pysail.tests.spark.iceberg.utils import WindowsLocalPyArrowFileIO, pyiceberg_file_io_properties
 
 
 @pytest.mark.yamlsnapshot(group="plan")
@@ -61,6 +69,116 @@ def test_metadata_delete_does_not_read_parquet(spark, tmp_path, format_version, 
         for file, backup in moved:
             backup.rename(file)
         spark.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def _append_metadata_delete_file(table, delete_kind, file_format):
+    path = _local_file_path(table.location())
+    if delete_kind == "equality":
+        schema = Schema(NestedField(2, "key", LongType()))
+        rows = [{"key": 7}]
+        content = DataFileContent.EQUALITY_DELETES
+        equality_ids = [2]
+    else:
+        entries = _current_manifest_entries(path, ManifestContent.DATA)
+        assert len(entries) == 1
+        schema = Schema(
+            NestedField(2147483546, "file_path", StringType(), required=True),
+            NestedField(2147483545, "pos", LongType(), required=True),
+        )
+        rows = [{"file_path": entries[0].data_file.file_path, "pos": 0}]
+        content = DataFileContent.POSITION_DELETES
+        equality_ids = None
+    delete_path = path / "data" / f"{delete_kind}-delete-{uuid.uuid4()}.{file_format.value.lower()}"
+    if file_format == FileFormat.AVRO:
+        io = WindowsLocalPyArrowFileIO()
+        with AvroOutputFile(
+            io.new_output(delete_path.as_uri()), schema, "delete_file", metadata={"avro.codec": "null"}
+        ) as writer:
+            writer.write_block([Record(*row.values()) for row in rows])
+        with AvroFile(io.new_input(delete_path.as_uri())) as reader:
+            assert [tuple(row[i] for i in range(len(schema.fields))) for row in reader] == [
+                tuple(row.values()) for row in rows
+            ]
+    else:
+        arrow_schema = pa.schema(
+            [
+                pa.field(
+                    field.name,
+                    pa.string() if isinstance(field.field_type, StringType) else pa.int64(),
+                    nullable=not field.required,
+                    metadata={b"PARQUET:field_id": str(field.field_id).encode()},
+                )
+                for field in schema.fields
+            ]
+        )
+        pq.write_table(pa.Table.from_pylist(rows, schema=arrow_schema), delete_path)
+        assert pq.read_table(delete_path).to_pylist() == rows
+    return _append_delete_snapshot(
+        table,
+        DataFile.from_args(
+            content=content,
+            file_path=delete_path.as_uri(),
+            file_format=file_format,
+            partition=Record(),
+            record_count=len(rows),
+            file_size_in_bytes=delete_path.stat().st_size,
+            equality_ids=equality_ids,
+        ),
+    )
+
+
+@pytest.mark.parametrize("delete_kind", ["equality", "position"])
+@pytest.mark.parametrize("file_format", [FileFormat.AVRO, FileFormat.PARQUET], ids=["avro", "parquet"])
+@pytest.mark.parametrize("mode", ["copy-on-write", "merge-on-read"])
+def test_metadata_delete_does_not_read_delete_files(spark, sql_catalog, tmp_path, delete_kind, file_format, mode):
+    # Iceberg Spark's metadata delete removes complete files without invoking their delete decoders.
+    name = "metadata_delete_files"
+    identifier = f"default.{name}"
+    table = sql_catalog.create_table(
+        identifier,
+        Schema(NestedField(1, "id", LongType()), NestedField(2, "key", LongType())),
+        properties={"format-version": "2", "write.delete.mode": mode},
+    )
+    moved = []
+    try:
+        table.append(pa.table({"id": [1, 2], "key": [7, 8]}))
+        path = _append_metadata_delete_file(table, delete_kind, file_format)
+        spark.sql(f"CREATE TABLE {name} USING iceberg LOCATION '{escape_sql_string_literal(str(path))}'")
+        before = _find_latest_metadata(path)
+        deletes_before = _current_manifest_entries(path, ManifestContent.DELETES)
+        if file_format == FileFormat.AVRO:
+            with pytest.raises(Exception, match=f"Unsupported Iceberg {delete_kind} delete file"):
+                spark.table(name).collect()
+        else:
+            assert [tuple(row) for row in spark.table(name).collect()] == [(2, 8)]
+        assert _find_latest_metadata(path) == before
+        for content in [ManifestContent.DATA, ManifestContent.DELETES]:
+            entries = _current_manifest_entries(path, content)
+            assert len(entries) == 1
+            for entry in entries:
+                file = _local_file_path(entry.data_file.file_path)
+                backup = tmp_path / f"saved-{len(moved)}"
+                file.rename(backup)
+                moved.append((file, backup))
+        spark.sql(f"DELETE FROM {name}").collect()
+        assert spark.table(name).collect() == []
+        after = _find_latest_metadata(path)
+        assert _current_snapshot(after)["summary"]["operation"] == "delete"
+        assert _current_snapshot(after)["parent-snapshot-id"] == before["current-snapshot-id"]
+        assert after["last-sequence-number"] == before["last-sequence-number"] + 1
+        assert after["snapshots"][:-1] == before["snapshots"]
+        assert _current_manifest_entries(path, ManifestContent.DATA) == []
+        # Unscoped deletes are retained for history, but no longer apply to any live data files.
+        assert _current_manifest_entries(path, ManifestContent.DELETES) == deletes_before
+        for file, backup in moved:
+            backup.rename(file)
+        moved.clear()
+        assert spark.table(name).collect() == []
+    finally:
+        for file, backup in moved:
+            backup.rename(file)
+        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        sql_catalog.drop_table(identifier)
 
 
 @pytest.mark.parametrize("format_version", [1, 2, 3])
