@@ -14,7 +14,7 @@ the table, Sail then removes a `SortExec` from the plan if the footer satisfies 
 check the data against the footer, so turn this on only for files whose footers you trust.
 
 This report describes what the test matrix in
-`python/pysail/tests/spark/datasource/test_parquet_footer_ordering.py` covers and what it found.
+`python/pysail/tests/_dev/spark/datasource/test_parquet_footer_ordering.py` covers and what it found.
 
 ## How the Tests Work
 

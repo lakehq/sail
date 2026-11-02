@@ -103,9 +103,20 @@ pub struct IcebergScan {
     copy_on_write_predicate: Option<Expr>,
     /// Whether to use the metadata-as-data read path (lazy manifest scanning)
     metadata_as_data_read: bool,
+    /// Preserve physical file reads when expressions require input-file provenance.
+    input_file_metadata_required: bool,
 }
 
 impl IcebergScan {
+    pub(crate) fn with_input_file_metadata_required(mut self) -> Self {
+        self.input_file_metadata_required = true;
+        self
+    }
+
+    pub(crate) fn input_file_metadata_required(&self) -> bool {
+        self.input_file_metadata_required
+    }
+
     pub(crate) fn metadata_aggregate_enabled(&self) -> bool {
         !self.metadata_as_data_read
             && self.file_column_name.is_none()
@@ -191,6 +202,7 @@ impl IcebergScan {
             format_version: crate::spec::FormatVersion::V2,
             schema,
             snapshot: Some(snapshot),
+            input_file_metadata_required: false,
             partition_specs,
             default_spec_id,
             output_schema: arrow_schema.clone(),
@@ -232,6 +244,7 @@ impl IcebergScan {
             format_version: crate::spec::FormatVersion::V2,
             schema,
             snapshot: None,
+            input_file_metadata_required: false,
             partition_specs,
             default_spec_id,
             output_schema: arrow_schema.clone(),
@@ -1127,7 +1140,8 @@ impl IcebergScan {
         // Object-store URL shared by all branches.
         let object_store_url = self.object_store_url()?;
 
-        if dirty_units.is_empty()
+        if !self.input_file_metadata_required
+            && dirty_units.is_empty()
             && parquet_pushdown_filters.is_empty()
             && let Some(scan) = self.constant_projection_scan(&all_data_files, projection, limit)?
         {
@@ -1767,6 +1781,120 @@ mod tests {
                 .expect("snapshot"),
         );
         Ok(store_context)
+    }
+
+    #[tokio::test]
+    #[expect(clippy::expect_used)]
+    async fn required_input_file_metadata_preserves_scans_and_source_refinements() -> Result<()> {
+        use datafusion::arrow::array::{Float64Array, Int32Array};
+        use datafusion::prelude::SessionContext;
+        use object_store::ObjectStoreExt;
+        use object_store::path::Path;
+        use parquet::arrow::ArrowWriter;
+        use sail_common_datafusion::datasource::MergeCapableSource;
+
+        use crate::logical::IcebergTableSource;
+
+        let (mut read_scan, mut file) = statistics_fixture()?;
+        assert!(!read_scan.input_file_metadata_required());
+        let context = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&read_scan.arrow_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 2])),
+                Arc::new(Float64Array::from(vec![2.5, 2.5])),
+            ],
+        )?;
+        let mut writer = ArrowWriter::try_new(Vec::new(), batch.schema(), None)?;
+        writer.write(&batch)?;
+        let bytes = writer.into_inner()?;
+        file.file_size_in_bytes = bytes.len() as u64;
+        let path = Path::from(file.file_path.as_str());
+        let store = commit_data_files(
+            &mut read_scan,
+            &context,
+            PartitionSpec::unpartitioned_spec(),
+            vec![file],
+        )
+        .await?;
+        store.prefixed.put(&path, bytes.into()).await?;
+        let state = context.state();
+        let planned = Arc::new(read_scan.plan_files(&state, &[], None).await?);
+        let source = IcebergTableSource::new(Arc::new(read_scan)).prepare(Arc::clone(&planned));
+        let marked = source.with_input_file_metadata_required();
+        assert!(!source.scan().input_file_metadata_required());
+        assert!(marked.scan().input_file_metadata_required());
+        assert!(Arc::ptr_eq(
+            &planned,
+            &marked.prepared(&[], None).expect("prepared scan")
+        ));
+        assert!(Arc::ptr_eq(
+            marked.scan(),
+            marked.with_input_file_metadata_required().scan()
+        ));
+        assert_eq!(
+            source.scan().metadata_aggregate_enabled(),
+            marked.scan().metadata_aggregate_enabled()
+        );
+        let prepared_again = marked.prepare(Arc::clone(&planned));
+        assert!(prepared_again.scan().input_file_metadata_required());
+        for refined in [
+            marked.with_file_column("_file")?,
+            marked.with_row_index_column("_row")?,
+        ] {
+            assert!(
+                refined
+                    .downcast_ref::<IcebergTableSource>()
+                    .expect("Iceberg source")
+                    .scan()
+                    .input_file_metadata_required()
+            );
+        }
+        for projection in [vec![], vec![0]] {
+            let ordinary = source
+                .scan()
+                .create_physical_plan(
+                    &state,
+                    Some(&projection),
+                    &[],
+                    None,
+                    Some(Arc::clone(&planned)),
+                )
+                .await?;
+            assert!(ordinary.is::<IcebergMetadataScanExec>());
+            let required = marked
+                .scan()
+                .create_physical_plan(
+                    &state,
+                    Some(&projection),
+                    &[],
+                    None,
+                    Some(Arc::clone(&planned)),
+                )
+                .await?;
+            assert!(required.is::<datafusion::datasource::source::DataSourceExec>());
+            assert_eq!(
+                required.schema().as_ref(),
+                &source.scan().schema().project(&projection)?
+            );
+            // Synthetic constants have non-nullable literal fields rather than file field IDs.
+            let constant_schema = ArrowSchema::new(
+                projection
+                    .iter()
+                    .map(|&index| {
+                        let schema = source.scan().schema();
+                        let field = schema.field(index);
+                        datafusion::arrow::datatypes::Field::new(
+                            field.name(),
+                            field.data_type().clone(),
+                            false,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(ordinary.schema().as_ref(), &constant_schema);
+        }
+        Ok(())
     }
 
     #[test]

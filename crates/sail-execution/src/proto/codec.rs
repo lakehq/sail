@@ -229,6 +229,7 @@ use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
@@ -237,6 +238,7 @@ use sail_function::scalar::misc::theta_sketch::{
     ThetaUnionFunction,
 };
 use sail_function::scalar::misc::version::SparkVersion;
+use sail_function::scalar::mixed_numeric::MixedNumeric;
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
@@ -3836,9 +3838,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
             "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
+            "mixed_numeric_add" | "mixed_numeric_subtract" | "mixed_numeric_multiply" => {
+                let function = MixedNumeric::from_name(name).ok_or_else(|| {
+                    datafusion::common::internal_datafusion_err!(
+                        "invalid mixed numeric function {name}"
+                    )
+                })?;
+                Ok(Arc::new(ScalarUDF::from(function)))
+            }
             "correlation_cast" => Ok(Arc::new(ScalarUDF::from(CorrelationCast::new()))),
             "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
+            "scalar_subquery_result" => Ok(Arc::new(ScalarUDF::from(ScalarSubqueryResult::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(SparkCastToVariant::new()))),
@@ -4041,6 +4052,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
             || node_inner.is::<NormalizeFloatKeys>()
+            || node_inner.is::<MixedNumeric>()
             || node_inner.is::<CorrelationCast>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
@@ -4069,6 +4081,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
+            || node_inner.is::<ScalarSubqueryResult>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
@@ -7760,6 +7773,32 @@ mod tests {
         let decoded = round_trip_udf(ScalarUDF::from(CorrelationCast::new()))?;
         downcast_udf::<CorrelationCast>(&decoded, "CorrelationCast")?;
         assert_eq!(decoded.name(), "correlation_cast");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_mixed_numeric_udfs() -> Result<()> {
+        for (operator, name) in [
+            (
+                datafusion::logical_expr::Operator::Plus,
+                "mixed_numeric_add",
+            ),
+            (
+                datafusion::logical_expr::Operator::Minus,
+                "mixed_numeric_subtract",
+            ),
+            (
+                datafusion::logical_expr::Operator::Multiply,
+                "mixed_numeric_multiply",
+            ),
+        ] {
+            let function = MixedNumeric::new(operator).ok_or_else(|| {
+                datafusion::common::internal_datafusion_err!("unsupported arithmetic test operator")
+            })?;
+            let decoded = round_trip_udf(ScalarUDF::from(function))?;
+            downcast_udf::<MixedNumeric>(&decoded, "MixedNumeric")?;
+            assert_eq!(decoded.name(), name);
+        }
         Ok(())
     }
 

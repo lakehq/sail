@@ -25,7 +25,7 @@ use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
-use super::decoder::{LossyUtf8Reader, decode_utf8_lossy_stream};
+use super::decoder::{CsvInputDecoder, CsvInputReader, decode_csv_input_stream};
 use super::projected::{DecoderBatchReader, ProjectedCsvDecoder, ProjectedCsvOptions};
 
 type CsvBatchReader = Box<dyn Iterator<Item = std::result::Result<RecordBatch, ArrowError>> + Send>;
@@ -291,7 +291,8 @@ impl FileOpener for CsvOpener {
                 .map_err(DataFusionError::from);
                 let decoder = config.builder()?.build_decoder();
                 let input = file_compression_type.convert_stream(aligned_stream.boxed())?;
-                let input = decode_utf8_lossy_stream(input).fuse();
+                let input =
+                    decode_csv_input_stream(input, CsvInputDecoder::new(&config.options)).fuse();
                 let stream =
                     deserialize_stream(input, DecoderDeserializer::new(CsvDecoder::new(decoder)));
                 return Ok(stream.map_err(DataFusionError::from).boxed());
@@ -305,7 +306,8 @@ impl FileOpener for CsvOpener {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(file, _) => {
                     let decompressed = file_compression_type.convert_read(file)?;
-                    let mut reader = config.open(LossyUtf8Reader::new(decompressed))?;
+                    let decoder = CsvInputDecoder::new(&config.options);
+                    let mut reader = config.open(CsvInputReader::new(decompressed, decoder))?;
                     let iterator = std::iter::from_fn(move || {
                         let mut timer = baseline_metrics.elapsed_compute().timer();
                         let result = reader.next();
@@ -320,7 +322,9 @@ impl FileOpener for CsvOpener {
                 GetResultPayload::Stream(stream) => {
                     let input = stream.map_err(DataFusionError::from).boxed();
                     let input = file_compression_type.convert_stream(input)?;
-                    let input = decode_utf8_lossy_stream(input).fuse();
+                    let input =
+                        decode_csv_input_stream(input, CsvInputDecoder::new(&config.options))
+                            .fuse();
                     let stream = match config.projected_decoder()? {
                         Some(decoder) => {
                             deserialize_stream(input, DecoderDeserializer::new(decoder))

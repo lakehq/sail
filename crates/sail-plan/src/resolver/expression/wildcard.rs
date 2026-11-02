@@ -221,7 +221,14 @@ impl PlanResolver<'_> {
             .transpose()?;
         let except = wildcard_options
             .except_columns
-            .map(|x| {
+            .map(|names| {
+                let x = names
+                    .into_iter()
+                    .map(|name| {
+                        self.resolve_one_column(schema, name.as_ref(), state)
+                            .map(|column| column.name)
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
                 let except = if x.len() > 1 {
                     let mut deque = VecDeque::from(x);
                     let first_element = deque.pop_front().ok_or_else(|| {
