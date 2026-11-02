@@ -597,7 +597,26 @@ impl PlanResolver<'_> {
                     expr,
                     metadata: _,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let name = name.one()?;
+                // A grouping column stays the aggregate's own attribute, so it keeps the
+                // qualifier and the field identity. An aggregate value is named after its
+                // DataFusion schema name, which is not a registered field.
+                let source = match &expr {
+                    Expr::Column(column) => state
+                        .get_field_info(&column.name)
+                        .is_ok()
+                        .then(|| (column.name.clone(), column.relation.clone())),
+                    _ => None,
+                };
+                match source {
+                    Some((field_id, relation)) => {
+                        let field_id = state.register_identity_field(name, &field_id)?;
+                        let qualifier = relation
+                            .filter(|relation| relation.table() != datafusion_expr::UNNAMED_TABLE);
+                        Ok(expr.alias_qualified(qualifier, field_id))
+                    }
+                    None => Ok(expr.alias(state.register_field_name(name))),
+                }
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)

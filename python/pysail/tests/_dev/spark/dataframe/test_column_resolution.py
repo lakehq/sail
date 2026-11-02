@@ -739,3 +739,36 @@ def test_wide_set_operation_struct_coercion(spark, temporal, array_wrapped):
     finally:
         spark.conf.set("spark.sql.ansi.enabled", ansi)
         spark.conf.set("spark.sql.session.timeZone", timezone)
+
+
+@pytest.mark.parametrize("operation", ["agg", "count"])
+def test_aggregate_keeps_qualified_grouping_key(spark, operation):
+    source = spark.sql("SELECT * FROM VALUES (1, 10), (1, 20), (2, 30) AS t(k, v)").alias("t1")
+    grouped = source.groupBy("k")
+    aggregated = grouped.agg(f.sum("v").alias("s")) if operation == "agg" else grouped.count()
+
+    assert Counter(aggregated.select("t1.k").collect()) == Counter([(1,), (2,)])
+    assert Counter(aggregated.select(source.k).collect()) == Counter([(1,), (2,)])
+
+    result = aggregated.select("t1.*")
+    assert result.columns == ["k"]
+    assert Counter(result.collect()) == Counter([(1,), (2,)])
+
+    projected = aggregated.withColumn("w", f.lit(1)).select("t1.k", "w")
+    assert Counter(projected.collect()) == Counter([(1, 1), (2, 1)])
+
+    # The aggregate value is a new unqualified attribute on both engines.
+    value = "s" if operation == "agg" else "count"
+    with pytest.raises(PySparkException, match=r"(?i)(cannot resolve|unresolved|not found)"):
+        aggregated.select(f"t1.{value}").collect()
+
+
+@pytest.mark.parametrize("projection", ["with_column", "select_all", "select_one"])
+def test_projection_keeps_qualifier_for_later_reference(spark, projection):
+    source = spark.sql("SELECT * FROM VALUES (1, 10) AS t(k, v)").alias("t1")
+    projected = {
+        "with_column": lambda: source.withColumn("w", f.lit(1)),
+        "select_all": lambda: source.select("k", "v"),
+        "select_one": lambda: source.select(f.col("v")),
+    }[projection]()
+    assert projected.select(f.col("t1.v")).collect() == [(10,)]
