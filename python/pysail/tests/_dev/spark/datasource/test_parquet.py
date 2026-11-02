@@ -110,7 +110,7 @@ def test_parquet_path_read_ignores_footer_sorting_columns_by_default(spark, tmp_
         path,
         sorting_columns=[pq.SortingColumn(0, descending=False, nulls_first=True)],
     )
-    query = f"SELECT id FROM parquet.`{path}` ORDER BY id ASC NULLS FIRST"
+    query = f"SELECT id FROM parquet.`{path}` ORDER BY id ASC NULLS FIRST"  # noqa: S608
 
     # The default read must not reuse file metadata cached by a read that trusts the footer.
     spark.read.option("trustSortingColumns", "true").parquet(str(path)).createOrReplaceTempView("footer_unsorted")

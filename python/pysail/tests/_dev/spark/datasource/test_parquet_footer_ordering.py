@@ -1,3 +1,4 @@
+# ruff: noqa: DTZ001, FBT001, PERF401, PLR2004, PLW1641, S608
 """Parquet footer `sorting_columns` and how they affect reads by path.
 
 Spark ignores `sorting_columns`, so every query here must return rows in the
@@ -76,10 +77,7 @@ def _value_key(value, descending: bool, nulls_first: bool):
     """Sort key that follows Spark ordering, including NaN as the largest value."""
     if value is None:
         return (0 if nulls_first else 2,)
-    if isinstance(value, float) and math.isnan(value):
-        rank = (1, 0)
-    else:
-        rank = (0, value)
+    rank = (1, 0) if isinstance(value, float) and math.isnan(value) else (0, value)
     if descending:
         return (1, _Reversed(rank))
     return (1, rank)
@@ -214,7 +212,7 @@ def _all_keys(columns: list[str]) -> list[list[SortKey]]:
     for n in (1, 2):
         for cols in itertools.permutations(columns, n):
             for dirs in itertools.product(DIRECTIONS, repeat=n):
-                keys.append([(c, d, nf) for c, (d, nf) in zip(cols, dirs)])
+                keys.append([(c, d, nf) for c, (d, nf) in zip(cols, dirs, strict=False)])
     return keys
 
 
@@ -252,7 +250,7 @@ def _footer_shape_cases() -> list[Case]:
     for name, data in [
         ("reversed", list(reversed(rows))),
         ("shuffled", [rows[(i * 7) % 30] for i in range(30)]),
-        ("one_swap", rows[:10] + [rows[11], rows[10]] + rows[12:]),
+        ("one_swap", [*rows[:10], rows[11], rows[10], *rows[12:]]),
     ]:
         for rgs in (None, 5):
             for query in (asc, desc):
@@ -273,12 +271,12 @@ def _footer_shape_cases() -> list[Case]:
     for name, footers in [
         ("one_without_footer", [asc, []]),
         ("asc_and_desc", [asc, desc]),
-        ("prefix_only", [asc + [("b", False, False)], asc]),
-        ("different_second_key", [asc + [("b", False, False)], asc + [("b", True, False)]]),
+        ("prefix_only", [[*asc, ("b", False, False)], asc]),
+        ("different_second_key", [[*asc, ("b", False, False)], [*asc, ("b", True, False)]]),
         ("other_column", [asc, [("b", False, False)]]),
     ]:
-        files = [_sorted_rows(h, f or asc) for h, f in zip(halves, footers)]
-        for query in (asc, desc, asc + [("b", False, False)]):
+        files = [_sorted_rows(h, f or asc) for h, f in zip(halves, footers, strict=False)]
+        for query in (asc, desc, [*asc, ("b", False, False)]):
             common = footers[0]
             for f in footers[1:]:
                 n = 0
@@ -461,7 +459,7 @@ def _params():
 def _write(case: Case, root) -> str:
     path = root / "data"
     path.mkdir()
-    for i, (rows, footer) in enumerate(zip(case.files, case.footers)):
+    for i, (rows, footer) in enumerate(zip(case.files, case.footers, strict=False)):
         names = case.file_columns[i] if case.file_columns else list(case.columns)
         schema = pa.schema([(n, case.columns[n]) for n in names])
         table = pa.Table.from_pylist(rows, schema=schema)
