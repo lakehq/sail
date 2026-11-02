@@ -3,8 +3,8 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.plan import normalize_plan_text
 from pysail.testing.spark.utils.sql import format_show_string, parse_show_string
 
 
