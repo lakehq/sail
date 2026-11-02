@@ -18,6 +18,8 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
+use crate::functions_nested_utils::{evaluate_lambda_rows, scatter_active_rows};
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayZipWith {
     signature: HigherOrderSignature,
@@ -32,14 +34,7 @@ impl Default for SparkArrayZipWith {
 impl SparkArrayZipWith {
     pub fn new() -> Self {
         Self {
-            signature: HigherOrderSignature::exact(
-                vec![
-                    ValueOrLambda::Value(()),
-                    ValueOrLambda::Value(()),
-                    ValueOrLambda::Lambda(()),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -64,7 +59,7 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         let [left, right, lambda] = args else {
             return None;
         };
-        Some((vec![left, right], vec![lambda]))
+        Some((vec![left], vec![right, lambda]))
     }
 
     fn lambda_parameters(
@@ -72,17 +67,52 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let (left, right, _lambda) = zip_args(self.name(), fields)?;
-        let left_element = list_element(self.name(), left, "first")?;
-        let right_element = list_element(self.name(), right, "second")?;
-        Ok(LambdaParametersProgress::Complete(vec![vec![
-            Arc::new(left_element.as_ref().clone().with_nullable(true)),
-            Arc::new(right_element.as_ref().clone().with_nullable(true)),
-        ]]))
+        match fields {
+            [
+                ValueOrLambda::Value(left),
+                ValueOrLambda::Value(right),
+                ValueOrLambda::Lambda(_),
+            ] => {
+                let left_element = list_element(self.name(), left, "first")?;
+                let right_element = list_element(self.name(), right, "second")?;
+                Ok(LambdaParametersProgress::Complete(vec![vec![
+                    Arc::new(left_element.as_ref().clone().with_nullable(true)),
+                    Arc::new(right_element.as_ref().clone().with_nullable(true)),
+                ]]))
+            }
+            [
+                ValueOrLambda::Value(_),
+                ValueOrLambda::Lambda(None),
+                ValueOrLambda::Lambda(_),
+            ] => {
+                let dummy = Arc::new(Field::new("", DataType::Null, true));
+                Ok(LambdaParametersProgress::Partial(vec![
+                    Some(vec![dummy]),
+                    None,
+                ]))
+            }
+            [
+                ValueOrLambda::Value(left),
+                ValueOrLambda::Lambda(Some(right)),
+                ValueOrLambda::Lambda(_),
+            ] => {
+                let left_element = list_element(self.name(), left, "first")?;
+                let right_element = list_element(self.name(), right, "second")?;
+                let dummy = Arc::new(Field::new("", DataType::Null, true));
+                Ok(LambdaParametersProgress::Complete(vec![
+                    vec![dummy],
+                    vec![
+                        Arc::new(left_element.as_ref().clone().with_nullable(true)),
+                        Arc::new(right_element.as_ref().clone().with_nullable(true)),
+                    ],
+                ]))
+            }
+            _ => plan_err!("{} expects array inputs and a lambda", self.name()),
+        }
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (left, right, lambda) = zip_args(self.name(), args.arg_fields)?;
+        let (left, right, lambda) = lazy_zip_args(self.name(), args.arg_fields)?;
         list_element(self.name(), left, "first")?;
         list_element(self.name(), right, "second")?;
         let large_offsets =
@@ -105,9 +135,8 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (left, right, lambda) = zip_args(self.name(), &args.args)?;
+        let (left, right, lambda) = lazy_zip_args(self.name(), &args.args)?;
         let left_array = left.to_array(args.number_rows)?;
-        let right_array = right.to_array(args.number_rows)?;
         let (DataType::List(element_field) | DataType::LargeList(element_field)) =
             args.return_field.data_type()
         else {
@@ -119,6 +148,19 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
         };
         let large_offsets = matches!(args.return_field.data_type(), DataType::LargeList(_));
         let left_rows = left_array.len();
+        let left_nulls = left_array.logical_nulls();
+        let active_rows = (0..left_rows)
+            .filter(|row| left_nulls.as_ref().is_none_or(|nulls| nulls.is_valid(*row)))
+            .map(|row| row as u64)
+            .collect::<Vec<_>>();
+        if active_rows.is_empty() {
+            return Ok(ColumnarValue::Array(new_null_array(
+                args.return_type(),
+                args.number_rows,
+            )));
+        }
+        let right_active = evaluate_lambda_rows(right, &active_rows)?;
+        let right_array = scatter_active_rows(right_active, &active_rows, left_rows)?;
         let right_rows = right_array.len();
         if left_rows != right_rows {
             return exec_err!(
@@ -190,21 +232,17 @@ impl HigherOrderUDFImpl for SparkArrayZipWith {
     }
 }
 
-fn zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
+fn lazy_zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
     name: &str,
     args: &'a [ValueOrLambda<V, L>],
-) -> Result<(&'a V, &'a V, &'a L)> {
-    let [left, right, lambda] = args else {
-        return plan_err!("{name} expects two arrays followed by a lambda");
-    };
-    let ValueOrLambda::Value(left) = left else {
-        return plan_err!("{name} expected a value as first argument");
-    };
-    let ValueOrLambda::Value(right) = right else {
-        return plan_err!("{name} expected a value as second argument");
-    };
-    let ValueOrLambda::Lambda(lambda) = lambda else {
-        return plan_err!("{name} expected a lambda as third argument");
+) -> Result<(&'a V, &'a L, &'a L)> {
+    let [
+        ValueOrLambda::Value(left),
+        ValueOrLambda::Lambda(right),
+        ValueOrLambda::Lambda(lambda),
+    ] = args
+    else {
+        return plan_err!("{name} expects an array followed by two lambdas");
     };
     Ok((left, right, lambda))
 }

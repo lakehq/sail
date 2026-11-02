@@ -177,6 +177,21 @@ Feature: zip_with higher-order function
         | result |
         | NULL   |
 
+    Scenario: A NULL left array skips right argument evaluation in ANSI mode
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT zip_with(array_value, array(1 / divisor), (x, y) -> y) AS result
+        FROM VALUES
+          (CAST(NULL AS ARRAY<INT>), 0),
+          (array(10), 1)
+        AS t(array_value, divisor)
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | [1.0]  |
+
     Scenario: Empty and NULL arrays skip lambda evaluation when there are no elements
       When query
         """

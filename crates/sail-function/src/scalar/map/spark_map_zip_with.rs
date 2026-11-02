@@ -5,7 +5,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, MapArray, StructArray, new_empty_array};
+use datafusion::arrow::array::{
+    Array, ArrayRef, MapArray, StructArray, new_empty_array, new_null_array,
+};
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::{cast, take};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
@@ -17,6 +19,8 @@ use datafusion_expr::{
 };
 use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::type_coercion::binary_type_coercion::set_operation_coercion;
+
+use crate::functions_nested_utils::{evaluate_lambda_rows, scatter_active_rows};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMapZipWith {
@@ -34,14 +38,7 @@ impl Default for SparkMapZipWith {
 impl SparkMapZipWith {
     pub fn new(ansi_mode: bool, session_timezone: Arc<str>) -> Self {
         Self {
-            signature: HigherOrderSignature::exact(
-                vec![
-                    ValueOrLambda::Value(()),
-                    ValueOrLambda::Value(()),
-                    ValueOrLambda::Lambda(()),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: HigherOrderSignature::variadic_any(Volatility::Immutable),
             ansi_mode,
             session_timezone,
         }
@@ -76,7 +73,7 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         let [left, right, lambda] = args else {
             return None;
         };
-        Some((vec![left, right], vec![lambda]))
+        Some((vec![left], vec![right, lambda]))
     }
 
     fn lambda_parameters(
@@ -84,37 +81,86 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
         _step: usize,
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
-        let (left, right, _lambda) = map_zip_args(self.name(), fields)?;
-        let (left_key, left_value, _) = map_fields(self.name(), left)?;
-        let (right_key, _right_value, _) = map_fields(self.name(), right)?;
-        let key_type = common_map_key_type(
-            self.name(),
-            &left_key,
-            &right_key,
-            self.ansi_mode,
-            &self.session_timezone,
-        )?;
-        Ok(LambdaParametersProgress::Complete(vec![vec![
-            Arc::new(
-                left_key
-                    .as_ref()
-                    .clone()
-                    .with_data_type(key_type)
-                    .with_nullable(false),
-            ),
-            Arc::new(left_value.as_ref().clone().with_nullable(true)),
-            Arc::new(
-                map_fields(self.name(), right)?
-                    .1
-                    .as_ref()
-                    .clone()
-                    .with_nullable(true),
-            ),
-        ]]))
+        match fields {
+            [
+                ValueOrLambda::Value(left),
+                ValueOrLambda::Value(right),
+                ValueOrLambda::Lambda(_),
+            ] => {
+                let (left_key, left_value, _) = map_fields(self.name(), left)?;
+                let (right_key, _, _) = map_fields(self.name(), right)?;
+                let key_type = common_map_key_type(
+                    self.name(),
+                    &left_key,
+                    &right_key,
+                    self.ansi_mode,
+                    &self.session_timezone,
+                )?;
+                Ok(LambdaParametersProgress::Complete(vec![vec![
+                    Arc::new(
+                        left_key
+                            .as_ref()
+                            .clone()
+                            .with_data_type(key_type)
+                            .with_nullable(false),
+                    ),
+                    Arc::new(left_value.as_ref().clone().with_nullable(true)),
+                    Arc::new(
+                        map_fields(self.name(), right)?
+                            .1
+                            .as_ref()
+                            .clone()
+                            .with_nullable(true),
+                    ),
+                ]]))
+            }
+            [
+                ValueOrLambda::Value(_),
+                ValueOrLambda::Lambda(None),
+                ValueOrLambda::Lambda(_),
+            ] => {
+                let dummy = Arc::new(Field::new("", DataType::Null, true));
+                Ok(LambdaParametersProgress::Partial(vec![
+                    Some(vec![dummy]),
+                    None,
+                ]))
+            }
+            [
+                ValueOrLambda::Value(left),
+                ValueOrLambda::Lambda(Some(right)),
+                ValueOrLambda::Lambda(_),
+            ] => {
+                let (left_key, left_value, _) = map_fields(self.name(), left)?;
+                let (right_key, right_value, _) = map_fields(self.name(), right)?;
+                let key_type = common_map_key_type(
+                    self.name(),
+                    &left_key,
+                    &right_key,
+                    self.ansi_mode,
+                    &self.session_timezone,
+                )?;
+                let dummy = Arc::new(Field::new("", DataType::Null, true));
+                Ok(LambdaParametersProgress::Complete(vec![
+                    vec![dummy],
+                    vec![
+                        Arc::new(
+                            left_key
+                                .as_ref()
+                                .clone()
+                                .with_data_type(key_type)
+                                .with_nullable(false),
+                        ),
+                        Arc::new(left_value.as_ref().clone().with_nullable(true)),
+                        Arc::new(right_value.as_ref().clone().with_nullable(true)),
+                    ],
+                ]))
+            }
+            _ => plan_err!("{} expects map inputs and a lambda", self.name()),
+        }
     }
 
     fn return_field_from_args(&self, args: HigherOrderReturnFieldArgs) -> Result<FieldRef> {
-        let (left, right, lambda) = map_zip_args(self.name(), args.arg_fields)?;
+        let (left, right, lambda) = lazy_map_zip_args(self.name(), args.arg_fields)?;
         let (left_key, _, _) = map_fields(self.name(), left)?;
         let (right_key, _, _) = map_fields(self.name(), right)?;
         let key_type = common_map_key_type(
@@ -147,10 +193,21 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
     }
 
     fn invoke_with_args(&self, args: HigherOrderFunctionArgs) -> Result<ColumnarValue> {
-        let (left, right, lambda) = map_zip_args(self.name(), &args.args)?;
+        let (left, right, lambda) = lazy_map_zip_args(self.name(), &args.args)?;
         let left_array = left.to_array(args.number_rows)?;
-        let right_array = right.to_array(args.number_rows)?;
         let left_map = as_map_array(&left_array)?;
+        let active_rows = (0..left_map.len())
+            .filter(|row| left_map.nulls().is_none_or(|nulls| nulls.is_valid(*row)))
+            .map(|row| row as u64)
+            .collect::<Vec<_>>();
+        if active_rows.is_empty() {
+            return Ok(ColumnarValue::Array(new_null_array(
+                args.return_type(),
+                args.number_rows,
+            )));
+        }
+        let right_active = evaluate_lambda_rows(right, &active_rows)?;
+        let right_array = scatter_active_rows(right_active, &active_rows, left_array.len())?;
         let right_map = as_map_array(&right_array)?;
         let inputs = build_lambda_inputs(
             self.name(),
@@ -218,17 +275,17 @@ impl HigherOrderUDFImpl for SparkMapZipWith {
     }
 }
 
-fn map_zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
+fn lazy_map_zip_args<'a, V: std::fmt::Debug, L: std::fmt::Debug>(
     name: &str,
     args: &'a [ValueOrLambda<V, L>],
-) -> Result<(&'a V, &'a V, &'a L)> {
-    let [left, right, lambda] = args else {
-        return plan_err!("{name} expects two maps followed by a lambda");
-    };
-    let (ValueOrLambda::Value(left), ValueOrLambda::Value(right), ValueOrLambda::Lambda(lambda)) =
-        (left, right, lambda)
+) -> Result<(&'a V, &'a L, &'a L)> {
+    let [
+        ValueOrLambda::Value(left),
+        ValueOrLambda::Lambda(right),
+        ValueOrLambda::Lambda(lambda),
+    ] = args
     else {
-        return plan_err!("{name} expects two maps followed by a lambda");
+        return plan_err!("{name} expects a map followed by two lambdas");
     };
     Ok((left, right, lambda))
 }
@@ -363,14 +420,16 @@ fn build_lambda_inputs(
         let mut row_keys = Vec::new();
 
         for index in left_start..left_end {
-            let key = ScalarValue::try_from_array(left.keys(), index)?.compacted();
+            let key = cast_scalar(ScalarValue::try_from_array(left.keys(), index)?, &key_type)?
+                .compacted();
             if seen.insert(key.clone()) {
                 row_keys.push(key.clone());
                 left_by_key.insert(key, index);
             }
         }
         for index in right_start..right_end {
-            let key = ScalarValue::try_from_array(right.keys(), index)?.compacted();
+            let key = cast_scalar(ScalarValue::try_from_array(right.keys(), index)?, &key_type)?
+                .compacted();
             right_by_key.entry(key.clone()).or_insert(index);
             if seen.insert(key.clone()) {
                 row_keys.push(key);
@@ -514,7 +573,7 @@ mod tests {
         let sorted_map = Arc::new(Field::new("map", DataType::Map(entries, true), true));
         let fields = [
             ValueOrLambda::Value(Arc::clone(&sorted_map)),
-            ValueOrLambda::Value(Arc::clone(&sorted_map)),
+            ValueOrLambda::Lambda(Arc::clone(&sorted_map)),
             ValueOrLambda::Lambda(Arc::new(Field::new("", DataType::Int32, true))),
         ];
         let scalar_arguments = [None, None, None];
