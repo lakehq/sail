@@ -69,9 +69,8 @@ mod planning;
 pub(crate) use planning::IcebergScanPlan;
 
 fn iceberg_schema_evolution_adapter() -> Arc<dyn PhysicalExprAdapterFactory> {
-    Arc::new(SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
-        StructFieldMatching::FieldId,
-    ))
+    SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(StructFieldMatching::FieldId)
+        .shared()
 }
 
 /// A fixed Iceberg read snapshot and its scan refinements.

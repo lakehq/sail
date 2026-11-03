@@ -59,7 +59,6 @@ use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::functions::{
     UDFCoercionExt, fields_with_udf, value_fields_with_higher_order_udf_and_lambdas,
 };
-use datafusion_expr::type_coercion::other::get_coerce_type_for_case_expression;
 use datafusion_expr::type_coercion::{is_datetime, is_interval, is_signed_numeric, is_timestamp};
 use datafusion_expr::utils::merge_schema;
 // DataFusion's MERGE statement is coerced as in DataFusion, though Sail does not create it.
@@ -71,8 +70,8 @@ use datafusion_expr::{
 };
 use itertools::{Itertools as _, izip};
 use sail_common_datafusion::type_coercion::binary_type_coercion::{
-    BinaryTypeCoercer, comparison_coercion_with_session_timezone, like_coercion, regex_coercion,
-    type_union_coercion,
+    BinaryTypeCoercer, comparison_coercion_with_session_timezone, conditional_common_type,
+    like_coercion, regex_coercion, type_union_coercion,
 };
 use sail_common_datafusion::utils::datetime::arrow_timezone_label;
 use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
@@ -1454,6 +1453,22 @@ fn coerced_argument_types<F: UDFCoercionExt>(
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
+    // DataFusion's coalesce coercion preserves each struct argument's own child
+    // nullability. Its CASE rewrite requires exactly equal branch types instead.
+    if func.name() == "coalesce"
+        && current_fields
+            .iter()
+            .any(|field| field.data_type().is_nested())
+    {
+        let types = current_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        let common = conditional_common_type(&types)
+            .ok_or_else(|| plan_datafusion_err!("Cannot coerce coalesce arguments {types:?}"))?;
+        return Ok(vec![common; expressions.len()]);
+    }
+
     fields_with_udf(&current_fields, func).map(|fields| {
         fields
             .into_iter()
@@ -1567,22 +1582,26 @@ fn coerce_case_expression(
             })
         })
         .transpose()?;
-    let then_else_coerce_type =
-        get_coerce_type_for_case_expression(&then_types, else_type.as_ref()).ok_or_else(|| {
-            if let Some(else_type) = else_type {
-                plan_datafusion_err!(
-                    "Failed to coerce then ({}) and else ({else_type}) \
+    let result_types = then_types
+        .iter()
+        .chain(else_type.iter())
+        .cloned()
+        .collect::<Vec<_>>();
+    let then_else_coerce_type = conditional_common_type(&result_types).ok_or_else(|| {
+        if let Some(else_type) = else_type {
+            plan_datafusion_err!(
+                "Failed to coerce then ({}) and else ({else_type}) \
                          to common types in CASE WHEN expression",
-                    then_types.iter().join(", ")
-                )
-            } else {
-                plan_datafusion_err!(
-                    "Failed to coerce then ({}) and else (None) \
+                then_types.iter().join(", ")
+            )
+        } else {
+            plan_datafusion_err!(
+                "Failed to coerce then ({}) and else (None) \
                          to common types in CASE WHEN expression",
-                    then_types.iter().join(", ")
-                )
-            }
-        })?;
+                then_types.iter().join(", ")
+            )
+        }
+    })?;
 
     // do cast if found common coercible types
     let case_expr = case
@@ -2049,9 +2068,7 @@ mod test {
         Ok(())
     }
 
-    // TODO: Enable after DataFusion 56, which infers the type of a LIMIT parameter.
     #[test]
-    #[ignore]
     fn untyped_limit_parameter_remains_inferable_after_coercion() -> Result<()> {
         let plan = LogicalPlan::Limit(Limit {
             input: empty(),

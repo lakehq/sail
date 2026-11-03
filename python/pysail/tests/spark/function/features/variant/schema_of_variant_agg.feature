@@ -25,6 +25,56 @@ Feature: schema_of_variant_agg
         | result  |
         | VARIANT |
 
+  Rule: Numeric schema widening
+
+    Scenario Outline: schema_of_variant_agg widens numeric values: <case>
+      When query
+        """
+        SELECT schema_of_variant_agg(parse_json(v)) AS result
+        FROM VALUES <values> AS t(v)
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case                  | values                                                        | result         |
+        | decimal and exponent  | ('1.1'), ('1e0'), (CAST(NULL AS STRING))                      | DOUBLE         |
+        | normalized decimals   | ('1.01'), ('1.00')                                            | DECIMAL(3,2)   |
+        | integer and decimal   | ('null'), ('1'), ('1.0')                                      | DECIMAL(20,0)  |
+        | tiny and zero decimal | ('0.000000000000000001'), ('10.1000'), ('-0.0')               | DECIMAL(20,18) |
+        | precision overflow    | ('1.1'), ('11111111111111111111111111111111111111')           | DOUBLE         |
+
+    Scenario: schema_of_variant_agg merges cast decimal values
+      When query
+        """
+        SELECT schema_of_variant_agg(CAST(v AS VARIANT)) AS result
+        FROM VALUES (1.01), (1.00), (CAST(NULL AS DECIMAL(3,2))) AS t(v)
+        """
+      Then query result
+        | result       |
+        | DECIMAL(3,2) |
+
+    Scenario Outline: schema_of_variant_agg widens Variant numeric families: <case>
+      When query
+        """
+        SELECT schema_of_variant_agg(v) AS result FROM (
+          SELECT CAST(CAST(1 AS <left>) AS VARIANT) AS v
+          UNION ALL
+          SELECT CAST(CAST(1.1 AS <right>) AS VARIANT) AS v
+        )
+        """
+      Then query result
+        | result   |
+        | <result> |
+
+      Examples:
+        | case             | left         | right        | result |
+        | bigint and float | BIGINT       | FLOAT        | FLOAT  |
+        | float and double | FLOAT        | DOUBLE       | DOUBLE |
+        | float and decimal | FLOAT       | DECIMAL(2,1) | DOUBLE |
+        | double and decimal | DOUBLE     | DECIMAL(2,1) | DOUBLE |
+
   Rule: Object field merging
 
     Scenario: schema_of_variant_agg objects merge fields

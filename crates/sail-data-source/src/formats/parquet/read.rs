@@ -24,8 +24,9 @@ use sail_common_datafusion::scan::load_parquet_scan_metadata;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::listing::utils::{NanosecondTimestamps, try_merge_normalized};
+use crate::listing::utils::{NanosecondTimestamps, list_all_files, try_merge_normalized};
 use crate::options::r#gen::ParquetReadOptions;
+use crate::url::PathGlobFilter;
 
 #[derive(Debug, Clone)]
 pub struct ParquetReadFormat {
@@ -284,7 +285,7 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_groups(input.file_groups)
             .with_constraints(input.constraints)
             .with_statistics(input.statistics)
-            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
+            .with_expr_adapter(Some(SchemaEvolutionPhysicalExprAdapterFactory::shared()))
             .with_projection_indices(input.projection)?
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)
@@ -297,6 +298,48 @@ impl ReadFormat for ParquetReadFormat {
 
     fn requires_explicit_schema_validation(&self) -> bool {
         true
+    }
+
+    async fn infer_schemas_for_validation(
+        &self,
+        ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+        compression: CompressionTypeVariant,
+    ) -> Result<Vec<SchemaRef>> {
+        let path_glob_filter = self
+            .path_glob_filter()
+            .map(PathGlobFilter::parse)
+            .transpose()?;
+        let mut individual_files = vec![];
+        for group in files {
+            // Validation cannot use the inference sample: a later file could require
+            // a narrowing cast that the generic execution adapter would otherwise allow.
+            let objects = list_all_files(
+                group.url,
+                ctx,
+                group.store.as_ref(),
+                path_glob_filter.as_ref(),
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+            individual_files.extend(objects.into_iter().map(|object| ListingFileSample {
+                url: group.url,
+                store: Arc::clone(&group.store),
+                objects: vec![object],
+            }));
+        }
+        let concurrency: usize = ctx.config_options().execution.meta_fetch_concurrency.into();
+        futures::stream::iter(individual_files)
+            .map(|file: ListingFileSample<'_>| async move {
+                // Reuse the same footer, hint, and option handling as inference, but
+                // never merge independent files before checking the requested schema.
+                self.infer_schema(ctx, &[file], compression).await
+            })
+            .boxed() // Workaround for https://github.com/rust-lang/rust/issues/64552
+            .buffered(concurrency)
+            .try_collect()
+            .await
     }
 
     fn validate_explicit_schema(&self, schema: &Schema, physical: &Schema) -> Result<()> {

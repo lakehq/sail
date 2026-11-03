@@ -16,6 +16,7 @@ use crate::function::common::{FunctionContextInput, ScalarFunction, ScalarFuncti
 use crate::function::datetime_utils::{
     cast_to_session_timestamp, coerce_timestamp_ntz_values, is_timestamp_ntz_mix,
 };
+use crate::function::struct_utils::align_struct_names;
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
@@ -24,6 +25,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let mut conditions = Vec::new();
     let mut branch_values = Vec::new();
+    let mut has_else = false;
     let mut iter = arguments.into_iter();
     while let Some(condition) = iter.next() {
         match iter.next() {
@@ -32,13 +34,18 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
                 branch_values.push(result);
             }
             _ => {
-                conditions.push(lit(true));
+                has_else = true;
                 branch_values.push(condition);
                 break;
             }
         }
     }
-    let branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let mut branch_values = coerce_string_temporal_values(branch_values, &function_context)?;
+    let else_expr = if has_else {
+        branch_values.pop().map(Box::new)
+    } else {
+        None
+    };
     let when_then_expr = conditions
         .into_iter()
         .zip(branch_values)
@@ -47,7 +54,7 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::Case(expr::Case {
         expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
         when_then_expr,
-        else_expr: None,
+        else_expr,
     }))
 }
 
@@ -167,6 +174,11 @@ fn coerce_string_temporal_values(
     arguments: Vec<expr::Expr>,
     function_context: &FunctionContextInput<'_>,
 ) -> PlanResult<Vec<expr::Expr>> {
+    let arguments = align_struct_names(
+        arguments,
+        function_context.schema,
+        function_context.plan_config.case_sensitive,
+    )?;
     let data_types = arguments
         .iter()
         .map(|arg| arg.get_type(function_context.schema))

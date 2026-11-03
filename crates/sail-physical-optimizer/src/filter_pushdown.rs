@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use datafusion::common::tree_node::TreeNode;
 use datafusion::config::ConfigOptions;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::aggregates::AggregateExec;
 
 #[derive(Debug)]
 pub struct PostFilterPushdown;
@@ -17,23 +15,8 @@ impl PhysicalOptimizerRule for PostFilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut config = config.clone();
-        if plan.exists(|node| {
-            Ok(node
-                .downcast_ref::<AggregateExec>()
-                .is_some_and(|aggregate| {
-                    aggregate.aggr_expr().len() > 1
-                        && !aggregate.dynamic_expressions_produced().is_empty()
-                }))
-        })? {
-            // A NULL-only partition can reset DataFusion's shared MIN bound to NULL.
-            // Omitting that bound from a multi-aggregate filter can prune unread minima.
-            // TODO: When upgrading to DataFusion 56, verify whether this issue is fixed before
-            // removing the workaround: https://github.com/apache/datafusion/issues/25147
-            config.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
-        }
-        let plan = FilterPushdown::new_post_optimization().optimize(plan, &config)?;
-        crate::mixed_numeric::specialize(plan, &config)
+        let plan = FilterPushdown::new_post_optimization().optimize(plan, config)?;
+        crate::mixed_numeric::specialize(plan, config)
     }
 
     fn name(&self) -> &str {
@@ -54,7 +37,7 @@ mod tests {
     use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
     use datafusion::physical_expr::aggregate::AggregateExprBuilder;
     use datafusion::physical_expr::expressions::col;
-    use datafusion::physical_plan::aggregates::{AggregateMode, PhysicalGroupBy};
+    use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 
     use super::*;
 
@@ -90,9 +73,9 @@ mod tests {
     }
 
     #[test]
-    fn multi_aggregate_filters_are_not_pushed_down() -> Result<()> {
+    fn multi_aggregate_filters_remain_enabled() -> Result<()> {
         let plan = PostFilterPushdown.optimize(aggregate_plan(true)?, &ConfigOptions::default())?;
-        assert!(plan.dynamic_expressions_produced().is_empty());
+        assert_eq!(plan.dynamic_expressions_produced().len(), 1);
         Ok(())
     }
 

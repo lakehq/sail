@@ -410,6 +410,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn semantic_failure_preserves_cause_after_another_partition_emits() -> Result<()> {
+        use sail_python_udf::error::PyErrExtractor;
+
+        let expected = "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row";
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        for control_plane in [false, true] {
+            let (sender, receiver) = mpsc::channel(2);
+            let mut stream = JobOutputStream::new(receiver);
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::iter([Ok(batch.clone())])),
+                })
+                .ok()
+                .expect("output channel has capacity");
+            assert_eq!(stream.next().await.transpose()?, Some(batch.clone()));
+
+            let cause = CommonErrorCause::NonRetryableExecution(expected.into());
+            let failure = if control_plane {
+                JobOutputItem::Error { cause }
+            } else {
+                JobOutputItem::Stream {
+                    key: TaskStreamKey {
+                        partition: 1,
+                        ..stream_key()
+                    },
+                    stream: Box::pin(futures::stream::iter([Err(TaskStreamError::from(cause))])),
+                }
+            };
+            sender
+                .try_send(failure)
+                .ok()
+                .expect("output channel has capacity");
+            let (tx, mut rx) = mpsc::channel(2);
+            assert_eq!(
+                forward_job_output(stream, &tx).await,
+                JobOutputOutcome::Failed
+            );
+            drop(tx);
+            let error = rx
+                .recv()
+                .await
+                .expect("terminal error")
+                .expect_err("must fail");
+            assert!(matches!(
+                CommonErrorCause::new::<PyErrExtractor>(&error),
+                CommonErrorCause::NonRetryableExecution(x) if x == expected
+            ));
+            assert!(
+                rx.recv().await.is_none(),
+                "no batches may follow the failure"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn output_conflict_fails_running_and_draining_jobs() {
         for disconnected in [false, true] {
             for mut state in active_job_states() {

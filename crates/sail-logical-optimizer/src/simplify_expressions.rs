@@ -1,14 +1,14 @@
-use datafusion::optimizer::simplify_expressions::SimplifyExpressions as DataFusionSimplifyExpressions;
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, lit};
+use sail_common_datafusion::simplify_expressions::SimplifyExpressions as BaseSimplifyExpressions;
 
 /// Extend the existing simplification pass with exact numeric widening comparisons.
 #[derive(Debug, Default)]
-pub struct SimplifyExpressions(DataFusionSimplifyExpressions);
+pub struct SimplifyExpressions(BaseSimplifyExpressions);
 
 impl OptimizerRule for SimplifyExpressions {
     fn name(&self) -> &str {
@@ -169,6 +169,51 @@ mod tests {
     use datafusion_expr::{cast, col, try_cast};
 
     use super::*;
+
+    #[test]
+    fn default_rules_preserve_backslash_regex_and_safe_like_rewrites() -> Result<()> {
+        use datafusion::functions::expr_fn::concat;
+        use datafusion::optimizer::{Optimizer, OptimizerContext};
+        use datafusion_expr::logical_plan::table_scan;
+        use datafusion_expr::{LogicalPlanBuilder, binary_expr};
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Int64, false)]);
+        let scan = table_scan(Some("t"), &schema, None)?.build()?;
+        let value = |prefix| concat(vec![lit(prefix), cast(col("id"), DataType::Utf8)]);
+        let plan = LogicalPlanBuilder::from(scan)
+            .project(vec![
+                binary_expr(value(r"a\b"), Operator::RegexMatch, lit(r"a\\b")).alias("positive"),
+                binary_expr(value("ab"), Operator::RegexMatch, lit(r"a\\b")).alias("negative"),
+                binary_expr(value("abc"), Operator::RegexMatch, lit("bc")).alias("safe"),
+            ])?
+            .build()?;
+        let optimized = Optimizer::with_rules(crate::default_optimizer_rules()).optimize(
+            plan,
+            &OptimizerContext::new().with_skip_failing_rules(false),
+            |_, _| {},
+        )?;
+        println!(
+            "Backslash regex optimized plan:\n{}",
+            optimized.display_indent()
+        );
+        let LogicalPlan::Projection(projection) = optimized else {
+            return datafusion_common::internal_err!("expected projection");
+        };
+        for expr in &projection.expr[..2] {
+            assert!(
+                matches!(expr.clone().unalias(), Expr::BinaryExpr(b) if b.op == Operator::RegexMatch)
+            );
+        }
+        assert!(matches!(
+            projection.expr[2].clone().unalias(),
+            Expr::Like(_)
+        ));
+        assert_eq!(
+            projection.schema.field_names(),
+            vec!["positive", "negative", "safe"]
+        );
+        Ok(())
+    }
 
     fn schema(data_type: DataType) -> Result<DFSchema> {
         DFSchema::try_from(Schema::new(vec![Field::new("x", data_type, true)]))

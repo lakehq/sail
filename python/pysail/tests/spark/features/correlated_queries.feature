@@ -40,6 +40,39 @@ Feature: Correlated query results
       DROP VIEW IF EXISTS n
       """
 
+  Scenario: Left lateral count distinguishes empty input from rejected matches
+    When query
+      """
+      SELECT o.id, s.c FROM
+        (VALUES (0L), (1L), (2L), (CAST(NULL AS BIGINT))) o(id)
+      LEFT JOIN LATERAL
+        (SELECT count(1) AS c FROM (VALUES (0L), (0L), (2L), (CAST(NULL AS BIGINT))) i(id)
+         WHERE i.id = o.id) s ON s.c = 0
+      """
+    Then query result collected
+      | id   | c    |
+      | 0    | NULL |
+      | 1    | 0    |
+      | 2    | NULL |
+      | NULL | 0    |
+
+  Scenario: Non-deterministic lateral queries reject multirow outer relations
+    When query
+      """
+      SELECT * FROM t CROSS JOIN LATERAL (SELECT t.id + rand() AS x) s
+      """
+    Then query error NON_DETERMINISTIC_LATERAL_SUBQUERIES
+
+  Scenario: Non-deterministic lateral queries allow single-row outer relations
+    When query
+      """
+      SELECT x FROM (SELECT sum(id) AS x FROM t) o,
+        LATERAL (SELECT o.x + rand() AS y) s
+      """
+    Then query result collected
+      | x  |
+      | 28 |
+
   Scenario: Correlated struct fields resolve without case sensitivity
     Given config spark.sql.caseSensitive = false
     When query
@@ -189,6 +222,72 @@ Feature: Correlated query results
       | column | type    |
       | id     | bigint  |
       | b      | boolean |
+
+  Scenario: Projected tuple predicates retain nullable keys and duplicate rows
+    When query
+      """
+      WITH r AS (
+        SELECT * FROM VALUES (1, 10), (1, 10), (CAST(NULL AS INT), 20),
+                             (2, CAST(NULL AS INT)) r(k, v)
+      )
+      SELECT id,
+        (k, v) IN (SELECT k, v FROM r) AS included,
+        (k, v) NOT IN (SELECT k, v FROM r) AS excluded,
+        EXISTS (SELECT 1 FROM r WHERE r.k = o.k AND r.v = o.v) AS present,
+        NOT EXISTS (SELECT 1 FROM r WHERE r.k = o.k AND r.v = o.v) AS absent
+      FROM VALUES (0, CAST(NULL AS INT), CAST(NULL AS INT)),
+                  (1, CAST(NULL AS INT), 10), (2, 1, CAST(NULL AS INT)),
+                  (3, 1, 10), (4, 1, 20), (5, 2, 10), (6, 2, 20),
+                  (7, 3, 30), (8, 1, 10) o(id, k, v)
+      """
+    Then query result collected
+      | id | included | excluded | present | absent |
+      | 0  | false    | false    | false   | true   |
+      | 1  | false    | false    | false   | true   |
+      | 2  | false    | false    | false   | true   |
+      | 3  | true     | false    | true    | false  |
+      | 4  | false    | false    | false   | true   |
+      | 5  | false    | false    | false   | true   |
+      | 6  | false    | false    | false   | true   |
+      | 7  | false    | true     | false   | true   |
+      | 8  | true     | false    | true    | false  |
+    Then query column types
+      | column   | type    |
+      | id       | int     |
+      | included | boolean |
+      | excluded | boolean |
+      | present  | boolean |
+      | absent   | boolean |
+
+  Scenario Outline: Projected predicates over an empty relation retain null outer keys
+    When query
+      """
+      SELECT id,
+        <key> IN (SELECT <columns> FROM VALUES (1, 10) r(k, v) WHERE false) AS included,
+        <key> NOT IN (SELECT <columns> FROM VALUES (1, 10) r(k, v) WHERE false) AS excluded,
+        EXISTS (SELECT 1 FROM VALUES (1, 10) r(k, v) WHERE r.k = o.k AND false) AS present,
+        NOT EXISTS (SELECT 1 FROM VALUES (1, 10) r(k, v) WHERE r.k = o.k AND false) AS absent
+      FROM VALUES (0, CAST(NULL AS INT), CAST(NULL AS INT)),
+                  (1, 1, CAST(NULL AS INT)), (2, CAST(NULL AS INT), 10), (3, 1, 10) o(id, k, v)
+      """
+    Then query result collected
+      | id | included | excluded | present | absent |
+      | 0  | false    | true     | false   | true   |
+      | 1  | false    | true     | false   | true   |
+      | 2  | false    | true     | false   | true   |
+      | 3  | false    | true     | false   | true   |
+    Then query column types
+      | column   | type    |
+      | id       | int     |
+      | included | boolean |
+      | excluded | boolean |
+      | present  | boolean |
+      | absent   | boolean |
+
+    Examples:
+      | key    | columns |
+      | k      | k       |
+      | (k, v) | k, v    |
 
   Scenario: A scalar subquery applies an ordered limit for each outer key
     When query

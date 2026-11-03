@@ -62,37 +62,36 @@ impl PlanResolver<'_> {
         timestamp_type: spec::TimestampType,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let (datetime, timezone) = parse_timestamp(&value).and_then(|x| x.into_naive())?;
-        let timezone = if timezone.is_empty() {
+        let timestamp = parse_timestamp(&value)?;
+        let timezone = if timestamp.timezone.is_empty() {
             None
         } else {
-            Some(timezone.parse::<Tz>()?)
+            Some(timestamp.timezone.parse::<Tz>()?)
         };
-        let (datetime, timestamp_type) = match (timestamp_type, timezone, self.config.default_timestamp_type) {
+        let (microseconds, timestamp_type) = match (timestamp_type, timezone, self.config.default_timestamp_type) {
             (spec::TimestampType::Configured, None, DefaultTimestampType::TimestampLtz)
             | (spec::TimestampType::WithLocalTimeZone, None, _) => {
                 let tz = Tz::from_str(&self.config.session_timezone)?;
+                let (datetime, _) = timestamp.into_naive()?;
                 let datetime = localize_with_fallback(&tz, &datetime)?;
-                (datetime, spec::TimestampType::WithLocalTimeZone)
+                (datetime.timestamp_micros(), spec::TimestampType::WithLocalTimeZone)
             }
             (spec::TimestampType::Configured, Some(tz), _)
             | (spec::TimestampType::WithLocalTimeZone, Some(tz), _) => {
+                let (datetime, _) = timestamp.into_naive()?;
                 let datetime = localize_with_fallback(&tz, &datetime)?;
-                (datetime, spec::TimestampType::WithLocalTimeZone)
+                (datetime.timestamp_micros(), spec::TimestampType::WithLocalTimeZone)
             }
             (spec::TimestampType::Configured, None, DefaultTimestampType::TimestampNtz)
             // If the timestamp type is explicitly `TIMESTAMP_NTZ`, the time zone in the literal
             // is simply ignored.
             | (spec::TimestampType::WithoutTimeZone, _, _) => {
-                (datetime.and_utc(), spec::TimestampType::WithoutTimeZone)
+                let (microseconds, _) = timestamp.into_naive_micros()?;
+                (microseconds, spec::TimestampType::WithoutTimeZone)
             }
         };
-        // Convert to microseconds.
-        // The parser accepts up to 9 digits (nanoseconds) for compatibility with Spark SQL syntax,
-        // but Spark stores timestamps with microsecond precision (6 digits).
-        // Nanoseconds beyond microsecond precision are truncated to match Spark behavior.
         let literal = spec::Literal::TimestampMicrosecond {
-            microseconds: Some(datetime.timestamp_micros()),
+            microseconds: Some(microseconds),
             timestamp_type,
         };
         self.resolve_expression_literal(literal, state)

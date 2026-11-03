@@ -1350,6 +1350,68 @@ mod tests {
     }
 
     #[test]
+    fn semantic_failure_stops_region_after_another_partition_succeeds()
+    -> crate::error::ExecutionResult<()> {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::datasource::memory::MemorySourceConfig;
+        use datafusion::execution::TaskContext;
+        use sail_common_datafusion::error::CommonErrorCause;
+
+        use super::{
+            JobDescriptor, JobScheduler, JobState, TaskAttemptDescriptor, TaskRegionState,
+            TaskState,
+        };
+        use crate::job_graph::{JobGraph, JobGraphOptions};
+        use crate::shuffle::{ShuffleBackendKind, ShuffleCompression};
+
+        let graph = JobGraph::try_new(
+            MemorySourceConfig::try_new_exec(&[vec![], vec![]], Arc::new(Schema::empty()), None)?,
+            JobGraphOptions {
+                shuffle_backend: ShuffleBackendKind::Flight {
+                    compression: ShuffleCompression::None,
+                    connection_count: std::num::NonZeroUsize::MIN,
+                    initial_stream_window_size: None,
+                    initial_connection_window_size: None,
+                },
+            },
+        )?;
+        let mut job =
+            JobDescriptor::try_new(graph, JobState::Draining, Arc::new(TaskContext::default()))?;
+        let expected = "SCALAR_SUBQUERY_TOO_MANY_ROWS: scalar subquery returned more than one row";
+        job.stages[0].tasks[0].attempts.push(TaskAttemptDescriptor {
+            state: TaskState::Failed,
+            messages: vec![],
+            cause: Some(CommonErrorCause::NonRetryableExecution(expected.into())),
+            job_output_fetched: true,
+        });
+        job.stages[0].tasks[1].attempts.push(TaskAttemptDescriptor {
+            state: TaskState::Succeeded,
+            messages: vec![],
+            cause: None,
+            job_output_fetched: true,
+        });
+        JobScheduler::update_task_regions(&mut job, 4);
+        assert!(
+            job.regions
+                .iter()
+                .any(|region| matches!(region.state, TaskRegionState::Failed))
+        );
+        assert!(matches!(
+            JobScheduler::infer_job_failure_cause(&job),
+            CommonErrorCause::NonRetryableExecution(x) if x == expected
+        ));
+        assert!(
+            job.stages[0]
+                .tasks
+                .iter()
+                .all(|task| task.attempts.len() == 1)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn forward_routing_uses_only_assigned_consumers_and_refreshes_producer_attempts()
     -> crate::error::ExecutionResult<()> {
         use std::collections::HashMap;

@@ -5,15 +5,19 @@ use std::sync::Arc;
 use datafusion::functions::core::expr_fn::coalesce;
 use datafusion::functions_aggregate::expr_fn::count;
 use datafusion::functions_nested::expr_fn::{array_element, make_array};
-use datafusion::optimizer::decorrelate::PullUpCorrelatedExpr;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{Column, Result, not_impl_err, plan_datafusion_err};
+use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::{conjunction, split_conjunction};
-use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder, expr_fn, ident, lit};
+use datafusion_expr::{
+    Expr, ExprSchemable, JoinType, LogicalPlan, LogicalPlanBuilder, expr_fn, ident, lit,
+};
+use sail_common_datafusion::decorrelate::PullUpCorrelatedExpr;
 use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+use sail_function::scalar::misc::in_subquery_nullable::InSubqueryNullable;
 
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
@@ -44,6 +48,9 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                     "IN subquery must return exactly one column"
                 ));
             }
+            let nullable = query.expr.nullable(self.plan.schema().as_ref())?
+                || inner.schema().field(0).is_nullable();
+            let preserve = |expr| InSubqueryNullable::wrap(expr, nullable);
             let column = inner
                 .schema()
                 .columns()
@@ -65,21 +72,21 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                     .alias(alias.clone())?
                     .build()?;
                 let result = self.mark_join(inner, predicate, alias)?;
-                return Ok(Transformed::yes(if query.negated {
+                return Ok(Transformed::yes(preserve(if query.negated {
                     !result
                 } else {
                     result
-                }));
+                })));
             }
             if Self::scalar_aggregate_has_filter(&inner) == Some(false) {
                 // A global aggregate produces exactly one row even when its
                 // correlated input is empty. Let scalar decorrelation preserve
                 // that row before applying the membership comparison.
                 let equal = (*query.expr).eq(expr_fn::scalar_subquery(inner));
-                return Ok(Transformed::yes(coalesce(vec![
+                return Ok(Transformed::yes(preserve(coalesce(vec![
                     if query.negated { !equal } else { equal },
                     lit(false),
-                ])));
+                ]))));
             }
             if Self::scalar_aggregate_has_filter(&inner) == Some(true) {
                 // A scalar subquery uses NULL both for a missing row and for
@@ -107,11 +114,11 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
                 let packed = ident(field);
                 let value = array_element(packed.clone(), lit(1_i64));
                 let equal = (*query.expr).eq(value);
-                return Ok(Transformed::yes(
+                return Ok(Transformed::yes(preserve(
                     datafusion_expr::when(packed.is_null(), lit(query.negated)).otherwise(
                         coalesce(vec![if query.negated { !equal } else { equal }, lit(false)]),
                     )?,
-                ));
+                )));
             }
             let outer = query
                 .expr
@@ -137,11 +144,11 @@ impl TreeNodeRewriter for ExistsRewriter<'_> {
             };
             let result = self
                 .correlated_exists(LogicalPlanBuilder::from(inner).filter(predicate)?.build()?)?;
-            return Ok(Transformed::yes(if query.negated {
+            return Ok(Transformed::yes(preserve(if query.negated {
                 !result
             } else {
                 result
-            }));
+            })));
         }
         let Expr::Exists(exists) = expr else {
             return Ok(Transformed::no(expr));
@@ -270,6 +277,8 @@ impl ExistsRewriter<'_> {
         let query = LogicalPlanBuilder::from(query)
             .alias(alias.clone())?
             .build()?;
+        // Qualify inner columns first so identical outer names retain their scope.
+        let predicate = strip_outer_reference(predicate);
         self.mark_join(query, predicate, alias)
     }
 
@@ -341,5 +350,159 @@ impl ExistsRewriter<'_> {
             LogicalPlan::Aggregate(aggregate) => aggregate.group_expr.is_empty().then_some(false),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::DFSchema;
+    use datafusion_common::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::{EmptyRelation, col, out_ref_col};
+
+    use super::*;
+
+    fn input(alias: &str) -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("k", DataType::Int64, true),
+            Field::new("v", DataType::Int64, true),
+        ]);
+        Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(DFSchema::try_from_qualified_schema(alias, &schema)?),
+        }))
+    }
+
+    #[test]
+    fn scalar_in_preserves_source_nullability_without_changing_marks() -> Result<()> {
+        for left_nullable in [false, true] {
+            for right_nullable in [false, true] {
+                for negated in [false, true] {
+                    for correlated in [false, true] {
+                        let relation = |alias: &str, nullable| -> Result<LogicalPlan> {
+                            let schema = Schema::new(vec![
+                                Field::new("k", DataType::Int64, nullable),
+                                // An unrelated correlation key must not make IN nullable.
+                                Field::new("v", DataType::Int64, true),
+                            ]);
+                            Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                                produce_one_row: false,
+                                schema: Arc::new(DFSchema::try_from_qualified_schema(
+                                    alias, &schema,
+                                )?),
+                            }))
+                        };
+                        let outer = relation("o", left_nullable)?;
+                        let mut inner = LogicalPlanBuilder::from(relation("r", right_nullable)?);
+                        if correlated {
+                            inner =
+                                inner.filter(col("r.v").gt(out_ref_col(DataType::Int64, "o.v")))?;
+                        }
+                        let inner = Arc::new(inner.project(vec![col("r.k")])?.build()?);
+                        let expr = if negated {
+                            expr_fn::not_in_subquery(col("o.k"), inner)
+                        } else {
+                            expr_fn::in_subquery(col("o.k"), inner)
+                        };
+                        let mut state = PlanResolverState::new();
+                        let mut rewriter = ExistsRewriter::new_from_plan(outer.clone(), &mut state);
+                        let result = expr.rewrite(&mut rewriter)?.data;
+                        let plan = rewriter.into_plan();
+                        assert_eq!(
+                            result.nullable(plan.schema().as_ref())?,
+                            left_nullable || right_nullable
+                        );
+                        assert!(
+                            result
+                                .to_field(plan.schema().as_ref())?
+                                .1
+                                .metadata()
+                                .is_empty()
+                        );
+                        let value = if left_nullable || right_nullable {
+                            let Expr::ScalarFunction(function) = result else {
+                                panic!("nullable IN must retain its typed annotation");
+                            };
+                            assert!(function.func.inner().is::<InSubqueryNullable>());
+                            assert_eq!(function.args.len(), 1);
+                            function.args[0].clone()
+                        } else {
+                            result
+                        };
+                        let LogicalPlan::Join(join) = &plan else {
+                            panic!("expected a single membership mark join");
+                        };
+                        assert_eq!(join.join_type, JoinType::LeftMark);
+                        assert_eq!(join.left.as_ref(), &outer);
+                        let LogicalPlan::SubqueryAlias(inner) = join.right.as_ref() else {
+                            panic!("expected requalified RHS");
+                        };
+                        let mark = coalesce(vec![
+                            Expr::Column(Column::new(Some(inner.alias.clone()), "mark")),
+                            lit(false),
+                        ]);
+                        assert_eq!(value, if negated { !mark } else { mark });
+                        assert!(plan.all_out_ref_exprs().is_empty());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn correlated_mark_join_preserves_column_scopes_without_outer_references() -> Result<()> {
+        // Also cover identical qualified names in distinct scopes, as in
+        // DataFusion's decorrelate::tests::test_build_join_filter.
+        for outer_alias in ["o", "t"] {
+            for null_aware in [false, true] {
+                let outer = input(outer_alias)?;
+                let comparison = |inner, outer| {
+                    let equal = Expr::eq(inner, outer);
+                    if null_aware {
+                        equal.clone().or(equal.is_null())
+                    } else {
+                        equal
+                    }
+                };
+                let predicates = ["k", "v"].map(|name| {
+                    comparison(
+                        col(format!("t.{name}")),
+                        out_ref_col(DataType::Int64, format!("{outer_alias}.{name}")),
+                    )
+                });
+                let predicate = predicates[0]
+                    .clone()
+                    .and(predicates[1].clone())
+                    .and(out_ref_col(DataType::Int64, format!("{outer_alias}.k")).gt(lit(0_i64)));
+                let query = LogicalPlanBuilder::from(input("t")?)
+                    .filter(predicate)?
+                    .build()?;
+                let mut state = PlanResolverState::new();
+                let mut rewriter = ExistsRewriter::new_from_plan(outer.clone(), &mut state);
+                let result = rewriter.correlated_exists(query)?;
+                let plan = rewriter.into_plan();
+                assert!(plan.all_out_ref_exprs().is_empty());
+                let LogicalPlan::Join(join) = plan else {
+                    panic!("expected mark join")
+                };
+                assert_eq!(join.join_type, JoinType::LeftMark);
+                assert_eq!(join.left.as_ref(), &outer);
+                assert!(join.on.is_empty());
+                let LogicalPlan::SubqueryAlias(inner) = join.right.as_ref() else {
+                    panic!("expected requalified inner input")
+                };
+                let inner_column =
+                    |name| Expr::Column(Column::new(Some(inner.alias.clone()), name));
+                let expected = comparison(inner_column("k"), col(format!("{outer_alias}.k")))
+                    .and(comparison(
+                        inner_column("v"),
+                        col(format!("{outer_alias}.v")),
+                    ))
+                    .and(col(format!("{outer_alias}.k")).gt(lit(0_i64)));
+                assert_eq!(join.filter, Some(expected));
+                assert_eq!(result, coalesce(vec![inner_column("mark"), lit(false)]));
+            }
+        }
+        Ok(())
     }
 }

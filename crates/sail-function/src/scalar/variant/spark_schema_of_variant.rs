@@ -165,8 +165,33 @@ pub(crate) fn merge_variant_types(left: InferredType, right: InferredType) -> In
 struct VariantTypeMerger;
 
 impl TypeMerger for VariantTypeMerger {
-    fn merge_atomic(&self, _left: InferredType, _right: InferredType) -> InferredType {
-        InferredType::Variant
+    fn merge_atomic(&self, left: InferredType, right: InferredType) -> InferredType {
+        use InferredType::*;
+
+        // Spark SchemaOfVariant uses JsonInferSchema.compatibleType, not the
+        // string-promoting policy used by ordinary format schema inference.
+        match (left, right) {
+            (Long, Float) | (Float, Long) => Float,
+            (Double, Long | Float | Decimal(_, _))
+            | (Long | Float | Decimal(_, _), Double)
+            | (Float, Decimal(_, _))
+            | (Decimal(_, _), Float) => Double,
+            // Every Variant integer is inferred as BIGINT. Spark reserves 20
+            // integral digits when combining BIGINT with a decimal schema.
+            (Long, decimal @ Decimal(_, _)) | (decimal @ Decimal(_, _), Long) => {
+                self.merge_atomic(Decimal(20, 0), decimal)
+            }
+            (Decimal(p1, s1), Decimal(p2, s2)) => {
+                let scale = s1.max(s2);
+                let precision = (p1 - s1).max(p2 - s2) + scale;
+                if precision > 38 {
+                    Double
+                } else {
+                    Decimal(precision, scale)
+                }
+            }
+            _ => Variant,
+        }
     }
 }
 
@@ -271,8 +296,13 @@ fn split_top_level(s: &str) -> Vec<&str> {
     fields
 }
 
-/// Compute the decimal precision from the integer value and scale.
-fn decimal_type(integer: i128, scale: u8) -> InferredType {
+/// Spark infers decimals from their value after removing fractional trailing
+/// zeros, even when their Variant encoding retains the original scale.
+fn decimal_type(mut integer: i128, mut scale: u8) -> InferredType {
+    while scale > 0 && integer % 10 == 0 {
+        integer /= 10;
+        scale -= 1;
+    }
     let abs = integer.unsigned_abs();
     let int_digits = if abs == 0 {
         1u8
@@ -288,4 +318,126 @@ fn decimal_type(integer: i128, scale: u8) -> InferredType {
     };
     let precision = int_digits.max(scale);
     InferredType::Decimal(precision, scale)
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{Decimal128Array, ListArray, StringViewArray};
+    use arrow::buffer::OffsetBuffer;
+    use arrow_schema::Field;
+    use parquet_variant::{VariantDecimal4, VariantDecimal8, VariantDecimal16};
+    use parquet_variant_compute::cast_to_variant;
+
+    use super::*;
+    use crate::scalar::variant::spark_parse_json::from_utf8view_arr;
+
+    #[test]
+    fn test_variant_numeric_common_types() {
+        use InferredType::*;
+
+        // Spark JsonInferSchema.compatibleType, including DecimalType.LongDecimal.
+        for (left, right, expected) in [
+            (Long, Float, Float),
+            (Long, Double, Double),
+            (Float, Double, Double),
+            (Decimal(2, 1), Double, Double),
+            (Decimal(2, 1), Float, Double),
+            (Decimal(3, 2), Decimal(1, 0), Decimal(3, 2)),
+            (Decimal(18, 18), Decimal(3, 1), Decimal(20, 18)),
+            (Long, Decimal(1, 0), Decimal(20, 0)),
+            (Long, Decimal(38, 0), Decimal(38, 0)),
+            (Long, Decimal(18, 18), Decimal(38, 18)),
+            (Long, Decimal(19, 19), Double),
+            (Decimal(38, 0), Decimal(2, 1), Double),
+            (Decimal(38, 38), Decimal(1, 0), Double),
+            (Decimal(38, 38), Decimal(37, 37), Decimal(38, 38)),
+            (Null, Decimal(3, 2), Decimal(3, 2)),
+            (Long, String, Variant),
+            (Boolean, Decimal(2, 1), Variant),
+            (Variant, Double, Variant),
+        ] {
+            assert_eq!(merge_variant_types(left.clone(), right.clone()), expected);
+            assert_eq!(merge_variant_types(right, left), expected);
+        }
+    }
+
+    #[test]
+    fn test_parsed_numeric_schemas_merge_recursively() -> Result<()> {
+        let cases = [
+            ("[1.1,1e0]", "ARRAY<DOUBLE>"),
+            ("[1.01,1.00]", "ARRAY<DECIMAL(3,2)>"),
+            ("[null,1,1.0]", "ARRAY<DECIMAL(20,0)>"),
+            (
+                "[0.000000000000000001,10.1000,-0.0]",
+                "ARRAY<DECIMAL(20,18)>",
+            ),
+            (
+                "[1.1,11111111111111111111111111111111111111]",
+                "ARRAY<DOUBLE>",
+            ),
+            (
+                r#"[{"a":[1.01],"b":null},{"a":[1.00],"b":1e0}]"#,
+                "ARRAY<OBJECT<a: ARRAY<DECIMAL(3,2)>, b: DOUBLE>>",
+            ),
+            ("[1.1,true]", "ARRAY<VARIANT>"),
+        ];
+        let input: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+            cases.iter().map(|(json, _)| *json),
+        ));
+        for safe in [false, true] {
+            let output = from_utf8view_arr(&input, safe)?;
+            let variants = VariantArray::try_new(output.as_ref())?;
+            for (index, (json, expected)) in cases.iter().enumerate() {
+                assert_eq!(
+                    variant_to_spark_type(&variants.value(index)),
+                    *expected,
+                    "{json}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_array_cast_schema_merges_normalized_elements() -> Result<()> {
+        let decimals = Decimal128Array::from(vec![101, 100]).with_precision_and_scale(3, 2)?;
+        let list = ListArray::new(
+            Arc::new(Field::new("item", DataType::Decimal128(3, 2), true)),
+            OffsetBuffer::new(vec![0, 2].into()),
+            Arc::new(decimals),
+            None,
+        );
+        let variants = cast_to_variant(&list)?;
+        assert_eq!(
+            variant_to_spark_type(&variants.value(0)),
+            "ARRAY<DECIMAL(3,2)>"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_schema_normalizes_all_storage_widths() -> Result<()> {
+        for (value, expected) in [
+            (VariantDecimal4::try_new(0, 9)?.into(), "DECIMAL(1,0)"),
+            (VariantDecimal4::try_new(101000, 4)?.into(), "DECIMAL(3,1)"),
+            (
+                VariantDecimal8::try_new(-10000000, 4)?.into(),
+                "DECIMAL(4,0)",
+            ),
+            (VariantDecimal8::try_new(1, 18)?.into(), "DECIMAL(18,18)"),
+            (VariantDecimal16::try_new(0, 38)?.into(), "DECIMAL(1,0)"),
+            (
+                VariantDecimal16::try_new(10_i128.pow(37), 37)?.into(),
+                "DECIMAL(1,0)",
+            ),
+            (
+                VariantDecimal16::try_new(10_i128.pow(37), 0)?.into(),
+                "DECIMAL(38,0)",
+            ),
+            (VariantDecimal16::try_new(1, 38)?.into(), "DECIMAL(38,38)"),
+        ] {
+            assert_eq!(variant_to_spark_type(&value), expected);
+        }
+        Ok(())
+    }
 }

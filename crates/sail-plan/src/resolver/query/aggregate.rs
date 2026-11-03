@@ -54,11 +54,9 @@ struct AggregateProjections {
 /// A map from a grouping expression to the column that materializes it.
 type GroupingReplacements = Vec<(Expr, Expr)>;
 
-/// Returns the name of a volatile (non-deterministic) scalar expression found
-/// in an aggregate context. Catches two Spark CheckAnalysis violations:
-/// 1. Volatile scalar UDF used directly in aggregate projections (outside any aggregate fn)
-/// 2. Volatile scalar UDF nested inside aggregate function arguments
-fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
+/// Find volatile scalar calls in an aggregate function's inputs, including
+/// filters and ordering. Output expressions are evaluated after aggregation.
+fn find_volatile_aggregate_input(expr: &Expr) -> Option<String> {
     let mut found_name: Option<String> = None;
     let _ = expr.apply(|e| {
         if let Expr::ScalarFunction(f) = e
@@ -74,6 +72,83 @@ fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
         Ok(TreeNodeRecursion::Continue)
     });
     found_name
+}
+
+#[cfg(test)]
+mod volatility_tests {
+    use datafusion::functions::math::expr_fn::random;
+    use datafusion::functions_aggregate::expr_fn::{count, sum};
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::Result;
+    use datafusion_expr::utils::find_aggregate_exprs;
+    use datafusion_expr::{ExprFunctionExt, ScalarUDF, col, lit};
+
+    use super::*;
+    use crate::config::PlanConfig;
+
+    #[test]
+    fn volatile_output_stays_above_aggregate() -> PlanResult<()> {
+        let context = SessionContext::new();
+        let resolver = PlanResolver::new(&context, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let id = state.register_field_name("id");
+        let input = LogicalPlanBuilder::values(vec![vec![lit(1_i64)], vec![lit(2_i64)]])?
+            .project(vec![col("column1").alias(&id)])?
+            .build()?;
+        let plan = resolver.rewrite_aggregate(
+            input.clone(),
+            vec![NamedExpr::new(vec!["c".into()], count(lit(1)) + random())],
+            vec![NamedExpr::new(vec!["id".into()], col(id))],
+            None,
+            false,
+            &mut state,
+        )?;
+        let LogicalPlan::Projection(projection) = plan else {
+            return Err(PlanError::internal("expected output projection"));
+        };
+        assert!(projection.expr.iter().any(Expr::is_volatile));
+        assert!(find_aggregate_exprs(&projection.expr).is_empty());
+        let LogicalPlan::Aggregate(aggregate) = projection.input.as_ref() else {
+            return Err(PlanError::internal(
+                "expected aggregate below volatile output",
+            ));
+        };
+        assert_eq!(aggregate.aggr_expr, vec![count(lit(1))]);
+        assert_eq!(aggregate.input.as_ref(), &input);
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_cardinality_assertion_is_not_nondeterminism() {
+        let assertion = ScalarUDF::from(ScalarSubqueryResult::new()).call(vec![lit(1)]);
+        assert!(find_volatile_aggregate_input(&sum(assertion.clone())).is_none());
+        assert!(find_volatile_aggregate_input(&sum(assertion + random())).is_some());
+    }
+
+    #[test]
+    fn output_volatility_is_not_an_aggregate_input() {
+        let aggregates = find_aggregate_exprs(&[count(lit(1)) + random()]);
+        assert_eq!(aggregates.len(), 1);
+        assert!(find_volatile_aggregate_input(&aggregates[0]).is_none());
+    }
+
+    #[test]
+    fn aggregate_arguments_filters_and_ordering_reject_volatility() -> Result<()> {
+        let expressions: Vec<Expr> = vec![
+            sum(random()),
+            count(lit(1)).filter(random().gt(lit(0.5))).build()?,
+            sum(lit(1))
+                .order_by(vec![random().sort(true, true)])
+                .build()?,
+        ];
+        for expr in expressions {
+            assert_eq!(
+                find_volatile_aggregate_input(&expr).as_deref(),
+                Some("random")
+            );
+        }
+        Ok(())
+    }
 }
 
 impl PlanResolver<'_> {
@@ -240,15 +315,6 @@ impl PlanResolver<'_> {
         let having = having
             .map(|expr| Self::replace_grouping_expressions(expr, &replacements))
             .transpose()?;
-
-        // Grouping keys now reference input columns; other volatile calls remain invalid.
-        for proj in &projections {
-            if let Some(name) = find_volatile_in_aggregate_context(&proj.expr) {
-                return Err(PlanError::AnalysisError(format!(
-                    "Non-deterministic expression {name} should not appear in an aggregate query",
-                )));
-            }
-        }
 
         self.rewrite_prepared_aggregate(
             input,
@@ -506,6 +572,13 @@ impl PlanResolver<'_> {
             aggregate_candidates.push(having.clone());
         }
         let aggregate_exprs = find_aggregate_exprs(&aggregate_candidates);
+        for aggregate in &aggregate_exprs {
+            if let Some(name) = find_volatile_aggregate_input(aggregate) {
+                return Err(PlanError::analysis(format!(
+                    "Non-deterministic expression {name} should not appear in the arguments of an aggregate function",
+                )));
+            }
+        }
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;

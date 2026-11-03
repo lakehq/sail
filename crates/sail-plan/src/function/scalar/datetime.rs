@@ -1121,8 +1121,15 @@ fn make_timestamp(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> 
     }
 }
 
-fn date_part(part: Expr, date: Expr) -> Expr {
-    ScalarUDF::from(SparkDatePart::new()).call(vec![part, date])
+fn date_part(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (part, date) = input.arguments.two()?;
+    // Spark reads LTZ fields in the session zone, not the source's Arrow label. NTZ is unchanged.
+    let date = with_session_timezone_label(
+        date,
+        input.function_context.schema,
+        &input.function_context.plan_config.session_timezone_label(),
+    )?;
+    Ok(ScalarUDF::from(SparkDatePart::new()).call(vec![part, date]))
 }
 
 fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -1441,7 +1448,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("date_from_unix_date", F::cast(DataType::Date32)),
-        ("date_part", F::binary(date_part)),
+        ("date_part", F::custom(date_part)),
         (
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
@@ -1449,7 +1456,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("date_trunc", F::custom(date_trunc)),
         ("dateadd", F::custom(|input| dateadd(input, "dateadd"))),
         ("datediff", F::custom(datediff)),
-        ("datepart", F::binary(date_part)),
+        ("datepart", F::custom(date_part)),
         ("day", F::unary(|arg| integer_part(arg, "DAY"))),
         ("dayname", F::custom(|input| date_to_char(input, "%a"))),
         ("dayofmonth", F::unary(|arg| integer_part(arg, "DAY"))),
@@ -1458,7 +1465,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::unary(|arg| integer_part(arg, "DOW") + lit(1)),
         ),
         ("dayofyear", F::unary(|arg| integer_part(arg, "DOY"))),
-        ("extract", F::binary(date_part)),
+        ("extract", F::custom(date_part)),
         ("from_unixtime", F::custom(from_unixtime)),
         ("from_utc_timestamp", F::custom(from_utc_timestamp)),
         ("hour", F::unary(|arg| integer_part(arg, "HOUR"))),

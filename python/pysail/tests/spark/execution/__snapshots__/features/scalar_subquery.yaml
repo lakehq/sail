@@ -182,6 +182,9 @@ data:
                     Projection: column1 AS #4, column2 AS #5
                       Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -316,6 +319,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -406,6 +412,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -494,6 +503,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -852,6 +864,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -965,6 +980,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1015,7 +1033,7 @@ data:
     initial_physical_plan_with_stats:
     SortExec: expr=[#9@0 ASC, #10@1 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
-        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]:)]]
+        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]: Null=Inexact(0))]]
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
@@ -1053,6 +1071,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -1424,6 +1445,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1537,6 +1561,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -1587,7 +1614,7 @@ data:
     initial_physical_plan_with_stats:
     SortExec: expr=[#9@0 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
       ProjectionExec: expr=[#2@0 as #9, #3@1 as #10, #8@2 as #11], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
-        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]:)]]
+        HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]: Null=Inexact(0))]]
           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[max(inner_t.#7)@1 as #8, #6@0 as #6], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
@@ -1625,6 +1652,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -2071,6 +2101,9 @@ data:
                     Projection: column1 AS #4, column2 AS #5
                       Values: (Int32(1), Int32(4)), (Int32(1), Int32(2)), (Int32(2), Int32(3)), (Int32(2), Int32(1))
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -2230,6 +2263,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -2318,6 +2354,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_aggregate_distinct:
     SAME TEXT AS ABOVE
 
     logical_plan after single_distinct_aggregation_to_group_by:
@@ -2438,6 +2477,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -2882,6 +2924,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3008,6 +3053,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3071,7 +3119,7 @@ data:
     ScalarSubqueryExec: subqueries=1, statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
       SortExec: expr=[#12@0 ASC, #13@1 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
         ProjectionExec: expr=[#2@0 as #12, #3@1 as #13, #11@2 as #14], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:)]]
-          HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]:)]]
+          HashJoinExec: mode=Auto, join_type=Left, on=[(#2@0, #6@1)], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]:),(Col[3]: Null=Inexact(0))]]
             ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
               DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
             ProjectionExec: expr=[max(inner_t.#7)@1 + scalar_subquery(<pending>) as #11, #6@0 as #6], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
@@ -3126,6 +3174,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -3520,6 +3571,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3619,6 +3673,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -3675,9 +3732,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64]
-      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64]
-        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64]
+    ScalarSubqueryExec: subqueries=1, schema=[#3:Int64, #4:Int64;N]
+      SortExec: expr=[#3@0 ASC], preserve_partitioning=[false], schema=[#3:Int64, #4:Int64;N]
+        ProjectionExec: expr=[#0@0 as #3, #0@0 + scalar_subquery(<pending>) as #4], schema=[#3:Int64, #4:Int64;N]
           ProjectionExec: expr=[id@0 as #0], schema=[#0:Int64]
             RangeExec: start=1, end=3, step=1, num_partitions=1, projection=[0], schema=[id:Int64]
       ProjectionExec: expr=[#1@0 as #2], schema=[#2:Int64]
@@ -3698,6 +3755,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -3981,6 +4041,9 @@ data:
             Projection: column1 AS #0
               Values: (Int32(1)), (Int32(2))
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4081,6 +4144,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4140,9 +4206,9 @@ data:
 
 
     initial_physical_plan_with_schema:
-    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64]
-      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64]
-        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64]
+    ScalarSubqueryExec: subqueries=1, schema=[#5:Int32, #6:Int64;N]
+      SortExec: expr=[#5@0 ASC], preserve_partitioning=[false], schema=[#5:Int32, #6:Int64;N]
+        ProjectionExec: expr=[#1@0 as #5, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as #6], schema=[#5:Int32, #6:Int64;N]
           ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
             DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
       ProjectionExec: expr=[CAST(#3@0 AS Int64) as #4], schema=[#4:Int64]
@@ -4165,6 +4231,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -4462,6 +4531,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -4566,6 +4638,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_aggregate_distinct:
     SAME TEXT AS ABOVE
 
     logical_plan after single_distinct_aggregation_to_group_by:
@@ -4686,6 +4761,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -5012,6 +5090,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -5116,6 +5197,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_aggregate_distinct:
     SAME TEXT AS ABOVE
 
     logical_plan after single_distinct_aggregation_to_group_by:
@@ -5236,6 +5320,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -5563,6 +5650,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -5663,6 +5753,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -5751,6 +5844,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -6028,6 +6124,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -6128,6 +6227,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -6220,6 +6322,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -6420,8 +6525,8 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Projection: CASE WHEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) IS NOT NULL THEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) WHEN Boolean(true) THEN NULL END AS joined AS #7
-      Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]]
+    Projection: CASE WHEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) IS NOT NULL THEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) WHEN Boolean(true) THEN NULL END AS joined AS #7
+      Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]]
         Subquery:
           Projection: min(s.#5) AS #6
             Aggregate: groupBy=[[]], aggr=[[min(s.#5)]]
@@ -6444,8 +6549,8 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after type_coercion:
-    Projection: CASE WHEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) IS NOT NULL THEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) WHEN Boolean(true) THEN CAST(NULL AS Utf8) END AS joined AS #7
-      Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]]
+    Projection: CASE WHEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) IS NOT NULL THEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) WHEN Boolean(true) THEN CAST(NULL AS Utf8) END AS joined AS #7
+      Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]]
         Subquery:
           Projection: min(s.#5) AS #6
             Aggregate: groupBy=[[]], aggr=[[min(s.#5)]]
@@ -6480,8 +6585,8 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
-    Projection: CASE WHEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) IS NOT NULL THEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) ELSE Utf8(NULL) END AS joined AS #7
-      Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] AS array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]]
+    Projection: CASE WHEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) IS NOT NULL THEN array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) ELSE Utf8(NULL) END AS joined AS #7
+      Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]]
         Subquery:
           Projection: min(s.#5) AS #6
             Aggregate: groupBy=[[]], aggr=[[min(s.#5)]]
@@ -6548,6 +6653,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -6556,8 +6664,8 @@ data:
 
     logical_plan after common_sub_expression_eliminate:
     Projection: CASE WHEN __common_expr_1 IS NOT NULL THEN __common_expr_1 ELSE Utf8(NULL) END AS joined AS #7
-      Projection: array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) AS __common_expr_1, array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]
-        Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] AS array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]]
+      Projection: array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) AS __common_expr_1, array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]
+        Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]]
           Subquery:
             Projection: min(s.#5) AS #6
               Aggregate: groupBy=[[]], aggr=[[min(s.#5)]]
@@ -6575,8 +6683,8 @@ data:
 
     logical_plan after optimize_projections:
     Projection: CASE WHEN __common_expr_1 IS NOT NULL THEN __common_expr_1 ELSE Utf8(NULL) END AS joined AS #7
-      Projection: array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) AS __common_expr_1
-        Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] AS array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]]
+      Projection: array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) AS __common_expr_1
+        Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]]
           Subquery:
             Projection: min(s.#5) AS #6
               Aggregate: groupBy=[[]], aggr=[[min(s.#5)]]
@@ -6662,6 +6770,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -6685,8 +6796,8 @@ data:
 
     logical_plan:
     Projection: CASE WHEN __common_expr_1 IS NOT NULL THEN __common_expr_1 ELSE Utf8(NULL) END AS joined AS #7
-      Projection: array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST], Utf8(",")) AS __common_expr_1
-        Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] AS array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]]
+      Projection: array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST], Utf8(",")) AS __common_expr_1
+        Aggregate: groupBy=[[]], aggr=[[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]]
           Subquery:
             Projection: min(s.#5) AS #6
               Aggregate: groupBy=[[]], aggr=[[min(s.#5)]]
@@ -6700,9 +6811,9 @@ data:
     initial_physical_plan:
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
-        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
-          AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
-            AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+          AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
+            AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(s.#5)@0 as #6]
@@ -6715,9 +6826,9 @@ data:
     initial_physical_plan_with_stats:
     ScalarSubqueryExec: subqueries=1, statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
       ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
-        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
-          AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
-            AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
+        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+          AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+            AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]], statistics=[Rows=Exact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(3), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
                 DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
       ProjectionExec: expr=[min(s.#5)@0 as #6], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]]
@@ -6730,9 +6841,9 @@ data:
     initial_physical_plan_with_schema:
     ScalarSubqueryExec: subqueries=1, schema=[#7:Utf8;N]
       ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7], schema=[#7:Utf8;N]
-        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1], schema=[__common_expr_1:Utf8;N]
-          AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]], schema=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]:List(Utf8);N]
-            AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]], schema=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST][array_agg]:List(Utf8);N, array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST][array_agg_orderings]:List(Struct("CASE WHEN scalar_subquery(<pending>) = 1 THEN #3@1 ELSE negative(#3@1) END": Int32))]
+        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1], schema=[__common_expr_1:Utf8;N]
+          AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]], schema=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]:List(Utf8);N]
+            AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]], schema=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST][array_agg]:List(Utf8);N, array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST][array_agg_orderings]:List(Struct("CASE WHEN scalar_subquery(<pending>) = 1 THEN #3@1 ELSE negative(#3@1) END": Int32))]
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Utf8, #3:Int32]
                 DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Utf8, column2:Int32]
       ProjectionExec: expr=[min(s.#5)@0 as #6], schema=[#6:Int32;N]
@@ -6746,9 +6857,9 @@ data:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
-          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
-            AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
-              AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+            AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
+              AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
         ProjectionExec: expr=[min(s.#5)@0 as #6]
@@ -6759,6 +6870,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -6789,9 +6903,9 @@ data:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
-          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
-            AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
-              AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+            AggregateExec: mode=Final, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
+              AggregateExec: mode=Partial, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
                 SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #3@1 ELSE negative(#3@1) END ASC], preserve_partitioning=[false]
                   ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                     DataSourceExec: partitions=1, partition_sizes=[1]
@@ -6809,8 +6923,8 @@ data:
     OutputRequirementExec: order_by=[], dist_by=Unspecified
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
-          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
-            AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+            AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #3@1 ELSE negative(#3@1) END ASC], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
@@ -6829,8 +6943,8 @@ data:
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
       ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
-        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
-          AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+        ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+          AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
             SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #3@1 ELSE negative(#3@1) END ASC], preserve_partitioning=[false]
               ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                 DataSourceExec: partitions=1, partition_sizes=[1]
@@ -6889,8 +7003,8 @@ data:
     ProjectionExec: expr=[#7@0 as joined]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
-          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
-            AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+            AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #3@1 ELSE negative(#3@1) END ASC], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
@@ -6904,8 +7018,8 @@ data:
     ProjectionExec: expr=[#7@0 as joined]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
-          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
-            AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+            AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #3@1 ELSE negative(#3@1) END ASC], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
@@ -6936,8 +7050,8 @@ data:
     ProjectionExec: expr=[#7@0 as joined]
       ScalarSubqueryExec: subqueries=1
         ProjectionExec: expr=[CASE WHEN __common_expr_1@0 IS NOT NULL THEN __common_expr_1@0 END as #7]
-          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
-            AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST] as array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 WHEN Boolean(true) THEN negative(t.#3) END ASC NULLS FIRST]]
+          ProjectionExec: expr=[array_to_string(array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]@0, ,) as __common_expr_1]
+            AggregateExec: mode=Single, gby=[], aggr=[array_agg(t.#2) IGNORE NULLS ORDER BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#3 ELSE negative(t.#3) END ASC NULLS FIRST]]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #3@1 ELSE negative(#3@1) END ASC], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                   DataSourceExec: partitions=1, partition_sizes=[1]
@@ -7082,6 +7196,9 @@ data:
                             Values: (Int32(1)), (Int32(2))
                 Values: (Int32(1), Int32(2)), (Int32(1), Int32(3)), (Int32(2), Int32(10)), (Int32(3), Int32(1))
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -7183,6 +7300,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -7280,6 +7400,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -7601,6 +7724,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -7701,6 +7827,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -7793,6 +7922,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -8095,6 +8227,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -8195,6 +8330,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -8287,6 +8425,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -8605,6 +8746,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -8706,6 +8850,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -8803,6 +8950,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -9133,6 +9283,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -9237,6 +9390,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -9299,7 +9455,7 @@ data:
       SortExec: expr=[#7@0 ASC], preserve_partitioning=[false], statistics=[Rows=Inexact(3), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
         ProjectionExec: expr=[#1@0 as #7, #3@1 as #8], statistics=[Rows=Inexact(3), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
           ProjectionExec: expr=[#1@0 as #1, #3@2 as #3], statistics=[Rows=Inexact(3), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
-            HashJoinExec: mode=Auto, join_type=Inner, on=[(l.#1 + #6@1, CAST(r.#3 AS Int64)@1)], statistics=[Rows=Inexact(3), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
+            HashJoinExec: mode=Auto, join_type=Inner, on=[(l.#1 + #6@1, CAST(r.#3 AS Int64)@1)], statistics=[Rows=Inexact(3), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
               ProjectionExec: expr=[#1@0 as #1, CAST(#1@0 AS Int64) + scalar_subquery(<pending>) as l.#1 + #6], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
                 ProjectionExec: expr=[column1@0 as #1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
                   DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
@@ -9353,6 +9509,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -9713,6 +9872,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -9816,6 +9978,9 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after push_down_filter:
+    SAME TEXT AS ABOVE
+
+    logical_plan after eliminate_aggregate_distinct:
     SAME TEXT AS ABOVE
 
     logical_plan after single_distinct_aggregation_to_group_by:
@@ -9927,6 +10092,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -10236,6 +10404,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -10338,6 +10509,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -10436,6 +10610,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -10648,7 +10825,7 @@ data:
 
     == Plan Steps ==
     initial_logical_plan:
-    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 WHEN Boolean(true) THEN negative(t.#2) END DESC NULLS LAST
+    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END DESC NULLS LAST
       Subquery:
         Projection: min(s.#4) AS #5
           Aggregate: groupBy=[[]], aggr=[[min(s.#4)]]
@@ -10696,19 +10873,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
-    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END AS CASE WHEN #5 = Int32(2) THEN t.#2 WHEN Boolean(true) THEN negative(t.#2) END DESC NULLS LAST
-      Subquery:
-        Projection: min(s.#4) AS #5
-          Aggregate: groupBy=[[]], aggr=[[min(s.#4)]]
-            SubqueryAlias: s
-              Projection: #3 AS #4
-                Projection: column1 AS #3
-                  Values: (Int32(2))
-      Projection: t.#1 AS #2
-        SubqueryAlias: t
-          Projection: #0 AS #1
-            Projection: column1 AS #0
-              Values: (Int32(1)), (Int32(2)), (Int32(3))
+    SAME TEXT AS ABOVE
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -10764,6 +10929,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -10777,7 +10945,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after optimize_projections:
-    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END AS CASE WHEN #5 = Int32(2) THEN t.#2 WHEN Boolean(true) THEN negative(t.#2) END DESC NULLS LAST
+    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END DESC NULLS LAST
       Subquery:
         Projection: min(s.#4) AS #5
           Aggregate: groupBy=[[]], aggr=[[min(s.#4)]]
@@ -10864,6 +11032,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -10886,7 +11057,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan:
-    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END AS CASE WHEN #5 = Int32(2) THEN t.#2 WHEN Boolean(true) THEN negative(t.#2) END DESC NULLS LAST
+    Sort: CASE WHEN (<subquery>) = Int32(2) THEN t.#2 ELSE negative(t.#2) END DESC NULLS LAST
       Subquery:
         Projection: min(s.#4) AS #5
           Aggregate: groupBy=[[]], aggr=[[min(s.#4)]]
@@ -10952,6 +11123,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -11229,6 +11403,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -11329,6 +11506,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -11421,6 +11601,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -11694,6 +11877,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -11795,6 +11981,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -11888,6 +12077,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -12074,8 +12266,8 @@ data:
     == Plan Steps ==
     initial_logical_plan:
     Sort: #7 ASC NULLS FIRST
-      Projection: t.#1 AS #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS #5 AS Int32) AS rn AS #7
-        WindowAggr: windowExpr=[[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      Projection: t.#1 AS #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS #5 AS Int32) AS rn AS #7
+        WindowAggr: windowExpr=[[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           Subquery:
             Projection: min(s.#3) AS #4
               Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
@@ -12122,20 +12314,7 @@ data:
     SAME TEXT AS ABOVE
 
     logical_plan after simplify_expressions:
-    Sort: #7 ASC NULLS FIRST
-      Projection: t.#1 AS #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS #5 AS Int32) AS rn AS #7
-        WindowAggr: windowExpr=[[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-          Subquery:
-            Projection: min(s.#3) AS #4
-              Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
-                SubqueryAlias: s
-                  Projection: #2 AS #3
-                    Projection: column1 AS #2
-                      Values: (Int32(2))
-          SubqueryAlias: t
-            Projection: #0 AS #1
-              Projection: column1 AS #0
-                Values: (Int32(3)), (Int32(1)), (Int32(2))
+    SAME TEXT AS ABOVE
 
     logical_plan after replace_distinct_aggregate:
     SAME TEXT AS ABOVE
@@ -12191,6 +12370,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -12205,8 +12387,8 @@ data:
 
     logical_plan after optimize_projections:
     Sort: #7 ASC NULLS FIRST
-      Projection: t.#1 AS #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS #5 AS Int32) AS rn AS #7
-        WindowAggr: windowExpr=[[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      Projection: t.#1 AS #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS #5 AS Int32) AS rn AS #7
+        WindowAggr: windowExpr=[[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           Subquery:
             Projection: min(s.#3) AS #4
               Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
@@ -12292,6 +12474,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -12315,8 +12500,8 @@ data:
 
     logical_plan:
     Sort: #7 ASC NULLS FIRST
-      Projection: t.#1 AS #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS #5 AS Int32) AS rn AS #7
-        WindowAggr: windowExpr=[[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+      Projection: t.#1 AS #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS #5 AS Int32) AS rn AS #7
+        WindowAggr: windowExpr=[[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
           Subquery:
             Projection: min(s.#3) AS #4
               Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
@@ -12330,8 +12515,8 @@ data:
     initial_physical_plan:
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#7@1 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
-          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             ProjectionExec: expr=[column1@0 as #1]
               DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(s.#3)@0 as #4]
@@ -12344,8 +12529,8 @@ data:
     initial_physical_plan_with_stats:
     ScalarSubqueryExec: subqueries=1, statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
       SortExec: expr=[#7@1 ASC], preserve_partitioning=[false], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], statistics=[Rows=Exact(3), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], statistics=[Rows=Exact(3), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:)]]
             ProjectionExec: expr=[column1@0 as #1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
               DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
       ProjectionExec: expr=[min(s.#3)@0 as #4], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]]
@@ -12358,8 +12543,8 @@ data:
     initial_physical_plan_with_schema:
     ScalarSubqueryExec: subqueries=1, schema=[#6:Int32, #7:Int32]
       SortExec: expr=[#7@1 ASC], preserve_partitioning=[false], schema=[#6:Int32, #7:Int32]
-        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7], schema=[#6:Int32, #7:Int32]
-          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[#1:Int32, row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:UInt64]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7], schema=[#6:Int32, #7:Int32]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted], schema=[#1:Int32, row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW:UInt64]
             ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
       ProjectionExec: expr=[min(s.#3)@0 as #4], schema=[#4:Int32;N]
@@ -12373,8 +12558,8 @@ data:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@1, asc)], dist_by=SinglePartition
         SortExec: expr=[#7@1 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
-            BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+          ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+            BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
               ProjectionExec: expr=[column1@0 as #1]
                 DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(s.#3)@0 as #4]
@@ -12385,6 +12570,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -12414,8 +12602,8 @@ data:
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@1, asc)], dist_by=SinglePartition
-        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
-          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 2 THEN #1@0 ELSE negative(#1@0) END ASC], preserve_partitioning=[false]
               ProjectionExec: expr=[column1@0 as #1]
                 DataSourceExec: partitions=1, partition_sizes=[1]
@@ -12432,8 +12620,8 @@ data:
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#7@1, asc)], dist_by=SinglePartition
-        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
-          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 2 THEN #1@0 ELSE negative(#1@0) END ASC], preserve_partitioning=[false]
               ProjectionExec: expr=[column1@0 as #1]
                 DataSourceExec: partitions=1, partition_sizes=[1]
@@ -12451,8 +12639,8 @@ data:
 
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
-      ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
-        BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+        BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
           SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 2 THEN #1@0 ELSE negative(#1@0) END ASC], preserve_partitioning=[false]
             ProjectionExec: expr=[column1@0 as #1]
               DataSourceExec: partitions=1, partition_sizes=[1]
@@ -12510,8 +12698,8 @@ data:
     physical_plan:
     ProjectionExec: expr=[#6@0 as v, #7@1 as rn]
       ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
-          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 2 THEN #1@0 ELSE negative(#1@0) END ASC], preserve_partitioning=[false]
               ProjectionExec: expr=[column1@0 as #1]
                 DataSourceExec: partitions=1, partition_sizes=[1]
@@ -12524,8 +12712,8 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#6@0 as v, #7@1 as rn]
       ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
-          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 2 THEN #1@0 ELSE negative(#1@0) END ASC], preserve_partitioning=[false]
               ProjectionExec: expr=[column1@0 as #1]
                 DataSourceExec: partitions=1, partition_sizes=[1]
@@ -12555,8 +12743,8 @@ data:
     placement=Worker
     ProjectionExec: expr=[#6@0 as v, #7@1 as rn]
       ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
-          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 WHEN Boolean(true) THEN negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+        ProjectionExec: expr=[#1@0 as #6, CAST(row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 AS Int32) as #7]
+          BoundedWindowAggExec: wdw=[row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [CASE WHEN (<subquery>) = Int32(2) THEN t.#1 ELSE negative(t.#1) END ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 2 THEN #1@0 ELSE negative(#1@0) END ASC], preserve_partitioning=[false]
               ProjectionExec: expr=[column1@0 as #1]
                 DataSourceExec: partitions=1, partition_sizes=[1]
@@ -12571,8 +12759,8 @@ data:
     == Plan Steps ==
     initial_logical_plan:
     Sort: t.#6 ASC NULLS FIRST
-      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
-        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
+        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
             Projection: min(s.#3) AS #4
               Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
@@ -12596,8 +12784,8 @@ data:
 
     logical_plan after type_coercion:
     Sort: t.#6 ASC NULLS FIRST
-      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
-        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
+        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN CAST(raise_error(Utf8("Remainder by zero")) AS Int32) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
             Projection: min(s.#3) AS #4
               Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
@@ -12633,8 +12821,8 @@ data:
 
     logical_plan after simplify_expressions:
     Sort: t.#6 ASC NULLS FIRST
-      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
-        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
+        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
             Projection: min(s.#3) AS #4
               Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
@@ -12701,6 +12889,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -12715,8 +12906,8 @@ data:
 
     logical_plan after optimize_projections:
     Sort: t.#6 ASC NULLS FIRST
-      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
-        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
+        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
             Projection: min(s.#3) AS #4
               Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
@@ -12802,6 +12993,9 @@ data:
     logical_plan after push_down_filter:
     SAME TEXT AS ABOVE
 
+    logical_plan after eliminate_aggregate_distinct:
+    SAME TEXT AS ABOVE
+
     logical_plan after single_distinct_aggregation_to_group_by:
     SAME TEXT AS ABOVE
 
@@ -12825,8 +13019,8 @@ data:
 
     logical_plan:
     Sort: t.#6 ASC NULLS FIRST
-      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
-        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+      Projection: t.#1 AS #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS #5 AS n AS #7
+        WindowAggr: windowExpr=[[count(Int64(1)) PARTITION BY [CASE WHEN (<subquery>) = Int32(1) THEN t.#1 % Int32(2) ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
           Subquery:
             Projection: min(s.#3) AS #4
               Aggregate: groupBy=[[]], aggr=[[min(s.#3)]]
@@ -12840,8 +13034,8 @@ data:
     initial_physical_plan:
     ScalarSubqueryExec: subqueries=1
       SortExec: expr=[#6@0 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
-          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
             ProjectionExec: expr=[column1@0 as #1]
               DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(s.#3)@0 as #4]
@@ -12854,8 +13048,8 @@ data:
     initial_physical_plan_with_stats:
     ScalarSubqueryExec: subqueries=1, statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
       SortExec: expr=[#6@0 ASC], preserve_partitioning=[false], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
-          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], statistics=[Rows=Exact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]:)]]
+          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], statistics=[Rows=Exact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]:)]]
             ProjectionExec: expr=[column1@0 as #1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
               DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
       ProjectionExec: expr=[min(s.#3)@0 as #4], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]:)]]
@@ -12868,8 +13062,8 @@ data:
     initial_physical_plan_with_schema:
     ScalarSubqueryExec: subqueries=1, schema=[#6:Int32, #7:Int64]
       SortExec: expr=[#6@0 ASC], preserve_partitioning=[false], schema=[#6:Int32, #7:Int64]
-        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7], schema=[#6:Int32, #7:Int64]
-          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], schema=[#1:Int32, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int64]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7], schema=[#6:Int32, #7:Int64]
+          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], schema=[#1:Int32, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING:Int64]
             ProjectionExec: expr=[column1@0 as #1], schema=[#1:Int32]
               DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32]
       ProjectionExec: expr=[min(s.#3)@0 as #4], schema=[#4:Int32;N]
@@ -12883,8 +13077,8 @@ data:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
         SortExec: expr=[#6@0 ASC], preserve_partitioning=[false]
-          ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
-            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               ProjectionExec: expr=[column1@0 as #1]
                 DataSourceExec: partitions=1, partition_sizes=[1]
       ProjectionExec: expr=[min(s.#3)@0 as #4]
@@ -12895,6 +13089,9 @@ data:
 
 
     physical_plan after aggregate_statistics:
+    SAME TEXT AS ABOVE
+
+    physical_plan after EliminateConstantJoin:
     SAME TEXT AS ABOVE
 
     physical_plan after join_selection:
@@ -12924,9 +13121,9 @@ data:
     physical_plan after EnsureRequirements:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
-        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
           SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
-            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #1@0 % 2 ELSE #1@0 END ASC NULLS LAST], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #1]
                   DataSourceExec: partitions=1, partition_sizes=[1]
@@ -12943,9 +13140,9 @@ data:
     physical_plan after CombinePartialFinalAggregate:
     ScalarSubqueryExec: subqueries=1
       OutputRequirementExec: order_by=[(#6@0, asc)], dist_by=SinglePartition
-        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
           SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
-            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #1@0 % 2 ELSE #1@0 END ASC NULLS LAST], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #1]
                   DataSourceExec: partitions=1, partition_sizes=[1]
@@ -12963,9 +13160,9 @@ data:
 
     physical_plan after OutputRequirements:
     ScalarSubqueryExec: subqueries=1
-      ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+      ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
         SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
-          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
             SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #1@0 % 2 ELSE #1@0 END ASC NULLS LAST], preserve_partitioning=[false]
               ProjectionExec: expr=[column1@0 as #1]
                 DataSourceExec: partitions=1, partition_sizes=[1]
@@ -13023,9 +13220,9 @@ data:
     physical_plan:
     ProjectionExec: expr=[#6@0 as v, #7@1 as n]
       ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
           SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
-            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #1@0 % 2 ELSE #1@0 END ASC NULLS LAST], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #1]
                   DataSourceExec: partitions=1, partition_sizes=[1]
@@ -13038,9 +13235,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#6@0 as v, #7@1 as n]
       ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
           SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
-            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #1@0 % 2 ELSE #1@0 END ASC NULLS LAST], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #1]
                   DataSourceExec: partitions=1, partition_sizes=[1]
@@ -13070,9 +13267,9 @@ data:
     placement=Worker
     ProjectionExec: expr=[#6@0 as v, #7@1 as n]
       ScalarSubqueryExec: subqueries=1
-        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
+        ProjectionExec: expr=[#1@0 as #6, count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as #7]
           SortExec: expr=[#1@0 ASC], preserve_partitioning=[false]
-            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END WHEN Boolean(true) THEN t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+            WindowAggExec: wdw=[count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8("Remainder by zero")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "count(Int64(1)) PARTITION BY [CASE WHEN #4 = Int32(1) THEN t.#1 % CASE WHEN Int32(2) = Int32(0) THEN raise_error(Utf8(/"Remainder by zero/")) ELSE Int32(2) END ELSE t.#1 END] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64 }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               SortExec: expr=[CASE WHEN scalar_subquery(<pending>) = 1 THEN #1@0 % 2 ELSE #1@0 END ASC NULLS LAST], preserve_partitioning=[false]
                 ProjectionExec: expr=[column1@0 as #1]
                   DataSourceExec: partitions=1, partition_sizes=[1]

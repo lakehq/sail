@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Error during planning: Function 'btrim' requires String, but received Binary (DataType: Binary).\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(String, String)\n\tbtrim(String)"
+        "failure": "error in DataFusion: Error during planning: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Error during planning: Function 'btrim' requires String, but received Binary (DataType: Binary).\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String.. No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(String, String)\n\tbtrim(String)"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' requires String, but received Binary (DataType: Binary).\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String.,Error during planning: Function 'btrim' expects 1 arguments but received 2.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(String, String)\n\tbtrim(String)"
+        "failure": "error in DataFusion: Error during planning: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' requires String, but received Binary (DataType: Binary).\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String.,Error during planning: Function 'btrim' expects 1 arguments but received 2. No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(String, String)\n\tbtrim(String)"
       }
     },
     {
@@ -1051,7 +1051,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nFailed to cast field 'lit' from Binary to Utf8View\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1073,7 +1073,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nFailed to cast field 'lit' from Binary to Utf8View\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1095,7 +1095,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nFailed to cast field 'lit' from Binary to Utf8View\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1117,7 +1117,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nFailed to cast field 'lit' from Binary to Utf8View\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {

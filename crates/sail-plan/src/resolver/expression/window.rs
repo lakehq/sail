@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::simplify::SimplifyContextBuilder;
@@ -14,6 +13,7 @@ use sail_common::spec::{self};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
+use sail_common_datafusion::simplify_expressions::ExprSimplifier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;

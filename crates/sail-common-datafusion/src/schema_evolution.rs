@@ -1,5 +1,5 @@
 use std::io::Cursor;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray, StructArray,
@@ -204,6 +204,14 @@ pub enum SchemaEvolutionTimezoneMode {
 #[derive(Debug)]
 pub struct SchemaEvolutionPhysicalExprAdapterFactory {}
 
+impl SchemaEvolutionPhysicalExprAdapterFactory {
+    pub fn shared() -> Arc<dyn PhysicalExprAdapterFactory> {
+        // Both factories create the same adapter with Name/Strict configuration.
+        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(StructFieldMatching::Name)
+            .shared()
+    }
+}
+
 impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
     fn create(
         &self,
@@ -225,7 +233,50 @@ pub struct SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
     timezone_mode: SchemaEvolutionTimezoneMode,
 }
 
+// DataFusion's factory trait has no downcast support. Canonical instances let the
+// plan codec recognize our factories by identity without inferring their behavior
+// from sample expressions. Keep every supported configuration alive and immutable.
+static SCHEMA_EVOLUTION_FACTORIES: LazyLock<
+    [Arc<SchemaEvolutionPhysicalExprAdapterFactoryWithMatching>; 6],
+> = LazyLock::new(|| {
+    use SchemaEvolutionPhysicalExprAdapterFactoryWithMatching as Factory;
+    [
+        Arc::new(Factory::new(StructFieldMatching::Name)),
+        Arc::new(Factory::new_relaxed_timezone(StructFieldMatching::Name)),
+        Arc::new(Factory::new(StructFieldMatching::PhysicalName)),
+        Arc::new(Factory::new_relaxed_timezone(
+            StructFieldMatching::PhysicalName,
+        )),
+        Arc::new(Factory::new(StructFieldMatching::FieldId)),
+        Arc::new(Factory::new_relaxed_timezone(StructFieldMatching::FieldId)),
+    ]
+});
+
 impl SchemaEvolutionPhysicalExprAdapterFactoryWithMatching {
+    /// Use a canonical factory when its configuration must cross plan transport.
+    pub fn shared(self) -> Arc<dyn PhysicalExprAdapterFactory> {
+        let matching = match self.matching {
+            StructFieldMatching::Name => 0,
+            StructFieldMatching::PhysicalName => 2,
+            StructFieldMatching::FieldId => 4,
+        };
+        let timezone = match self.timezone_mode {
+            SchemaEvolutionTimezoneMode::Strict => 0,
+            SchemaEvolutionTimezoneMode::Relaxed => 1,
+        };
+        SCHEMA_EVOLUTION_FACTORIES[matching + timezone].clone()
+    }
+
+    /// Return configuration only for an exactly identified, supported factory.
+    pub fn shared_configuration(
+        factory: &Arc<dyn PhysicalExprAdapterFactory>,
+    ) -> Option<(StructFieldMatching, SchemaEvolutionTimezoneMode)> {
+        SCHEMA_EVOLUTION_FACTORIES.iter().find_map(|known| {
+            let erased: Arc<dyn PhysicalExprAdapterFactory> = known.clone();
+            Arc::ptr_eq(factory, &erased).then_some((known.matching, known.timezone_mode))
+        })
+    }
+
     pub fn new(matching: StructFieldMatching) -> Self {
         Self {
             matching,

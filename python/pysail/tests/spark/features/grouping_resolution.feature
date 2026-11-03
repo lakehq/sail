@@ -23,6 +23,35 @@ Feature: Grouping and sort resolution
       DROP VIEW IF EXISTS t
       """
 
+  Scenario: Volatile aggregate output runs after grouping
+    When query
+      """
+      SELECT g, CAST(count(1) + rand() AS BIGINT) AS n
+      FROM t GROUP BY g
+      """
+    Then query result collected
+      | g    | n |
+      | a    | 3 |
+      | b    | 2 |
+      | c    | 1 |
+      | NULL | 1 |
+    Then query column types
+      | column | type   |
+      | g      | string |
+      | n      | bigint |
+
+  Scenario Outline: Volatile aggregate inputs are rejected
+    When query
+      """
+      SELECT <aggregate> FROM t GROUP BY g
+      """
+    Then query error (?i)(non.deterministic|nondeterministic)
+
+    Examples:
+      | aggregate                                  |
+      | sum(rand())                                |
+      | count(1) FILTER (WHERE rand() > 0.5)         |
+
   Scenario: ORDER BY ALL sorts by every output column
     When query
       """

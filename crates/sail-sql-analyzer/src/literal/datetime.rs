@@ -7,6 +7,42 @@ use chumsky::prelude::{any, choice, end, just, one_of};
 
 use crate::error::{SqlError, SqlResult};
 
+#[cfg(test)]
+mod tests {
+    use super::{DateValue, TimeValue, TimestampValue};
+    use crate::error::SqlResult;
+
+    #[test]
+    fn gregorian_era_microseconds_match_chrono_in_both_directions() -> SqlResult<()> {
+        // Complete positive/negative Gregorian cycles, including invalid month-end dates.
+        for year in (-2400..-2000).chain(2000..2400) {
+            for month in 1..=12 {
+                for day in 1..=31 {
+                    let value = TimestampValue {
+                        date: DateValue { year, month, day },
+                        time: TimeValue {
+                            hour: 23,
+                            minute: 59,
+                            second: 59,
+                            nanoseconds: 999_999_999,
+                        },
+                        timezone: "",
+                    };
+                    let expected = value.clone().into_naive();
+                    let actual = value.into_naive_micros();
+                    match expected {
+                        Ok((datetime, timezone)) => {
+                            assert_eq!(actual?, (datetime.and_utc().timestamp_micros(), timezone));
+                        }
+                        Err(_) => assert!(actual.is_err()),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DateValue {
     pub year: i32,
@@ -64,6 +100,19 @@ pub struct TimestampValue<'a> {
 }
 
 impl<'a> TimestampValue<'a> {
+    /// Convert a timezone-free timestamp without restricting it to Chrono's year range.
+    pub fn into_naive_micros(mut self) -> SqlResult<(i64, &'a str)> {
+        // Gregorian calendar validity repeats every 400 years (146097 days).
+        let era = i128::from(self.date.year.div_euclid(400));
+        self.date.year = self.date.year.rem_euclid(400);
+        let (datetime, timezone) = self.into_naive()?;
+        let micros =
+            i128::from(datetime.and_utc().timestamp_micros()) + era * 146_097 * 86_400 * 1_000_000;
+        let micros = i64::try_from(micros)
+            .map_err(|_| SqlError::invalid("timestamp is outside the microsecond range"))?;
+        Ok((micros, timezone))
+    }
+
     pub fn into_naive(self) -> SqlResult<(NaiveDateTime, &'a str)> {
         let Self {
             date,

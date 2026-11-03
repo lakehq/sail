@@ -20,3 +20,5 @@ log = { workspace = true }
 
 [dev-dependencies]
 datafusion-proto = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }

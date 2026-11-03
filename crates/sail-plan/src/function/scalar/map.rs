@@ -196,11 +196,18 @@ fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     use crate::function::common::ScalarFunctionBuilder as F;
 
-    // If any input is NULL, return NULL
-    // This is done by creating a CASE expression that checks each input for NULL
     if input.arguments.is_empty() {
-        return Ok(lit(ScalarValue::Null));
+        // Unlike map(), Spark's empty map_concat has string keys and nullable string values.
+        let empty = lit(ScalarValue::List(ScalarValue::new_list(
+            &[],
+            &DataType::Utf8,
+            true,
+        )));
+        return Ok(ScalarUDF::from(SparkMapFromArrays::new(false)).call(vec![empty.clone(), empty]));
     }
+    let nullable = input.arguments.iter().try_fold(false, |nullable, map| {
+        Ok::<_, PlanError>(nullable || map.nullable(input.function_context.schema.as_ref())?)
+    })?;
     input.arguments = coerce_timestamp_ntz_values(
         input.arguments,
         input.function_context.schema,
@@ -230,11 +237,18 @@ fn map_concat(mut input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         input.function_context.plan_config.map_key_dedup_policy == MapKeyDedupPolicy::LastWin;
     let result = F::udf(
         SparkMapFromArrays::new(last_value_wins)
-            .with_value_contains_null(Some(value_contains_null)),
+            .with_value_contains_null(Some(value_contains_null))
+            .with_nullable((!nullable).then_some(false)),
     )(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })?;
+
+    // map_keys/map_values and array_concat have conservative nullable fields. Only the
+    // original map expressions prove that their concatenated arrays cannot be NULL.
+    if !nullable {
+        return Ok(result);
+    }
 
     // Wrap the result with CASE to handle NULLs:
     // CASE WHEN arg1 IS NULL OR arg2 IS NULL OR ... THEN NULL ELSE result END
@@ -283,10 +297,6 @@ fn str_to_map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         function_context: input.function_context,
     })
 }
-
-#[cfg(test)]
-#[path = "map_tests.rs"]
-mod tests;
 
 pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;

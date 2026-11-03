@@ -249,6 +249,15 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     match expr {
         Expr::Atom(atom) => from_ast_atom_expression(atom),
         Expr::UnaryOperator(op, expr) => {
+            // Spark includes an immediate minus in the numeric literal before checking its
+            // range. Do not fold through parentheses or other unary operators.
+            if matches!(op, UnaryOperator::Minus(_))
+                && let Expr::Atom(AtomExpr::NumberLiteral(number)) = expr.as_ref()
+            {
+                let mut number = number.clone();
+                number.value.insert(0, '-');
+                return from_ast_number_literal(number);
+            }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: spec::ObjectName::bare(from_ast_unary_operator(op)?),
                 arguments: vec![from_ast_expression(*expr)?],

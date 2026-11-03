@@ -680,12 +680,21 @@ fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
 /// literal (some functions, e.g. `ceil`/`floor` target scale, require a literal
 /// argument and run before the optimizer would fold a `SparkNegative` call).
 /// Returns `None` when the value is not a foldable numeric literal or the
-/// negation overflows (e.g. `-INT_MIN`), leaving such cases to the runtime UDF.
-fn negate_literal(arg: &Expr) -> Option<Expr> {
+/// negation overflows in ANSI mode (e.g. `-INT_MIN`), leaving such cases to the runtime UDF.
+fn negate_literal(arg: &Expr, ansi_mode: bool) -> Option<Expr> {
     let Expr::Literal(value, _) = arg else {
         return None;
     };
     let negated = match value {
+        // Wrapping negation of a signed minimum is the same non-null literal.
+        ScalarValue::Int8(Some(i8::MIN))
+        | ScalarValue::Int16(Some(i16::MIN))
+        | ScalarValue::Int32(Some(i32::MIN))
+        | ScalarValue::Int64(Some(i64::MIN))
+            if !ansi_mode =>
+        {
+            value.clone()
+        }
         ScalarValue::Int8(Some(v)) => ScalarValue::Int8(Some(v.checked_neg()?)),
         ScalarValue::Int16(Some(v)) => ScalarValue::Int16(Some(v.checked_neg()?)),
         ScalarValue::Int32(Some(v)) => ScalarValue::Int32(Some(v.checked_neg()?)),
@@ -763,8 +772,8 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
         }
         // A negated numeric literal folds to a literal so constant-arg functions
         // (e.g. `ceil`/`floor` target scale) still see a constant; overflow
-        // (`-INT_MIN`) can't fold and falls through to the runtime UDF.
-        _ => match negate_literal(&arg) {
+        // in ANSI mode (`-INT_MIN`) falls through to the runtime UDF.
+        _ => match negate_literal(&arg, ansi_mode) {
             Some(folded) => folded,
             None => ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![arg]),
         },

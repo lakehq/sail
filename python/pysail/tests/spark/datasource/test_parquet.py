@@ -10,7 +10,16 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
-from pyspark.sql.types import TimestampNTZType, TimestampType
+from pyspark.sql.types import (
+    ArrayType,
+    LongType,
+    MapType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampNTZType,
+    TimestampType,
+)
 
 from pysail.testing.spark.utils.files import get_data_directory_size
 from pysail.testing.spark.utils.sql import escape_sql_identifier, escape_sql_string_literal
@@ -200,6 +209,13 @@ def test_parquet_read_options(spark, sample_df, tmp_path):
         ("value STRUCT<nested: DOUBLE>", "value STRUCT<nested: INT>", Row(nested=1.5)),
         ("value ARRAY<DOUBLE>", "value ARRAY<INT>", [1.5]),
         ("value MAP<STRING, DOUBLE>", "value MAP<STRING, INT>", {"key": 1.5}),
+        ("value BIGINT", "value INT", 1),
+        ("value BIGINT", "value DOUBLE", 2**53 + 1),
+        ("value DOUBLE", "value FLOAT", 1.5),
+        ("value STRUCT<nested: BIGINT>", "value STRUCT<nested: INT>", Row(nested=2**40)),
+        ("value ARRAY<BIGINT>", "value ARRAY<INT>", [2**40]),
+        ("value MAP<BIGINT, STRING>", "value MAP<INT, STRING>", {2**40: "key"}),
+        ("value MAP<STRING, BIGINT>", "value MAP<STRING, INT>", {"key": 2**40}),
     ],
 )
 def test_parquet_explicit_schema_rejects_incompatible_types(spark, tmp_path, physical_schema, requested_schema, value):
@@ -226,6 +242,148 @@ def test_parquet_explicit_schema_allows_missing_fields(spark, tmp_path):
     rows = spark.read.schema("id INT, missing STRING").parquet(path).collect()
 
     assert rows == [Row(id=1, missing=None)]
+
+
+@pytest.mark.parametrize(
+    ("predicate", "expected_ids"),
+    [
+        ("id >= 1 AND (payload.n >= 2 OR payload IS NULL)", [1, 2, 3, 4, 5]),
+        ("id >= 1 AND label IS NULL AND missing IS NULL AND payload.extra IS NULL", [1, 2, 4, 5]),
+    ],
+)
+@pytest.mark.parametrize("mixed_width", [False, True], ids=["same-width", "mixed-width"])
+@pytest.mark.parametrize("pushdown_filters", [False, True], ids=["residual-filter", "pushed-filter"])
+def test_parquet_evolved_nested_schema_filter_and_projection(
+    spark, tmp_path, predicate, expected_ids, mixed_width, pushdown_filters
+):
+    # Spark ParquetQuerySuite SPARK-10301: reordered/overlapping requested schemas,
+    # extended with numeric widening, nested nulls, and pushed predicates.
+    path = tmp_path / "evolved_nested"
+    path.mkdir()
+    old_struct = pa.struct([("n", pa.int32())])
+    new_type = pa.int64() if mixed_width else pa.int32()
+    new_struct = pa.struct([("n", new_type), ("extra", pa.string())])
+    old = pa.table(
+        {
+            "id": pa.array([0, 1, 2], type=pa.int32()),
+            "payload": pa.array([{"n": 0}, {"n": 2}, None], type=old_struct),
+            "items": pa.array([[{"n": 0}], [None, {"n": 2}], None], type=pa.list_(old_struct)),
+        }
+    )
+    new = pa.table(
+        {
+            "items": pa.array([[{"n": 3, "extra": "x"}], [], [None]], type=pa.list_(new_struct)),
+            "payload": pa.array([{"n": 3, "extra": "x"}, {"n": 4}, None], type=new_struct),
+            "label": pa.array(["new", None, None], type=pa.string()),
+            "id": pa.array([3, 4, 5], type=new_type),
+        }
+    )
+    for index, table in enumerate([old, new]):
+        pq.write_table(table, path / f"part-{index}.parquet", write_statistics=False, row_group_size=1)
+    nested_schema = StructType(
+        [StructField("extra", StringType()), StructField("n", LongType(), metadata={"comment": "nested value"})]
+    )
+    schema = StructType(
+        [
+            StructField("id", LongType(), metadata={"comment": "identifier"}),
+            StructField("payload", nested_schema),
+            StructField("items", ArrayType(nested_schema)),
+            StructField("label", StringType()),
+            StructField("missing", StringType()),
+        ]
+    )
+    query = (
+        spark.read.schema(schema)
+        .option("pushdown_filters", str(pushdown_filters).lower())
+        .parquet(str(path))
+        .where(predicate)
+        .select("id", "payload", "items", "label", "missing")
+        .orderBy("id")
+    )
+    expected = {
+        1: Row(id=1, payload=Row(extra=None, n=2), items=[None, Row(extra=None, n=2)], label=None, missing=None),
+        2: Row(id=2, payload=None, items=None, label=None, missing=None),
+        3: Row(id=3, payload=Row(extra="x", n=3), items=[Row(extra="x", n=3)], label="new", missing=None),
+        4: Row(id=4, payload=Row(extra=None, n=4), items=[], label=None, missing=None),
+        5: Row(id=5, payload=None, items=[None], label=None, missing=None),
+    }
+    assert query.schema == schema
+    assert query.collect() == [expected[index] for index in expected_ids]
+
+
+def test_parquet_explicit_schema_evolves_map_keys_and_nested_values(spark, tmp_path):
+    path = tmp_path / "evolved_maps"
+    path.mkdir()
+    old_value = pa.struct([("n", pa.int32())])
+    new_value = pa.struct([("n", pa.int64()), ("extra", pa.string())])
+    for index, (key_type, value_type, values) in enumerate(
+        [
+            (pa.int32(), old_value, [[(-2147483648, {"n": 2147483647}), (1, None)], None]),
+            (pa.int64(), new_value, [[(2**40, {"n": -(2**40), "extra": "large"})], []]),
+        ]
+    ):
+        table = pa.table(
+            {
+                "attributes": pa.array(values, type=pa.map_(key_type, value_type)),
+                "id": pa.array([index * 2, index * 2 + 1], type=key_type),
+            }
+        )
+        pq.write_table(table, path / f"part-{index}.parquet", row_group_size=1)
+    value_schema = StructType([StructField("extra", StringType()), StructField("n", LongType())])
+    schema = StructType([StructField("id", LongType()), StructField("attributes", MapType(LongType(), value_schema))])
+    frame = spark.read.schema(schema).parquet(str(path))
+    query = frame.where("id >= 0").orderBy("id")
+    assert query.schema == schema
+    assert query.collect() == [
+        Row(id=0, attributes={-2147483648: Row(extra=None, n=2147483647), 1: None}),
+        Row(id=1, attributes=None),
+        Row(id=2, attributes={2**40: Row(extra="large", n=-(2**40))}),
+        Row(id=3, attributes={}),
+    ]
+    assert frame.where("attributes[CAST(1099511627776 AS BIGINT)].n < 0").select("id").collect() == [Row(id=2)]
+
+
+@pytest.mark.parametrize("merge_schema", [False, True], ids=["default", "merge-option"])
+def test_parquet_mixed_widths_without_explicit_schema_fail(spark, tmp_path, merge_schema):
+    # Spark cannot merge INT/BIGINT, and a sampled INT schema cannot read an INT64 file.
+    # Sail's unsupported mergeSchema option must not introduce numeric promotion either.
+    path = tmp_path / "mixed_inferred"
+    path.mkdir()
+    for name, data_type in [("a", pa.int32()), ("z", pa.int64())]:
+        pq.write_table(pa.table({"n": pa.array([1], type=data_type)}), path / f"{name}.parquet")
+    reader = spark.read.option("mergeSchema", "true") if merge_schema else spark.read
+    with pytest.raises(Exception, match="(?i)merge|PARQUET_COLUMN_DATA_TYPE_MISMATCH"):
+        reader.parquet(str(path)).collect()
+
+
+@pytest.mark.parametrize("bad_file", ["narrowing", "incompatible", "corrupt"])
+def test_parquet_explicit_schema_validates_beyond_inference_sample(spark, tmp_path, bad_file):
+    path = tmp_path / "all_files_validated"
+    path.mkdir()
+    for index in range(10):
+        pq.write_table(pa.table({"n": pa.array([index], type=pa.int32())}), path / f"part-{index:02}.parquet")
+    last = path / "part-10.parquet"
+    if bad_file == "corrupt":
+        last.write_bytes(b"not a parquet file")
+        error = "(?i)parquet|footer|magic"
+    else:
+        values = pa.array([2**40], type=pa.int64()) if bad_file == "narrowing" else pa.array(["12"])
+        pq.write_table(pa.table({"n": values}), last)
+        error = "PARQUET_COLUMN_DATA_TYPE_MISMATCH"
+    with pytest.raises(Exception, match=error):
+        spark.read.schema("n INT").parquet(str(path)).collect()
+
+
+def test_parquet_multiple_extrema_without_file_statistics(spark, tmp_path):
+    path = tmp_path / "extrema_without_statistics"
+    path.mkdir()
+    table = pa.table(
+        {"a": pa.array([1, 8, 2, 3], type=pa.int32()), "b": pa.array([None, None, 5, 7], type=pa.int32())}
+    )
+    for index in range(2):
+        pq.write_table(table, path / f"part-{index}.parquet", write_statistics=False, row_group_size=2)
+    query = spark.read.parquet(str(path)).agg(F.min("a"), F.max("a"), F.min("b"), F.max("b"))
+    assert [tuple(row) for row in query.collect()] == [(1, 8, 5, 7)]
 
 
 def test_parquet_arrow_second_timestamp_is_bigint(spark, tmp_path):

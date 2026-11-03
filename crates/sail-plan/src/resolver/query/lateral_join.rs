@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchemaRef, Spans, internal_err};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, Projection, Subquery, SubqueryAlias, build_join_schema,
+    Expr, LogicalPlan, LogicalPlanBuilder, Projection, Subquery, build_join_schema, lit,
 };
 use sail_common::spec;
+use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 
@@ -38,6 +40,16 @@ impl PlanResolver<'_> {
             let mut scope = state.enter_query_scope(schema);
             self.resolve_query_plan(right, scope.state()).await?
         };
+
+        if has_volatile_expressions(&right)?
+            && !lateral_max_rows(&left)?.is_some_and(|rows| rows <= 1)
+        {
+            return Err(PlanError::analysis(
+                "[UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.NON_DETERMINISTIC_LATERAL_SUBQUERIES] \
+                 Non-deterministic lateral subqueries are not supported when joining with \
+                 outer relations that produce more than one row",
+            ));
+        }
 
         // FROM LATERAL (...) without a preceding relation has a one-row,
         // zero-column left input. Preserve the enclosing correlation scope.
@@ -94,6 +106,18 @@ impl PlanResolver<'_> {
             None
         };
 
+        if condition
+            .as_ref()
+            .map(is_nondeterministic)
+            .transpose()?
+            .unwrap_or(false)
+        {
+            return Err(PlanError::analysis(
+                "[UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.LATERAL_JOIN_CONDITION_NON_DETERMINISTIC] \
+                 Lateral join condition must be deterministic",
+            ));
+        }
+
         // Track whether the right side was wrapped as a Subquery so we can add
         // an output Projection below to flatten the schema.
         let wrapped_as_subquery = matches!(&right, LogicalPlan::Subquery(_));
@@ -133,6 +157,101 @@ impl PlanResolver<'_> {
     }
 }
 
+// Resolution precedes DataFusion's limit coercion, so SQL integer literals may
+// still be Int32. Normalize constant bounds only on the cardinality-check copy.
+fn lateral_max_rows(plan: &LogicalPlan) -> datafusion_common::Result<Option<usize>> {
+    let normalized = plan
+        .clone()
+        .transform_up(|plan| {
+            let LogicalPlan::Limit(mut limit) = plan else {
+                return Ok(Transformed::no(plan));
+            };
+            if let Some(fetch) = limit.fetch.as_deref_mut()
+                && !fetch.is_volatile()
+                && let Ok(value) = LiteralEvaluator::new().evaluate(fetch)
+                && let Ok(value) = LiteralValue(&value).try_to_i64()
+            {
+                *fetch = lit(value);
+            }
+            Ok(Transformed::yes(LogicalPlan::Limit(limit)))
+        })?
+        .data;
+    Ok(normalized.max_rows())
+}
+
+fn is_nondeterministic(expr: &Expr) -> datafusion_common::Result<bool> {
+    expr.exists(|expr| {
+        // An evaluation-sensitive scalar-cardinality assertion is not randomness.
+        Ok(expr.is_volatile_node()
+            && !matches!(expr, Expr::ScalarFunction(f) if f.func.inner().is::<ScalarSubqueryResult>()))
+    })
+}
+
+fn has_volatile_expressions(plan: &LogicalPlan) -> datafusion_common::Result<bool> {
+    let mut volatile = false;
+    plan.apply_with_subqueries(|node| {
+        for expr in node.expressions() {
+            volatile |= is_nondeterministic(&expr)?;
+        }
+        Ok(if volatile {
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(volatile)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion_common::{Column, Result};
+    use datafusion_expr::{Expr, LogicalPlanBuilder, col, lit};
+
+    use super::{collapse_projections, lateral_max_rows};
+
+    #[test]
+    fn lateral_cardinality_accepts_uncoerced_limit() -> Result<()> {
+        let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?.build()?;
+        let limited = datafusion_expr::LogicalPlan::Limit(datafusion_expr::Limit {
+            skip: None,
+            fetch: Some(Box::new(lit(1_i32))),
+            input: std::sync::Arc::new(input.clone()),
+        });
+        assert_eq!(lateral_max_rows(&limited)?, Some(1));
+        assert_eq!(lateral_max_rows(&input)?, Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn rename_projections_preserve_alias_boundary() -> Result<()> {
+        let source = LogicalPlanBuilder::values(vec![vec![lit(1_i64)]])?
+            .project(vec![col("column1").alias("id")])?
+            .alias("?table?")?
+            .project(vec![
+                Expr::Column(Column::new(Some("?table?"), "id")).alias("id"),
+            ])?
+            .alias("i")?
+            .project(vec![col("i.id").alias("field")])?
+            .build()?;
+        assert_eq!(collapse_projections(source.clone())?, source);
+        Ok(())
+    }
+
+    #[test]
+    fn adjacent_rename_projections_still_collapse() -> Result<()> {
+        let source = LogicalPlanBuilder::values(vec![vec![lit(1_i64)]])?.build()?;
+        let plan = LogicalPlanBuilder::from(source.clone())
+            .project(vec![col("column1").alias("id")])?
+            .project(vec![col("id").alias("field")])?
+            .build()?;
+        let expected = LogicalPlanBuilder::from(source)
+            .project(vec![col("column1").alias("field")])?
+            .build()?;
+        assert_eq!(collapse_projections(plan)?, expected);
+        Ok(())
+    }
+}
+
 fn is_rename_projection(proj: &Projection) -> bool {
     proj.expr.iter().all(|e| {
         matches!(e, Expr::Alias(Alias { expr, .. }) if matches!(expr.as_ref(), Expr::Column(_)))
@@ -153,8 +272,7 @@ fn collapse_projections(plan: LogicalPlan) -> datafusion_common::Result<LogicalP
             LogicalPlan::Projection(outer) if is_rename_projection(&outer) => {
                 match outer.input.as_ref() {
                     LogicalPlan::Projection(inner) if is_rename_projection(inner) => {
-                        let LogicalPlan::Projection(inner) =
-                            Arc::unwrap_or_clone(outer.input)
+                        let LogicalPlan::Projection(inner) = Arc::unwrap_or_clone(outer.input)
                         else {
                             return internal_err!("expected Projection input");
                         };
@@ -170,40 +288,8 @@ fn collapse_projections(plan: LogicalPlan) -> datafusion_common::Result<LogicalP
                             )))
                         }
                     }
-                    // Projection over SubqueryAlias over Projection: skip the SubqueryAlias
-                    // to check if we can merge through it.
-                    // (SubqueryAlias only adds a qualifier, doesn't change field names)
-                    LogicalPlan::SubqueryAlias(sa)
-                        if matches!(sa.input.as_ref(), LogicalPlan::Projection(p) if is_rename_projection(p)) =>
-                    {
-                        let LogicalPlan::SubqueryAlias(sa) =
-                            Arc::unwrap_or_clone(outer.input)
-                        else {
-                            return internal_err!("expected SubqueryAlias input");
-                        };
-                        let LogicalPlan::Projection(inner) =
-                            Arc::unwrap_or_clone(sa.input)
-                        else {
-                            return internal_err!("expected Projection inside SubqueryAlias");
-                        };
-
-                        let inner_map = build_output_name_map(&inner.expr);
-                        let merged = inline_projection(&outer.expr, &inner_map);
-
-                        // Rebuild: merged Projection over SubqueryAlias(inner.input)
-                        let new_sa = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
-                            inner.input,
-                            sa.alias,
-                        )?);
-
-                        if is_identity_projection(&merged, new_sa.schema()) {
-                            Ok(Transformed::yes(new_sa))
-                        } else {
-                            Ok(Transformed::yes(LogicalPlan::Projection(
-                                Projection::try_new(merged, Arc::new(new_sa))?,
-                            )))
-                        }
-                    }
+                    // Do not merge through SubqueryAlias: its input columns have
+                    // different qualifiers from the columns exposed to the outer projection.
                     _ => Ok(Transformed::no(LogicalPlan::Projection(outer))),
                 }
             }
@@ -213,12 +299,10 @@ fn collapse_projections(plan: LogicalPlan) -> datafusion_common::Result<LogicalP
                 if matches!(outer.input.as_ref(), LogicalPlan::SubqueryAlias(inner)
                     if inner.alias == outer.alias) =>
             {
-                Ok(Transformed::yes(Arc::unwrap_or_clone(
-                    match node {
-                        LogicalPlan::SubqueryAlias(sa) => sa.input,
-                        _ => return internal_err!("expected SubqueryAlias"),
-                    },
-                )))
+                Ok(Transformed::yes(Arc::unwrap_or_clone(match node {
+                    LogicalPlan::SubqueryAlias(sa) => sa.input,
+                    _ => return internal_err!("expected SubqueryAlias"),
+                })))
             }
 
             other => Ok(Transformed::no(other)),

@@ -97,6 +97,68 @@ def test_sql_set_timezone_changes_planning(spark):
         spark.conf.set(key, original)
 
 
+# Spark SQLConfSuite: retain raw spelling while using the zone for timestamp conversion.
+@pytest.mark.parametrize(
+    ("zone", "micros"),
+    [
+        ("UTC", 0),
+        ("Asia/Kolkata", -19800000000),
+        ("America/Chicago", 21600000000),
+        ("PST", 28800000000),
+        ("GMT+8:00", -28800000000),
+        ("+5:30", -19800000000),
+        ("Z", 0),
+        ("UT", 0),
+    ],
+)
+def test_session_timezone_spelling_and_timestamp_values(config_sessions, zone, micros):
+    session = config_sessions.create()
+    session.conf.set("spark.sql.session.timeZone", zone)
+    assert session.conf.get("spark.sql.session.timeZone") == zone
+    result = session.sql("""
+        SELECT id, current_timezone() AS zone,
+          unix_micros(cast(concat('1970-01-01 00:00:0', id) AS timestamp)) AS micros
+        FROM range(2) ORDER BY id
+    """)
+    assert result.collect() == [Row(id=i, zone=zone, micros=micros + i * 1000000) for i in range(2)]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "spark.sql.session.timeZone",
+        pytest.param(
+            "datafusion.execution.time_zone",
+            marks=pytest.mark.skipif(is_jvm_spark(), reason="DataFusion configuration is specific to Sail"),
+        ),
+    ],
+)
+def test_sql_timezone_invalid_set_preserves_state_and_reset(config_sessions, key):
+    session = config_sessions.create()
+    spark_key = "spark.sql.session.timeZone"
+    session.sql("SET TIME ZONE LOCAL").collect()
+    system_zone = session.conf.get(spark_key)
+    session.sql(f"SET {key}=GMT+8:00").collect()
+    for invalid in ["Nope", "Asia/shanghai", "pst", "+18:00:01", " UTC "]:
+        # Spark SET decodes backticks; native DataFusion SET decodes string literals.
+        value = f"'{invalid}'" if key.startswith("datafusion.") else f"`{invalid}`"
+        with pytest.raises(Exception, match=r"INVALID_CONF_VALUE\.TIME_ZONE"):
+            session.sql(f"SET {key}={value}").collect()
+        assert session.conf.get(spark_key) == "GMT+8:00"
+        result = session.sql("""
+            SELECT current_timezone() AS zone,
+              unix_micros(cast(concat('1970-01-01 00:00:0', id) AS timestamp)) AS micros
+            FROM range(2) ORDER BY id
+        """)
+        assert result.collect() == [Row(zone="GMT+8:00", micros=-28800000000 + i * 1000000) for i in range(2)]
+    for _ in range(2):
+        result = session.sql(f"RESET {key}")
+        assert result.schema == StructType([])
+        assert result.collect() == []
+        assert session.conf.get(spark_key) == system_zone
+        assert session.sql("SELECT current_timezone()").first()[0] == system_zone
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="DataFusion configuration is specific to Sail")
 @pytest.mark.parametrize(
     ("key", "value"),

@@ -13,7 +13,7 @@
 // The file is copied as a whole, including the functions that Sail does not use.
 #![expect(dead_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::{Array, new_empty_array};
@@ -23,7 +23,7 @@ use arrow::datatypes::TimeUnit::*;
 use arrow::datatypes::{
     DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
-    DataType, Field, FieldRef, Fields, TimeUnit,
+    DataType, FieldRef, Fields, TimeUnit,
 };
 use datafusion_common::{
     Diagnostic, Result, Span, Spans, exec_err, internal_err, not_impl_err, plan_datafusion_err,
@@ -31,6 +31,105 @@ use datafusion_common::{
 };
 use datafusion_expr::Operator;
 use itertools::Itertools;
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field};
+
+    use super::{comparison_coercion, conditional_common_type, type_union_coercion};
+
+    #[test]
+    fn duplicate_fields_are_coerced_by_position() {
+        for names in [["x", "x"], ["", ""], ["a", "b"]] {
+            let left = DataType::Struct(
+                vec![
+                    Field::new(names[0], DataType::Int32, false)
+                        .with_metadata(HashMap::from([("tag".into(), "kept".into())])),
+                    Field::new(names[1], DataType::Int64, false),
+                ]
+                .into(),
+            );
+            let right = DataType::Struct(
+                vec![
+                    Field::new(names[0], DataType::Int64, true),
+                    Field::new(names[1], DataType::Int32, false),
+                ]
+                .into(),
+            );
+            let expected = DataType::Struct(
+                vec![
+                    Field::new(names[0], DataType::Int64, true)
+                        .with_metadata(HashMap::from([("tag".into(), "kept".into())])),
+                    Field::new(names[1], DataType::Int64, false),
+                ]
+                .into(),
+            );
+            assert_eq!(comparison_coercion(&left, &right), Some(expected.clone()));
+            assert_eq!(type_union_coercion(&left, &right), Some(expected));
+            assert_eq!(
+                type_union_coercion(&left, &DataType::Struct(Default::default())),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn conditional_nullability_is_merged_recursively_without_widening_other_fields() {
+        let make_struct = |nullable| {
+            DataType::Struct(
+                vec![
+                    Field::new("a", DataType::Int32, nullable)
+                        .with_metadata(HashMap::from([("tag".into(), "kept".into())])),
+                    Field::new("b", DataType::Int32, false),
+                ]
+                .into(),
+            )
+        };
+        let wrap_struct = |data_type, nullable| {
+            DataType::Struct(vec![Field::new("s", data_type, nullable)].into())
+        };
+        let wrap_list = |data_type, nullable| {
+            DataType::List(Arc::new(Field::new_list_field(data_type, nullable)))
+        };
+        let wrap_map = |data_type, nullable| {
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", data_type, nullable),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            )
+        };
+        for wrap in [
+            wrap_struct as fn(DataType, bool) -> DataType,
+            wrap_list,
+            wrap_map,
+        ] {
+            let nonnull = wrap(make_struct(false), false);
+            let nullable = wrap(make_struct(true), true);
+            for inputs in [
+                vec![nonnull.clone(), nullable.clone()],
+                vec![nullable.clone(), nonnull.clone()],
+            ] {
+                assert_eq!(conditional_common_type(&inputs), Some(nullable.clone()));
+            }
+            assert_eq!(
+                conditional_common_type(&[nonnull.clone(), nonnull.clone(), DataType::Null]),
+                Some(nonnull)
+            );
+        }
+    }
+}
 
 /// The type signature of an instantiation of binary operator expression such as
 /// `lhs + rhs`
@@ -938,6 +1037,14 @@ pub fn type_union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     type_union_coercion_inner(lhs_type, rhs_type, type_union_coercion)
 }
 
+/// Find one exact result type for conditional branches, including nested nullability.
+pub fn conditional_common_type(data_types: &[DataType]) -> Option<DataType> {
+    let (first, rest) = data_types.split_first()?;
+    rest.iter().try_fold(first.clone(), |left, right| {
+        type_union_coercion(&left, right)
+    })
+}
+
 /// Spark set operations unify numeric/string pairs numerically in ANSI mode and
 /// keep timestamps in microseconds, including inside arrays and structs. LTZ/NTZ
 /// inputs must first be aligned using the session's timestamp cast semantics.
@@ -1428,96 +1535,13 @@ where
                 return None;
             }
 
-            // If the two structs have exactly the same set of field names (possibly in
-            // different order), prefer name-based coercion. Otherwise fall back to
-            // positional coercion which preserves backward compatibility.
-            //
-            // Name-based coercion is used in:
-            // 1. Array construction: [s1, s2] where s1 and s2 have reordered fields
-            // 2. UNION operations: different field orders unified by name
-            // 3. VALUES clauses: heterogeneous struct rows unified by field name
-            // 4. JOIN conditions: structs with matching field names
-            // 5. Window functions: partitions/orders by struct fields
-            // 6. Aggregate functions: collecting structs with reordered fields
-            //
-            // See docs/source/user-guide/sql/struct_coercion.md for detailed examples.
-            if fields_have_same_names(lhs_fields, rhs_fields) {
-                return coerce_struct_by_name(lhs_fields, rhs_fields, coerce_fn);
-            }
-
+            // Spark pairs fields by position, including duplicate and empty names.
+            // Resolver-dependent name validation belongs to the public planner;
+            // set operations also use this helper with positional schemas.
             coerce_struct_by_position(lhs_fields, rhs_fields, coerce_fn)
         }
         _ => None,
     }
-}
-
-/// Return true if every left-field name exists in the right fields (and lengths are equal).
-///
-/// # Assumptions
-/// **This function assumes field names within each struct are unique.** This assumption is safe
-/// because field name uniqueness is enforced at multiple levels:
-/// - **Arrow level:** `StructType` construction enforces unique field names at the schema level
-/// - **DataFusion level:** SQL parser rejects duplicate field names in `CREATE TABLE` and struct type definitions
-/// - **Runtime level:** `StructArray::try_new()` validates field uniqueness
-///
-/// Therefore, we don't need to handle degenerate cases like:
-/// - `struct<c1 int> -> struct<c1 int, c1 int>` (target has duplicate field names)
-/// - `struct<c1 int, c1 int> -> struct<c1 int>` (source has duplicate field names)
-fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
-    // Debug assertions: field names should be unique within each struct
-    #[cfg(debug_assertions)]
-    {
-        let lhs_names: HashSet<_> = lhs_fields.iter().map(|f| f.name()).collect();
-        assert_eq!(
-            lhs_names.len(),
-            lhs_fields.len(),
-            "Struct has duplicate field names (should be caught by Arrow schema validation)"
-        );
-
-        let rhs_names_check: HashSet<_> = rhs_fields.iter().map(|f| f.name()).collect();
-        assert_eq!(
-            rhs_names_check.len(),
-            rhs_fields.len(),
-            "Struct has duplicate field names (should be caught by Arrow schema validation)"
-        );
-    }
-
-    let rhs_names: HashSet<&str> = rhs_fields.iter().map(|f| f.name().as_str()).collect();
-    lhs_fields
-        .iter()
-        .all(|lf| rhs_names.contains(lf.name().as_str()))
-}
-
-/// Coerce two structs by matching fields by name using `coerce_fn`.
-/// Assumes the name-sets match.
-#[expect(clippy::unwrap_used)]
-fn coerce_struct_by_name<F>(
-    lhs_fields: &Fields,
-    rhs_fields: &Fields,
-    coerce_fn: F,
-) -> Option<DataType>
-where
-    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
-{
-    use arrow::datatypes::DataType::*;
-
-    let rhs_by_name: HashMap<&str, &FieldRef> =
-        rhs_fields.iter().map(|f| (f.name().as_str(), f)).collect();
-
-    let mut coerced: Vec<FieldRef> = Vec::with_capacity(lhs_fields.len());
-
-    for lhs in lhs_fields.iter() {
-        let rhs = rhs_by_name.get(lhs.name().as_str()).unwrap(); // safe: caller ensured names match
-        let coerced_type = coerce_fn(lhs.data_type(), rhs.data_type())?;
-        let is_nullable = lhs.is_nullable() || rhs.is_nullable();
-        coerced.push(Arc::new(Field::new(
-            lhs.name().clone(),
-            coerced_type,
-            is_nullable,
-        )));
-    }
-
-    Some(Struct(coerced.into()))
 }
 
 /// Coerce two structs positionally (left-to-right) using `coerce_fn`.
@@ -1553,8 +1577,12 @@ where
 /// returns the result of coercing two fields to a common type
 fn coerce_fields(common_type: DataType, lhs: &FieldRef, rhs: &FieldRef) -> FieldRef {
     let is_nullable = lhs.is_nullable() || rhs.is_nullable();
-    let name = lhs.name(); // pick the name from the left field
-    Arc::new(Field::new(name, common_type, is_nullable))
+    Arc::new(
+        lhs.as_ref()
+            .clone()
+            .with_data_type(common_type)
+            .with_nullable(is_nullable),
+    )
 }
 
 /// Coerce two Map types by coercing their inner entry fields using

@@ -8,7 +8,6 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::expressions::LambdaVariable;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion::physical_plan::joins::NestedLoopJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{
@@ -63,15 +62,6 @@ fn install_optimizer_boundary(
             ProjectionBoundary::InputFileMetadata,
         ))));
     }
-    if let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>()
-        && let Some(filter) = join.filter()
-        && expression_contains_lambda_variable(filter.expression())?
-    {
-        return Ok(Transformed::yes(Arc::new(
-            LambdaJoinFilterBoundaryExec::new(plan),
-        )));
-    }
-
     let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
         return Ok(Transformed::no(plan));
     };
@@ -90,9 +80,6 @@ fn install_optimizer_boundary(
 fn remove_optimizer_boundary(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    if let Some(boundary) = plan.downcast_ref::<LambdaJoinFilterBoundaryExec>() {
-        return Ok(Transformed::yes(Arc::clone(&boundary.join)));
-    }
     let Some(boundary) = plan.downcast_ref::<ProjectionBoundaryExec>() else {
         return Ok(Transformed::no(plan));
     };
@@ -110,83 +97,6 @@ fn projection_contains_lambda_variable(projection: &ProjectionExec) -> Result<bo
         }
     }
     Ok(false)
-}
-
-/// Hides a lambda-bearing nested-loop join from DataFusion's join-filter
-/// projection pushdown while keeping its children visible to the optimizer.
-#[derive(Debug)]
-struct LambdaJoinFilterBoundaryExec {
-    join: Arc<dyn ExecutionPlan>,
-    properties: Arc<PlanProperties>,
-}
-
-impl LambdaJoinFilterBoundaryExec {
-    fn new(join: Arc<dyn ExecutionPlan>) -> Self {
-        let properties = Arc::clone(join.properties());
-        Self { join, properties }
-    }
-}
-
-impl DisplayAs for LambdaJoinFilterBoundaryExec {
-    fn fmt_as(
-        &self,
-        _format: DisplayFormatType,
-        formatter: &mut std::fmt::Formatter,
-    ) -> std::fmt::Result {
-        write!(formatter, "LambdaJoinFilterBoundaryExec")
-    }
-}
-
-impl ExecutionPlan for LambdaJoinFilterBoundaryExec {
-    fn name(&self) -> &'static str {
-        Self::static_name()
-    }
-
-    fn properties(&self) -> &Arc<PlanProperties> {
-        &self.properties
-    }
-
-    fn maintains_input_order(&self) -> Vec<bool> {
-        self.join.maintains_input_order()
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        self.join.children()
-    }
-
-    fn apply_expressions(
-        &self,
-        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
-    ) -> Result<TreeNodeRecursion> {
-        self.join.apply_expressions(f)
-    }
-
-    fn replace_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-        options: ReplaceChildrenOptions,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let join = Arc::clone(&self.join).replace_children(children, options)?;
-        Ok(Arc::new(Self::new(join)))
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.replace_children(
-            children,
-            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-        )
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        self.join.execute(partition, context)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -311,7 +221,6 @@ mod tests {
     use datafusion::functions::expr_fn::{coalesce, concat, input_file_name};
     use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion::logical_expr::{Expr, ScalarUDF, cast, col, lit};
-    use datafusion::optimizer::simplify_expressions::{ExprSimplifier, SimplifyContext};
     use datafusion::physical_expr::execution_props::ExecutionProps;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
@@ -319,6 +228,7 @@ mod tests {
     use datafusion::physical_plan::projection::ProjectionExpr;
     use datafusion_physical_expr::create_physical_exprs;
     use sail_common_datafusion::input_file::{InputFileBlockLengthFunc, InputFileBlockStartFunc};
+    use sail_common_datafusion::simplify_expressions::{ExprSimplifier, SimplifyContext};
 
     use super::*;
     use crate::input_file_name::{

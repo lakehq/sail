@@ -8,8 +8,10 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
+use parquet_variant::Variant;
 use parquet_variant_compute::VariantArray;
 use parquet_variant_json::VariantToJson;
+use sail_common_datafusion::display::spark_f64_to_string;
 
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::utils::helper::try_field_as_variant_array;
@@ -32,7 +34,7 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
                 } else {
                     let v = variant_array.value(0);
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                        v.to_json_string()?,
+                        variant_to_json_string(&v)?,
                     ))))
                 }
             }
@@ -45,7 +47,7 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
                     arrow::array::StringViewBuilder::with_capacity(variant_array.len());
                 for variant in variant_array.iter() {
                     match variant {
-                        Some(v) => builder.append_value(v.to_json_string()?),
+                        Some(v) => builder.append_value(variant_to_json_string(&v)?),
                         None => builder.append_null(),
                     }
                 }
@@ -54,6 +56,54 @@ pub fn variant_to_json_columnar(arg: &ColumnarValue) -> Result<ColumnarValue> {
             unsupported => exec_err!("Invalid data type: {unsupported}"),
         },
     }
+}
+
+fn variant_to_json_string(variant: &Variant<'_, '_>) -> Result<String> {
+    let mut buffer = Vec::new();
+    write_variant_json(variant, &mut buffer)?;
+    String::from_utf8(buffer).map_err(|e| exec_datafusion_err!("JSON encoding error: {e}"))
+}
+
+/// Override DOUBLE formatting recursively, leaving other Variant encodings and
+/// string escaping to parquet-variant-json. Rewriting serialized JSON would also
+/// change numeric-looking strings and object keys.
+fn write_variant_json(variant: &Variant<'_, '_>, buffer: &mut Vec<u8>) -> Result<()> {
+    match variant {
+        Variant::Double(value) => {
+            if !value.is_finite() {
+                buffer.push(b'"');
+            }
+            buffer.extend_from_slice(spark_f64_to_string(*value).as_bytes());
+            if !value.is_finite() {
+                buffer.push(b'"');
+            }
+        }
+        Variant::List(list) => {
+            buffer.push(b'[');
+            for (index, value) in list.iter().enumerate() {
+                if index > 0 {
+                    buffer.push(b',');
+                }
+                write_variant_json(&value, buffer)?;
+            }
+            buffer.push(b']');
+        }
+        Variant::Object(object) => {
+            buffer.push(b'{');
+            for (index, (key, value)) in object.iter().enumerate() {
+                if index > 0 {
+                    buffer.push(b',');
+                }
+                serde_json::to_writer(&mut *buffer, key)
+                    .map_err(|e| exec_datafusion_err!("JSON encoding error: {e}"))?;
+                buffer.push(b':');
+                write_variant_json(&value, buffer)?;
+            }
+            buffer.push(b'}');
+        }
+        _ => variant.to_json(buffer)?,
+    }
+    Ok(())
 }
 
 /// Returns a JSON string from a VariantArray
@@ -137,6 +187,67 @@ mod tests {
         builder.append_json(json_str.as_str())?;
 
         Ok(builder.build())
+    }
+
+    #[test]
+    fn test_double_json_formatting() -> Result<()> {
+        for (value, expected) in [
+            (0.0, "0.0"),
+            (-0.0, "-0.0"),
+            (1.0, "1.0"),
+            (0.15, "0.15"),
+            (1e-3, "0.001"),
+            (1e-4, "1.0E-4"),
+            (1e6, "1000000.0"),
+            (1e7, "1.0E7"),
+            (1e-18, "1.0E-18"),
+            (f64::from_bits(1), "4.9E-324"),
+            (f64::NAN, "\"NaN\""),
+            (f64::INFINITY, "\"Infinity\""),
+            (f64::NEG_INFINITY, "\"-Infinity\""),
+        ] {
+            assert_eq!(variant_to_json_string(&Variant::Double(value))?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_double_formatting_preserves_strings_and_other_types() -> Result<()> {
+        use parquet_variant::{VariantBuilder, VariantDecimal4};
+
+        let mut builder = VariantBuilder::new();
+        let mut object = builder.new_object();
+        object.insert("a\"b", -0.0_f64);
+        object.insert("text", "\\1e10\n-0.0\"");
+        let mut list = object.new_list("values");
+        list.append_value(1e10_f64);
+        list.append_value(f64::INFINITY);
+        list.append_value(VariantDecimal4::try_new(12300, 4)?);
+        list.append_value(Variant::Binary(b"abc"));
+        list.append_value(Variant::Null);
+        list.finish();
+        object.finish();
+        let (metadata, value) = builder.finish();
+        assert_eq!(
+            variant_to_json_string(&Variant::try_new(&metadata, &value)?)?,
+            r#"{"a\"b":-0.0,"text":"\\1e10\n-0.0\"","values":[1.0E10,"Infinity",1.23,"YWJj",null]}"#,
+        );
+        // The numeric override must not alter the remaining leaf encodings.
+        let date = chrono::NaiveDate::from_ymd_opt(2024, 1, 2)
+            .ok_or_else(|| exec_datafusion_err!("invalid test date"))?;
+        for value in [
+            Variant::Float(1.5),
+            Variant::Date(date),
+            Variant::TimestampNtzMicros(
+                date.and_hms_opt(3, 4, 5)
+                    .ok_or_else(|| exec_datafusion_err!("invalid test time"))?,
+            ),
+            Variant::BooleanTrue,
+            Variant::from("é 1e10 -0.0"),
+        ] {
+            assert_eq!(variant_to_json_string(&value)?, value.to_json_string()?);
+        }
+        Ok(())
     }
 
     #[test]

@@ -40,9 +40,8 @@ use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
-use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
-use datafusion::physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
+use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion::physical_expr::{
     AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
@@ -133,9 +132,7 @@ use sail_delta_lake::physical_plan::{
     DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
 };
 use sail_delta_lake::schema::PhysicalPartitionColumn;
-use sail_delta_lake::spec::{
-    Action, ColumnMappingMode, ColumnMetadataKey, DeltaOperation, StructType,
-};
+use sail_delta_lake::spec::{Action, ColumnMappingMode, DeltaOperation, StructType};
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -228,6 +225,7 @@ use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
+use sail_function::scalar::misc::in_subquery_nullable::InSubqueryNullable;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_aes::{
@@ -675,6 +673,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 struct_field_matching,
                 timezone_mode,
                 virtual_columns,
+                expr_adapter_kind,
             }) => {
                 let mut base_config = try_decode_message(&base_config)?;
                 let table_schema = FileScanConfig::parse_table_schema_from_proto(&base_config)?;
@@ -743,20 +742,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let struct_field_matching =
                     Self::try_decode_struct_field_matching(struct_field_matching)?;
                 let timezone_mode = Self::try_decode_schema_evolution_timezone_mode(timezone_mode)?;
-                let adapter_factory = match timezone_mode {
-                    SchemaEvolutionTimezoneMode::Strict => {
-                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
-                            struct_field_matching,
-                        )
-                    }
-                    SchemaEvolutionTimezoneMode::Relaxed => {
-                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
-                            struct_field_matching,
-                        )
-                    }
+                let adapter_kind = expr_adapter_kind
+                    .map(r#gen::ParquetExprAdapterKind::try_from)
+                    .transpose()
+                    .map_err(|_| plan_datafusion_err!("invalid Parquet expression adapter kind"))?
+                    .unwrap_or(r#gen::ParquetExprAdapterKind::SailSchemaEvolution);
+                let adapter_factory = match adapter_kind {
+                    r#gen::ParquetExprAdapterKind::DatafusionDefault => None,
+                    r#gen::ParquetExprAdapterKind::SailSchemaEvolution => Some(match timezone_mode {
+                        SchemaEvolutionTimezoneMode::Strict => {
+                            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(
+                                struct_field_matching,
+                            )
+                            .shared()
+                        }
+                        SchemaEvolutionTimezoneMode::Relaxed => {
+                            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
+                                struct_field_matching,
+                            )
+                            .shared()
+                        }
+                    }),
                 };
                 let source = FileScanConfigBuilder::from(source)
-                    .with_expr_adapter(Some(Arc::new(adapter_factory)))
+                    .with_expr_adapter(adapter_factory)
                     .build();
                 let scan = DataSourceExec::new(Arc::new(source));
                 let scan = if output_partitioning.is_empty() {
@@ -2560,8 +2569,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         options,
                     })
                 } else if let Some(parquet_source) = file_source.downcast_ref::<ParquetSource>() {
+                    let (expr_adapter_kind, struct_field_matching, timezone_mode) =
+                        Self::parquet_schema_evolution_modes(file_scan)?;
+                    // The supported factory's complete state is carried by ParquetExecNode.
+                    // DataFusion encodes only the remaining format-agnostic scan spine.
+                    let mut spine = file_scan.clone();
+                    spine.expr_adapter_factory = None;
                     let base_config = try_encode_message(serialize_file_scan_config(
-                        file_scan,
+                        &spine,
                         self,
                         proto_converter,
                     )?)?;
@@ -2579,9 +2594,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             )
                         })
                         .transpose()?;
-                    let (struct_field_matching, timezone_mode) =
-                        Self::parquet_schema_evolution_modes(file_scan)?;
                     NodeKind::Parquet(r#gen::ParquetExecNode {
+                        expr_adapter_kind: Some(expr_adapter_kind as i32),
                         base_config,
                         options,
                         predicate,
@@ -3673,9 +3687,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
                 last_value_wins,
                 value_contains_null,
+                nullable,
             }) => {
                 let udf = SparkMapFromArrays::new(last_value_wins)
-                    .with_value_contains_null(value_contains_null);
+                    .with_value_contains_null(value_contains_null)
+                    .with_nullable(nullable);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
@@ -3863,6 +3879,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "scalar_subquery_result" => Ok(Arc::new(ScalarUDF::from(ScalarSubqueryResult::new()))),
+            "in_subquery_nullable" => Ok(Arc::new(ScalarUDF::from(InSubqueryNullable::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(SparkCastToVariant::new()))),
@@ -4095,6 +4112,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<ScalarSubqueryResult>()
+            || node_inner.is::<InSubqueryNullable>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
@@ -4193,6 +4211,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
                 last_value_wins: func.last_value_wins(),
                 value_contains_null: func.value_contains_null(),
+                nullable: func.nullable(),
             })
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromEntries>() {
             UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf {
@@ -5013,92 +5032,30 @@ impl RemoteExecutionCodec {
 
     fn parquet_schema_evolution_modes(
         file_scan: &FileScanConfig,
-    ) -> Result<(StructFieldMatching, SchemaEvolutionTimezoneMode)> {
+    ) -> Result<(
+        r#gen::ParquetExprAdapterKind,
+        StructFieldMatching,
+        SchemaEvolutionTimezoneMode,
+    )> {
         let Some(factory) = file_scan.expr_adapter_factory.as_ref() else {
             return Ok((
-                Self::parquet_struct_field_matching(file_scan),
+                r#gen::ParquetExprAdapterKind::DatafusionDefault,
+                StructFieldMatching::Name,
                 SchemaEvolutionTimezoneMode::Strict,
             ));
         };
-
-        let field_name = "__sail_schema_evolution_codec_probe";
-        let field_id = "1";
-        // Every supported identity resolves the same field, while the type difference
-        // forces the adapter to expose its matching and timezone modes through a cast.
-        let logical_field =
-            Field::new(field_name, DataType::Int64, true).with_metadata(HashMap::from([
-                (
-                    ColumnMetadataKey::ColumnMappingPhysicalName
-                        .as_ref()
-                        .to_string(),
-                    field_name.to_string(),
-                ),
-                (
-                    ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
-                    field_id.to_string(),
-                ),
-            ]));
-        let physical_field = Field::new(field_name, DataType::Int32, true).with_metadata(
-            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string())]),
-        );
-        let logical_schema = Arc::new(Schema::new(vec![logical_field]));
-        let physical_schema = Arc::new(Schema::new(vec![physical_field]));
-        let adapter = factory.create(logical_schema, physical_schema)?;
-        let rewritten = adapter.rewrite(Arc::new(Column::new(field_name, 0)))?;
-        if let Some(cast) = rewritten.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
-            return Ok((cast.matching(), cast.timezone_mode()));
-        }
-
+        let (matching, timezone_mode) =
+            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::shared_configuration(factory)
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "unsupported or unregistered Parquet expr_adapter_factory: {factory:?}"
+                    )
+                })?;
         Ok((
-            Self::parquet_struct_field_matching(file_scan),
-            SchemaEvolutionTimezoneMode::Strict,
+            r#gen::ParquetExprAdapterKind::SailSchemaEvolution,
+            matching,
+            timezone_mode,
         ))
-    }
-
-    fn parquet_struct_field_matching(file_scan: &FileScanConfig) -> StructFieldMatching {
-        fn field_or_descendant_contains_metadata(field: &Field, keys: &[&str]) -> bool {
-            if keys.iter().any(|key| field.metadata().contains_key(*key)) {
-                return true;
-            }
-            match field.data_type() {
-                DataType::Struct(fields) => fields
-                    .iter()
-                    .any(|field| field_or_descendant_contains_metadata(field, keys)),
-                DataType::List(field)
-                | DataType::LargeList(field)
-                | DataType::FixedSizeList(field, _)
-                | DataType::Map(field, _) => {
-                    field_or_descendant_contains_metadata(field.as_ref(), keys)
-                }
-                _ => false,
-            }
-        }
-
-        let fields = file_scan
-            .file_source()
-            .table_schema()
-            .file_schema()
-            .fields();
-        let has_metadata = |keys: &[&str]| {
-            fields
-                .iter()
-                .any(|field| field_or_descendant_contains_metadata(field, keys))
-        };
-
-        // `PARQUET:field_id` is present in both Delta name and ID modes, so prefer
-        // the mode-specific Delta metadata before using it as a generic fallback.
-        if has_metadata(&[
-            ColumnMetadataKey::ColumnMappingId.as_ref(),
-            ColumnMetadataKey::ParquetFieldId.as_ref(),
-        ]) {
-            StructFieldMatching::FieldId
-        } else if has_metadata(&[ColumnMetadataKey::ColumnMappingPhysicalName.as_ref()]) {
-            StructFieldMatching::PhysicalName
-        } else if has_metadata(&[PARQUET_FIELD_ID_META_KEY]) {
-            StructFieldMatching::FieldId
-        } else {
-            StructFieldMatching::Name
-        }
     }
 
     fn try_decode_physical_sink_mode(
@@ -6274,11 +6231,352 @@ impl RemoteExecutionCodec {
 
 #[cfg(test)]
 mod tests {
+    mod scan_adapter {
+        use datafusion::arrow::array::{Array, ArrayRef, Int32Array, Int64Array, StructArray};
+        use datafusion::arrow::datatypes::SchemaRef;
+        use datafusion::arrow::record_batch::RecordBatch;
+        use datafusion::execution::object_store::ObjectStoreUrl;
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column, lit};
+        use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
+        use sail_common_datafusion::schema_evolution::{
+            FIELD_DEFAULT_METADATA_KEY, SchemaEvolutionPhysicalExprAdapterFactory,
+            encode_field_default,
+        };
+
+        use super::*;
+        use crate::proto::converter::RemotePhysicalProtoConverter;
+        use crate::proto::{decode_remote_physical_plan, encode_remote_physical_plan};
+
+        fn scan(factory: Option<Arc<dyn PhysicalExprAdapterFactory>>) -> FileScanConfig {
+            FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                Arc::new(ParquetSource::new(Arc::new(Schema::new(vec![Field::new(
+                    "value",
+                    DataType::Int64,
+                    true,
+                )])))),
+            )
+            .with_expr_adapter(factory)
+            .build()
+        }
+
+        fn decoded_scan(plan: &Arc<dyn ExecutionPlan>) -> Result<&FileScanConfig> {
+            plan.downcast_ref::<DataSourceExec>()
+                .and_then(|scan| scan.data_source().downcast_ref::<FileScanConfig>())
+                .ok_or_else(|| plan_datafusion_err!("expected a decoded file scan"))
+        }
+
+        fn round_trip(config: FileScanConfig) -> Result<FileScanConfig> {
+            let plan = DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>;
+            let bytes = encode_remote_physical_plan(&RemoteExecutionCodec, plan)?;
+            let plan = decode_remote_physical_plan(
+                &TaskContext::default(),
+                &RemoteExecutionCodec,
+                &bytes,
+            )?;
+            Ok(decoded_scan(&plan)?.clone())
+        }
+
+        fn field(name: &str, id: i32, data_type: DataType) -> Field {
+            Field::new(name, data_type, true).with_metadata(HashMap::from([
+                ("PARQUET:field_id".to_owned(), id.to_string()),
+                (
+                    "delta.columnMapping.physicalName".to_owned(),
+                    format!("stored_{name}"),
+                ),
+            ]))
+        }
+
+        #[test]
+        fn round_trip_preserves_schema_evolution_configuration_and_behavior() -> Result<()> {
+            for matching in [
+                StructFieldMatching::Name,
+                StructFieldMatching::PhysicalName,
+                StructFieldMatching::FieldId,
+            ] {
+                for timezone in [
+                    SchemaEvolutionTimezoneMode::Strict,
+                    SchemaEvolutionTimezoneMode::Relaxed,
+                ] {
+                    let factory = match timezone {
+                        SchemaEvolutionTimezoneMode::Strict => {
+                            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(matching)
+                        }
+                        SchemaEvolutionTimezoneMode::Relaxed => {
+                            SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
+                                matching,
+                            )
+                        }
+                    }
+                    .shared();
+                    let default_field =
+                        field("added", 4, DataType::Int64).with_metadata(HashMap::from([
+                            ("PARQUET:field_id".to_owned(), "4".to_owned()),
+                            (
+                                FIELD_DEFAULT_METADATA_KEY.to_owned(),
+                                encode_field_default(&ScalarValue::Int64(Some(42)))?,
+                            ),
+                        ]));
+                    let logical = Arc::new(Schema::new(vec![
+                        field("value", 1, DataType::Int64),
+                        field(
+                            "nested",
+                            2,
+                            DataType::Struct(
+                                vec![field("n", 3, DataType::Int64), default_field.clone()].into(),
+                            ),
+                        ),
+                        default_field,
+                        field("missing", 5, DataType::Int64),
+                    ]));
+                    let physical_name = |name: &str| match matching {
+                        StructFieldMatching::Name => name.to_owned(),
+                        _ => format!("stored_{name}"),
+                    };
+                    let nested_field = field(&physical_name("n"), 3, DataType::Int32);
+                    let nested = StructArray::from(vec![(
+                        Arc::new(nested_field),
+                        Arc::new(Int32Array::from(vec![Some(3), None])) as ArrayRef,
+                    )]);
+                    // Reordered physical columns, renamed identities, and widened nested values.
+                    let physical = Arc::new(Schema::new(vec![
+                        field(&physical_name("nested"), 2, nested.data_type().clone()),
+                        field(&physical_name("value"), 1, DataType::Int32),
+                    ]));
+                    let batch = RecordBatch::try_new(
+                        physical.clone(),
+                        vec![Arc::new(nested), Arc::new(Int32Array::from(vec![7, 8]))],
+                    )?;
+                    let predicate = Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("value", 0)),
+                        Operator::Gt,
+                        lit(6_i64),
+                    )) as Arc<dyn PhysicalExpr>;
+                    let source =
+                        ParquetSource::new(logical.clone()).with_predicate(predicate.clone());
+                    let config = FileScanConfigBuilder::new(
+                        ObjectStoreUrl::local_filesystem(),
+                        Arc::new(source),
+                    )
+                    .with_expr_adapter(Some(factory.clone()))
+                    .with_projection_indices(Some(vec![1, 2, 0]))?
+                    .build();
+                    let decoded = round_trip(config.clone())?;
+                    assert_eq!(decoded.file_source().table_schema().file_schema(), &logical);
+                    assert_eq!(
+                        decoded.file_source().projection(),
+                        config.file_source().projection()
+                    );
+                    let source = decoded
+                        .file_source()
+                        .downcast_ref::<ParquetSource>()
+                        .ok_or_else(|| plan_datafusion_err!("expected Parquet"))?;
+                    assert!(source.filter().is_some_and(|filter| filter.eq(&predicate)));
+                    let decoded_factory = decoded
+                        .expr_adapter_factory
+                        .as_ref()
+                        .ok_or_else(|| plan_datafusion_err!("missing adapter"))?;
+                    assert_eq!(
+                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::shared_configuration(
+                            decoded_factory
+                        ),
+                        Some((matching, timezone))
+                    );
+                    let original = factory.create(logical.clone(), physical.clone())?;
+                    let restored = decoded_factory.create(logical.clone(), physical.clone())?;
+                    for index in 0..logical.fields().len() {
+                        let column = Arc::new(Column::new(logical.field(index).name(), index))
+                            as Arc<dyn PhysicalExpr>;
+                        let before = original
+                            .rewrite(column.clone())?
+                            .evaluate(&batch)?
+                            .into_array(batch.num_rows())?;
+                        let after = restored
+                            .rewrite(column)?
+                            .evaluate(&batch)?
+                            .into_array(batch.num_rows())?;
+                        assert_eq!(before.to_data(), after.to_data());
+                        assert_eq!(after.data_type(), logical.field(index).data_type());
+                        match index {
+                            0 => assert_eq!(
+                                after.as_ref(),
+                                &Int64Array::from(vec![7, 8]) as &dyn Array
+                            ),
+                            1 => {
+                                let nested = after
+                                    .as_any()
+                                    .downcast_ref::<StructArray>()
+                                    .ok_or_else(|| plan_datafusion_err!("expected struct"))?;
+                                assert_eq!(
+                                    nested.column(0).as_ref(),
+                                    &Int64Array::from(vec![Some(3), None]) as &dyn Array
+                                );
+                                assert_eq!(
+                                    nested.column(1).as_ref(),
+                                    &Int64Array::from(vec![42, 42]) as &dyn Array
+                                );
+                            }
+                            2 => assert_eq!(
+                                after.as_ref(),
+                                &Int64Array::from(vec![42, 42]) as &dyn Array
+                            ),
+                            3 => assert_eq!(after.null_count(), 2),
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn round_trip_plain_factory_is_name_strict_not_datafusion_default() -> Result<()> {
+            let factory = SchemaEvolutionPhysicalExprAdapterFactory::shared();
+            assert!(!factory.is_equivalent_to_default());
+            let decoded = round_trip(scan(Some(factory)))?;
+            assert_eq!(
+                RemoteExecutionCodec::parquet_schema_evolution_modes(&decoded)?,
+                (
+                    r#gen::ParquetExprAdapterKind::SailSchemaEvolution,
+                    StructFieldMatching::Name,
+                    SchemaEvolutionTimezoneMode::Strict,
+                )
+            );
+            let logical = Arc::new(Schema::new(vec![Field::new(
+                "required",
+                DataType::Int64,
+                false,
+            )]));
+            let physical = Arc::new(Schema::empty());
+            let column = Arc::new(Column::new("required", 0)) as Arc<dyn PhysicalExpr>;
+            let plain = SchemaEvolutionPhysicalExprAdapterFactory {}
+                .create(logical.clone(), physical.clone())?
+                .rewrite(column.clone())?;
+            let restored = decoded
+                .expr_adapter_factory
+                .ok_or_else(|| plan_datafusion_err!("missing adapter"))?
+                .create(logical, physical)?
+                .rewrite(column)?;
+            assert!(plain.eq(&restored));
+            assert_eq!(
+                restored
+                    .downcast_ref::<datafusion::physical_expr::expressions::Literal>()
+                    .map(|expr| expr.value()),
+                Some(&ScalarValue::Int64(Some(0)))
+            );
+            Ok(())
+        }
+
+        #[derive(Debug)]
+        struct UnknownFactory;
+
+        impl PhysicalExprAdapterFactory for UnknownFactory {
+            fn create(
+                &self,
+                logical: SchemaRef,
+                physical: SchemaRef,
+            ) -> Result<Arc<dyn PhysicalExprAdapter>> {
+                // A behavioral probe cannot distinguish this factory from a supported one.
+                SchemaEvolutionPhysicalExprAdapterFactory {}.create(logical, physical)
+            }
+        }
+
+        #[test]
+        fn rejects_unregistered_factories_without_probing_or_dropping_them() {
+            for factory in [
+                Arc::new(UnknownFactory) as Arc<dyn PhysicalExprAdapterFactory>,
+                Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {}),
+            ] {
+                let error =
+                    round_trip(scan(Some(factory))).expect_err("must reject unknown factory");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("unsupported or unregistered Parquet expr_adapter_factory"),
+                    "{error}"
+                );
+            }
+        }
+
+        #[test]
+        fn parquet_adapter_kind_absence_defaults_and_invalid_values() -> Result<()> {
+            assert!(round_trip(scan(None))?.expr_adapter_factory.is_none());
+            let codec = RemoteExecutionCodec;
+            let converter = RemotePhysicalProtoConverter::default();
+            let source = DataSourceExec::from_data_source(scan(None));
+            let mut bytes = vec![];
+            codec.try_encode(
+                Arc::new(RemoteDataSourceExec::new(source.as_ref())),
+                &mut bytes,
+                &converter,
+            )?;
+            let node = ExtendedPhysicalPlanNode::decode(bytes.as_slice())
+                .map_err(|error| plan_datafusion_err!("{error}"))?;
+            let Some(NodeKind::Parquet(mut parquet)) = node.node_kind else {
+                return plan_err!("expected Parquet proto");
+            };
+            let decode = |parquet| {
+                let node = ExtendedPhysicalPlanNode {
+                    node_kind: Some(NodeKind::Parquet(parquet)),
+                };
+                codec.try_decode(
+                    &node.encode_to_vec(),
+                    &[],
+                    &TaskContext::default(),
+                    &converter,
+                )
+            };
+            // Old messages did not carry field 8. Their existing mode fields still apply.
+            parquet.expr_adapter_kind = None;
+            for matching in [
+                StructFieldMatching::Name,
+                StructFieldMatching::PhysicalName,
+                StructFieldMatching::FieldId,
+            ] {
+                for timezone in [
+                    SchemaEvolutionTimezoneMode::Strict,
+                    SchemaEvolutionTimezoneMode::Relaxed,
+                ] {
+                    parquet.struct_field_matching =
+                        RemoteExecutionCodec::try_encode_struct_field_matching(matching);
+                    parquet.timezone_mode =
+                        RemoteExecutionCodec::try_encode_schema_evolution_timezone_mode(timezone);
+                    let plan = decode(parquet.clone())?;
+                    assert_eq!(
+                        RemoteExecutionCodec::parquet_schema_evolution_modes(decoded_scan(&plan)?)?,
+                        (
+                            r#gen::ParquetExprAdapterKind::SailSchemaEvolution,
+                            matching,
+                            timezone
+                        )
+                    );
+                }
+            }
+            parquet.expr_adapter_kind = Some(i32::MAX);
+            assert!(
+                decode(parquet.clone())
+                    .expect_err("invalid kind")
+                    .to_string()
+                    .contains("invalid Parquet expression adapter kind")
+            );
+            parquet.expr_adapter_kind =
+                Some(r#gen::ParquetExprAdapterKind::SailSchemaEvolution as i32);
+            parquet.struct_field_matching = i32::MAX;
+            assert!(decode(parquet.clone()).is_err());
+            parquet.struct_field_matching = 0;
+            parquet.timezone_mode = i32::MAX;
+            assert!(decode(parquet).is_err());
+            Ok(())
+        }
+    }
+
     use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
     use datafusion::arrow::datatypes::{Schema, SchemaRef};
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion::physical_expr::HigherOrderFunctionExpr;
+    use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_expr_common::physical_expr::proto_decode::PhysicalExprDecode;
     use datafusion::physical_expr_common::physical_expr::proto_encode::PhysicalExprEncode;
     use datafusion_proto::protobuf::PhysicalExprNode;
@@ -6320,22 +6618,94 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_in_subquery_nullable() -> Result<()> {
+        use datafusion::logical_expr::{
+            ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, Volatility,
+        };
+
+        let original = ScalarUDF::from(InSubqueryNullable::new());
+        let decoded = round_trip_udf(original.clone())?;
+        assert!(decoded.inner().is::<InSubqueryNullable>());
+        assert_eq!(decoded.signature(), original.signature());
+        assert_eq!(decoded.signature().volatility, Volatility::Immutable);
+        for value in [Some(true), Some(false), None] {
+            assert!(!decoded.should_evaluate_const(&[&ScalarValue::Boolean(value)]));
+            let fields = vec![Arc::new(Field::new(
+                "value",
+                DataType::Boolean,
+                value.is_none(),
+            ))];
+            let field = decoded.return_field_from_args(ReturnFieldArgs {
+                arg_fields: &fields,
+                scalar_arguments: &[None],
+            })?;
+            assert_eq!(field.data_type(), &DataType::Boolean);
+            assert!(field.is_nullable());
+            assert!(field.metadata().is_empty());
+            let actual = decoded.invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(ScalarValue::Boolean(value))],
+                arg_fields: fields,
+                number_rows: 1,
+                return_field: field,
+                config_options: Arc::new(Default::default()),
+            })?;
+            let ColumnarValue::Scalar(actual) = actual else {
+                panic!("identity must preserve scalar representation");
+            };
+            assert_eq!(actual, ScalarValue::Boolean(value));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_map_from_arrays_nullability() -> Result<()> {
         for value_contains_null in [None, Some(false), Some(true)] {
-            for last_value_wins in [false, true] {
-                let udf = SparkMapFromArrays::new(last_value_wins)
-                    .with_value_contains_null(value_contains_null);
-                let decoded = round_trip_udf(ScalarUDF::from(udf))?;
-                let decoded = downcast_udf::<SparkMapFromArrays>(&decoded, "map_from_arrays")?;
-                assert_eq!(decoded.last_value_wins(), last_value_wins);
-                assert_eq!(decoded.value_contains_null(), value_contains_null);
+            for nullable in [None, Some(false), Some(true)] {
+                for last_value_wins in [false, true] {
+                    let udf = SparkMapFromArrays::new(last_value_wins)
+                        .with_value_contains_null(value_contains_null)
+                        .with_nullable(nullable);
+                    let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+                    let decoded = downcast_udf::<SparkMapFromArrays>(&decoded, "map_from_arrays")?;
+                    assert_eq!(decoded.last_value_wins(), last_value_wins);
+                    assert_eq!(decoded.value_contains_null(), value_contains_null);
+                    assert_eq!(decoded.nullable(), nullable);
+                }
             }
         }
-        // Old messages contain only field 1; absence must not become Some(false).
-        let legacy = r#gen::SparkMapFromArraysUdf::decode(&[0x08, 0x01][..])
-            .map_err(|error| plan_datafusion_err!("{error}"))?;
-        assert!(legacy.last_value_wins);
-        assert_eq!(legacy.value_contains_null, None);
+        // Legacy messages may have field 2 but never field 3. Decode through the real codec too.
+        for (bytes, value_contains_null) in [
+            (&[0x08, 0x01][..], None),
+            (&[0x08, 0x01, 0x10, 0x00][..], Some(false)),
+            (&[0x08, 0x01, 0x10, 0x01][..], Some(true)),
+        ] {
+            let legacy = r#gen::SparkMapFromArraysUdf::decode(bytes)
+                .map_err(|error| plan_datafusion_err!("{error}"))?;
+            assert!(legacy.last_value_wins);
+            assert_eq!(legacy.value_contains_null, value_contains_null);
+            assert_eq!(legacy.nullable, None);
+            let message = r#gen::ExtendedScalarUdf {
+                udf_kind: Some(r#gen::extended_scalar_udf::UdfKind::SparkMapFromArrays(
+                    legacy,
+                )),
+            };
+            let decoded =
+                RemoteExecutionCodec.try_decode_udf("map_from_arrays", &message.encode_to_vec())?;
+            let decoded = downcast_udf::<SparkMapFromArrays>(&decoded, "map_from_arrays")?;
+            assert_eq!(decoded.nullable(), None);
+            assert_eq!(decoded.value_contains_null(), value_contains_null);
+            assert!(decoded.last_value_wins());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_struct_field_names() -> Result<()> {
+        for names in [vec![], vec!["".to_owned(), "a".to_owned(), "a".to_owned()]] {
+            let decoded = round_trip_udf(ScalarUDF::from(StructFunction::new(names.clone())))?;
+            let decoded = downcast_udf::<StructFunction>(&decoded, "struct")?;
+            assert_eq!(decoded.field_names(), names);
+        }
         Ok(())
     }
 
@@ -7600,50 +7970,6 @@ mod tests {
             );
         }
         assert!(RemoteExecutionCodec::try_decode_schema_evolution_timezone_mode(i32::MAX).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_parquet_codec_probe_preserves_schema_evolution_modes() -> Result<()> {
-        let table_schema = Arc::new(Schema::new(vec![Field::new(
-            "value",
-            DataType::Int64,
-            true,
-        )]));
-
-        for matching in [
-            StructFieldMatching::Name,
-            StructFieldMatching::PhysicalName,
-            StructFieldMatching::FieldId,
-        ] {
-            for timezone_mode in [
-                SchemaEvolutionTimezoneMode::Strict,
-                SchemaEvolutionTimezoneMode::Relaxed,
-            ] {
-                let adapter_factory = match timezone_mode {
-                    SchemaEvolutionTimezoneMode::Strict => {
-                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new(matching)
-                    }
-                    SchemaEvolutionTimezoneMode::Relaxed => {
-                        SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
-                            matching,
-                        )
-                    }
-                };
-                let parquet_source = Arc::new(ParquetSource::new(Arc::clone(&table_schema)));
-                let file_scan = FileScanConfigBuilder::new(
-                    datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
-                    parquet_source,
-                )
-                .with_expr_adapter(Some(Arc::new(adapter_factory)))
-                .build();
-
-                assert_eq!(
-                    RemoteExecutionCodec::parquet_schema_evolution_modes(&file_scan)?,
-                    (matching, timezone_mode)
-                );
-            }
-        }
         Ok(())
     }
 

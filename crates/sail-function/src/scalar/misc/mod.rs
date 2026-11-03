@@ -1,4 +1,5 @@
 pub mod hll_sketch;
+pub mod in_subquery_nullable;
 pub mod monotonically_increasing_id;
 pub mod raise_error;
 pub mod scalar_subquery_result;

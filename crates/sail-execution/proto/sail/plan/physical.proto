@@ -366,6 +366,7 @@ message SparkDateFormatUdf {
 message SparkMapFromArraysUdf {
   bool last_value_wins = 1;
   optional bool value_contains_null = 2;
+  optional bool nullable = 3;
 }
 
 message SparkMapFromEntriesUdf {
@@ -742,6 +743,11 @@ message CsvExecNode {
   bytes options = 2;
 }
 
+enum ParquetExprAdapterKind {
+  PARQUET_EXPR_ADAPTER_KIND_DATAFUSION_DEFAULT = 0;
+  PARQUET_EXPR_ADAPTER_KIND_SAIL_SCHEMA_EVOLUTION = 1;
+}
+
 message ParquetExecNode {
   bytes base_config = 1;
   bytes options = 2;
@@ -750,6 +756,8 @@ message ParquetExecNode {
   StructFieldMatching struct_field_matching = 5;
   SchemaEvolutionTimezoneMode timezone_mode = 6;
   repeated bytes virtual_columns = 7;
+  // Absent legacy payloads use Sail schema evolution with fields 5 and 6.
+  optional ParquetExprAdapterKind expr_adapter_kind = 8;
 }
 
 message ArrowExecNode {

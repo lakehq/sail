@@ -538,15 +538,16 @@ pub async fn build_file_scan_config(
         .with_statistics(stats)
         .with_projection_indices(params.projection.cloned())?
         .with_limit(params.limit)
-        .with_expr_adapter(Some(Arc::new(
+        .with_expr_adapter(Some(
             SchemaEvolutionPhysicalExprAdapterFactoryWithMatching::new_relaxed_timezone(
                 match snapshot.effective_column_mapping_mode() {
                     crate::spec::ColumnMappingMode::None => StructFieldMatching::Name,
                     crate::spec::ColumnMappingMode::Name => StructFieldMatching::PhysicalName,
                     crate::spec::ColumnMappingMode::Id => StructFieldMatching::FieldId,
                 },
-            ),
-        )))
+            )
+            .shared(),
+        ))
         .build();
 
     Ok(file_scan_config)

@@ -22,7 +22,6 @@ Feature: map_concat output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to map_concat yields the schema Spark declares
       When query
         """
