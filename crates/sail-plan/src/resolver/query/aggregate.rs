@@ -538,10 +538,30 @@ impl PlanResolver<'_> {
         };
         let projections = if with_grouping_expressions {
             if !lateral_columns.is_empty() {
+                // The lateral aliases are staged in a projection above the aggregate, and the
+                // grouping columns are carried along it. A fresh unqualified field would drop
+                // the qualifier and the attribute identity of the aggregate's grouping column,
+                // so stage it under a field that keeps both.
                 let mut columns = grouping_exprs
                     .iter()
-                    .map(|_| Column::new_unqualified(state.register_field_name("")))
-                    .collect::<Vec<_>>();
+                    .map(|x| {
+                        let source = match &x.expr {
+                            Expr::Column(column) => state
+                                .get_field_info(&column.name)
+                                .is_ok()
+                                .then(|| (column.name.clone(), column.relation.clone())),
+                            _ => None,
+                        };
+                        match source {
+                            Some((field_id, relation)) => {
+                                let field_id =
+                                    state.register_identity_field(String::new(), &field_id)?;
+                                Ok(Column::new(relation, field_id))
+                            }
+                            None => Ok(Column::new_unqualified(state.register_field_name(""))),
+                        }
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
                 columns.extend(lateral_columns);
                 lateral_columns = columns;
             }
