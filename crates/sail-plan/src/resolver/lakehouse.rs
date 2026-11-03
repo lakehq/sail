@@ -7,6 +7,7 @@ use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_object_store::register_vended_storage_credential;
 
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
@@ -60,7 +61,17 @@ impl PlanResolver<'_> {
             )
             .await
         {
-            Ok(session) => Ok(session.context),
+            Ok(session) => {
+                let object_stores = &self.ctx.runtime_env().object_store_registry;
+                for credential in &session.storage_credentials {
+                    register_vended_storage_credential(
+                        object_stores.as_ref(),
+                        &credential.prefix,
+                        &credential.config,
+                    )?;
+                }
+                Ok(session.context)
+            }
             Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
                 Ok(execution)
             }

@@ -1269,17 +1269,6 @@ pub(crate) fn validate_iceberg_lakehouse_storage_access(
             context.catalog_table().join(".")
         );
     }
-    if context
-        .rest_session
-        .as_ref()
-        .is_some_and(|session| session.storage_credential_count > 0)
-    {
-        // TODO: Apply REST vended credentials to operation-scoped storage access.
-        warn!(
-            "Iceberg REST catalog table {} advertises vended storage credentials, which is not implemented yet",
-            context.catalog_table().join(".")
-        );
-    }
     Ok(())
 }
 

@@ -20,7 +20,7 @@ use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::lakehouse::{
     BeginTableAccessRequest, LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
-    TableAccessSession,
+    TableAccessSession, VendedStorageCredential,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
@@ -53,6 +53,7 @@ pub const REST_CATALOG_PROP_NAMESPACE_SEPARATOR: &str = "namespace-separator";
 
 const REST_CATALOG_DEFAULT_NAMESPACE_SEPARATOR: &str = "\x1F";
 const REST_ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
+const REST_S3_ACCESS_KEY_ID_KEY: &str = "s3.access-key-id";
 const REST_TABLE_SCAN_PLANNING_MODE_KEY: &str = "scan-planning-mode";
 const REST_REMOTE_SIGNING_ENABLED_KEY: &str = "s3.remote-signing-enabled";
 
@@ -432,6 +433,47 @@ impl IcebergRestCatalogProvider {
                 .unwrap_or(0),
             remote_signing_enabled,
         })
+    }
+
+    /// The storage credentials of a table load. As the REST specification requires,
+    /// `storage-credentials` takes precedence over credentials in the table `config`,
+    /// which then apply to the table location. Each credential is layered over the
+    /// table `config`, so it inherits the endpoint and region the catalog sent there.
+    fn vended_storage_credentials(
+        result: &crate::r#gen::LoadTableResult,
+    ) -> Vec<VendedStorageCredential> {
+        let config = result.config.clone().unwrap_or_default();
+        let layered =
+            |prefix: &str, credential: &HashMap<String, String>| VendedStorageCredential {
+                prefix: prefix.to_string(),
+                config: config
+                    .iter()
+                    .chain(credential)
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            };
+        // An entry without an access key, such as a remote signing hint, vends nothing, and the
+        // table keeps the object store the server is configured with.
+        let has_key = |credential: &VendedStorageCredential| {
+            credential.config.contains_key(REST_S3_ACCESS_KEY_ID_KEY)
+        };
+        let vended = result
+            .storage_credentials
+            .iter()
+            .flatten()
+            .map(|credential| layered(&credential.prefix, &credential.config))
+            .filter(has_key)
+            .collect::<Vec<_>>();
+        if !vended.is_empty() {
+            return vended;
+        }
+        result
+            .metadata
+            .location
+            .iter()
+            .map(|location| layered(location, &HashMap::new()))
+            .filter(has_key)
+            .collect()
     }
 
     fn validate_create_table_access_session_requirements(
@@ -873,6 +915,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
         vec![
             LakehouseCapability::TableAccessSessions,
+            LakehouseCapability::CredentialVending,
             LakehouseCapability::IcebergRestCommit,
         ]
     }
@@ -1638,8 +1681,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
             )
             .await?;
-        // TODO: Convert preserved REST table-session credentials into operation-scoped
-        // FileIO/object-store access instead of only fingerprinting the session.
+        let storage_credentials = Self::vended_storage_credentials(&result);
         let rest_session =
             Self::rest_table_session_ref(&self.name, database, table, catalog_config, &result)?;
         if rest_session.scan_planning_mode.as_deref() == Some("server") {
@@ -1669,6 +1711,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             expires_at_ms: None,
             credential_scope,
             capability_fingerprint: context.capability_fingerprint,
+            storage_credentials,
         })
     }
 
@@ -3937,6 +3980,99 @@ mod tests {
         assert!(!serialized.contains("session-token-secret"));
         assert!(!serialized.contains("AKIA-SECRET"));
         assert!(!serialized.contains("storage-secret"));
+
+        let [credential] = session.storage_credentials.as_slice() else {
+            panic!("expected one vended credential");
+        };
+        assert_eq!(credential.prefix, "s3://credential-bucket/private-prefix");
+        assert_eq!(credential.config["s3.access-key-id"], "AKIA-SECRET");
+        // The table config is inherited, so the endpoint and region reach the store.
+        assert_eq!(credential.config["s3.remote-signing-enabled"], "true");
+        for exposed in [
+            serde_json::to_string(&session).unwrap(),
+            format!("{session:?}"),
+        ] {
+            assert!(!exposed.contains("AKIA-SECRET"));
+            assert!(!exposed.contains("storage-secret"));
+        }
+    }
+
+    fn load_table_result(extra: serde_json::Value) -> crate::r#gen::LoadTableResult {
+        let mut result = serde_json::json!({
+            "metadata": {
+                "format-version": 2,
+                "table-uuid": "12345678-1234-1234-1234-123456789012",
+                "location": "s3://bucket/wh/table",
+                "current-schema-id": 0,
+                "schemas": [{"type": "struct", "schema-id": 0, "fields": []}]
+            }
+        });
+        if let (Some(result), Some(extra)) = (result.as_object_mut(), extra.as_object()) {
+            result.extend(extra.clone());
+        }
+        serde_json::from_value(result).unwrap()
+    }
+
+    #[test]
+    fn credentials_in_the_table_config_apply_to_the_table_location() {
+        let result = load_table_result(serde_json::json!({
+            "config": {
+                "s3.access-key-id": "key",
+                "s3.secret-access-key": "secret",
+                "s3.endpoint": "http://storage:9000"
+            }
+        }));
+        let credentials = IcebergRestCatalogProvider::vended_storage_credentials(&result);
+        let [credential] = credentials.as_slice() else {
+            panic!("expected one vended credential");
+        };
+        assert_eq!(credential.prefix, "s3://bucket/wh/table");
+        assert_eq!(credential.config["s3.endpoint"], "http://storage:9000");
+    }
+
+    #[test]
+    fn storage_credentials_take_precedence_over_the_table_config() {
+        let result = load_table_result(serde_json::json!({
+            "config": {"s3.access-key-id": "config-key", "s3.endpoint": "http://storage:9000"},
+            "storage-credentials": [
+                {"prefix": "s3://bucket/wh/table/data", "config": {"s3.access-key-id": "data-key"}},
+                {"prefix": "s3://bucket/wh/table", "config": {"s3.access-key-id": "table-key"}}
+            ]
+        }));
+        let credentials = IcebergRestCatalogProvider::vended_storage_credentials(&result);
+        let keys = credentials
+            .iter()
+            .map(|c| (c.prefix.as_str(), c.config["s3.access-key-id"].as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            [
+                ("s3://bucket/wh/table/data", "data-key"),
+                ("s3://bucket/wh/table", "table-key"),
+            ]
+        );
+        assert!(
+            credentials
+                .iter()
+                .all(|c| c.config["s3.endpoint"] == "http://storage:9000")
+        );
+    }
+
+    #[test]
+    fn storage_credentials_without_an_access_key_vend_nothing() {
+        let result = load_table_result(serde_json::json!({
+            "config": {"s3.remote-signing-enabled": "true", "s3.endpoint": "http://storage:9000"},
+            "storage-credentials": [
+                {"prefix": "s3://bucket/wh/table", "config": {"s3.signer.uri": "http://catalog"}}
+            ]
+        }));
+        assert!(IcebergRestCatalogProvider::vended_storage_credentials(&result).is_empty());
+    }
+
+    #[test]
+    fn a_table_without_vended_credentials_has_none() {
+        let result = load_table_result(serde_json::json!({"config": {"s3.endpoint": "x"}}));
+        assert!(IcebergRestCatalogProvider::vended_storage_credentials(&result).is_empty());
     }
 
     async fn test_get_view_impl(name: Option<&str>) {

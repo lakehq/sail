@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::{
@@ -21,6 +22,7 @@ use sail_common_datafusion::lakeprocedure::{
     LakeProcedureRootPlacement, LakeProcedureTableTarget, LakeProcedureTarget,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_object_store::register_vended_storage_credential;
 
 /// Engine-owned physical boundary around a provider-planned procedure implementation.
 #[derive(Debug, Clone)]
@@ -196,6 +198,7 @@ pub async fn prepare_lake_procedure_execution(
         ) => {
             prepare_table_target(
                 manager.as_ref(),
+                context.runtime_env().object_store_registry.as_ref(),
                 &call.catalog,
                 &call.lake_source,
                 call.invocation.procedure.access,
@@ -228,6 +231,7 @@ pub async fn prepare_lake_procedure_execution(
 
 async fn prepare_table_target(
     manager: &CatalogManager,
+    object_stores: &dyn ObjectStoreRegistry,
     catalog: &str,
     lake_source: &str,
     access: LakeProcedureAccess,
@@ -295,7 +299,16 @@ async fn prepare_table_target(
         )
         .await
     {
-        Ok(session) => session.context,
+        Ok(session) => {
+            for credential in &session.storage_credentials {
+                register_vended_storage_credential(
+                    object_stores,
+                    &credential.prefix,
+                    &credential.config,
+                )?;
+            }
+            session.context
+        }
         Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
             resolved.execution
         }

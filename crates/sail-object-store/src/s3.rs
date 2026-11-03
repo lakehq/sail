@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -146,6 +147,44 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
         builder = builder.with_region(region);
     }
 
+    builder.build()
+}
+
+/// An S3 object store for the bucket of `url` that signs with the Iceberg FileIO
+/// properties a catalog vended (`s3.access-key-id`, `s3.secret-access-key`,
+/// `s3.session-token`, `s3.endpoint`, `s3.region` or `client.region`, and
+/// `s3.path-style-access`). It never reads credentials from the environment.
+pub fn get_vended_s3_object_store(
+    url: &Url,
+    config: &BTreeMap<String, String>,
+) -> object_store::Result<AmazonS3> {
+    let get = |key: &str| config.get(key).filter(|value| !value.is_empty());
+    let required = |key: &str| {
+        get(key).ok_or_else(|| object_store::Error::Generic {
+            store: "S3",
+            source: Box::new(plan_datafusion_err!(
+                "vended storage credential for {url} has no {key}"
+            )),
+        })
+    };
+    let mut builder = parse_s3_url(AmazonS3Builder::new(), url)?
+        .with_access_key_id(required("s3.access-key-id")?)
+        .with_secret_access_key(required("s3.secret-access-key")?);
+    if let Some(token) = get("s3.session-token") {
+        builder = builder.with_token(token);
+    }
+    if let Some(region) = get("s3.region").or_else(|| get("client.region")) {
+        builder = builder.with_region(region);
+    }
+    if let Some(endpoint) = get("s3.endpoint") {
+        builder = builder
+            .with_allow_http(endpoint.starts_with("http://"))
+            .with_endpoint(endpoint);
+    }
+    if let Some(path_style) = get("s3.path-style-access") {
+        builder =
+            builder.with_virtual_hosted_style_request(!path_style.eq_ignore_ascii_case("true"));
+    }
     builder.build()
 }
 

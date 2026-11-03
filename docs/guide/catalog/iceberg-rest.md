@@ -33,6 +33,15 @@ Sail calls `GET /v1/config` before catalog operations. The final Iceberg REST ca
 
 Server overrides take precedence over matching values configured in Sail. For example, if the REST server returns `namespace-separator` in `overrides`, Sail uses that value to encode multipart namespaces even when `namespace_separator` is configured locally. Configuring `namespace_separator` in Sail does not configure the REST server. The server must already decode the same separator, usually by advertising it from `/v1/config`.
 
+## Vended Storage Credentials
+
+Sail asks the REST server for table credentials with the `X-Iceberg-Access-Delegation: vended-credentials` header. When the server vends S3 credentials with a table, Sail reads and writes the table's files with them:
+
+- Each entry of `storage-credentials` applies to the paths under its `prefix`. Without `storage-credentials`, the S3 keys in the table `config` (`s3.access-key-id`, `s3.secret-access-key`, `s3.session-token`) apply to the table location.
+- Each credential is layered over the S3 options of the table `config`, such as `s3.endpoint`, `s3.region` and `s3.path-style-access`.
+- The S3 client for a credential is built from these values alone, never from the environment of the server. Paths that no credential covers keep the object store that the server is configured with.
+- The credentials belong to the Spark session and are never part of a serialized plan. They apply in local mode only: in cluster mode, workers do not receive them.
+
 ## Examples
 
 This example configures an Iceberg REST catalog without authentication.

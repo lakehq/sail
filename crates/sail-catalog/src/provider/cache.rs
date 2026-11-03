@@ -657,6 +657,7 @@ mod tests {
                 context: request.context,
                 expires_at_ms: Some(123),
                 credential_scope: Some("test-scope".to_string()),
+                storage_credentials: vec![],
             })
         }
 

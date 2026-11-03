@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
@@ -104,6 +106,27 @@ pub struct TableAccessSession {
     pub expires_at_ms: Option<i64>,
     pub credential_scope: Option<String>,
     pub capability_fingerprint: CapabilityFingerprint,
+    /// Storage credentials the catalog vended for this access.
+    /// They are never serialized, so they cannot leak into a plan.
+    #[serde(skip)]
+    pub storage_credentials: Vec<VendedStorageCredential>,
+}
+
+/// Object-store configuration a catalog vended for one storage location prefix,
+/// such as `s3.access-key-id` for `s3://bucket/warehouse/table`.
+#[derive(Clone, Eq, PartialEq, Hash, PartialOrd)]
+pub struct VendedStorageCredential {
+    pub prefix: String,
+    pub config: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for VendedStorageCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VendedStorageCredential")
+            .field("prefix", &self.prefix)
+            .field("config", &self.config.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

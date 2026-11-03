@@ -5,12 +5,13 @@ use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{Result, plan_datafusion_err};
 #[cfg(feature = "hdfs")]
 use hdfs_native_object_store::HdfsObjectStoreBuilder;
-use log::debug;
+use log::{debug, warn};
 use object_store::azure::{MicrosoftAzure, MicrosoftAzureBuilder};
 use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder};
 use object_store::http::{HttpBuilder, HttpStore};
 use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
+use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreScheme};
 use sail_common::runtime::RuntimeHandle;
 use url::Url;
@@ -18,6 +19,7 @@ use url::Url;
 use crate::hugging_face::HuggingFaceObjectStore;
 use crate::layers::lazy::LazyObjectStore;
 use crate::layers::logging::LoggingObjectStore;
+use crate::layers::prefix::PrefixObjectStore;
 use crate::layers::runtime::RuntimeAwareObjectStore;
 use crate::s3::get_s3_object_store;
 
@@ -43,6 +45,7 @@ impl ObjectStoreKey {
 #[derive(Debug)]
 pub struct DynamicObjectStoreRegistry {
     stores: DashMap<ObjectStoreKey, Arc<dyn ObjectStore>>,
+    prefixed: DashMap<ObjectStoreKey, Arc<PrefixObjectStore>>,
     runtime: RuntimeHandle,
 }
 
@@ -57,7 +60,11 @@ impl DynamicObjectStoreRegistry {
             },
             Arc::new(LoggingObjectStore::new(Arc::new(LocalFileSystem::new()))),
         );
-        Self { stores, runtime }
+        Self {
+            stores,
+            prefixed: DashMap::new(),
+            runtime,
+        }
     }
 
     pub fn register_session_store(
@@ -85,17 +92,35 @@ impl DynamicObjectStoreRegistry {
     }
 }
 
-impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
-    fn register_store(
+impl DynamicObjectStoreRegistry {
+    /// Routes requests under the path of `url` to `store`. The rest of the bucket
+    /// keeps the store it had.
+    fn register_prefix_store(
         &self,
         url: &Url,
+        prefix: &str,
         store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore>> {
+    ) -> Result<()> {
         let key = ObjectStoreKey::new(url, None);
-        self.stores.insert(key, store)
+        let router = match self.prefixed.get(&key) {
+            Some(router) => router.clone(),
+            None => {
+                let fallback = self.get_default_store(url)?;
+                self.prefixed
+                    .entry(key)
+                    .or_insert_with(|| Arc::new(PrefixObjectStore::new(fallback)))
+                    .clone()
+            }
+        };
+        let store = RuntimeAwareObjectStore::try_new(|| Ok(store), self.runtime.io().clone())?;
+        router.register(
+            Path::from(prefix),
+            Arc::new(LoggingObjectStore::new(Arc::new(store))),
+        );
+        Ok(())
     }
 
-    fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+    fn get_default_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
         let key = ObjectStoreKey::new(url, None);
 
         // Use entry API for atomic get-or-insert
@@ -111,6 +136,35 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
             .clone();
 
         Ok(store)
+    }
+}
+
+impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
+    /// Registers `store` for the scheme and authority of `url`. When `url` has a
+    /// path, the store serves only that path prefix, such as one table location
+    /// with the storage credentials a catalog vended for it.
+    fn register_store(
+        &self,
+        url: &Url,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        let prefix = url.path().trim_matches('/');
+        if prefix.is_empty() {
+            let key = ObjectStoreKey::new(url, None);
+            return self.stores.insert(key, store);
+        }
+        if let Err(e) = self.register_prefix_store(url, prefix, store) {
+            warn!("cannot register object store for {url}: {e}");
+        }
+        None
+    }
+
+    fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
+        let key = ObjectStoreKey::new(url, None);
+        if let Some(router) = self.prefixed.get(&key) {
+            return Ok(router.clone());
+        }
+        self.get_default_store(url)
     }
 }
 
@@ -296,6 +350,35 @@ mod tests {
             .unwrap();
         let default_store = registry.get_store(&url).unwrap();
         assert!(Arc::ptr_eq(&fallback, &default_store));
+    }
+
+    #[tokio::test]
+    async fn a_store_registered_for_a_path_serves_only_that_prefix() {
+        use object_store::path::Path;
+        use object_store::{ObjectStoreExt, PutPayload};
+
+        let handle = Handle::current();
+        let registry = DynamicObjectStoreRegistry::new(RuntimeHandle::new(handle.clone(), handle));
+        let bucket = Url::parse("memory:///").unwrap();
+        let table: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let default_store = registry.get_store(&bucket).unwrap();
+
+        let replaced =
+            registry.register_store(&Url::parse("memory:///wh/t1").unwrap(), table.clone());
+        assert!(replaced.is_none());
+
+        let store = registry.get_store(&bucket).unwrap();
+        store
+            .put(&Path::from("wh/t1/a"), PutPayload::from_static(b"x"))
+            .await
+            .unwrap();
+        store
+            .put(&Path::from("wh/t2/a"), PutPayload::from_static(b"x"))
+            .await
+            .unwrap();
+        assert!(table.head(&Path::from("wh/t1/a")).await.is_ok());
+        assert!(table.head(&Path::from("wh/t2/a")).await.is_err());
+        assert!(default_store.head(&Path::from("wh/t2/a")).await.is_ok());
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, StringArray};
+use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::error::CatalogError;
@@ -24,6 +25,7 @@ use sail_common_datafusion::lakeprocedure::{
     LakeProcedureValue,
 };
 use sail_common_datafusion::literal::LiteralEvaluator;
+use sail_object_store::register_vended_storage_credential;
 use uuid::Uuid;
 
 use crate::error::{PlanError, PlanResult};
@@ -293,6 +295,7 @@ impl PlanResolver<'_> {
                     canonical_table.push(table_status.name.clone());
                     let planning = resolve_procedure_table_planning(
                         manager.as_ref(),
+                        self.ctx.runtime_env().object_store_registry.as_ref(),
                         &canonical_table,
                         format,
                         invocation.procedure.access,
@@ -478,6 +481,7 @@ struct ProcedureTablePlanning {
 
 async fn resolve_procedure_table_planning(
     manager: &CatalogManager,
+    object_stores: &dyn ObjectStoreRegistry,
     table: &[String],
     format: &str,
     access: LakeProcedureAccess,
@@ -504,7 +508,16 @@ async fn resolve_procedure_table_planning(
         )
         .await
     {
-        Ok(session) => session.context,
+        Ok(session) => {
+            for credential in &session.storage_credentials {
+                register_vended_storage_credential(
+                    object_stores,
+                    &credential.prefix,
+                    &credential.config,
+                )?;
+            }
+            session.context
+        }
         Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
             binding.clone()
         }
