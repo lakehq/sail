@@ -236,6 +236,7 @@ Process decisions, in brief: product code and tests go in Sail, plans, reviews, 
   - A real run materializes metadata, then publishes views, then runs batch flows.
   - A failed write may leave tables behind, as in Spark (DESIGN.md §2–4).
 - **Validation order** (CF-0082, CF-0091). First resolve all flows, then validate in Spark's order:
+
   1. user-specified schemas;
   2. topology;
   3. CDC multiflow, then MV multiflow;
