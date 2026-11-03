@@ -59,6 +59,7 @@ pub struct ServerSessionFactory {
     mutator: Box<dyn ServerSessionMutator>,
     runtime_env: RuntimeEnvFactory,
     catalog_cache_manager: Arc<CatalogCacheManager>,
+    session_catalog_http_client: reqwest::Client,
 }
 
 impl ServerSessionFactory {
@@ -74,6 +75,7 @@ impl ServerSessionFactory {
             mutator,
             runtime_env,
             catalog_cache_manager: Arc::new(CatalogCacheManager::new()),
+            session_catalog_http_client: reqwest::Client::new(),
         }
     }
 }
@@ -114,7 +116,10 @@ impl ServerSessionFactory {
                 self.runtime.clone(),
                 self.catalog_cache_manager.clone(),
             )?))
-            .with_extension(Arc::new(SessionCatalogFactory::new(self.runtime.clone())))
+            .with_extension(Arc::new(SessionCatalogFactory::new(
+                self.runtime.clone(),
+                self.session_catalog_http_client.clone(),
+            )))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
             .with_extension(Arc::new(RemoteCheckpointRegistry::new(

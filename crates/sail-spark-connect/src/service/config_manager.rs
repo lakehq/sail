@@ -493,7 +493,10 @@ mod tests {
             SessionConfig::new()
                 .with_extension(Arc::new(manager))
                 .with_extension(Arc::new(spark))
-                .with_extension(Arc::new(SessionCatalogFactory::new(runtime))),
+                .with_extension(Arc::new(SessionCatalogFactory::new(
+                    runtime,
+                    reqwest::Client::new(),
+                ))),
         )
     }
 

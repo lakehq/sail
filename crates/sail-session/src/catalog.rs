@@ -69,6 +69,7 @@ pub fn create_catalog_manager(
                         prefix.as_deref(),
                         namespace_separator.as_deref(),
                         credentials,
+                        None,
                         &runtime,
                     )?;
                     let provider = wrap_catalog_provider(
@@ -271,6 +272,9 @@ pub const SESSION_CATALOG_ICEBERG_REST: &str = "iceberg-rest";
 /// since a global cache is keyed by the catalog name and so would be shared across sessions.
 pub struct SessionCatalogFactory {
     runtime: RuntimeHandle,
+    /// The HTTP client shared by the session catalogs. A catalog is rebuilt whenever one of its
+    /// options changes, and creating a client for each one would cost far more than the change.
+    http_client: reqwest::Client,
 }
 
 impl SessionExtension for SessionCatalogFactory {
@@ -280,8 +284,11 @@ impl SessionExtension for SessionCatalogFactory {
 }
 
 impl SessionCatalogFactory {
-    pub fn new(runtime: RuntimeHandle) -> Self {
-        Self { runtime }
+    pub fn new(runtime: RuntimeHandle, http_client: reqwest::Client) -> Self {
+        Self {
+            runtime,
+            http_client,
+        }
     }
 
     /// Makes the catalog `name` match its definition: the value of `spark.sql.catalog.<name>`
@@ -341,6 +348,7 @@ impl SessionCatalogFactory {
             options.get("prefix").map(String::as_str),
             options.get("namespace_separator").map(String::as_str),
             credentials,
+            Some(&self.http_client),
             &self.runtime,
         )?;
         Ok(Some(Arc::new(provider)))
@@ -354,6 +362,7 @@ fn iceberg_rest_provider(
     prefix: Option<&str>,
     namespace_separator: Option<&str>,
     credentials: Arc<dyn CatalogCredentials>,
+    http_client: Option<&reqwest::Client>,
     runtime: &RuntimeHandle,
 ) -> CatalogResult<RuntimeAwareCatalogProvider<IcebergRestCatalogProvider>> {
     let mut properties = HashMap::new();
@@ -372,13 +381,18 @@ fn iceberg_rest_provider(
     }
     RuntimeAwareCatalogProvider::try_new(
         || {
-            Ok(IcebergRestCatalogProvider::new(
-                name.to_string(),
-                IcebergRestCatalogOptions {
-                    credentials,
-                    properties,
-                },
-            ))
+            let options = IcebergRestCatalogOptions {
+                credentials,
+                properties,
+            };
+            Ok(match http_client {
+                Some(client) => IcebergRestCatalogProvider::with_http_client(
+                    name.to_string(),
+                    options,
+                    client.clone(),
+                ),
+                None => IcebergRestCatalogProvider::new(name.to_string(), options),
+            })
         },
         runtime.io().clone(),
     )
@@ -594,7 +608,10 @@ mod tests {
             Arc::new(CatalogCacheManager::new()),
         )
         .unwrap();
-        (manager, SessionCatalogFactory::new(runtime))
+        (
+            manager,
+            SessionCatalogFactory::new(runtime, reqwest::Client::new()),
+        )
     }
 
     fn iceberg_options(token: &str) -> HashMap<String, String> {

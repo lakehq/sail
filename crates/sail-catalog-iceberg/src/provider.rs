@@ -133,10 +133,21 @@ pub struct IcebergRestCatalogProvider {
 
 impl IcebergRestCatalogProvider {
     pub fn new(name: String, options: IcebergRestCatalogOptions) -> Self {
+        Self::with_http_client(name, options, reqwest::Client::new())
+    }
+
+    /// Creates a provider that sends its requests with the given HTTP client.
+    /// Creating a client is expensive, since it loads the TLS root certificates,
+    /// while cloning one shares its connection pool.
+    pub fn with_http_client(
+        name: String,
+        options: IcebergRestCatalogOptions,
+        http_client: reqwest::Client,
+    ) -> Self {
         Self {
             name,
             options,
-            http_client: reqwest::Client::new(),
+            http_client,
             resolved_catalog_config: OnceCell::new(),
         }
     }
