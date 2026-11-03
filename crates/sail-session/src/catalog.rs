@@ -6,7 +6,7 @@ use datafusion_common::plan_err;
 use sail_catalog::credentials::{
     CatalogCredentials, EmptyCatalogCredentials, FileCatalogCredentials, StaticCatalogCredentials,
 };
-use sail_catalog::error::CatalogResult;
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{
     CachingCatalogProvider, CatalogCacheManager, CatalogProvider, RuntimeAwareCatalogProvider,
@@ -20,6 +20,7 @@ use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
 use sail_catalog_unity::{UnityCatalogConfig, UnityCatalogOptions, UnityCatalogProvider};
 use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType, OneLakeApi};
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::extension::SessionExtension;
 use secrecy::{ExposeSecret, SecretString};
 
 pub fn create_catalog_manager(
@@ -56,38 +57,19 @@ pub fn create_catalog_manager(
                     bearer_access_token_file,
                     cache,
                 } => {
-                    let mut properties = HashMap::new();
-                    properties.insert("uri".to_string(), uri.to_string());
-                    if let Some(warehouse) = warehouse {
-                        properties.insert("warehouse".to_string(), warehouse.to_string());
-                    }
-                    if let Some(prefix) = prefix {
-                        properties.insert("prefix".to_string(), prefix.to_string());
-                    }
-                    if let Some(namespace_separator) = namespace_separator {
-                        properties.insert(
-                            "namespace-separator".to_string(),
-                            namespace_separator.to_string(),
-                        );
-                    }
                     let credentials = iceberg_rest_credentials(
                         bearer_access_token_file.as_ref(),
                         bearer_access_token.as_ref(),
                         oauth_access_token.as_ref(),
                     );
-
-                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
-                        || {
-                            let provider = IcebergRestCatalogProvider::new(
-                                name.to_string(),
-                                IcebergRestCatalogOptions {
-                                    credentials,
-                                    properties,
-                                },
-                            );
-                            Ok(provider)
-                        },
-                        runtime.io().clone(),
+                    let runtime_aware = iceberg_rest_provider(
+                        name,
+                        uri,
+                        warehouse.as_deref(),
+                        prefix.as_deref(),
+                        namespace_separator.as_deref(),
+                        credentials,
+                        &runtime,
                     )?;
                     let provider = wrap_catalog_provider(
                         Arc::new(runtime_aware),
@@ -276,6 +258,130 @@ pub fn create_catalog_manager(
     };
     CatalogManager::try_new(options)
         .map_err(|e| plan_datafusion_err!("failed to create catalog manager: {e}"))
+}
+
+/// The value of `spark.sql.catalog.<name>` that registers an Iceberg REST catalog.
+pub const SESSION_CATALOG_ICEBERG_REST: &str = "iceberg-rest";
+
+/// Builds the catalogs that a session registers at runtime, for example from the
+/// `spark.sql.catalog.<name>*` options of a Spark session.
+///
+/// A session catalog is registered in the session's [`CatalogManager`] only, so it is
+/// invisible to other sessions and is dropped with the session. It has no catalog cache,
+/// since a global cache is keyed by the catalog name and so would be shared across sessions.
+pub struct SessionCatalogFactory {
+    runtime: RuntimeHandle,
+}
+
+impl SessionExtension for SessionCatalogFactory {
+    fn name() -> &'static str {
+        "session catalog factory"
+    }
+}
+
+impl SessionCatalogFactory {
+    pub fn new(runtime: RuntimeHandle) -> Self {
+        Self { runtime }
+    }
+
+    /// Makes the catalog `name` match its definition: the value of `spark.sql.catalog.<name>`
+    /// and the options under `spark.sql.catalog.<name>.`, without that prefix.
+    ///
+    /// The catalog is registered once its type is known and, for an Iceberg REST catalog,
+    /// its `uri` is set. Until then, and when the type is not supported, the catalog is removed.
+    pub fn apply(
+        &self,
+        manager: &CatalogManager,
+        name: &str,
+        kind: Option<&str>,
+        options: &HashMap<String, String>,
+    ) -> CatalogResult<()> {
+        let provider = match kind {
+            Some(SESSION_CATALOG_ICEBERG_REST) => {
+                if manager.has_fixed_catalog(name)? {
+                    return Err(CatalogError::AlreadyExists(
+                        CatalogObject::Catalog,
+                        name.to_string(),
+                    ));
+                }
+                self.iceberg_rest(name, options)?
+            }
+            _ => None,
+        };
+        match provider {
+            Some(provider) => manager.register_session_catalog(name, provider),
+            None => manager.remove_session_catalog(name),
+        }
+    }
+
+    fn iceberg_rest(
+        &self,
+        name: &str,
+        options: &HashMap<String, String>,
+    ) -> CatalogResult<Option<Arc<dyn CatalogProvider>>> {
+        if options.contains_key("bearer_access_token_file") {
+            // The server would read the file and send its content to the catalog `uri`.
+            return Err(CatalogError::NotSupported(
+                "bearer_access_token_file for a session catalog".to_string(),
+            ));
+        }
+        let Some(uri) = options.get("uri") else {
+            return Ok(None);
+        };
+        let secret = |key: &str| options.get(key).map(|x| SecretString::from(x.clone()));
+        let credentials = iceberg_rest_credentials(
+            None,
+            secret("bearer_access_token").as_ref(),
+            secret("oauth_access_token").as_ref(),
+        );
+        let provider = iceberg_rest_provider(
+            name,
+            uri,
+            options.get("warehouse").map(String::as_str),
+            options.get("prefix").map(String::as_str),
+            options.get("namespace_separator").map(String::as_str),
+            credentials,
+            &self.runtime,
+        )?;
+        Ok(Some(Arc::new(provider)))
+    }
+}
+
+fn iceberg_rest_provider(
+    name: &str,
+    uri: &str,
+    warehouse: Option<&str>,
+    prefix: Option<&str>,
+    namespace_separator: Option<&str>,
+    credentials: Arc<dyn CatalogCredentials>,
+    runtime: &RuntimeHandle,
+) -> CatalogResult<RuntimeAwareCatalogProvider<IcebergRestCatalogProvider>> {
+    let mut properties = HashMap::new();
+    properties.insert("uri".to_string(), uri.to_string());
+    if let Some(warehouse) = warehouse {
+        properties.insert("warehouse".to_string(), warehouse.to_string());
+    }
+    if let Some(prefix) = prefix {
+        properties.insert("prefix".to_string(), prefix.to_string());
+    }
+    if let Some(namespace_separator) = namespace_separator {
+        properties.insert(
+            "namespace-separator".to_string(),
+            namespace_separator.to_string(),
+        );
+    }
+    RuntimeAwareCatalogProvider::try_new(
+        || {
+            Ok(IcebergRestCatalogProvider::new(
+                name.to_string(),
+                IcebergRestCatalogOptions {
+                    credentials,
+                    properties,
+                },
+            ))
+        },
+        runtime.io().clone(),
+    )
 }
 
 fn wrap_catalog_provider(
@@ -471,5 +577,136 @@ mod tests {
     async fn iceberg_credentials_are_empty_without_any_token() {
         let credentials = iceberg_rest_credentials(None, None, None);
         assert_eq!(credentials.retrieve().await.unwrap(), None);
+    }
+
+    fn session_catalog_manager() -> (CatalogManager, SessionCatalogFactory) {
+        let handle = tokio::runtime::Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let mut config = AppConfig::load().unwrap();
+        config.catalog.list = vec![CatalogType::Memory {
+            name: "sail".to_string(),
+            initial_database: vec!["default".to_string()],
+            initial_database_comment: None,
+        }];
+        let manager = create_catalog_manager(
+            &config,
+            runtime.clone(),
+            Arc::new(CatalogCacheManager::new()),
+        )
+        .unwrap();
+        (manager, SessionCatalogFactory::new(runtime))
+    }
+
+    fn iceberg_options(token: &str) -> HashMap<String, String> {
+        HashMap::from([
+            (
+                "uri".to_string(),
+                "http://catalog.invalid/catalog".to_string(),
+            ),
+            ("warehouse".to_string(), "org_1".to_string()),
+            ("bearer_access_token".to_string(), token.to_string()),
+        ])
+    }
+
+    #[tokio::test]
+    async fn session_catalog_registers_and_resolves() {
+        let (manager, factory) = session_catalog_manager();
+        factory
+            .apply(
+                &manager,
+                "org_1",
+                Some(SESSION_CATALOG_ICEBERG_REST),
+                &iceberg_options("token"),
+            )
+            .unwrap();
+        let mut names = manager.list_catalogs(None).unwrap();
+        names.sort();
+        assert_eq!(
+            names.iter().map(|x| x.as_ref()).collect::<Vec<_>>(),
+            vec!["org_1", "sail", "system"]
+        );
+        assert!(manager.resolve_catalog_reference(Some("org_1")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn session_catalogs_of_two_managers_are_separate() {
+        let (first, factory) = session_catalog_manager();
+        let (second, _) = session_catalog_manager();
+        factory
+            .apply(
+                &first,
+                "org_1",
+                Some(SESSION_CATALOG_ICEBERG_REST),
+                &iceberg_options("token"),
+            )
+            .unwrap();
+        assert!(first.resolve_catalog_reference(Some("org_1")).is_ok());
+        assert!(second.resolve_catalog_reference(Some("org_1")).is_err());
+    }
+
+    #[tokio::test]
+    async fn session_catalog_cannot_replace_a_server_or_the_system_catalog() {
+        let (manager, factory) = session_catalog_manager();
+        for name in ["sail", SYSTEM_CATALOG_NAME] {
+            let error = factory
+                .apply(
+                    &manager,
+                    name,
+                    Some(SESSION_CATALOG_ICEBERG_REST),
+                    &iceberg_options("token"),
+                )
+                .unwrap_err();
+            assert!(matches!(error, CatalogError::AlreadyExists(..)), "{error}");
+        }
+        // Removing a name that the session did not register keeps the server catalog.
+        factory
+            .apply(&manager, "sail", None, &HashMap::new())
+            .unwrap();
+        assert!(manager.resolve_catalog_reference(Some("sail")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn session_catalog_is_removed_without_a_type_or_a_uri() {
+        let (manager, factory) = session_catalog_manager();
+        let kind = Some(SESSION_CATALOG_ICEBERG_REST);
+        factory
+            .apply(&manager, "org_1", kind, &iceberg_options("token"))
+            .unwrap();
+        factory
+            .apply(&manager, "org_1", kind, &HashMap::new())
+            .unwrap();
+        assert!(manager.resolve_catalog_reference(Some("org_1")).is_err());
+        factory
+            .apply(&manager, "org_1", kind, &iceberg_options("token"))
+            .unwrap();
+        factory
+            .apply(&manager, "org_1", None, &iceberg_options("token"))
+            .unwrap();
+        assert!(manager.resolve_catalog_reference(Some("org_1")).is_err());
+    }
+
+    #[tokio::test]
+    async fn session_catalog_refuses_a_token_file() {
+        let (manager, factory) = session_catalog_manager();
+        let mut options = iceberg_options("token");
+        options.insert(
+            "bearer_access_token_file".to_string(),
+            "/var/run/secrets/token".to_string(),
+        );
+        let error = factory
+            .apply(
+                &manager,
+                "org_1",
+                Some(SESSION_CATALOG_ICEBERG_REST),
+                &options,
+            )
+            .unwrap_err();
+        assert!(matches!(error, CatalogError::NotSupported(_)), "{error}");
+    }
+
+    #[test]
+    fn static_credentials_do_not_print_the_token() {
+        let credentials = StaticCatalogCredentials::new("secret-token".to_string());
+        assert!(!format!("{credentials:?}").contains("secret-token"));
     }
 }

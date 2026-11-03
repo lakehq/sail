@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use datafusion_expr::{LogicalPlan, ScalarUDF};
@@ -26,6 +26,9 @@ pub struct CatalogManager {
 
 pub(super) struct CatalogManagerState {
     pub(super) catalogs: HashMap<Arc<str>, Arc<dyn CatalogProvider>>,
+    /// Names of the catalogs registered by the session at runtime.
+    /// The catalogs defined by the server configuration are not in this set.
+    pub(super) session_catalogs: HashSet<Arc<str>>,
     pub(super) functions: HashMap<Arc<str>, datafusion_expr::ScalarUDF>,
     pub(super) default_catalog: Arc<str>,
     pub(super) default_database: Namespace,
@@ -57,6 +60,7 @@ impl CatalogManager {
         // Even if the default database is valid now, it may be dropped externally later.
         let state = CatalogManagerState {
             catalogs,
+            session_catalogs: HashSet::new(),
             functions: HashMap::new(),
             default_catalog: options.default_catalog.into(),
             default_database: options.default_database.try_into()?,

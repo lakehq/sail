@@ -65,6 +65,30 @@ This example configures a client-side namespace separator fallback.
 export SAIL_CATALOG__LIST='[{type="iceberg-rest", name="sail", uri="https://catalog.example.com", namespace_separator="::"}]'
 ```
 
+## Session Catalogs
+
+A Spark session can also register an Iceberg REST catalog at runtime, with the Spark catalog options `spark.sql.catalog.<name>`. Set them with `spark.conf.set(...)` (the Spark Connect `Config` operation) or with the SQL `SET` statement.
+
+- `spark.sql.catalog.<name>`: set this to `iceberg-rest`.
+- `spark.sql.catalog.<name>.uri` (required): the base URI of the catalog server.
+- `spark.sql.catalog.<name>.warehouse`, `.prefix`, `.namespace_separator`, `.oauth_access_token` and `.bearer_access_token`: the same options as above.
+
+```python
+spark.conf.set("spark.sql.catalog.org_1", "iceberg-rest")
+spark.conf.set("spark.sql.catalog.org_1.uri", "https://catalog.example.com")
+spark.conf.set("spark.sql.catalog.org_1.warehouse", "org_1")
+spark.conf.set("spark.sql.catalog.org_1.bearer_access_token", "...")
+spark.sql("SELECT * FROM org_1.raw.events")
+```
+
+The catalog is registered once its type and `uri` are set, and it is replaced when one of its options changes. Unsetting `spark.sql.catalog.<name>` drops it. A change that cannot be applied is rejected and leaves the options as they were.
+
+- The catalog belongs to the session. Other sessions do not see it, and it is dropped when the session is released. A session cannot replace a catalog from the server configuration or the `system` catalog, and the default catalog cannot be dropped. Unsetting an option of a catalog that the session did not register does nothing.
+- A session catalog has no catalog cache.
+- The `bearer_access_token_file` option is not available, since the server would read a file named by the client.
+- The values of options that match `spark.redaction.regex` (by default `secret`, `password`, `token` and `access key` in the key) are redacted from `GetAll` results, the result of `SET`, and the debug log of configuration requests. The text of a SQL `SET` statement is still part of the debug log of the statement.
+- A catalog type other than `iceberg-rest` is stored as a configuration value only.
+
 ## Table DDL
 
 See the [Iceberg DDL support matrix](./index.md#iceberg) for supported operations.

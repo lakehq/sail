@@ -20,7 +20,7 @@ use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_telemetry::telemetry::global_system_store_reader;
 
-use crate::catalog::create_catalog_manager;
+use crate::catalog::{SessionCatalogFactory, create_catalog_manager};
 use crate::formats::create_data_source_registry;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::planner::new_query_planner;
@@ -114,6 +114,7 @@ impl ServerSessionFactory {
                 self.runtime.clone(),
                 self.catalog_cache_manager.clone(),
             )?))
+            .with_extension(Arc::new(SessionCatalogFactory::new(self.runtime.clone())))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
             .with_extension(Arc::new(RemoteCheckpointRegistry::new(

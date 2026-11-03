@@ -18,9 +18,16 @@ impl CatalogCredentials for EmptyCatalogCredentials {
     }
 }
 
-#[derive(Debug)]
 pub struct StaticCatalogCredentials {
     credential: String,
+}
+
+impl Debug for StaticCatalogCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticCatalogCredentials")
+            .field("credential", &"<redacted>")
+            .finish()
+    }
 }
 
 impl StaticCatalogCredentials {

@@ -1,6 +1,6 @@
 use async_stream;
 use datafusion::prelude::SessionContext;
-use log::debug;
+use log::{Level, debug, log_enabled};
 use sail_session::session_manager::SessionManager;
 use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
@@ -115,6 +115,21 @@ async fn handle_command(
 }
 
 // TODO: make sure that `server_side_session_id` is set properly
+
+/// Hides the sensitive values of a configuration request before it is logged.
+fn redact_config_request(request: &ConfigRequest) -> ConfigRequest {
+    use crate::spark::connect::config_request::operation::OpType;
+
+    let mut request = request.clone();
+    if let Some(OpType::Set(set)) = request
+        .operation
+        .as_mut()
+        .and_then(|operation| operation.op_type.as_mut())
+    {
+        service::redact_config_pairs(&mut set.pairs);
+    }
+    request
+}
 
 #[tonic::async_trait]
 impl SparkConnectService for SparkConnectServer {
@@ -249,7 +264,9 @@ impl SparkConnectService for SparkConnectServer {
         use crate::spark::connect::config_request::operation::OpType;
 
         let request = request.into_inner();
-        debug!("{request:?}");
+        if log_enabled!(Level::Debug) {
+            debug!("{:?}", redact_config_request(&request));
+        }
         let session_id = request.session_id.clone();
         let user_id = request.user_context.map(|u| u.user_id).unwrap_or_default();
         let ctx = self
@@ -281,7 +298,11 @@ impl SparkConnectService for SparkConnectServer {
                 service::handle_config_is_modifiable(&ctx, keys)?
             }
         };
-        debug!("{response:?}");
+        if log_enabled!(Level::Debug) {
+            let mut logged = response.clone();
+            service::redact_config_pairs(&mut logged.pairs);
+            debug!("{logged:?}");
+        }
         Ok(Response::new(response))
     }
 

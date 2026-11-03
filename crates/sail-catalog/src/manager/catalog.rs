@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
+use crate::provider::CatalogProvider;
 use crate::utils::match_pattern;
 
 impl CatalogManager {
@@ -21,6 +22,51 @@ impl CatalogManager {
             ));
         }
         state.default_catalog = catalog;
+        Ok(())
+    }
+
+    /// Registers a catalog for the current session, or replaces a catalog that the session
+    /// registered earlier. A catalog defined by the server configuration is never replaced.
+    pub fn register_session_catalog(
+        &self,
+        name: impl Into<Arc<str>>,
+        provider: Arc<dyn CatalogProvider>,
+    ) -> CatalogResult<()> {
+        let name = name.into();
+        let mut state = self.state()?;
+        if state.catalogs.contains_key(&name) && !state.session_catalogs.contains(&name) {
+            return Err(CatalogError::AlreadyExists(
+                CatalogObject::Catalog,
+                name.to_string(),
+            ));
+        }
+        state.session_catalogs.insert(name.clone());
+        state.catalogs.insert(name, provider);
+        Ok(())
+    }
+
+    /// Returns whether the name is taken by a catalog that the session did not register,
+    /// such as a catalog defined by the server configuration.
+    pub fn has_fixed_catalog(&self, name: &str) -> CatalogResult<bool> {
+        let state = self.state()?;
+        Ok(state.catalogs.contains_key(name) && !state.session_catalogs.contains(name))
+    }
+
+    /// Removes a catalog that the session registered. This does nothing for a name that the
+    /// session did not register, so the catalogs defined by the server configuration stay.
+    /// The default catalog cannot be removed.
+    pub fn remove_session_catalog(&self, name: &str) -> CatalogResult<()> {
+        let mut state = self.state()?;
+        if !state.session_catalogs.contains(name) {
+            return Ok(());
+        }
+        if state.default_catalog.as_ref() == name {
+            return Err(CatalogError::InvalidArgument(format!(
+                "cannot remove the default catalog: {name}"
+            )));
+        }
+        state.session_catalogs.remove(name);
+        state.catalogs.remove(name);
         Ok(())
     }
 
