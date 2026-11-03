@@ -220,7 +220,17 @@ pub(crate) fn handle_config_set(
         let key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING.to_string();
         kv.iter().any(|pair| pair.key == key)
     };
-    spark.set_config(kv)?;
+    let result = spark.set_config(kv);
+    // A request that fails on one pair keeps the pairs applied before it, as Spark does, so the
+    // mirror follows what the session holds on the error path as well. Returning the error without
+    // mirroring would leave `conf.get` reporting a value that Parquet reads ignore. The error of
+    // the request is the one the caller needs, so it takes precedence over a mirroring error.
+    let mirrored = if sets_parquet_binary_as_string {
+        sync_parquet_binary_as_string(ctx, &spark)
+    } else {
+        Ok(())
+    };
+    result.and(mirrored)?;
     if sets_session_timezone {
         // Mirror `spark.sql.session.timeZone` onto the DataFusion session configuration. Parquet
         // listing-table schema inference reads `execution.time_zone` to reconcile mixed-timezone
@@ -234,9 +244,6 @@ pub(crate) fn handle_config_set(
             .options_mut()
             .execution
             .time_zone = Some(session_timezone);
-    }
-    if sets_parquet_binary_as_string {
-        sync_parquet_binary_as_string(ctx, &spark)?;
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
@@ -310,6 +317,12 @@ pub(crate) fn handle_config_unset(
         keys.iter().any(|k| k == &key)
     };
     spark.unset_config(keys)?;
+    // Mirror before anything else can return an error, for the same reason as in
+    // `handle_config_set`. Unsetting either removes every key or none of them, so there is no
+    // partially applied request to mirror here.
+    if unsets_parquet_binary_as_string {
+        sync_parquet_binary_as_string(ctx, &spark)?;
+    }
     if unsets_session_timezone {
         // Unsetting `spark.sql.session.timeZone` reverts it toward the default, so re-sync
         // `execution.time_zone` to the now-effective session zone instead of leaving the last
@@ -321,9 +334,6 @@ pub(crate) fn handle_config_unset(
             .options_mut()
             .execution
             .time_zone = Some(session_timezone);
-    }
-    if unsets_parquet_binary_as_string {
-        sync_parquet_binary_as_string(ctx, &spark)?;
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
@@ -433,6 +443,44 @@ mod tests {
         assert!(set(&ctx, "yes").is_err());
         assert_eq!(session_value(&ctx)?, Some("true".to_string()));
         assert!(mirrored_value(&ctx));
+        Ok(())
+    }
+
+    #[test]
+    fn test_a_failed_batch_mirrors_the_pair_it_applied() -> SparkResult<()> {
+        let ctx = test_context(false)?;
+        let kv = vec![
+            KeyValue {
+                key: KEY.to_string(),
+                value: Some("true".to_string()),
+            },
+            KeyValue {
+                key: SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS.to_string(),
+                value: Some("0".to_string()),
+            },
+        ];
+        assert!(handle_config_set(&ctx, kv).is_err());
+        assert_eq!(session_value(&ctx)?, Some("true".to_string()));
+        assert!(mirrored_value(&ctx));
+        Ok(())
+    }
+
+    #[test]
+    fn test_a_failed_batch_does_not_mirror_a_pair_it_did_not_apply() -> SparkResult<()> {
+        let ctx = test_context(false)?;
+        let kv = vec![
+            KeyValue {
+                key: SparkConfigKey::SPARK_SQL_SHUFFLE_PARTITIONS.to_string(),
+                value: Some("0".to_string()),
+            },
+            KeyValue {
+                key: KEY.to_string(),
+                value: Some("true".to_string()),
+            },
+        ];
+        assert!(handle_config_set(&ctx, kv).is_err());
+        assert_eq!(session_value(&ctx)?, None);
+        assert!(!mirrored_value(&ctx));
         Ok(())
     }
 
