@@ -143,7 +143,7 @@ pub(super) struct PlanResolverState {
     /// The named windows defined in the current query, keyed by window name.
     windows: std::collections::HashMap<String, spec::Window>,
     /// The sources of the catalog tables read so far, shared by repeated references to
-    /// the same table so that they read the same snapshot.
+    /// the same table within the query.
     table_sources: HashMap<TableSourceKey, SharedTableSource>,
 }
 

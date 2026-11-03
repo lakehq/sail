@@ -104,12 +104,14 @@ impl QueryPlanner for ExtensionQueryPlanner {
             Box::new(DeltaMetadataAggregateRewriter),
             Box::new(sail_iceberg::logical::IcebergMetadataAggregateRewriter),
         ];
-        let mut logical_plan = logical_plan.clone();
+        // Equivalent scalar subqueries are shared before the rewriters, which give each
+        // rewritten scan its own source. The rewritten bodies remain equal, so DataFusion
+        // still executes them once.
+        let mut logical_plan = share_equivalent_scalar_subqueries(logical_plan.clone())?;
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan, session).await?.data;
         }
         logical_plan = sail_plan::function::prepare_async_functions(logical_plan)?;
-        logical_plan = share_equivalent_scalar_subqueries(logical_plan)?;
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),
@@ -638,6 +640,7 @@ fn plan_explicit_partitioning(
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::panic)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use datafusion::arrow::array::{AsArray, Int64Array};
@@ -756,6 +759,81 @@ mod tests {
         let schema = physical.schema();
         let batches = collect(physical, context.task_ctx()).await?;
         Ok((display, concat_batches(&schema, &batches)?))
+    }
+
+    /// Builds `(SELECT max(<column>) FROM <scan>)` the way Sail resolves a table reference,
+    /// where each reference gets fresh column names and the aggregate is aliased above it.
+    fn aggregate_scalar_subquery(
+        scan: LogicalPlanBuilder,
+        column: Expr,
+        input_name: &str,
+        output_name: &str,
+    ) -> datafusion_common::Result<Expr> {
+        let max = datafusion::functions_aggregate::min_max::max(col(input_name));
+        let subquery = scan
+            .project(vec![column.alias(input_name)])?
+            .aggregate(Vec::<Expr>::new(), vec![max.clone()])?
+            .project(vec![max.alias(output_name)])?
+            .build()?;
+        Ok(scalar_subquery(Arc::new(subquery)))
+    }
+
+    #[tokio::test]
+    async fn scalar_subqueries_differing_in_generated_names_share_one_execution()
+    -> datafusion_common::Result<()> {
+        let left = memory_source(vec![10, 20])?;
+        let right = memory_source(vec![100, 200])?;
+        let scan = |name: &str, source: &Arc<dyn TableSource>| {
+            LogicalPlanBuilder::scan(name, Arc::clone(source), None)
+        };
+        let join = || scan("a", &left)?.cross_join(scan("b", &right)?.build()?);
+        // A CTE whose first reference reads the body directly, while later references
+        // rename its columns. Both compute the same as reading the table directly.
+        let cte = || {
+            scan("t", &left)?
+                .project(vec![col("t.v").alias("#20")])?
+                .alias("cte")
+        };
+        let renamed_cte = || cte()?.project(vec![col("cte.#20").alias("#30")]);
+        // A projection that only renames the columns, and one that also sets field metadata.
+        let renamed = |metadata: Option<BTreeMap<String, String>>| {
+            scan("t", &left)?.project(vec![
+                col("t.k").alias("#40"),
+                col("t.v").alias_with_metadata("#41", metadata.map(Into::into)),
+            ])
+        };
+        let metadata = BTreeMap::from([("key".to_string(), "value".to_string())]);
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                aggregate_scalar_subquery(scan("t", &left)?, col("t.v"), "#1", "#2")?.alias("a"),
+                // Fresh names and another spelling of the table name are the same computation.
+                aggregate_scalar_subquery(scan("T", &left)?, col("T.v"), "#3", "#4")?.alias("b"),
+                // A different column is a different computation.
+                aggregate_scalar_subquery(scan("t", &left)?, col("t.k"), "#5", "#6")?.alias("c"),
+                // The same column of different relations is a different computation.
+                aggregate_scalar_subquery(join()?, col("a.v"), "#7", "#8")?.alias("d"),
+                aggregate_scalar_subquery(join()?, col("b.v"), "#9", "#10")?.alias("e"),
+                aggregate_scalar_subquery(cte()?, col("cte.#20"), "#21", "#22")?.alias("f"),
+                aggregate_scalar_subquery(renamed_cte()?, col("#30"), "#31", "#32")?.alias("g"),
+                aggregate_scalar_subquery(renamed(None)?, col("#41"), "#42", "#43")?.alias("h"),
+                aggregate_scalar_subquery(renamed(Some(metadata))?, col("#41"), "#44", "#45")?
+                    .alias("i"),
+            ])?
+            .build()?;
+
+        let (display, batch) = plan_and_collect(plan).await?;
+
+        assert!(
+            display.contains("ScalarSubqueryExec: subqueries=5"),
+            "{display}"
+        );
+        let values = batch
+            .columns()
+            .iter()
+            .map(|column| column.as_primitive::<Int64Type>().value(0))
+            .collect::<Vec<_>>();
+        assert_eq!(values, [20, 20, 2, 20, 200, 20, 20, 20, 20]);
+        Ok(())
     }
 
     #[tokio::test]

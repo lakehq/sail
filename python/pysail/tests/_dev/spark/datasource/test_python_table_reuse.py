@@ -67,7 +67,9 @@ def reads(counter):
             "WITH c AS (SELECT x FROM {t}) SELECT (SELECT sum(x) FROM c) AS a, (SELECT sum(x) FROM c) AS b",
             id="cte-aggregate",
         ),
+        pytest.param("SELECT (SELECT max(x) FROM {t}) AS a, (SELECT max(x) FROM {t}) AS b", id="table-aggregate"),
         pytest.param("SELECT (SELECT x FROM {v}) AS a, (SELECT x FROM {v}) AS b", id="view"),
+        pytest.param("SELECT (SELECT max(x) FROM {v}) AS a, (SELECT max(x) FROM {v}) AS b", id="view-aggregate"),
         pytest.param(
             "WITH c AS (SELECT x FROM {v}) SELECT (SELECT x FROM c) AS a, (SELECT x FROM c) AS b", id="view-cte"
         ),

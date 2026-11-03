@@ -51,8 +51,8 @@ def test_dataframe_table_reads_share_sources_by_version(
     assert scalar_subquery_slots(df) == slots
 
 
-@pytest.fixture
-def commit_on_schema(spark, tmp_path):
+@pytest.fixture(params=[False, True], ids=["unpartitioned", "partitioned"])
+def commit_on_schema(spark, tmp_path, request):
     """Returns (delta_table, hook_table, log_dir).
 
     The hook table is a Python data source table without declared columns, so Sail asks the
@@ -65,8 +65,12 @@ def commit_on_schema(spark, tmp_path):
     hook_table = f"delta_query_snapshot_hook_{suffix}"
     location = tmp_path / delta_table
     log_dir = location / "_delta_log"
-    spark.sql(f"CREATE TABLE {delta_table} (id INT) USING DELTA LOCATION '{escape_sql_string_literal(str(location))}'")
-    spark.sql(f"INSERT INTO {delta_table} VALUES (1)")  # noqa: S608
+    partition = "PARTITIONED BY (p)" if request.param else ""
+    spark.sql(
+        f"CREATE TABLE {delta_table} (id INT, p INT) USING DELTA {partition} "
+        f"LOCATION '{escape_sql_string_literal(str(location))}'"
+    )
+    spark.sql(f"INSERT INTO {delta_table} VALUES (1, 1)")  # noqa: S608
 
     from pyspark.sql.datasource import DataSource, DataSourceReader
     from pyspark.sql.types import IntegerType, StructField, StructType

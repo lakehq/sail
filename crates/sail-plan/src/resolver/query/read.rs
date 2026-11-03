@@ -25,6 +25,7 @@ use sail_common_datafusion::rename::logical_plan::{
 };
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_data_source::reuse::is_reusable_source;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use super::sample::SAMPLE_ROUNDING_EPSILON;
@@ -182,25 +183,25 @@ impl PlanResolver<'_> {
                     .resolve_time_travel_options(&format, temporal, state)
                     .await?;
                 // Repeated references to the same table within a query share its source,
-                // so that they read the same snapshot and can share scalar subqueries.
+                // so that they can share scalar subqueries. Delta Lake and Iceberg sources
+                // also pin one table snapshot, while file tables still list files for each scan.
                 let data_source = data_source_registry.get_data_source(&format)?;
-                let source_key = (lake_relation.is_none() && data_source.supports_source_reuse())
-                    .then(|| TableSourceKey {
-                        catalog: status.catalog,
-                        database: status.database,
-                        name: status.name,
-                        format: format.clone(),
-                        location: location.clone(),
-                        // The properties of a table have unique keys, but some catalogs
-                        // return them in an arbitrary order.
-                        properties: {
-                            let mut properties = properties.clone();
-                            properties.sort_by(|a, b| a.0.cmp(&b.0));
-                            properties
-                        },
-                        options: options.clone(),
-                        temporal_options: temporal_options.clone(),
-                    });
+                let source_key = lake_relation.is_none().then(|| TableSourceKey {
+                    catalog: status.catalog,
+                    database: status.database,
+                    name: status.name,
+                    format: format.clone(),
+                    location: location.clone(),
+                    // The properties of a table have unique keys, but some catalogs
+                    // return them in an arbitrary order.
+                    properties: {
+                        let mut properties = properties.clone();
+                        properties.sort_by(|a, b| a.0.cmp(&b.0));
+                        properties
+                    },
+                    options: options.clone(),
+                    temporal_options: temporal_options.clone(),
+                });
                 let table_source = match source_key
                     .as_ref()
                     .and_then(|key| state.get_table_source(key))
@@ -254,7 +255,9 @@ impl PlanResolver<'_> {
                             }
                             None => data_source.create_source(&self.ctx.state(), info).await?,
                         };
-                        if let Some(key) = source_key {
+                        if let Some(key) = source_key
+                            && is_reusable_source(&table_source)
+                        {
                             state.insert_table_source(key, Arc::clone(&table_source));
                         }
                         table_source

@@ -482,15 +482,6 @@ pub trait DataSource: Send + Sync {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableSource>>;
 
-    /// Returns whether repeated references to the same catalog table within a query
-    /// can share one source from [`Self::create_source`], and therefore read the same
-    /// table snapshot. Sources that must be created for each reference, such as
-    /// streaming or Python data sources, keep the default. (Scalar subqueries over
-    /// Python data sources are also never shared, so each reference reads the source.)
-    fn supports_source_reuse(&self) -> bool {
-        false
-    }
-
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         Ok(self.create_source(ctx, info).await?.schema())
