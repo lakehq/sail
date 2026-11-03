@@ -8,9 +8,18 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 
+arrow = { workspace = true }
+chrono = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+itertools = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

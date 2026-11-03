@@ -943,43 +943,43 @@
     {
       "input": "ALTER TABLE t DEFAULT COLLATION sr",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'SET', 'DROP', 'ADD', 'REPLACE', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION sr_ci_ai",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'SET', 'DROP', 'ADD', 'REPLACE', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'SET', 'DROP', 'ADD', 'REPLACE', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode_ci",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'SET', 'DROP', 'ADD', 'REPLACE', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION unicode_ci_rtrim",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'SET', 'DROP', 'ADD', 'REPLACE', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION utf8_binary",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'SET', 'DROP', 'ADD', 'REPLACE', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {
       "input": "ALTER TABLE t DEFAULT COLLATION utf8_lcase",
       "output": {
-        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'SET', 'DROP', 'ADD', 'REPLACE', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
+        "failure": "invalid argument: found DEFAULT at 14:21 expected '.', 'CREATE', 'REPLACE', 'DROP', 'SET', 'ADD', 'WRITE', 'RENAME', 'PARTITION', 'ALTER', 'CHANGE', 'UNSET', or 'RECOVER'"
       }
     },
     {

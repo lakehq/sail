@@ -20,7 +20,9 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use sail_common_datafusion::datasource::MERGE_ROW_INDEX_COLUMN;
+use sail_common_datafusion::datasource::{
+    MERGE_ROW_INDEX_COLUMN, OPERATION_COLUMN, RowLevelOperationType,
+};
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
@@ -149,7 +151,10 @@ pub async fn build_delete_plan(
         .rewrite(physical_retention_condition)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let change_data = if crate::change_data_feed::enabled(snapshot_state.metadata()) {
+    // Whole-file deletes infer CDF from removes; an empty CDC action would suppress it.
+    let change_data = if !partition_only
+        && crate::change_data_feed::enabled(snapshot_state.metadata())
+    {
         let deleted = Arc::new(datafusion::physical_expr::expressions::NotExpr::new(
             adapted_retention_condition.clone(),
         ));
@@ -163,9 +168,45 @@ pub async fn build_delete_plan(
     } else {
         None
     };
-    let filter_exec: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(adapted_retention_condition, scan_exec)?);
-    let writer_input = prepare_delta_writer_input(filter_exec, &partition_columns, None)?;
+    let writer_rows: Arc<dyn ExecutionPlan> = if partition_only {
+        // Metadata-only scans emit no data. Do not tag their empty batches as exact zero deletes.
+        scan_exec
+    } else {
+        let schema = scan_exec.schema();
+        let operation = Arc::new(datafusion::physical_expr::expressions::CaseExpr::try_new(
+            None,
+            vec![(
+                adapted_retention_condition,
+                Arc::new(datafusion::physical_expr::expressions::Literal::new(
+                    datafusion_common::ScalarValue::Int32(Some(
+                        RowLevelOperationType::Copy.as_i32(),
+                    )),
+                )) as _,
+            )],
+            Some(Arc::new(
+                datafusion::physical_expr::expressions::Literal::new(
+                    datafusion_common::ScalarValue::Int32(Some(
+                        RowLevelOperationType::Delete.as_i32(),
+                    )),
+                ),
+            )),
+        )?);
+        let mut projection = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                (
+                    Arc::new(Column::new(field.name(), index))
+                        as Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+                    field.name().clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        projection.push((operation, OPERATION_COLUMN.to_string()));
+        Arc::new(ProjectionExec::try_new(projection, scan_exec)?)
+    };
+    let writer_input = prepare_delta_writer_input(writer_rows, &partition_columns, None)?;
 
     let operation = Some(DeltaOperation::Delete {
         predicate: condition.source,
@@ -208,6 +249,7 @@ pub async fn build_delete_plan(
         ctx.options().user_metadata.clone(),
         write_context,
         ctx.lakehouse_table().cloned(),
+        ctx.config().output,
     )
 }
 
@@ -423,15 +465,18 @@ pub async fn build_delete_plan_mor(
         datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec::new(dv_writer),
     );
 
-    Ok(Arc::new(crate::physical_plan::DeltaCommitExec::new(
-        coalesced,
-        ctx.table_url().clone(),
-        partition_columns,
-        ctx.table_exists(),
-        table_schema,
-        sail_common_datafusion::datasource::PhysicalSinkMode::Append,
-        ctx.options().user_metadata.clone(),
-        DeltaCommitContext::from_snapshot(snapshot_state.as_ref()),
-        ctx.lakehouse_table().cloned(),
-    )))
+    Ok(Arc::new(
+        crate::physical_plan::DeltaCommitExec::new(
+            coalesced,
+            ctx.table_url().clone(),
+            partition_columns,
+            ctx.table_exists(),
+            table_schema,
+            sail_common_datafusion::datasource::PhysicalSinkMode::Append,
+            ctx.options().user_metadata.clone(),
+            DeltaCommitContext::from_snapshot(snapshot_state.as_ref()),
+            ctx.lakehouse_table().cloned(),
+        )
+        .with_output(ctx.config().output),
+    ))
 }

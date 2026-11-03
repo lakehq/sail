@@ -14,6 +14,17 @@ pub struct RemoteError {
     pub cause: CommonErrorCause,
 }
 
+/// A mutation may have committed and must not be retried automatically.
+#[derive(Debug, Error)]
+#[error("commit state unknown: {0}")]
+pub struct CommitStateUnknownError(pub String);
+
+impl From<String> for CommitStateUnknownError {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PythonErrorCause {
     pub summary: String,
@@ -61,6 +72,7 @@ pub enum CommonErrorCause {
     Configuration(String),
     Execution(String),
     DeltaTable(String),
+    CommitStateUnknown(String),
 }
 
 impl fmt::Display for CommonErrorCause {
@@ -90,7 +102,8 @@ impl fmt::Display for CommonErrorCause {
             | CommonErrorCause::Schema(x)
             | CommonErrorCause::Configuration(x)
             | CommonErrorCause::Execution(x)
-            | CommonErrorCause::DeltaTable(x) => write!(f, "{x}"),
+            | CommonErrorCause::DeltaTable(x)
+            | CommonErrorCause::CommitStateUnknown(x) => write!(f, "{x}"),
             CommonErrorCause::Python(PythonErrorCause { summary, .. }) => {
                 write!(f, "{summary}")
             }
@@ -99,6 +112,10 @@ impl fmt::Display for CommonErrorCause {
 }
 
 impl CommonErrorCause {
+    pub fn is_retryable(&self) -> bool {
+        !matches!(self, Self::CommitStateUnknown(_))
+    }
+
     fn build<Py: PythonErrorCauseExtractor>(
         error: &(dyn std::error::Error + 'static),
         seen: &mut HashSet<*const dyn std::error::Error>,
@@ -157,10 +174,18 @@ impl CommonErrorCause {
                 DataFusionError::Context(_, e) => Self::build::<Py>(e, seen),
                 DataFusionError::Substrait(x) => Self::Unknown(x.clone()),
                 DataFusionError::Diagnostic(_, e) => Self::build::<Py>(e.as_ref(), seen),
-                DataFusionError::Collection(errors) => match errors.first() {
-                    None => Self::Unknown("empty error collection".to_string()),
-                    Some(e) => Self::build::<Py>(e, seen),
-                },
+                DataFusionError::Collection(errors) => {
+                    let causes = errors
+                        .iter()
+                        .map(|e| Self::build::<Py>(e, seen))
+                        .collect::<Vec<_>>();
+                    causes
+                        .iter()
+                        .find(|cause| !cause.is_retryable())
+                        .or_else(|| causes.first())
+                        .cloned()
+                        .unwrap_or_else(|| Self::Unknown("empty error collection".to_string()))
+                }
                 DataFusionError::Shared(e) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::Ffi(x) => Self::Unknown(x.clone()),
             };
@@ -172,6 +197,10 @@ impl CommonErrorCause {
 
         if let Some(e) = error.downcast_ref::<RemoteError>() {
             return e.cause.clone();
+        }
+
+        if let Some(e) = error.downcast_ref::<CommitStateUnknownError>() {
+            return Self::CommitStateUnknown(e.to_string());
         }
 
         if let Some(e) = error.source() {

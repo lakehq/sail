@@ -23,6 +23,9 @@ use datafusion_expr::{
     HigherOrderUDFImpl, LambdaParametersProgress, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, ValueOrLambda, Volatility,
 };
+use sail_common::utils::datetime::{
+    MICROS_PER_DAY, civil_from_days, is_fixed_zero_offset_timezone,
+};
 use sail_common_datafusion::formatter::IntervalMonthDayNanoFormatter;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 
@@ -31,22 +34,7 @@ use crate::functions_nested_utils::{
 };
 
 const MAX_ROUNDED_ARRAY_LENGTH: i64 = i32::MAX as i64 - 15;
-const MICROS_PER_DAY: i64 = 86_400_000_000;
 const MICROS_PER_MONTH: i64 = 28 * MICROS_PER_DAY;
-
-// TODO: Remove the `use_wide_utc_arithmetic` split once Sail has Spark-compatible
-// wide-range timezone arithmetic. Fixed-zero zones can bypass Chrono's narrower
-// datetime range today; full support requires Java `ZoneId`-compatible parsing and
-// wide-range offset/DST gap-overlap handling for calendar interval arithmetic.
-fn is_fixed_zero_offset_timezone(timezone: &str) -> bool {
-    matches!(
-        timezone,
-        "+00" | "-00" | "+0000" | "-0000" | "+00:00" | "-00:00"
-    ) || matches!(
-        timezone.strip_prefix("Etc/").unwrap_or(timezone),
-        "GMT" | "GMT+0" | "GMT-0" | "GMT0" | "Greenwich" | "UCT" | "UTC" | "Universal" | "Zulu"
-    )
-}
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSequence {
@@ -73,7 +61,12 @@ impl SparkSequence {
     }
 
     fn parse_session_timezone(&self) -> Result<Tz> {
-        self.session_timezone.parse().map_err(|error| {
+        let timezone = match self.session_timezone.as_ref() {
+            "Z" | "UT" => "UTC",
+            "PST" => "America/Los_Angeles",
+            timezone => timezone,
+        };
+        timezone.parse().map_err(|error| {
             exec_datafusion_err!(
                 "Spark `sequence` function: failed to parse timezone {}: {error}",
                 self.session_timezone
@@ -919,21 +912,6 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let days = days + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let shifted_month = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
-    let month = shifted_month + if shifted_month < 10 { 3 } else { -9 };
-    year += if month <= 2 { 1 } else { 0 };
-    (year, month as u32, day as u32)
-}
-
 fn add_wide_calendar_interval(start: i128, months: i32, days: i32, micros: i64) -> Result<i128> {
     let epoch_day = i64::try_from(start.div_euclid(i128::from(MICROS_PER_DAY)))
         .map_err(|_| exec_datafusion_err!("cannot convert sequence timestamp {start}"))?;
@@ -1314,7 +1292,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_zero_offset_timezone_matches_arrow_supported_aliases() {
+    fn fixed_zero_offset_timezone_matches_sequence_supported_aliases() {
         for timezone in ["+00", "-00", "+0000", "-0000", "+00:00", "-00:00"] {
             assert!(timezone.parse::<Tz>().is_ok(), "{timezone}");
             assert!(is_fixed_zero_offset_timezone(timezone), "{timezone}");
@@ -1339,9 +1317,15 @@ mod tests {
             assert!(is_fixed_zero_offset_timezone(&timezone), "{timezone}");
         }
 
+        for timezone in ["Z", "UT"] {
+            let sequence = SparkSequence::new(timezone.into(), true);
+            assert!(sequence.parse_session_timezone().is_ok(), "{timezone}");
+            assert!(is_fixed_zero_offset_timezone(timezone), "{timezone}");
+        }
+
         for timezone in [
-            "Z",
-            "UT",
+            "Etc/Z",
+            "Etc/UT",
             "UTC+00:00",
             "+01:00",
             "Etc/GMT+1",

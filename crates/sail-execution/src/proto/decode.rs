@@ -246,6 +246,7 @@ pub(super) fn try_decode_higher_order_udf(
         HigherOrderUdfKind::ConvertTzLazy(r#gen::ConvertTzUdf {
             classic,
             null_short_circuit,
+            ..
         }) => {
             let convert_tz = ConvertTz::new(classic);
             let convert_tz = if null_short_circuit {

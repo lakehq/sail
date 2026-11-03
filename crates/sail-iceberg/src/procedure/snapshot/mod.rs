@@ -1,5 +1,6 @@
 mod commit;
 mod operation;
+mod reference;
 
-pub(super) use commit::commit_snapshot_operation;
-pub(super) use operation::{SnapshotOperation, ancestors_output};
+pub(crate) use commit::commit_snapshot_operation;
+pub(crate) use operation::{SnapshotOperation, ancestors_output};

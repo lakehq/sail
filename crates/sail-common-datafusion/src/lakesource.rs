@@ -6,10 +6,13 @@ use datafusion::catalog::Session;
 use datafusion::execution::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_common::{Result, not_impl_err};
 
 use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
-use crate::datasource::{DataSource, DeleteInfo, MergeInfo, SourceInfo, UpdateInfo};
+use crate::datasource::{
+    DataSource, DeleteInfo, MergeInfo, RowLevelTarget, SourceInfo, UpdateInfo,
+};
 use crate::lakeprocedure::LakeProcedureProvider;
 use crate::lakerelation::LakeRelationProvider;
 
@@ -18,6 +21,8 @@ use crate::lakerelation::LakeRelationProvider;
 pub struct LakeSourceMetadata {
     pub schema: SchemaRef,
     pub properties: Vec<(String, String)>,
+    /// Authoritative partitioning when available, including `Some(vec![])` for unpartitioned tables.
+    pub partition_by: Option<Vec<CatalogPartitionField>>,
 }
 
 /// A column definition used when catalog DDL asks a lake source to create
@@ -80,6 +85,10 @@ pub struct LakeSourceAlterTableResult {
 /// A row-level operation that requires lake-source-specific planning.
 #[derive(Debug, Clone)]
 pub enum RowLevelOperation {
+    Truncate {
+        target_plan: Arc<LogicalPlan>,
+        target: Box<RowLevelTarget>,
+    },
     Delete(Box<DeleteInfo>),
     Update(Box<UpdateInfo>),
     Merge(Box<MergeInfo>),
@@ -87,6 +96,9 @@ pub enum RowLevelOperation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LakeSourceAlterTableOperation {
+    AlterSnapshotReference {
+        operation: sail_common::spec::SnapshotReferenceOperation,
+    },
     AlterIdentifierFields {
         names: Vec<Vec<String>>,
         drop: bool,
@@ -167,6 +179,7 @@ pub trait LakeSource: DataSource {
         Ok(LakeSourceMetadata {
             schema: self.infer_schema(ctx, info).await?,
             properties: vec![],
+            partition_by: None,
         })
     }
 
@@ -185,9 +198,10 @@ pub trait LakeSource: DataSource {
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<RuntimeEnv>,
+        config: &SessionConfig,
         info: LakeSourceCreateTableInfo,
     ) -> Result<LakeSourceCreateTableResult> {
-        let _ = (runtime_env, info);
+        let _ = (runtime_env, config, info);
         Ok(LakeSourceCreateTableResult::default())
     }
 
@@ -199,6 +213,10 @@ pub trait LakeSource: DataSource {
     ) -> Result<LogicalPlan> {
         let _ = ctx;
         match operation {
+            RowLevelOperation::Truncate { .. } => not_impl_err!(
+                "TRUNCATE TABLE is not yet implemented for lake source '{}'",
+                self.name()
+            ),
             RowLevelOperation::Delete(_) => not_impl_err!(
                 "DELETE is not yet implemented for lake source '{}'",
                 self.name()
@@ -225,7 +243,8 @@ pub trait LakeSource: DataSource {
         let _ = lakehouse_table;
         let runtime_env = ctx.runtime_env();
         match operation {
-            LakeSourceAlterTableOperation::AlterIdentifierFields { .. }
+            LakeSourceAlterTableOperation::AlterSnapshotReference { .. }
+            | LakeSourceAlterTableOperation::AlterIdentifierFields { .. }
             | LakeSourceAlterTableOperation::AlterPartitionSpec { .. }
             | LakeSourceAlterTableOperation::SetPartitioning { .. }
             | LakeSourceAlterTableOperation::SetWriteOrder { .. }

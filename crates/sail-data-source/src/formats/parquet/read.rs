@@ -10,6 +10,8 @@ use datafusion::datasource::physical_plan::parquet::{
     CachedParquetFileReaderFactory, Int96Coercer,
 };
 use datafusion::parquet::arrow::parquet_to_arrow_schema;
+use datafusion::parquet::basic::Type as PhysicalType;
+use datafusion::parquet::schema::types::SchemaDescriptor;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result, plan_err};
@@ -65,6 +67,37 @@ fn reinterpret_second_timestamps_as_int64(schema: Schema, physical: &Schema) -> 
     Schema::new_with_metadata(fields, schema.metadata().clone())
 }
 
+/// Spark reads INT96 as TIMESTAMP whatever the `ARROW:schema` hint says, while `Int96Coercer`
+/// coerces an INT96 column to `data_type` only when the hint gives nanoseconds. pyarrow hints the
+/// unit of the written values, such as `timestamp[us]`, which would otherwise read as
+/// TIMESTAMP_NTZ.
+// TODO: Coerce nested INT96 values with such a hint.
+fn coerce_hinted_int96_timestamps(
+    schema: Schema,
+    parquet_schema: &SchemaDescriptor,
+    data_type: &DataType,
+) -> Schema {
+    let int96 = parquet_schema
+        .columns()
+        .iter()
+        .filter(|column| {
+            column.physical_type() == PhysicalType::INT96 && column.path().parts().len() == 1
+        })
+        .map(|column| column.name())
+        .collect::<Vec<_>>();
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Timestamp(_, None) if int96.contains(&field.name().as_str()) => {
+                field.as_ref().clone().with_data_type(data_type.clone())
+            }
+            _ => field.as_ref().clone(),
+        })
+        .collect::<Vec<_>>();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
 #[async_trait::async_trait]
 impl ReadFormat for ParquetReadFormat {
     async fn infer_compression(
@@ -90,6 +123,7 @@ impl ReadFormat for ParquetReadFormat {
             .as_deref()
             .map(parse_coerce_int96_string)
             .transpose()?;
+        let coerce_int96_tz = options.global.coerce_int96_tz.as_deref().map(Arc::from);
 
         let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata_size_hint = options.global.metadata_size_hint;
@@ -117,8 +151,7 @@ impl ReadFormat for ParquetReadFormat {
                 // reads the `ARROW:schema` key-value hint and then applies `coerce_int96` to the
                 // INT96-derived columns. Reproduced here (rather than calling `fetch_schema()`)
                 // so the inferred types stay identical to today for hinted and INT96 columns.
-                // `coerce_int96_tz` is never set on the reader, so INT96 columns coerce to a
-                // `None`-timezone timestamp, matching `fetch_schema`'s default.
+                // INT96 columns coerce to a UTC timestamp, matching the reader's `coerce_int96_tz`.
                 let schema = parquet_to_arrow_schema(
                     file_metadata.schema_descr(),
                     file_metadata.key_value_metadata(),
@@ -126,7 +159,9 @@ impl ReadFormat for ParquetReadFormat {
                 let schema = coerce_int96
                     .as_ref()
                     .and_then(|time_unit| {
-                        Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit).coerce()
+                        Int96Coercer::new(file_metadata.schema_descr(), &schema, time_unit)
+                            .with_timezone(coerce_int96_tz.clone())
+                            .coerce()
                     })
                     .unwrap_or(schema);
                 // Metadata-free physical schema: no `ARROW:schema` hint, so an Arrow-only
@@ -134,6 +169,14 @@ impl ReadFormat for ParquetReadFormat {
                 // two lets `reinterpret_second_timestamps_as_int64` read such a column as long,
                 // matching Spark.
                 let physical = parquet_to_arrow_schema(file_metadata.schema_descr(), None)?;
+                let schema = match &coerce_int96 {
+                    Some(time_unit) => coerce_hinted_int96_timestamps(
+                        schema,
+                        file_metadata.schema_descr(),
+                        &DataType::Timestamp(*time_unit, coerce_int96_tz.clone()),
+                    ),
+                    None => schema,
+                };
                 let schema = reinterpret_second_timestamps_as_int64(schema, &physical);
                 Ok::<_, DataFusionError>((object.location.clone(), schema))
             })

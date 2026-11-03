@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.7.2"
+version = "0.7.3"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -35,7 +35,7 @@ test = [
     "pyspark-client==4.2.0",
     "pandas<3",
     "duckdb>=1.0,<2",
-    "pytest>=9.1,<10",
+    "pytest>=9.1,<9.2",
     "pytest-xdist>=3.7,<4",
     "pytest-rerunfailures>=16.7,<17",
     "pytest-timeout>=2.4,<3",
@@ -99,7 +99,7 @@ dependencies = [
     "pyspark[connect]==4.2.0",
     "ibis-framework>=12,<13",
     "pandas<3",
-    "pytest>=9.1,<10",
+    "pytest>=9.1,<9.2",
     "pytest-timeout>=2.4,<3",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
@@ -156,7 +156,7 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pandas<3",
-    "pytest>=9.1,<10",
+    "pytest>=9.1,<9.2",
     "pytest-xdist>=3.7,<4",
     "pytest-rerunfailures>=16.7,<17",
     "pytest-timeout>=2.4,<3",
@@ -262,17 +262,21 @@ path = ".venvs/test-ibis"
 [tool.hatch.envs.test-ibis.overrides]
 env.CI.installer = "uv"
 
-[tool.hatch.build.targets.sdist]
-packages = ["python/pysail"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["python/pysail"]
-
 [tool.ruff]
 line-length = 120
 
+[tool.ruff.lint]
+extend-select = ["TID251"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"pysail.tests._dev".msg = "Development tests must not be used by the release package."
+"pysail.testing._dev".msg = "Development helpers must not be used by the release package."
+
 [tool.ruff.lint.per-file-ignores]
+"!python/pysail/**" = ["TID251"]
 "crates/**/*.py" = ["INP001", "PLC0415"]
+"python/pysail/testing/_dev/**/*.py" = ["TID251"]
+"python/pysail/tests/_dev/**/*.py" = ["TID251"]
 "python/pysail/docs/conf.py" = ["INP001"]
 "python/pysail/examples/**/*.py" = ["T201", "PLC0415"]
 "python/pysail/testing/**/*.py" = ["S101"]
@@ -289,6 +293,7 @@ testpaths = ["python"]
 
 [tool.maturin]
 python-source = "python"
+exclude = ["python/pysail/tests/_dev/**", "python/pysail/testing/_dev/**"]
 module-name = "pysail._native"
 manifest-path = "crates/sail-python/Cargo.toml"
 features = [

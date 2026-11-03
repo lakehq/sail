@@ -12,8 +12,9 @@ use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
 use crate::catalog_support::commit::IcebergCatalogCommitCoordinator;
 use crate::datasource::type_converter::arrow_type_to_iceberg;
 use crate::lake_source::{IcebergLakeSource, metadata_location_from_properties};
+use crate::operations::metadata_commit::{PreviousMetadataFile, previous_metadata_log_entry};
 use crate::spec::{
-    FormatVersion, Literal, MetadataLog, NestedField, PrimitiveType, Schema, TableMetadata, Type,
+    FormatVersion, Literal, NestedField, PrimitiveType, Schema, TableMetadata, Type,
 };
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -52,11 +53,13 @@ pub(crate) async fn alter_catalog_table(
     let bytes = load_metadata_file_bytes(&store, &metadata_path).await?;
     let mut metadata = TableMetadata::from_json(&bytes)
         .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let previous_entry = previous_metadata_log_entry(
+        &table_url,
+        PreviousMetadataFile::CatalogLocation(&previous),
+        metadata.last_updated_ms,
+    )?;
     apply_operation(&mut metadata, operation)?;
-    metadata.metadata_log.push(MetadataLog {
-        timestamp_ms: metadata.last_updated_ms,
-        metadata_file: previous.clone(),
-    });
+    metadata.metadata_log.push(previous_entry);
     metadata.last_updated_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     let version = metadata_file_version_from_path(&previous).unwrap_or(0) + 1;
     let extension = metadata_file_extension_from_properties(&metadata.properties)?;
@@ -97,6 +100,11 @@ fn catalog_alter_options(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<Vec<AlterTableOptions>> {
     Ok(match operation {
+        LakeSourceAlterTableOperation::AlterSnapshotReference { operation } => {
+            vec![AlterTableOptions::AlterSnapshotReference {
+                operation: operation.clone(),
+            }]
+        }
         LakeSourceAlterTableOperation::AlterIdentifierFields { names, drop } => {
             vec![AlterTableOptions::AlterIdentifierFields {
                 names: names.clone(),
@@ -196,6 +204,9 @@ pub(crate) fn apply_operation(
     operation: &LakeSourceAlterTableOperation,
 ) -> Result<()> {
     match operation {
+        LakeSourceAlterTableOperation::AlterSnapshotReference { .. } => {
+            datafusion_common::internal_err!("Snapshot references require the snapshot commit path")
+        }
         LakeSourceAlterTableOperation::AlterIdentifierFields { names, drop } => {
             alter_identifier_fields(metadata, names, *drop)
         }

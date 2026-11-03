@@ -50,12 +50,28 @@ pub(crate) fn apply_alter_table_input(
         AlterTableOptions::AlterColumnType { name, .. }
         | AlterTableOptions::AlterColumnDefault { name, .. } => name,
         _ => {
+            let comment = match &options {
+                AlterTableOptions::SetTableProperties { properties } => properties
+                    .iter()
+                    .rev()
+                    .find(|(key, _)| key == "comment")
+                    .map(|(_, value)| Some(value.clone())),
+                AlterTableOptions::UnsetTableProperties { keys, .. }
+                    if keys.iter().any(|key| key == "comment") =>
+                {
+                    Some(None)
+                }
+                _ => None,
+            };
             input.parameters = Some(apply_alter_table_options(
                 database,
                 table,
                 input.parameters.take().unwrap_or_default(),
                 options,
             )?);
+            if let Some(comment) = comment {
+                input.description = comment;
+            }
             return Ok(());
         }
     };
@@ -110,7 +126,8 @@ pub(crate) fn apply_alter_table_options(
 ) -> CatalogResult<HashMap<String, String>> {
     match options {
         // Iceberg partition specs live in format metadata; Glue partition keys stay empty.
-        AlterTableOptions::AlterIdentifierFields { .. }
+        AlterTableOptions::AlterSnapshotReference { .. }
+        | AlterTableOptions::AlterIdentifierFields { .. }
         | AlterTableOptions::AlterPartitionSpec { .. }
         | AlterTableOptions::SetPartitioning { .. } => {}
         AlterTableOptions::SetWriteOrder { distribution, .. } => {

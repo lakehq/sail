@@ -188,9 +188,15 @@ fn alter_fields(
         }
         ColumnChange::Comment { comment, .. } => {
             let field = Arc::make_mut(&mut fields[i]);
-            field
-                .metadata_mut()
-                .insert("comment".into(), comment.clone());
+            // Iceberg also stores column documentation under "doc".
+            field.metadata_mut().remove("doc");
+            if let Some(comment) = comment {
+                field
+                    .metadata_mut()
+                    .insert("comment".into(), comment.clone());
+            } else {
+                field.metadata_mut().remove("comment");
+            }
         }
         ColumnChange::Nullability { nullable, .. } => {
             if !nullable && fields[i].is_nullable() {

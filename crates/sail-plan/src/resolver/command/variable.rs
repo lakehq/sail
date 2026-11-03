@@ -25,6 +25,7 @@ impl PlanResolver<'_> {
     }
 }
 
+// Only Flight SQL gets here with these names: Spark Connect stores them as plain Spark keys.
 fn normalize_variable_name(variable: String) -> String {
     if variable.eq_ignore_ascii_case("timezone") || variable.eq_ignore_ascii_case("time.zone") {
         "datafusion.execution.time_zone".to_string()

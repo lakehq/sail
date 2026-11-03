@@ -63,6 +63,16 @@ impl std::str::FromStr for SaveMode {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    Optimize {
+        predicate: Option<String>,
+    },
+    VacuumStart {
+        retention_check_enabled: bool,
+        specified_retention_millis: Option<i64>,
+        default_retention_millis: i64,
+    },
+    VacuumEnd {},
+    Truncate {},
     DynamicPartitionOverwrite {
         partition_by: Option<Vec<String>>,
     },
@@ -145,6 +155,9 @@ pub enum DeltaOperation {
 impl DeltaOperation {
     pub fn name(&self) -> &str {
         match self {
+            Self::Optimize { .. } => "OPTIMIZE",
+            Self::VacuumStart { .. } => "VACUUM START",
+            Self::VacuumEnd { .. } => "VACUUM END",
             Self::ReplaceColumns { .. } => "REPLACE COLUMNS",
             Self::AddColumns { .. } => "ADD COLUMNS",
             Self::DropColumns { .. } => "DROP COLUMNS",
@@ -155,6 +168,7 @@ impl DeltaOperation {
             } => "CREATE OR REPLACE TABLE",
             Self::Create { .. } => "CREATE TABLE",
             Self::Write { .. } | Self::DynamicPartitionOverwrite { .. } => "WRITE",
+            Self::Truncate {} => "TRUNCATE",
             Self::Delete { .. } => "DELETE",
             Self::Update { .. } => "UPDATE",
             Self::Merge { .. } => "MERGE",
@@ -189,6 +203,40 @@ impl DeltaOperation {
 
         let mut parameters = HashMap::new();
         match self {
+            Self::Optimize { predicate } => {
+                insert_json(
+                    &mut parameters,
+                    "predicate",
+                    &predicate.iter().collect::<Vec<_>>(),
+                )?;
+                insert_json(&mut parameters, "zOrderBy", &Vec::<String>::new())?;
+                insert_json(&mut parameters, "clusterBy", &Vec::<String>::new())?;
+                insert_opt(&mut parameters, "auto", Some(false));
+            }
+            Self::VacuumStart {
+                retention_check_enabled,
+                specified_retention_millis,
+                default_retention_millis,
+            } => {
+                insert_opt(
+                    &mut parameters,
+                    "retentionCheckEnabled",
+                    Some(retention_check_enabled),
+                );
+                insert_opt(
+                    &mut parameters,
+                    "specifiedRetentionMillis",
+                    *specified_retention_millis,
+                );
+                insert_opt(
+                    &mut parameters,
+                    "defaultRetentionMillis",
+                    Some(default_retention_millis),
+                );
+            }
+            Self::VacuumEnd {} => {
+                insert_opt(&mut parameters, "status", Some("COMPLETED"));
+            }
             Self::DynamicPartitionOverwrite { partition_by } => {
                 insert_opt(&mut parameters, "mode", Some("Overwrite"));
                 if let Some(partitions) = partition_by {
@@ -257,7 +305,7 @@ impl DeltaOperation {
                     not_matched_by_source_predicates,
                 )?;
             }
-            Self::FileSystemCheck {} => {}
+            Self::Truncate {} | Self::FileSystemCheck {} => {}
             Self::Restore { version, datetime } => {
                 insert_opt(&mut parameters, "version", *version);
                 insert_opt(&mut parameters, "datetime", *datetime);
@@ -330,7 +378,7 @@ impl DeltaOperation {
 
     pub fn read_whole_table(&self) -> bool {
         match self {
-            Self::DynamicPartitionOverwrite { .. } => true,
+            Self::Truncate {} | Self::DynamicPartitionOverwrite { .. } => true,
             // UPDATE predicates are not yet evaluated against concurrent file additions, so
             // conservatively retain the full read set until predicate conflict checks are wired.
             Self::Update { .. } => true,

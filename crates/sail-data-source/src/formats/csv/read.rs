@@ -13,7 +13,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::delimited::newline_delimited_stream;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt};
 
-use super::decoder::decode_utf8_lossy_stream;
+use super::decoder::{CsvInputDecoder, decode_csv_input_stream};
 use super::source::CsvSource;
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 use crate::listing::utils::{
@@ -71,7 +71,7 @@ impl ReadFormat for CsvReadFormat {
 
                 let stream =
                     FileCompressionType::from(options.compression).convert_stream(stream)?;
-                let stream = decode_utf8_lossy_stream(stream);
+                let stream = decode_csv_input_stream(stream, CsvInputDecoder::new(&options));
                 let stream = newline_delimited_stream(stream.map_err(|error| match error {
                     DataFusionError::ObjectStore(error) => *error,
                     error => ObjectStoreError::Generic {

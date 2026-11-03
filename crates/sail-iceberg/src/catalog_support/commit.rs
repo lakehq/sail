@@ -205,7 +205,7 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
                     Ok(CatalogCommitOutcome::Conflict)
                 }
                 LakehouseCommitOutcome::StateUnknown { message } => Err(DataFusionError::External(
-                    Box::new(CatalogError::CommitStateUnknown(message)),
+                    Box::new(CatalogError::CommitStateUnknown(message.into())),
                 )),
                 LakehouseCommitOutcome::Rejected { message } => Err(DataFusionError::External(
                     Box::new(CatalogError::CommitRejected(message)),

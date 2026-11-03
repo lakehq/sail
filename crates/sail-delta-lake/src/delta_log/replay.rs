@@ -116,16 +116,13 @@ pub(crate) async fn load_replayed_table_state(
     let store = log_store.object_store(None);
     let mut state = ReconciledCheckpointState::default();
     let start_commit_version = if let Some(checkpoint_files) = checkpoint {
+        let next_version = checkpoint_files.version().saturating_add(1);
         let rows =
             read_checkpoint_rows_from_checkpoint_files(store.clone(), checkpoint_files).await?;
         for row in rows {
             state.apply_checkpoint_row(row)?;
         }
-        commit_files
-            .first()
-            .map(|(v, _)| *v)
-            .or_else(|| compaction_files.first().map(|((s, _), _)| *s))
-            .unwrap_or(target_version.saturating_add(1))
+        next_version
     } else {
         0
     };
@@ -206,17 +203,13 @@ pub(crate) async fn load_replayed_table_header(
 
             let (mut state, start_commit_version, mut commit_timestamps) = match checkpoint {
                 Some(checkpoint_files) => {
+                    let next_version = checkpoint_files.version().saturating_add(1);
                     let checkpoint_state = read_checkpoint_header_from_checkpoint_files(
                         store.clone(),
                         checkpoint_files,
                     )
                     .await?;
-                    let next_v = commit_files
-                        .first()
-                        .map(|(v, _)| *v)
-                        .or_else(|| compaction_files.first().map(|((s, _), _)| *s))
-                        .unwrap_or(target_version.saturating_add(1));
-                    (checkpoint_state, next_v, BTreeMap::new())
+                    (checkpoint_state, next_version, BTreeMap::new())
                 }
                 None => {
                     let start = base.version.saturating_add(1);

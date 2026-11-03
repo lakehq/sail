@@ -2,7 +2,7 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{DFSchemaRef, Result as DataFusionResult};
+use datafusion_common::{DFSchemaRef, Result as DataFusionResult, ScalarValue};
 use datafusion_expr::expr::{BinaryExpr, HigherOrderFunction, InList, Lambda, LambdaVariable};
 use datafusion_expr::{ExprSchemable, HigherOrderUDF, ScalarUDF, cast, expr, lit};
 use datafusion_expr_common::operator::Operator;
@@ -345,25 +345,24 @@ fn timestamp_string_coercion_requires_rewrite(
     }
 }
 
-/// Applies Spark timestamp/string coercion to one predicate before DataFusion's generic
-/// coercion, preserving session-zone parsing and Spark TimestampType's microsecond precision.
-pub(super) fn coerce_timestamp_string_predicate(
+/// Apply Spark's numeric precision and timestamp parsing rules before native coercion.
+pub(super) fn coerce_comparison_predicate(
     expression: expr::Expr,
     schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> PlanResult<expr::Expr> {
     Ok(match expression {
         expr::Expr::BinaryExpr(BinaryExpr { left, op, right }) if is_comparison(op) => {
-            let (left, right) = coerce_timestamp_pair(*left, *right, op, schema, config)?;
+            let (left, right) = coerce_comparison_pair(*left, *right, op, schema, config)?;
             expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
         }
         expr::Expr::InList(InList {
-            expr,
-            list,
+            mut expr,
+            mut list,
             negated,
         }) => {
-            let expr_type = expr.get_type(schema.as_ref())?;
-            let list_types = list
+            let mut expr_type = expr.get_type(schema.as_ref())?;
+            let mut list_types = list
                 .iter()
                 .map(|value| value.get_type(schema.as_ref()))
                 .collect::<DataFusionResult<Vec<_>>>()?;
@@ -371,12 +370,45 @@ pub(super) fn coerce_timestamp_string_predicate(
             data_types.push(expr_type.clone());
             data_types.extend(list_types.iter().cloned());
 
+            let mut widened = false;
+            let column = matches!(expr.as_ref(), expr::Expr::Column(_));
+            if config.ansi_mode
+                && widens_float_comparison(
+                    &std::iter::once((expr.as_ref(), &expr_type))
+                        .chain(list.iter().zip(&list_types))
+                        .collect::<Vec<_>>(),
+                )
+                && let Some(targets) =
+                    ansi_float_comparison_types(&data_types, config.case_sensitive)
+            {
+                widened = true;
+                expr = Box::new(cast_comparison_operand(*expr, &expr_type, &targets[0]));
+                list = list
+                    .into_iter()
+                    .zip(&list_types)
+                    .zip(&targets[1..])
+                    .map(|((value, from), to)| cast_comparison_operand(value, from, to))
+                    .collect();
+                expr_type = targets[0].clone();
+                list_types = targets[1..].to_vec();
+                data_types = targets;
+            }
+
             let Some(coercion) = find_timestamp_string_in_coercion(
                 &data_types,
                 &config.session_timezone,
                 config.ansi_mode,
                 config.case_sensitive,
             ) else {
+                // DataFusion rewrites a short IN list on a column into equalities, which merge
+                // -0.0 and 0.0; its IN set does not. Keep that rewrite for the cast column.
+                if widened
+                    && column
+                    && (1..=3).contains(&list.len())
+                    && !list.iter().any(is_null_literal_expression)
+                {
+                    return Ok(recursive_list_in_as_comparisons(*expr, list, negated));
+                }
                 return Ok(expr::Expr::InList(InList::new(expr, list, negated)));
             };
             let has_null_list_value = list.iter().any(is_null_literal_expression);
@@ -460,7 +492,237 @@ fn recursive_list_in_as_comparisons(
     }
 }
 
-fn coerce_timestamp_pair(
+/// Spark ANSI computes arithmetic and conditionals over integral and FLOAT values as DOUBLE,
+/// where native coercion keeps FLOAT.
+// TODO: Spark also widens map(), map_concat(), concat() of arrays, set operations, nested
+//  array and struct leaves, and FLOAT with DECIMAL to DOUBLE.
+pub(super) fn coerce_ansi_float_widening(
+    expression: expr::Expr,
+    schema: &DFSchemaRef,
+    config: &PlanConfig,
+) -> DataFusionResult<expr::Expr> {
+    if !config.ansi_mode {
+        return Ok(expression);
+    }
+    let widen = |values: Vec<expr::Expr>| -> DataFusionResult<Vec<expr::Expr>> {
+        // Leave operands that are not typed yet, such as `grouping_id()`, to native coercion.
+        let Ok(types) = values
+            .iter()
+            .map(|value| value.get_type(schema.as_ref()))
+            .collect::<DataFusionResult<Vec<_>>>()
+        else {
+            return Ok(values);
+        };
+        let integral = |t: &DataType| {
+            matches!(
+                t,
+                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+            )
+        };
+        let widened = types.iter().any(|t| matches!(t, DataType::Float32))
+            && types.iter().any(integral)
+            && types.iter().all(|t| {
+                t.is_null() || integral(t) || matches!(t, DataType::Float32 | DataType::Float64)
+            });
+        Ok(if widened {
+            values
+                .into_iter()
+                .zip(&types)
+                .map(|(value, from)| cast_comparison_operand(value, from, &DataType::Float64))
+                .collect()
+        } else {
+            values
+        })
+    };
+    Ok(match expression {
+        expr::Expr::BinaryExpr(BinaryExpr { left, op, right })
+            if matches!(
+                op,
+                Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Modulo
+            ) =>
+        {
+            let mut operands = widen(vec![*left, *right])?.into_iter();
+            match (operands.next(), operands.next()) {
+                (Some(left), Some(right)) => {
+                    expr::Expr::BinaryExpr(BinaryExpr::new(Box::new(left), op, Box::new(right)))
+                }
+                _ => unreachable!("two operands"),
+            }
+        }
+        expr::Expr::ScalarFunction(mut function)
+            if matches!(
+                function.name(),
+                "coalesce" | "greatest" | "least" | "pmod" | "spark_array"
+            ) =>
+        {
+            function.args = widen(function.args)?;
+            expr::Expr::ScalarFunction(function)
+        }
+        expr::Expr::Case(mut case) => {
+            let mut values = case
+                .when_then_expr
+                .iter()
+                .map(|(_, then)| then.as_ref().clone())
+                .chain(case.else_expr.as_deref().cloned())
+                .collect::<Vec<_>>();
+            values = widen(values)?;
+            let mut values = values.into_iter();
+            for (_, then) in &mut case.when_then_expr {
+                if let Some(value) = values.next() {
+                    **then = value;
+                }
+            }
+            if let (Some(else_expr), Some(value)) = (case.else_expr.as_mut(), values.next()) {
+                **else_expr = value;
+            }
+            expr::Expr::Case(case)
+        }
+        expression => expression,
+    })
+}
+
+/// Whether to compare FLOAT and integral operands as DOUBLE, like Spark ANSI. Integral
+/// literals that FLOAT represents exactly compare the same either way, without casting
+/// every FLOAT value.
+fn widens_float_comparison(operands: &[(&expr::Expr, &DataType)]) -> bool {
+    const FLOAT_EXACT: i128 = 1 << 24;
+    let exact_literal = |expression: &expr::Expr| match expression {
+        expr::Expr::Literal(value, _) => match value {
+            ScalarValue::Int8(Some(v)) => i128::from(*v).abs() <= FLOAT_EXACT,
+            ScalarValue::Int16(Some(v)) => i128::from(*v).abs() <= FLOAT_EXACT,
+            ScalarValue::Int32(Some(v)) => i128::from(*v).abs() <= FLOAT_EXACT,
+            ScalarValue::Int64(Some(v)) => i128::from(*v).abs() <= FLOAT_EXACT,
+            _ => false,
+        },
+        _ => false,
+    };
+    !operands
+        .iter()
+        .all(|(expression, data_type)| match data_type {
+            DataType::Float32 | DataType::Null => true,
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                exact_literal(expression)
+            }
+            _ => false,
+        })
+}
+
+/// Spark ANSI compares FLOAT with integral values as DOUBLE, including nested leaves.
+/// Keep each operand's other fields intact for the existing coercion rules.
+pub(in crate::resolver) fn ansi_float_comparison_types(
+    data_types: &[DataType],
+    case_sensitive: bool,
+) -> Option<Vec<DataType>> {
+    use DataType::*;
+    if data_types.iter().any(|t| matches!(t, Float32))
+        && data_types
+            .iter()
+            .any(|t| matches!(t, Int8 | Int16 | Int32 | Int64))
+        && data_types.iter().all(|t| {
+            matches!(t, Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
+                || t.is_string()
+                || t.is_decimal()
+        })
+    {
+        return Some(vec![Float64; data_types.len()]);
+    }
+    let first = data_types.iter().find(|t| !t.is_null())?;
+    match first {
+        List(_) | LargeList(_) | FixedSizeList(_, _) => {
+            let elements = data_types
+                .iter()
+                .map(|t| match t {
+                    List(field) | LargeList(field) | FixedSizeList(field, _) => {
+                        Some(field.data_type().clone())
+                    }
+                    Null => Some(Null),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let targets = ansi_float_comparison_types(&elements, case_sensitive)?;
+            Some(
+                data_types
+                    .iter()
+                    .zip(targets)
+                    .map(|(t, target)| match t {
+                        List(field) => {
+                            List(Arc::new(field.as_ref().clone().with_data_type(target)))
+                        }
+                        LargeList(field) => {
+                            LargeList(Arc::new(field.as_ref().clone().with_data_type(target)))
+                        }
+                        FixedSizeList(field, size) => FixedSizeList(
+                            Arc::new(field.as_ref().clone().with_data_type(target)),
+                            *size,
+                        ),
+                        _ => t.clone(),
+                    })
+                    .collect(),
+            )
+        }
+        Struct(first_fields) => {
+            if !data_types.iter().all(|t| match t {
+                Struct(fields) => {
+                    fields.len() == first_fields.len()
+                        && fields.iter().zip(first_fields).all(|(field, first)| {
+                            struct_field_names_equal(field.name(), first.name(), case_sensitive)
+                        })
+                }
+                Null => true,
+                _ => false,
+            }) {
+                return None;
+            }
+            let mut result = data_types
+                .iter()
+                .map(|t| match t {
+                    Struct(fields) => Some(fields.to_vec()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let mut changed = false;
+            for index in 0..first_fields.len() {
+                let fields = data_types
+                    .iter()
+                    .map(|t| match t {
+                        Struct(fields) => fields[index].data_type().clone(),
+                        _ => Null,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(targets) = ansi_float_comparison_types(&fields, case_sensitive) {
+                    changed = true;
+                    for (fields, target) in result.iter_mut().zip(targets) {
+                        if let Some(fields) = fields {
+                            fields[index] =
+                                Arc::new(fields[index].as_ref().clone().with_data_type(target));
+                        }
+                    }
+                }
+            }
+            changed.then(|| {
+                result
+                    .into_iter()
+                    .zip(data_types)
+                    .map(|(fields, original)| {
+                        fields.map_or_else(|| original.clone(), |fields| Struct(fields.into()))
+                    })
+                    .collect()
+            })
+        }
+        _ => None,
+    }
+}
+
+fn cast_comparison_operand(expression: expr::Expr, from: &DataType, to: &DataType) -> expr::Expr {
+    if from == to {
+        expression
+    } else {
+        // Cast the complete operand once, including volatile arrays and structs.
+        cast(expression, to.clone())
+    }
+}
+
+fn coerce_comparison_pair(
     left: expr::Expr,
     right: expr::Expr,
     operator: Operator,
@@ -469,6 +731,19 @@ fn coerce_timestamp_pair(
 ) -> DataFusionResult<(expr::Expr, expr::Expr)> {
     let left_type = left.get_type(schema.as_ref())?;
     let right_type = right.get_type(schema.as_ref())?;
+
+    if config.ansi_mode
+        && widens_float_comparison(&[(&left, &left_type), (&right, &right_type)])
+        && let Some(targets) = ansi_float_comparison_types(
+            &[left_type.clone(), right_type.clone()],
+            config.case_sensitive,
+        )
+    {
+        return Ok((
+            cast_comparison_operand(left, &left_type, &targets[0]),
+            cast_comparison_operand(right, &right_type, &targets[1]),
+        ));
+    }
 
     if !config.ansi_mode
         && config.legacy_type_coercion_datetime_to_string
@@ -597,7 +872,7 @@ fn is_string_type(data_type: &DataType) -> bool {
 }
 
 /// Coerces an IN-subquery pair whose right-hand expression belongs to a separate logical plan.
-pub(super) fn coerce_timestamp_in_subquery_pair(
+pub(super) fn coerce_in_subquery_pair(
     left: expr::Expr,
     left_type: &DataType,
     left_schema: &DFSchemaRef,
@@ -606,20 +881,51 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
     right_schema: &DFSchemaRef,
     config: &PlanConfig,
 ) -> DataFusionResult<(expr::Expr, expr::Expr, bool, bool)> {
+    let targets = (config.ansi_mode
+        && widens_float_comparison(&[(&left, left_type), (&right, right_type)]))
+    .then(|| {
+        ansi_float_comparison_types(
+            &[left_type.clone(), right_type.clone()],
+            config.case_sensitive,
+        )
+    })
+    .flatten();
+    let (left, right, left_type, right_type, left_numeric, right_numeric) =
+        if let Some(targets) = targets {
+            (
+                cast_comparison_operand(left, left_type, &targets[0]),
+                cast_comparison_operand(right, right_type, &targets[1]),
+                targets[0].clone(),
+                targets[1].clone(),
+                left_type != &targets[0],
+                right_type != &targets[1],
+            )
+        } else {
+            (
+                left,
+                right,
+                left_type.clone(),
+                right_type.clone(),
+                false,
+                false,
+            )
+        };
     let Some(coercion) = find_timestamp_string_in_coercion(
         &[left_type.clone(), right_type.clone()],
         &config.session_timezone,
         config.ansi_mode,
         config.case_sensitive,
     ) else {
-        return Ok((left, right, false, false));
+        return Ok((left, right, left_numeric, right_numeric));
     };
 
-    let left_changed = timestamp_string_coercion_requires_rewrite(left_type, &coercion);
-    let right_changed = timestamp_string_coercion_requires_rewrite(right_type, &coercion);
+    let left_changed =
+        left_numeric || timestamp_string_coercion_requires_rewrite(&left_type, &coercion);
+    let right_changed =
+        right_numeric || timestamp_string_coercion_requires_rewrite(&right_type, &coercion);
     let left = apply_timestamp_string_in_coercion(
         left,
-        left_type,
+        &left_type,
         &coercion,
         left_schema,
         &config.session_timezone,
@@ -628,7 +934,7 @@ pub(super) fn coerce_timestamp_in_subquery_pair(
     )?;
     let right = apply_timestamp_string_in_coercion(
         right,
-        right_type,
+        &right_type,
         &coercion,
         right_schema,
         &config.session_timezone,
@@ -698,7 +1004,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let expr = Box::new(self.resolve_expression(expr, schema, state).await?);
         let list = self.resolve_expressions(list, schema, state).await?;
-        let expression = coerce_timestamp_string_predicate(
+        let expression = coerce_comparison_predicate(
             expr::Expr::InList(expr::InList::new(expr, list, negated)),
             schema,
             &self.config,
@@ -824,7 +1130,7 @@ impl PlanResolver<'_> {
         let high = self.resolve_expression(high, schema, state).await?;
 
         // DataFusion's BETWEEN operator has a bug, so we construct the expression manually.
-        let greater_eq = coerce_timestamp_string_predicate(
+        let greater_eq = coerce_comparison_predicate(
             expr::Expr::BinaryExpr(BinaryExpr::new(
                 Box::new(expr.clone()),
                 Operator::GtEq,
@@ -833,7 +1139,7 @@ impl PlanResolver<'_> {
             schema,
             &self.config,
         )?;
-        let less_eq = coerce_timestamp_string_predicate(
+        let less_eq = coerce_comparison_predicate(
             expr::Expr::BinaryExpr(BinaryExpr::new(
                 Box::new(expr),
                 Operator::LtEq,
@@ -864,7 +1170,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let left = self.resolve_expression(left, schema, state).await?;
         let right = self.resolve_expression(right, schema, state).await?;
-        let expression = coerce_timestamp_string_predicate(
+        let expression = coerce_comparison_predicate(
             expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::IsDistinctFrom,
@@ -889,7 +1195,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         let left = self.resolve_expression(left, schema, state).await?;
         let right = self.resolve_expression(right, schema, state).await?;
-        let expression = coerce_timestamp_string_predicate(
+        let expression = coerce_comparison_predicate(
             expr::Expr::BinaryExpr(BinaryExpr {
                 left: Box::new(left),
                 op: Operator::IsNotDistinctFrom,

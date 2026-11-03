@@ -137,6 +137,9 @@ pub struct DropTemporaryViewOptions {
 /// Options for altering a table in a catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum AlterTableOptions {
+    AlterSnapshotReference {
+        operation: sail_common::spec::SnapshotReferenceOperation,
+    },
     AlterIdentifierFields {
         names: Vec<Vec<String>>,
         drop: bool,
@@ -200,6 +203,11 @@ impl From<&AlterTableOptions>
     fn from(options: &AlterTableOptions) -> Self {
         use sail_common_datafusion::lakesource::LakeSourceAlterTableOperation;
         match options {
+            AlterTableOptions::AlterSnapshotReference { operation } => {
+                LakeSourceAlterTableOperation::AlterSnapshotReference {
+                    operation: operation.clone(),
+                }
+            }
             AlterTableOptions::AlterIdentifierFields { names, drop } => {
                 LakeSourceAlterTableOperation::AlterIdentifierFields {
                     names: names.clone(),

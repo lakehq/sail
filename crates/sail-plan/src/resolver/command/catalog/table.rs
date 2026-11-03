@@ -516,6 +516,9 @@ impl PlanResolver<'_> {
             spec::AlterTableOperation::SetLocation { location } => {
                 AlterTableOptions::SetLocation { location }
             }
+            spec::AlterTableOperation::AlterSnapshotReference { operation } => {
+                AlterTableOptions::AlterSnapshotReference { operation }
+            }
             spec::AlterTableOperation::RenameTable { name } => {
                 return self.resolve_catalog_command(CatalogCommand::RenameTable {
                     table: table.into(),

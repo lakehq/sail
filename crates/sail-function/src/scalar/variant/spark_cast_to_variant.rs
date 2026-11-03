@@ -28,6 +28,14 @@ impl SparkCastToVariant {
             signature: Signature::any(1, Volatility::Immutable),
         }
     }
+
+    pub fn validate_input_type(input_type: &DataType) -> Result<()> {
+        match input_type {
+            DataType::Map(_, _) => exec_err!("cannot cast MAP to VARIANT"),
+            DataType::Struct(_) => exec_err!("cannot cast STRUCT to VARIANT"),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl Default for SparkCastToVariant {
@@ -72,13 +80,7 @@ impl ScalarUDFImpl for SparkCastToVariant {
             .map(|f| f.data_type().clone())
             .unwrap_or(DataType::Null);
 
-        // Reject Map and Struct (Spark doesn't support CAST to VARIANT for these)
-        if matches!(input_type, DataType::Map(_, _)) {
-            return exec_err!("cannot cast MAP to VARIANT");
-        }
-        if matches!(input_type, DataType::Struct(_)) {
-            return exec_err!("cannot cast STRUCT to VARIANT");
-        }
+        Self::validate_input_type(&input_type)?;
 
         let arg = &args.args[0];
         match arg {

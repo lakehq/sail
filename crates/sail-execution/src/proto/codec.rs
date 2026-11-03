@@ -100,6 +100,7 @@ use sail_common_datafusion::array::record_batch::{read_record_batches, write_rec
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::input_file::{
     InputFileBlockLengthFunc, InputFileBlockStartFunc, InputFileMetadataSource,
@@ -155,6 +156,8 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::vector::avg::VectorAvg;
+use sail_function::aggregate::vector_sum::VectorSum;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
@@ -166,10 +169,11 @@ use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
+use sail_function::scalar::correlation_cast::CorrelationCast;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
 use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
-use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::convert_tz::{ConvertTz, ConvertTzMode};
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
@@ -188,6 +192,7 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::datetime::spark_timestamp_add_interval::SparkTimestampAddInterval;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -210,7 +215,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::SparkDiv;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -224,6 +229,7 @@ use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::misc::scalar_subquery_result::ScalarSubqueryResult;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
@@ -232,7 +238,9 @@ use sail_function::scalar::misc::theta_sketch::{
     ThetaUnionFunction,
 };
 use sail_function::scalar::misc::version::SparkVersion;
+use sail_function::scalar::mixed_numeric::MixedNumeric;
 use sail_function::scalar::multi_expr::MultiExpr;
+use sail_function::scalar::normalize_float_keys::NormalizeFloatKeys;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 use sail_function::scalar::spark_cast_string_to_int32::SparkCastStringToInt32;
 use sail_function::scalar::spark_struct_rename::SparkStructRename;
@@ -398,6 +406,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 style,
                 truncate,
                 schema,
+                timezone,
             }) => {
                 let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(ShowStringExec::new(
@@ -407,7 +416,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     ShowStringFormat::new(
                         self.try_decode_show_string_style(style)?,
                         truncate as usize,
-                    ),
+                    )
+                    .with_timezone(timezone.map(Arc::from)),
                     Arc::new(schema),
                 )))
             }
@@ -1052,6 +1062,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 user_metadata,
                 commit_context,
                 lakehouse_table_json,
+                output,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1072,17 +1083,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
 
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
-                Ok(Arc::new(DeltaCommitExec::new(
-                    input,
-                    table_url,
-                    partition_columns,
-                    table_exists,
-                    Arc::new(sink_schema),
-                    sink_mode,
-                    user_metadata,
-                    commit_context,
-                    lakehouse_table,
-                )))
+                Ok(Arc::new(
+                    DeltaCommitExec::new(
+                        input,
+                        table_url,
+                        partition_columns,
+                        table_exists,
+                        Arc::new(sink_schema),
+                        sink_mode,
+                        user_metadata,
+                        commit_context,
+                        lakehouse_table,
+                    )
+                    .with_output(Self::try_decode_command_output(output)?),
+                ))
             }
             NodeKind::DeltaScanByAdds(r#gen::DeltaScanByAddsExecNode {
                 input,
@@ -1098,6 +1112,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 lakehouse_table_json,
                 catalog_managed_commits_json,
                 input_file_projection,
+                preserve_file_groups,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1158,23 +1173,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         "Delta catalog-managed commit set",
                     )?)
                 };
-                Ok(Arc::new(
-                    DeltaScanByAddsExec::new(
-                        input,
-                        table_url,
-                        version,
-                        table_schema,
-                        output_schema,
-                        scan_config,
-                        projection,
-                        limit,
-                        pushdown_filter,
-                        lakehouse_table,
-                        catalog_managed_commits,
-                    )
-                    .with_input_file_projection(input_file_projection)?
-                    .with_output_statistics(statistics),
-                ))
+                let scan = DeltaScanByAddsExec::new(
+                    input,
+                    table_url,
+                    version,
+                    table_schema,
+                    output_schema,
+                    scan_config,
+                    projection,
+                    limit,
+                    pushdown_filter,
+                    lakehouse_table,
+                    catalog_managed_commits,
+                )
+                .with_input_file_projection(input_file_projection)?
+                .with_output_statistics(statistics);
+                Ok(Arc::new(if preserve_file_groups {
+                    scan.preserve_file_groups()
+                } else {
+                    scan
+                }))
             }
             NodeKind::DeltaDiscovery(r#gen::DeltaDiscoveryExecNode {
                 table_url,
@@ -1631,6 +1649,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 snapshot_update_kind,
                 dynamic_partition_overwrite,
                 removed_data_file_paths,
+                output,
             }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1640,14 +1659,31 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let snapshot_update_kind =
                     Self::try_decode_iceberg_snapshot_update_kind(snapshot_update_kind)?;
 
-                Ok(Arc::new(
+                let commit =
                     IcebergCommitExec::new(input, table_url, lakehouse_table, snapshot_update_kind)
                         .with_expected_snapshot_id(
                             validate_read_snapshot.then_some(expected_snapshot_id),
                         )
                         .with_dynamic_partition_overwrite(dynamic_partition_overwrite)
-                        .with_removed_data_file_paths(removed_data_file_paths),
-                ))
+                        .with_removed_data_file_paths(removed_data_file_paths);
+                use r#gen::iceberg_commit_exec_node::Output;
+                let commit = match output {
+                    Some(Output::CommandOutput(output)) => {
+                        let output = Self::try_decode_command_output(output)?;
+                        if !matches!(output, CommandOutput::Empty | CommandOutput::Count) {
+                            return plan_err!("unsupported Iceberg command output");
+                        }
+                        commit.with_output(output)
+                    }
+                    Some(Output::RewriteDataFilesOutput(output)) => commit
+                        .with_rewrite_data_files_output(
+                            Arc::new(try_decode_schema(&output.schema)?),
+                            output.rewritten_data_files_count,
+                            output.rewritten_bytes_count,
+                        ),
+                    None => return plan_err!("Missing output for IcebergCommitExec"),
+                };
+                Ok(Arc::new(commit))
             }
             NodeKind::IcebergManifestScan(r#gen::IcebergManifestScanExecNode {
                 table_url,
@@ -1745,6 +1781,35 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::IcebergFileTasks(r#gen::IcebergFileTasksExecNode { groups }) => Ok(Arc::new(
                 IcebergFileTasksExec::try_from_serialized(&groups)?,
             )),
+            NodeKind::DeltaOptimizeRewrite(r#gen::DeltaOptimizeRewriteExecNode {
+                input,
+                assignments,
+            }) => {
+                let input =
+                    try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
+                let assignments = assignments
+                    .into_iter()
+                    .map(|assignment| {
+                        assignment
+                            .groups
+                            .into_iter()
+                            .map(|group| {
+                                usize::try_from(group).map_err(|error| {
+                                    plan_datafusion_err!(
+                                        "Invalid Delta OPTIMIZE rewrite group: {error}"
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(
+                    sail_delta_lake::physical_plan::DeltaOptimizeRewriteExec::try_new(
+                        input,
+                        assignments,
+                    )?,
+                ))
+            }
             NodeKind::IcebergRewrite(r#gen::IcebergRewriteExecNode { input, assignments }) => {
                 let input =
                     try_decode_physical_plan_with_converter(ctx, self, proto_converter, &input)?;
@@ -1992,6 +2057,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sail_iceberg::physical_plan::validate_iceberg_procedure_call_identity(
                     &input, &call,
                 )?;
+                let mut pending = vec![&input];
+                while let Some(node) = pending.pop() {
+                    if let Some(exec) =
+                        node.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
+                        && exec.call() != &call
+                    {
+                        return plan_err!(
+                            "Delta maintenance call does not match its procedure boundary"
+                        );
+                    }
+                    pending.extend(node.children());
+                }
                 let procedure = LakeProcedureExec::try_new(call, input, root_placement)?;
                 if procedure.schema_ref().as_ref() != schema.as_ref() {
                     return plan_err!(
@@ -1999,6 +2076,58 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     );
                 }
                 Ok(Arc::new(procedure))
+            }
+            NodeKind::DeltaMaintenance(r#gen::DeltaMaintenanceExecNode {
+                call,
+                options,
+                predicate,
+                predicate_schema,
+                input,
+                optimize_plan,
+            }) => {
+                let call = serde_json::from_str(&call).map_err(|e| {
+                    plan_datafusion_err!("failed to decode Delta maintenance call: {e}")
+                })?;
+                let predicate = match (predicate, predicate_schema) {
+                    (None, None) => None,
+                    (Some(predicate), Some(schema)) => {
+                        let schema = Arc::new(try_decode_schema(&schema)?);
+                        let expr = try_decode_physical_expr_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &predicate,
+                            &schema,
+                        )?;
+                        Some(sail_delta_lake::physical_plan::DeltaMaintenancePredicate {
+                            schema,
+                            expr,
+                        })
+                    }
+                    _ => return plan_err!("Delta maintenance predicate is missing its schema"),
+                };
+                let mut exec = sail_delta_lake::physical_plan::DeltaMaintenanceExec::try_new(
+                    call,
+                    options.into_iter().collect(),
+                    predicate,
+                )?;
+                match (input.is_empty(), optimize_plan.is_empty()) {
+                    (true, true) => {}
+                    (false, false) => {
+                        let input = try_decode_physical_plan_with_converter(
+                            ctx,
+                            self,
+                            proto_converter,
+                            &input,
+                        )?;
+                        let plan = serde_json::from_str(&optimize_plan).map_err(|e| {
+                            plan_datafusion_err!("failed to decode Delta OPTIMIZE plan: {e}")
+                        })?;
+                        exec = exec.with_optimize(input, plan)?;
+                    }
+                    _ => return plan_err!("Delta OPTIMIZE input and plan must appear together"),
+                }
+                Ok(Arc::new(exec))
             }
             NodeKind::IcebergProcedure(r#gen::IcebergProcedureExecNode {
                 call,
@@ -2119,6 +2248,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 style: self.try_encode_show_string_style(show_string.format().style())?,
                 truncate: show_string.format().truncate() as u64,
                 schema,
+                timezone: show_string.format().timezone().map(|x| x.to_string()),
             })
         } else if let Some(stage_input) = node.downcast_ref::<StageInputExec<usize>>() {
             let eq_properties = self.try_encode_equivalence_properties(
@@ -2554,6 +2684,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url: delta_commit_exec.table_url().to_string(),
                 partition_columns: delta_commit_exec.partition_columns().to_vec(),
                 table_exists: delta_commit_exec.table_exists(),
+                output: Self::encode_command_output(delta_commit_exec.output()),
                 sink_schema: try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
                 user_metadata: delta_commit_exec.user_metadata().map(str::to_owned),
@@ -2615,6 +2746,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 limit,
                 pushdown_filter,
                 version: delta_scan_by_adds_exec.version(),
+                preserve_file_groups: delta_scan_by_adds_exec.preserves_file_groups(),
                 statistics,
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(delta_scan_by_adds_exec.lakehouse_table())?,
@@ -2998,6 +3130,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ),
                 dynamic_partition_overwrite: iceberg_commit_exec.dynamic_partition_overwrite(),
                 removed_data_file_paths: iceberg_commit_exec.removed_data_file_paths().to_vec(),
+                output: Some(match iceberg_commit_exec.output() {
+                    sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::Command(output) =>
+                        r#gen::iceberg_commit_exec_node::Output::CommandOutput(Self::encode_command_output(*output)),
+                    sail_iceberg::physical_plan::commit::commit_exec::CommitOutput::RewriteDataFiles {
+                        rewritten_data_files_count, rewritten_bytes_count,
+                    } => r#gen::iceberg_commit_exec_node::Output::RewriteDataFilesOutput(r#gen::IcebergRewriteDataFilesOutput {
+                        schema: try_encode_schema(&iceberg_commit_exec.schema())?,
+                        rewritten_data_files_count: *rewritten_data_files_count,
+                        rewritten_bytes_count: *rewritten_bytes_count,
+                    }),
+                }),
             })
         } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>() {
             let snapshot_json = serde_json::to_string(manifest_scan.snapshot())
@@ -3053,6 +3196,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(tasks) = node.downcast_ref::<IcebergFileTasksExec>() {
             NodeKind::IcebergFileTasks(r#gen::IcebergFileTasksExecNode {
                 groups: tasks.serialized_groups()?,
+            })
+        } else if let Some(rewrite) =
+            node.downcast_ref::<sail_delta_lake::physical_plan::DeltaOptimizeRewriteExec>()
+        {
+            NodeKind::DeltaOptimizeRewrite(r#gen::DeltaOptimizeRewriteExecNode {
+                input: try_encode_physical_plan_with_converter(
+                    self,
+                    proto_converter,
+                    rewrite.input().clone(),
+                )?,
+                assignments: rewrite
+                    .assignments()
+                    .iter()
+                    .map(|groups| r#gen::DeltaOptimizeGroupAssignment {
+                        groups: groups.iter().map(|group| *group as u64).collect(),
+                    })
+                    .collect(),
             })
         } else if let Some(rewrite) = node.downcast_ref::<IcebergRewriteExec>() {
             NodeKind::IcebergRewrite(r#gen::IcebergRewriteExecNode {
@@ -3244,6 +3404,50 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 call,
                 input,
                 root_placement,
+            })
+        } else if let Some(exec) =
+            node.downcast_ref::<sail_delta_lake::physical_plan::DeltaMaintenanceExec>()
+        {
+            NodeKind::DeltaMaintenance(r#gen::DeltaMaintenanceExecNode {
+                input: exec
+                    .input()
+                    .map(|input| {
+                        try_encode_physical_plan_with_converter(
+                            self,
+                            proto_converter,
+                            input.clone(),
+                        )
+                    })
+                    .transpose()?
+                    .unwrap_or_default(),
+                optimize_plan: exec
+                    .optimize_plan()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| plan_datafusion_err!("failed to encode Delta OPTIMIZE plan: {e}"))?
+                    .unwrap_or_default(),
+                call: serde_json::to_string(exec.call()).map_err(|e| {
+                    plan_datafusion_err!("failed to encode Delta maintenance call: {e}")
+                })?,
+                options: exec
+                    .options()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+                predicate: exec
+                    .predicate()
+                    .map(|predicate| {
+                        try_encode_physical_expr_with_converter(
+                            self,
+                            proto_converter,
+                            &predicate.expr,
+                        )
+                    })
+                    .transpose()?,
+                predicate_schema: exec
+                    .predicate()
+                    .map(|predicate| try_encode_schema(&predicate.schema))
+                    .transpose()?,
             })
         } else if let Some(procedure_exec) = node.downcast_ref::<IcebergProcedureExec>() {
             procedure_exec.validate()?;
@@ -3439,6 +3643,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkSequence::new(Arc::from(session_timezone), ansi_mode);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkToString(r#gen::SparkToStringUdf { timezone }) => {
+                let timezone = timezone.map(Arc::from);
+                let udf = match name {
+                    "spark_to_utf8" => ScalarUDF::from(SparkToUtf8::new().with_timezone(timezone)),
+                    "spark_to_large_utf8" => {
+                        ScalarUDF::from(SparkToLargeUtf8::new().with_timezone(timezone))
+                    }
+                    "spark_to_utf8_view" => {
+                        ScalarUDF::from(SparkToUtf8View::new().with_timezone(timezone))
+                    }
+                    _ => return plan_err!("unknown string conversion function: {name}"),
+                };
+                return Ok(Arc::new(udf));
+            }
             UdfKind::SparkDateFormat(r#gen::SparkDateFormatUdf { session_timezone }) => {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -3552,8 +3770,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::ConvertTz(r#gen::ConvertTzUdf {
                 classic,
                 null_short_circuit,
+                mode,
+                output_timezone,
             }) => {
-                let func = ConvertTz::new(classic);
+                let func = match r#gen::ConvertTzMode::try_from(mode)
+                    .map_err(|_| plan_datafusion_err!("invalid convert_tz mode: {mode}"))?
+                {
+                    r#gen::ConvertTzMode::Function => ConvertTz::new(classic),
+                    r#gen::ConvertTzMode::Cast => ConvertTz::cast(false),
+                    r#gen::ConvertTzMode::TryCast => ConvertTz::cast(true),
+                }
+                .with_output_timezone(output_timezone.map(Arc::from));
                 let func = if null_short_circuit {
                     func.with_null_short_circuit()
                 } else {
@@ -3611,7 +3838,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
             "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
+            "mixed_numeric_add" | "mixed_numeric_subtract" | "mixed_numeric_multiply" => {
+                let function = MixedNumeric::from_name(name).ok_or_else(|| {
+                    datafusion::common::internal_datafusion_err!(
+                        "invalid mixed numeric function {name}"
+                    )
+                })?;
+                Ok(Arc::new(ScalarUDF::from(function)))
+            }
+            "correlation_cast" => Ok(Arc::new(ScalarUDF::from(CorrelationCast::new()))),
+            "normalize_float_keys" => Ok(Arc::new(ScalarUDF::from(NormalizeFloatKeys::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
+            "scalar_subquery_result" => Ok(Arc::new(ScalarUDF::from(ScalarSubqueryResult::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(SparkCastToVariant::new()))),
@@ -3678,7 +3916,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "xpath" => Ok(Arc::new(ScalarUDF::from(Xpath::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
-            "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
+            "spark_div" => Ok(Arc::new(ScalarUDF::from(SparkDiv::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
@@ -3714,6 +3952,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
             }
             "negate_duration" => Ok(Arc::new(ScalarUDF::from(NegateDuration::new()))),
+            "spark_timestamp_add_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTimestampAddInterval::new())))
+            }
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
             }
@@ -3810,6 +4051,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<VectorNormalize>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<CoalesceFunc>()
+            || node_inner.is::<NormalizeFloatKeys>()
+            || node_inner.is::<MixedNumeric>()
+            || node_inner.is::<CorrelationCast>()
             || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
@@ -3832,10 +4076,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
             || node_inner.is::<NegateDuration>()
+            || node_inner.is::<SparkTimestampAddInterval>()
             || node_inner.is::<OverlayFunc>()
             || node_inner.is::<RepeatFunc>()
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
+            || node_inner.is::<ScalarSubqueryResult>()
             || node_inner.is::<Randn>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
@@ -3861,7 +4107,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkEncode>()
             || node_inner.is::<SparkExpm1>()
             || node_inner.is::<SparkHex>()
-            || node_inner.is::<SparkIntervalDiv>()
+            || node_inner.is::<SparkDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
             || node_inner.is::<SparkVariantExplodeUdf>()
@@ -3892,9 +4138,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSplit>()
             || node_inner.is::<SparkToBinary>()
             || node_inner.is::<WithMetadataFunc>()
-            || node_inner.is::<SparkToLargeUtf8>()
-            || node_inner.is::<SparkToUtf8>()
-            || node_inner.is::<SparkToUtf8View>()
             || node_inner.is::<SparkTryAdd>()
             || node_inner.is::<SparkTryAESDecrypt>()
             || node_inner.is::<SparkTryAESEncrypt>()
@@ -4010,6 +4253,23 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 session_timezone,
                 ansi_mode,
             })
+        } else if let Some(timezone) = node_inner
+            .downcast_ref::<SparkToUtf8>()
+            .map(SparkToUtf8::timezone)
+            .or_else(|| {
+                node_inner
+                    .downcast_ref::<SparkToLargeUtf8>()
+                    .map(SparkToLargeUtf8::timezone)
+            })
+            .or_else(|| {
+                node_inner
+                    .downcast_ref::<SparkToUtf8View>()
+                    .map(SparkToUtf8View::timezone)
+            })
+        {
+            UdfKind::SparkToString(r#gen::SparkToStringUdf {
+                timezone: timezone.map(|x| x.to_string()),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkSequence>() {
             let session_timezone = func.session_timezone().to_string();
             let ansi_mode = func.ansi_mode();
@@ -4106,9 +4366,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<ConvertTz>() {
             let classic = func.classic();
             let null_short_circuit = func.null_short_circuit();
+            let mode = match func.mode() {
+                ConvertTzMode::Function => r#gen::ConvertTzMode::Function,
+                ConvertTzMode::Cast => r#gen::ConvertTzMode::Cast,
+                ConvertTzMode::TryCast => r#gen::ConvertTzMode::TryCast,
+            } as i32;
             UdfKind::ConvertTz(r#gen::ConvertTzUdf {
                 classic,
                 null_short_circuit,
+                mode,
+                output_timezone: func.output_timezone().map(|timezone| timezone.to_string()),
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkStructRename>() {
             let target_type = self.try_encode_data_type(func.target_type())?;
@@ -4217,6 +4484,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "theta_union_agg" => Ok(Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new()))),
                 "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(SparkTrySum::new()))),
+                "vector_avg" => Ok(Arc::new(AggregateUDF::from(VectorAvg::new()))),
+                "vector_sum" => Ok(Arc::new(AggregateUDF::from(VectorSum::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
             Some(UdafKind::PySparkGroupAgg(r#gen::PySparkGroupAggUdaf {
@@ -4340,6 +4609,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<ThetaUnionAggFunction>()
             || node.inner().is::<TryAvgFunction>()
             || node.inner().is::<SparkTrySum>()
+            || node.inner().is::<VectorAvg>()
+            || node.inner().is::<VectorSum>()
         {
             UdafKind::Standard(r#gen::StandardUdaf {})
         } else if let Some(func) = node.inner().downcast_ref::<PySparkGroupAggregateUDF>() {
@@ -5066,6 +5337,27 @@ impl RemoteExecutionCodec {
         }) as i32)
     }
 
+    fn try_decode_command_output(output: i32) -> Result<CommandOutput> {
+        match r#gen::CommandOutput::try_from(output)
+            .map_err(|_| plan_datafusion_err!("invalid command output"))?
+        {
+            r#gen::CommandOutput::Empty => Ok(CommandOutput::Empty),
+            r#gen::CommandOutput::Count => Ok(CommandOutput::Count),
+            r#gen::CommandOutput::AffectedRows => Ok(CommandOutput::AffectedRows),
+            r#gen::CommandOutput::MergeRows => Ok(CommandOutput::MergeRows),
+            r#gen::CommandOutput::Unspecified => plan_err!("command output is unspecified"),
+        }
+    }
+
+    fn encode_command_output(output: CommandOutput) -> i32 {
+        (match output {
+            CommandOutput::Empty => r#gen::CommandOutput::Empty,
+            CommandOutput::Count => r#gen::CommandOutput::Count,
+            CommandOutput::AffectedRows => r#gen::CommandOutput::AffectedRows,
+            CommandOutput::MergeRows => r#gen::CommandOutput::MergeRows,
+        }) as i32
+    }
+
     fn try_decode_iceberg_snapshot_update_kind(kind: i32) -> Result<SnapshotUpdateKind> {
         match r#gen::IcebergSnapshotUpdateKind::try_from(kind)
             .map_err(|_| plan_datafusion_err!("invalid Iceberg snapshot update kind"))?
@@ -5082,6 +5374,7 @@ impl RemoteExecutionCodec {
             r#gen::IcebergSnapshotUpdateKind::RowLevelRewrite => {
                 Ok(SnapshotUpdateKind::RowLevelRewrite)
             }
+            r#gen::IcebergSnapshotUpdateKind::Truncate => Ok(SnapshotUpdateKind::Truncate),
             r#gen::IcebergSnapshotUpdateKind::Unspecified => {
                 plan_err!("Iceberg snapshot update kind is unspecified")
             }
@@ -5090,6 +5383,7 @@ impl RemoteExecutionCodec {
 
     fn try_encode_iceberg_snapshot_update_kind(kind: SnapshotUpdateKind) -> i32 {
         (match kind {
+            SnapshotUpdateKind::Truncate => r#gen::IcebergSnapshotUpdateKind::Truncate,
             SnapshotUpdateKind::FastAppend => r#gen::IcebergSnapshotUpdateKind::FastAppend,
             SnapshotUpdateKind::FullOverwrite => r#gen::IcebergSnapshotUpdateKind::FullOverwrite,
             SnapshotUpdateKind::RowDelta => r#gen::IcebergSnapshotUpdateKind::RowDelta,
@@ -6001,6 +6295,34 @@ mod tests {
         codec.try_decode_udf(&name, &buf)
     }
 
+    fn round_trip_udaf(udaf: AggregateUDF) -> Result<Arc<AggregateUDF>> {
+        let codec = RemoteExecutionCodec;
+        let name = udaf.name().to_string();
+        let mut buf = vec![];
+        codec.try_encode_udaf(&udaf, &mut buf)?;
+        codec.try_decode_udaf(&name, &buf)
+    }
+
+    #[test]
+    fn test_round_trip_vector_avg_udaf() -> Result<()> {
+        let decoded = round_trip_udaf(AggregateUDF::from(VectorAvg::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorAvg>().is_some());
+        assert_eq!(decoded.name(), "vector_avg");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_vector_sum_udaf() -> Result<()> {
+        let decoded = round_trip_udaf(AggregateUDF::from(VectorSum::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<VectorSum>().is_some());
+        assert_eq!(decoded.name(), "vector_sum");
+
+        Ok(())
+    }
+
     #[test]
     fn test_jev_udf_codec_preserves_async_wrapper() -> Result<()> {
         for kind in sail_function::scalar::jev::JevKind::ALL {
@@ -6210,6 +6532,105 @@ mod tests {
             Ok(_) => return plan_err!("mismatched procedure calls should not encode"),
         };
         assert!(error.contains("implementation call does not match its engine boundary"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_delta_optimize_preserves_groups_and_snapshot() -> Result<()> {
+        use sail_common_datafusion::lakeprocedure::{
+            LakeProcedure, LakeProcedureAccess, LakeProcedureCall, LakeProcedureInvocation,
+            LakeProcedureInvocationId, LakeProcedureTarget,
+        };
+        use sail_delta_lake::physical_plan::{
+            DeltaMaintenanceExec, DeltaOptimizePlan, DeltaOptimizeRewriteExec, delta_action_schema,
+        };
+
+        let schema = delta_action_schema()?;
+        let files = DataSourceExec::from_data_source(MemorySourceConfig::try_new(
+            &[vec![], vec![], vec![], vec![]],
+            schema.clone(),
+            None,
+        )?);
+        let scan = Arc::new(
+            DeltaScanByAddsExec::new(
+                files,
+                Url::parse("file:///tmp/optimize").map_err(|e| plan_datafusion_err!("{e}"))?,
+                42,
+                schema.clone(),
+                schema,
+                Default::default(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .preserve_file_groups(),
+        );
+        let assignments = vec![vec![0, 2], vec![1, 3]];
+        let rewrite = Arc::new(DeltaOptimizeRewriteExec::try_new(
+            scan,
+            assignments.clone(),
+        )?);
+        let call = LakeProcedureCall {
+            invocation_id: LakeProcedureInvocationId("optimize-1".to_string()),
+            catalog: "sail".to_string(),
+            namespace: vec!["delta".to_string()],
+            lake_source: "delta".to_string(),
+            target: None,
+            invocation: LakeProcedureInvocation {
+                procedure: LakeProcedure {
+                    name: "optimize".to_string(),
+                    parameters: vec![],
+                    output: vec![],
+                    access: LakeProcedureAccess::MetadataCommit,
+                    target: LakeProcedureTarget::Catalog,
+                },
+                arguments: vec![],
+            },
+        };
+        let plan = DeltaOptimizePlan {
+            table_url: "file:///tmp/optimize".to_string(),
+            table_id: "table-1".to_string(),
+            version: 42,
+            removed: vec![],
+            considered: 0,
+            optimized_partitions: 0,
+            num_bins: 4,
+            parallelism: 2,
+        };
+        let maintenance = DeltaMaintenanceExec::try_new(call.clone(), Default::default(), None)?
+            .with_optimize(rewrite, plan)?;
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(maintenance))?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        let maintenance = decoded
+            .downcast_ref::<DeltaMaintenanceExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected maintenance"))?;
+        assert_eq!(maintenance.call(), &call);
+        let plan = maintenance
+            .optimize_plan()
+            .ok_or_else(|| plan_datafusion_err!("missing optimize plan"))?;
+        assert_eq!(plan.version, 42);
+        assert_eq!(plan.table_id, "table-1");
+        assert_eq!(plan.parallelism, 2);
+        let rewrite = maintenance
+            .input()
+            .and_then(|input| input.downcast_ref::<DeltaOptimizeRewriteExec>())
+            .ok_or_else(|| plan_datafusion_err!("expected rewrite"))?;
+        assert_eq!(rewrite.assignments(), assignments);
+        assert_eq!(
+            rewrite.properties().output_partitioning().partition_count(),
+            2
+        );
+        let scan = rewrite
+            .input()
+            .downcast_ref::<DeltaScanByAddsExec>()
+            .ok_or_else(|| plan_datafusion_err!("expected scan"))?;
+        assert!(scan.preserves_file_groups());
+        assert_eq!(scan.version(), 42);
+        assert_eq!(scan.properties().output_partitioning().partition_count(), 4);
+        assert_eq!(scan.benefits_from_input_partitioning(), vec![false]);
         Ok(())
     }
 
@@ -6568,6 +6989,7 @@ mod tests {
             last_partition_id: 999,
             current_snapshot_id: Some(42),
         });
+        write_context.operation = Some(sail_iceberg::operation_metrics::IcebergOperation::Merge);
         let plan = Arc::new(IcebergWriterExec::new_copy_on_write(
             Arc::new(EmptyExec::new(input_schema)),
             table_url,
@@ -6584,6 +7006,19 @@ mod tests {
         assert_eq!(
             writer.row_level_mode(),
             Some(RowLevelWriteMode::CopyOnWrite)
+        );
+        assert_eq!(
+            writer.write_context().operation,
+            Some(sail_iceberg::operation_metrics::IcebergOperation::Merge)
+        );
+        #[expect(deprecated)]
+        let rebuilt = Arc::clone(&decoded).with_new_children(vec![Arc::clone(writer.input())])?;
+        let rebuilt = rebuilt
+            .downcast_ref::<IcebergWriterExec>()
+            .ok_or_else(|| plan_datafusion_err!("rebuilt plan is not an IcebergWriterExec"))?;
+        assert_eq!(
+            rebuilt.write_context().operation,
+            writer.write_context().operation
         );
         assert_eq!(
             writer
@@ -6604,6 +7039,7 @@ mod tests {
             for (kind, dynamic) in [
                 (SnapshotUpdateKind::CopyOnWrite, true),
                 (SnapshotUpdateKind::RowLevelRewrite, false),
+                (SnapshotUpdateKind::Truncate, false),
                 (SnapshotUpdateKind::RewriteDataFiles, false),
             ] {
                 let input: Arc<dyn ExecutionPlan> =
@@ -6633,6 +7069,107 @@ mod tests {
                 assert_eq!(commit.removed_data_file_paths(), &["data/old.parquet"]);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_commit_output_round_trip_and_reconstruction() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
+        use sail_delta_lake::physical_plan::DeltaCommitContext;
+        use sail_iceberg::physical_plan::commit::commit_exec::CommitOutput;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let url = Url::parse("file:///tmp/command-output-codec/")
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+        let codec = RemoteExecutionCodec;
+        for output in [
+            CommandOutput::Empty,
+            CommandOutput::Count,
+            CommandOutput::AffectedRows,
+            CommandOutput::MergeRows,
+        ] {
+            let delta: Arc<dyn ExecutionPlan> = Arc::new(
+                DeltaCommitExec::new(
+                    input.clone(),
+                    url.clone(),
+                    vec![],
+                    true,
+                    input.schema(),
+                    PhysicalSinkMode::Append,
+                    None,
+                    DeltaCommitContext::default(),
+                    None,
+                )
+                .with_output(output),
+            );
+            let rebuilt = delta.replace_children(
+                vec![input.clone()],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
+            let bytes = try_encode_physical_plan(&codec, rebuilt)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            assert_eq!(decoded.schema(), output.schema());
+            assert_eq!(
+                decoded
+                    .downcast_ref::<DeltaCommitExec>()
+                    .ok_or_else(|| plan_datafusion_err!("expected Delta commit"))?
+                    .output(),
+                output
+            );
+        }
+        for output in [CommandOutput::Empty, CommandOutput::Count] {
+            let iceberg: Arc<dyn ExecutionPlan> = Arc::new(
+                IcebergCommitExec::new(
+                    input.clone(),
+                    url.clone(),
+                    None,
+                    SnapshotUpdateKind::RowDelta,
+                )
+                .with_output(output),
+            );
+            let rebuilt = iceberg.replace_children(
+                vec![input.clone()],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
+            let bytes = try_encode_physical_plan(&codec, rebuilt)?;
+            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+            assert_eq!(decoded.schema(), output.schema());
+            assert_eq!(
+                decoded
+                    .downcast_ref::<IcebergCommitExec>()
+                    .ok_or_else(|| plan_datafusion_err!("expected Iceberg commit"))?
+                    .output(),
+                &CommitOutput::Command(output)
+            );
+        }
+        let rewrite: Arc<dyn ExecutionPlan> = Arc::new(
+            IcebergCommitExec::new(
+                input.clone(),
+                url,
+                None,
+                SnapshotUpdateKind::RewriteDataFiles,
+            )
+            .with_rewrite_data_files_output(input.schema(), 3, 42),
+        );
+        let rebuilt = rewrite.replace_children(
+            vec![input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let bytes = try_encode_physical_plan(&codec, rebuilt)?;
+        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+        assert_eq!(
+            decoded
+                .downcast_ref::<IcebergCommitExec>()
+                .ok_or_else(|| plan_datafusion_err!("expected Iceberg commit"))?
+                .output(),
+            &CommitOutput::RewriteDataFiles {
+                rewritten_data_files_count: 3,
+                rewritten_bytes_count: 42
+            }
+        );
+        assert!(RemoteExecutionCodec::try_decode_command_output(0).is_err());
+        assert!(RemoteExecutionCodec::try_decode_command_output(99).is_err());
         Ok(())
     }
 
@@ -7228,6 +7765,48 @@ mod tests {
 
         let coalesce = round_trip_udf(ScalarUDF::from(CoalesceFunc::new()))?;
         downcast_udf::<CoalesceFunc>(&coalesce, "CoalesceFunc")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_correlation_cast_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(CorrelationCast::new()))?;
+        downcast_udf::<CorrelationCast>(&decoded, "CorrelationCast")?;
+        assert_eq!(decoded.name(), "correlation_cast");
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_mixed_numeric_udfs() -> Result<()> {
+        for (operator, name) in [
+            (
+                datafusion::logical_expr::Operator::Plus,
+                "mixed_numeric_add",
+            ),
+            (
+                datafusion::logical_expr::Operator::Minus,
+                "mixed_numeric_subtract",
+            ),
+            (
+                datafusion::logical_expr::Operator::Multiply,
+                "mixed_numeric_multiply",
+            ),
+        ] {
+            let function = MixedNumeric::new(operator).ok_or_else(|| {
+                datafusion::common::internal_datafusion_err!("unsupported arithmetic test operator")
+            })?;
+            let decoded = round_trip_udf(ScalarUDF::from(function))?;
+            downcast_udf::<MixedNumeric>(&decoded, "MixedNumeric")?;
+            assert_eq!(decoded.name(), name);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_normalize_float_keys_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(NormalizeFloatKeys::new()))?;
+        downcast_udf::<NormalizeFloatKeys>(&decoded, "NormalizeFloatKeys")?;
+        assert_eq!(decoded.name(), "normalize_float_keys");
         Ok(())
     }
 
@@ -8677,6 +9256,22 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_spark_to_string_preserves_timezone() -> Result<()> {
+        let timezone = Some(Arc::from("Asia/Shanghai"));
+        let decoded = round_trip_udf(ScalarUDF::from(
+            SparkToUtf8View::new().with_timezone(timezone.clone()),
+        ))?;
+        let decoded = downcast_udf::<SparkToUtf8View>(&decoded, "SparkToUtf8View")?;
+        assert_eq!(decoded.timezone(), timezone.as_ref());
+
+        let decoded = round_trip_udf(ScalarUDF::from(SparkToUtf8::new()))?;
+        let decoded = downcast_udf::<SparkToUtf8>(&decoded, "SparkToUtf8")?;
+        assert_eq!(decoded.timezone(), None);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_day_time_interval_to_calendar_interval_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(
             SparkDayTimeIntervalToCalendarInterval::new(),
@@ -8709,6 +9304,21 @@ mod tests {
         let decoded = downcast_udf::<ConvertTz>(&decoded, "ConvertTz")?;
         assert!(decoded.classic());
         assert!(decoded.null_short_circuit());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_convert_tz_preserves_cast_mode() -> Result<()> {
+        let udf = ConvertTz::cast(true).with_output_timezone(Some("America/Los_Angeles".into()));
+        let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+
+        let decoded = downcast_udf::<ConvertTz>(&decoded, "ConvertTz")?;
+        assert_eq!(decoded.mode(), ConvertTzMode::TryCast);
+        assert_eq!(
+            decoded.output_timezone().map(|timezone| timezone.as_ref()),
+            Some("America/Los_Angeles")
+        );
 
         Ok(())
     }

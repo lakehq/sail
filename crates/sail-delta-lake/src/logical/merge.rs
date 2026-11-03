@@ -6,6 +6,7 @@ use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScanBuilder, TableSource};
 use log::trace;
+use sail_common_datafusion::command::CommandOutput;
 use sail_common_datafusion::datasource::{
     MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
     MergeNotMatchedBySourceAction, RowLevelWriteMode,
@@ -120,7 +121,8 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         effects,
         expansion.options,
         expansion.output_schema,
-    );
+    )
+    .with_output(CommandOutput::MergeRows);
 
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(write_node),

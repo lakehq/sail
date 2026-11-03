@@ -38,15 +38,15 @@ fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
     let (collection, element) = input.arguments.two()?;
-    let (name, null_or_out_of_bounds) = if is_try {
-        ("try_element_at", lit(ScalarValue::Null))
+    let name = if is_try {
+        "try_element_at"
     } else {
-        (
-            "element_at",
-            // TODO: respect spark.sql.ansi.enabled=false: https://spark.apache.org/docs/latest/api/sql/index.html#element_at
-            ScalarUDF::from(RaiseError::new())
-                .call(vec![lit("element_at: the index is out of bounds")]),
-        )
+        "element_at"
+    };
+    let null_or_out_of_bounds = if is_try || !input.function_context.plan_config.ansi_mode {
+        lit(ScalarValue::Null)
+    } else {
+        ScalarUDF::from(RaiseError::new()).call(vec![lit("element_at: the index is out of bounds")])
     };
 
     Ok(match collection.get_type(input.function_context.schema)? {
