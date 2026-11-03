@@ -3,7 +3,7 @@ use std::collections::btree_map::Entry;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, Int32Array, Int64Array, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Metadata, Schema};
 use datafusion::arrow::record_batch::RecordBatch as ArrowRecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -387,7 +387,7 @@ fn position_delete_arrow_schema() -> Schema {
                     POSITION_DELETE_FILE_PATH_ID.to_string(),
                 )]
                 .into_iter()
-                .collect(),
+                .collect::<Metadata>(),
             ),
         ),
         Arc::new(
@@ -397,7 +397,7 @@ fn position_delete_arrow_schema() -> Schema {
                     POSITION_DELETE_POS_ID.to_string(),
                 )]
                 .into_iter()
-                .collect(),
+                .collect::<Metadata>(),
             ),
         ),
     ])

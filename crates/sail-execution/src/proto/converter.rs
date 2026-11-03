@@ -319,6 +319,7 @@ fn extension_expr_to_proto(
             PhysicalExtensionExprNode {
                 expr: node.encode_to_vec(),
                 inputs,
+                expr_name: None,
             },
         )),
     })

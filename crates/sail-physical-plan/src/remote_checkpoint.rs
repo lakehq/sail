@@ -845,6 +845,7 @@ fn validate_partition_location(
 #[expect(clippy::expect_used)]
 mod tests {
     use datafusion::arrow::array::Int32Array;
+    use datafusion::arrow::datatypes::Metadata;
     use datafusion::arrow::record_batch::RecordBatchOptions;
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -870,13 +871,13 @@ mod tests {
                 Field::new("value", DataType::Int64, false).with_metadata(
                     [("field-key".to_string(), "field-value".to_string())]
                         .into_iter()
-                        .collect(),
+                        .collect::<Metadata>(),
                 ),
                 Field::new("value", DataType::Utf8, true),
             ],
             [("schema-key".to_string(), "schema-value".to_string())]
                 .into_iter()
-                .collect(),
+                .collect::<Metadata>(),
         ));
 
         let storage = checkpoint_storage_schema(&logical);

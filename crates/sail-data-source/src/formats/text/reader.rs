@@ -615,7 +615,7 @@ mod tests {
     #[expect(clippy::unwrap_used)]
     #[test]
     fn test_text_schema_metadata() {
-        let mut metadata = std::collections::HashMap::new();
+        let mut metadata = datafusion::arrow::datatypes::Metadata::new();
         metadata.insert("foo".to_owned(), "bar".to_owned());
         let schema = Arc::new(Schema::new_with_metadata(
             vec![Field::new(

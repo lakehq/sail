@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use datafusion::common::{DFSchema, TableReference};
@@ -70,7 +69,8 @@ impl SystemCatalogProvider {
                     projected_schema: Arc::new(DFSchema::try_from(t.schema())?),
                     filters: vec![],
                     fetch: None,
-                    statistics_requests: BTreeSet::new(),
+                    skip: None,
+                    statistics_requests: Box::default(),
                 })),
                 columns,
                 comment: Some(t.description().to_string()),
@@ -256,5 +256,45 @@ impl CatalogProvider for SystemCatalogProvider {
         Err(CatalogError::NotSupported(
             "drop view in system catalog".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(clippy::panic, clippy::unwrap_used)]
+    fn test_system_tables_start_with_unrestricted_scans() {
+        for db in SystemCatalog::databases() {
+            let database = Namespace {
+                head: Arc::from(db.name()),
+                tail: vec![],
+            };
+            for table in db.tables() {
+                let status =
+                    SystemCatalogProvider::get_table_status(&database, table.name(), *table)
+                        .unwrap();
+                let TableKind::TemporaryView { plan, .. } = status.kind else {
+                    panic!("expected a temporary view");
+                };
+                let LogicalPlan::TableScan(scan) = plan.as_ref() else {
+                    panic!("expected a table scan");
+                };
+                assert_eq!(
+                    scan.table_name,
+                    TableReference::full(SYSTEM_CATALOG_NAME, db.name(), table.name())
+                );
+                assert_eq!(
+                    scan.projected_schema.as_arrow(),
+                    scan.source.schema().as_ref()
+                );
+                assert_eq!(scan.projection, None);
+                assert!(scan.filters.is_empty());
+                assert_eq!(scan.fetch, None);
+                assert_eq!(scan.skip, None);
+                assert!(scan.statistics_requests.is_empty());
+            }
+        }
     }
 }

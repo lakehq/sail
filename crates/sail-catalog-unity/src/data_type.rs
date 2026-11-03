@@ -14,7 +14,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Fields, IntervalUnit, TimeUnit,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Fields, IntervalUnit,
+    Metadata, TimeUnit,
 };
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_common::spec::{
@@ -38,7 +39,7 @@ pub(crate) fn unity_struct_field_type_json(
     name: &str,
     data_type: &DataType,
     nullable: bool,
-    metadata: &HashMap<String, String>,
+    metadata: &Metadata,
 ) -> CatalogResult<serde_json::Value> {
     let data_type_json = spark_data_type_json(data_type)?;
     Ok(serde_json::json!({
@@ -58,9 +59,7 @@ fn spark_struct_field_json(field: &Field) -> CatalogResult<serde_json::Value> {
     )
 }
 
-fn spark_field_metadata_json(
-    metadata: &HashMap<String, String>,
-) -> CatalogResult<serde_json::Value> {
+fn spark_field_metadata_json(metadata: &Metadata) -> CatalogResult<serde_json::Value> {
     let mut out = if let Some(raw) = metadata.get(SPARK_METADATA_JSON_KEY) {
         match serde_json::from_str::<serde_json::Value>(raw) {
             Ok(serde_json::Value::Object(object)) => object,
@@ -880,5 +879,97 @@ fn get_field_metadata(
             .collect()
     } else {
         HashMap::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unity_field_metadata_preserves_spark_json() -> CatalogResult<()> {
+        let raw = serde_json::json!({
+            "comment": "from Spark",
+            "count": 7,
+            "enabled": true,
+            "missing": null,
+            "unknown": {"values": [1, "two", false, null]},
+        });
+        let metadata = HashMap::from([
+            (SPARK_METADATA_JSON_KEY.to_string(), raw.to_string()),
+            ("comment".to_string(), "fallback".to_string()),
+            ("extra".to_string(), "保留".to_string()),
+            (
+                SAIL_SPARK_UDT_METADATA_KEY.to_string(),
+                "internal UDT".to_string(),
+            ),
+        ]);
+        let field = Field::new("value", DataType::Int32, false).with_metadata(metadata.clone());
+        let data_type = DataType::Struct(vec![field.clone()].into());
+        let actual = unity_struct_field_type_json("record", &data_type, true, &Metadata::new())?;
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "name": "record",
+                "nullable": true,
+                "metadata": {},
+                "type": {
+                    "type": "struct",
+                    "fields": [{
+                        "name": "value",
+                        "type": "integer",
+                        "nullable": false,
+                        "metadata": {
+                            "comment": "from Spark",
+                            "count": 7,
+                            "enabled": true,
+                            "missing": null,
+                            "unknown": {"values": [1, "two", false, null]},
+                            "extra": "保留",
+                        },
+                    }],
+                },
+            })
+        );
+        assert_eq!(HashMap::from(field.metadata()), metadata);
+        Ok(())
+    }
+
+    #[test]
+    fn test_unity_field_metadata_preserves_strings() -> CatalogResult<()> {
+        let metadata = Metadata::from([
+            ("comment", "column comment"),
+            ("unknown", "{\"nested\":1}"),
+            ("empty", ""),
+            (SAIL_SPARK_UDT_METADATA_KEY, "internal UDT"),
+        ]);
+        assert_eq!(
+            unity_struct_field_type_json("value", &DataType::Utf8, true, &metadata)?,
+            serde_json::json!({
+                "name": "value",
+                "type": "string",
+                "nullable": true,
+                "metadata": {
+                    "comment": "column comment",
+                    "unknown": "{\"nested\":1}",
+                    "empty": "",
+                },
+            }),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_unity_field_metadata_rejects_invalid_spark_json() {
+        for raw in ["{", "[]", "null", "true", "7", "\"text\""] {
+            let metadata = Metadata::from([(SPARK_METADATA_JSON_KEY, raw)]);
+            assert!(
+                matches!(
+                    unity_struct_field_type_json("value", &DataType::Int32, true, &metadata),
+                    Err(CatalogError::InvalidArgument(_)),
+                ),
+                "unexpected result for {raw}"
+            );
+        }
     }
 }

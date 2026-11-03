@@ -61,6 +61,7 @@ impl ParquetWriteFormat {
             return Ok(ext);
         }
         let ext = ext.strip_prefix('.').unwrap_or(&ext);
+        let compression = compression.to_string();
         let compression = compression.strip_prefix('.').unwrap_or(&compression);
         let (compression, _level) = split_parquet_compression_string(&compression.to_lowercase())?;
         let file_compression_type = FileCompressionType::from_str(compression.as_str());
@@ -70,5 +71,39 @@ impl ParquetWriteFormat {
         };
         let compression = compression.strip_prefix('.').unwrap_or(&compression);
         Ok(format!("{compression}.{ext}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::SessionContext;
+
+    use super::*;
+    use crate::options::{ResolveOptions, option_list};
+
+    #[test]
+    fn typed_compression_keeps_file_extensions() -> Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        for (compression, expected) in [
+            ("", "parquet"),
+            ("none", ".parquet"),
+            ("SNAPPY", "snappy.parquet"),
+            ("gzip", "gz.parquet"),
+            ("gzip(9)", "gz.parquet"),
+            ("brotli", "brotli.parquet"),
+            ("zstd", "zst.parquet"),
+            ("lz4", "lz4.parquet"),
+            ("lz4_raw", "lz4_raw.parquet"),
+        ] {
+            let format = ParquetWriteFormat {
+                options: ParquetWriteOptions::resolve(
+                    &state,
+                    vec![option_list(&[("compression", compression)])],
+                )?,
+            };
+            assert_eq!(format.file_extension()?, expected, "{compression:?}");
+        }
+        Ok(())
     }
 }

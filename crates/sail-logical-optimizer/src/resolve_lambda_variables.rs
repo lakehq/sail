@@ -34,10 +34,6 @@ impl OptimizerRule for ResolveLambdaVariables {
         None
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,

@@ -270,7 +270,8 @@ pub(super) fn ensure_row_level_metadata_columns(
                             .with_projection(projection)
                             .with_filters(scan.filters.clone())
                             .with_fetch(scan.fetch)
-                            .with_statistics_requests(scan.statistics_requests.clone())
+                            .with_skip(scan.skip)
+                            .with_statistics_requests(scan.statistics_requests.as_ref().clone())
                             .build()?,
                     );
                     trace!(
@@ -377,4 +378,109 @@ pub(super) fn change_data_enabled(plan: &LogicalPlan) -> Result<bool> {
         Ok(TreeNodeRecursion::Continue)
     })?;
     Ok(enabled)
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::panic)]
+mod tests {
+    use datafusion_expr::statistics::StatisticsRequest;
+    use datafusion_expr::{col, lit};
+    use object_store::ObjectStore;
+    use object_store::memory::InMemory;
+    use url::Url;
+
+    use super::*;
+    use crate::datasource::DeltaScanConfig;
+    use crate::delta_log::{StorageConfig, default_logstore};
+    use crate::snapshot::{DeltaSnapshot, DeltaSnapshotConfig};
+    use crate::spec::{DataType, Metadata, Protocol, StructField, StructType};
+
+    #[test]
+    fn row_level_metadata_columns_preserve_scan_state() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = default_logstore(
+            Arc::clone(&store),
+            store,
+            &Url::parse("memory:///").expect("URL"),
+            &StorageConfig,
+        );
+        let metadata = Metadata::try_new(
+            None,
+            None,
+            StructType::try_new([
+                StructField::not_null("id", DataType::LONG),
+                StructField::nullable("value", DataType::LONG),
+            ])
+            .expect("schema"),
+            vec![],
+            0,
+            Default::default(),
+        )
+        .expect("metadata");
+        let snapshot = DeltaSnapshot::from_metadata_only_parts(
+            log_store.as_ref(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+            0,
+            Protocol::new(1, 2, None, None),
+            metadata,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )
+        .expect("snapshot");
+        let source: Arc<dyn TableSource> = Arc::new(
+            DeltaTableSource::try_new(Arc::new(snapshot), log_store, DeltaScanConfig::default())
+                .expect("source"),
+        );
+
+        for (projection, skip, fetch) in [
+            (None, None, None),
+            (Some(vec![1, 0]), Some(7), Some(11)),
+            (Some(vec![]), Some(0), Some(0)),
+        ] {
+            let scan = TableScanBuilder::new("target", Arc::clone(&source))
+                .with_projection(projection)
+                .with_filters(vec![col("target.id").gt(lit(0_i64))])
+                .with_skip(skip)
+                .with_fetch(fetch)
+                .with_statistics_requests(
+                    [
+                        StatisticsRequest::RowCount,
+                        StatisticsRequest::Min(Arc::new(Column::new(Some("target"), "id"))),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
+                .build()
+                .expect("table scan");
+            let mut expected_projection = scan.projection.clone().unwrap_or_else(|| vec![0, 1]);
+            expected_projection.extend([2, 3]);
+            let mut expected_fields = scan.projected_schema.field_names();
+            expected_fields.extend(
+                [MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN].map(|name| format!("target.{name}")),
+            );
+            let mut plan = LogicalPlan::TableScan(scan.clone());
+            for _ in 0..2 {
+                plan = ensure_row_level_metadata_columns(
+                    plan,
+                    MERGE_FILE_COLUMN,
+                    Some(MERGE_ROW_INDEX_COLUMN),
+                )
+                .expect("metadata columns");
+                let LogicalPlan::TableScan(updated) = &plan else {
+                    panic!("expected a table scan");
+                };
+                assert_eq!(updated.table_name, scan.table_name);
+                assert_eq!(updated.projection.as_ref(), Some(&expected_projection));
+                assert_eq!(updated.projected_schema.field_names(), expected_fields);
+                assert_eq!(updated.filters, scan.filters);
+                assert_eq!(updated.fetch, scan.fetch);
+                assert_eq!(updated.skip, scan.skip);
+                assert_eq!(updated.statistics_requests, scan.statistics_requests);
+            }
+        }
+    }
 }

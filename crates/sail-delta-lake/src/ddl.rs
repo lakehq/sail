@@ -309,9 +309,7 @@ fn replace_delta_type(
             updated = updated.with_nullable(new.is_nullable());
         }
         if let Some(comment) = new.metadata().get("comment") {
-            updated
-                .metadata_mut()
-                .insert("comment".into(), comment.clone());
+            updated.metadata_mut().insert("comment", comment.clone());
         }
         Ok(Arc::new(updated))
     }

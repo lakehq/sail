@@ -63,8 +63,9 @@ impl DataSource for RateDataSource {
                         .options()
                         .execution
                         .time_zone
-                        .clone()
-                        .unwrap_or_else(|| "UTC".to_string()),
+                        .as_ref()
+                        .map(|tz| tz.as_str())
+                        .unwrap_or("UTC"),
                 );
                 Schema::new(vec![
                     Arc::new(Field::new(

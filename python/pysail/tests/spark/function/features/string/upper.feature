@@ -3,7 +3,6 @@ Feature: upper output schema
   @function(nullability)
   Rule: Output schema
 
-    @sail-bug
     Scenario: a non-null literal input to upper yields the schema Spark declares
       When query
         """
@@ -15,7 +14,6 @@ Feature: upper output schema
          |-- result: string (nullable = false)
         """
 
-    @sail-bug
     Scenario: a non-null column input to upper yields the schema Spark declares
       When query
         """
@@ -38,7 +36,6 @@ Feature: upper output schema
          |-- result: string (nullable = true)
         """
 
-    @sail-bug
     Scenario: distinct upper results remain non-nullable for non-null input
       When query
         """

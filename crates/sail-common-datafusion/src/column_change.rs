@@ -44,9 +44,7 @@ pub fn replacement_schema(columns: &[ColumnChange<DataType>]) -> Result<Schema> 
         }
         let mut field = Field::new(name, data_type.clone(), *nullable);
         if let Some(comment) = comment {
-            field
-                .metadata_mut()
-                .insert("comment".into(), comment.clone());
+            field.metadata_mut().insert("comment", comment.clone());
         }
         fields.push(Arc::new(field));
     }
@@ -159,9 +157,7 @@ fn alter_fields(
         }
         let mut field = Field::new(name, data_type.clone(), *nullable);
         if let Some(comment) = comment {
-            field
-                .metadata_mut()
-                .insert("comment".into(), comment.clone());
+            field.metadata_mut().insert("comment", comment.clone());
         }
         fields.push(Arc::new(field));
         if let Some(position) = position {
@@ -191,9 +187,7 @@ fn alter_fields(
             // Iceberg also stores column documentation under "doc".
             field.metadata_mut().remove("doc");
             if let Some(comment) = comment {
-                field
-                    .metadata_mut()
-                    .insert("comment".into(), comment.clone());
+                field.metadata_mut().insert("comment", comment.clone());
             } else {
                 field.metadata_mut().remove("comment");
             }

@@ -17,13 +17,16 @@ pub fn split_parquet_compression_string(
 
     match split_setting {
         Some((codec, rh)) => {
-            let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
-                DataFusionError::Configuration(format!(
-                    "Could not parse compression string. \
-                    Got codec: {codec} and unknown level from {str_setting}"
-                ))
-            })?;
-            Ok((codec.to_owned(), Some(*level)))
+            let level = rh
+                .strip_suffix(')')
+                .and_then(|level| level.parse::<u32>().ok())
+                .ok_or_else(|| {
+                    DataFusionError::Configuration(format!(
+                        "Could not parse compression string. \
+                        Got codec: {codec} and unknown level from {str_setting}"
+                    ))
+                })?;
+            Ok((codec.to_owned(), Some(level)))
         }
         None => Ok((str_setting.to_owned(), None)),
     }

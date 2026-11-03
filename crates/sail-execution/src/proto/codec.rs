@@ -27,8 +27,8 @@ use datafusion::functions::core::coalesce::CoalesceFunc;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::input_file_name::InputFileNameFunc;
 use datafusion::functions::core::least::LeastFunc;
+use datafusion::functions::core::overlay::OverlayFunc;
 use datafusion::functions::core::with_metadata::WithMetadataFunc;
-use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::functions::string::repeat::RepeatFunc;
 use datafusion::functions_nested::extract::ArrayElement;
 use datafusion::functions_nested::map_extract::MapExtract;
@@ -964,6 +964,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_prefix_len,
                 fetch,
                 window_fn_kind,
+                ranking_field,
             }) => {
                 let [input] = inputs else {
                     return plan_err!(
@@ -999,13 +1000,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         expr.len().saturating_sub(1)
                     );
                 }
-                Ok(Arc::new(PartitionedTopKExec::try_new(
+                let mut top_k = PartitionedTopKExec::try_new(
                     Arc::clone(input),
                     expr,
                     partition_prefix_len,
                     fetch,
                     window_fn_kind,
-                )?))
+                )?;
+                if let Some(field) = ranking_field {
+                    top_k = top_k.with_ranking_field(try_decode_field_ref(&field)?)?;
+                }
+                Ok(Arc::new(top_k))
             }
             NodeKind::DeltaWriter(delta_writer) => {
                 let r#gen::DeltaWriterExecNode {
@@ -2477,6 +2482,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_prefix_len,
                 fetch,
                 window_fn_kind: Self::try_encode_partitioned_top_k_window_fn_kind(top_k.fn_kind()),
+                ranking_field: top_k
+                    .ranking_field()
+                    .map(try_encode_field_ref)
+                    .transpose()?,
             })
         } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let data_source = data_source.data_source();
@@ -3661,8 +3670,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf { last_value_wins }) => {
-                let udf = SparkMapFromArrays::new(last_value_wins);
+            UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
+                last_value_wins,
+                value_contains_null,
+            }) => {
+                let udf = SparkMapFromArrays::new(last_value_wins)
+                    .with_value_contains_null(value_contains_null);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf { last_value_wins }) => {
@@ -4179,6 +4192,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromArrays>() {
             UdfKind::SparkMapFromArrays(r#gen::SparkMapFromArraysUdf {
                 last_value_wins: func.last_value_wins(),
+                value_contains_null: func.value_contains_null(),
             })
         } else if let Some(func) = node_inner.downcast_ref::<SparkMapFromEntries>() {
             UdfKind::SparkMapFromEntries(r#gen::SparkMapFromEntriesUdf {
@@ -5751,6 +5765,7 @@ impl RemoteExecutionCodec {
             }
             r#gen::PartitionedTopKWindowFnKind::RowNumber => Ok(WindowFnKind::RowNumber),
             r#gen::PartitionedTopKWindowFnKind::Rank => Ok(WindowFnKind::Rank),
+            r#gen::PartitionedTopKWindowFnKind::DenseRank => Ok(WindowFnKind::DenseRank),
         }
     }
 
@@ -5758,6 +5773,7 @@ impl RemoteExecutionCodec {
         (match kind {
             WindowFnKind::RowNumber => r#gen::PartitionedTopKWindowFnKind::RowNumber,
             WindowFnKind::Rank => r#gen::PartitionedTopKWindowFnKind::Rank,
+            WindowFnKind::DenseRank => r#gen::PartitionedTopKWindowFnKind::DenseRank,
         }) as i32
     }
 
@@ -6304,6 +6320,34 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_map_from_arrays_nullability() -> Result<()> {
+        for value_contains_null in [None, Some(false), Some(true)] {
+            for last_value_wins in [false, true] {
+                let udf = SparkMapFromArrays::new(last_value_wins)
+                    .with_value_contains_null(value_contains_null);
+                let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+                let decoded = downcast_udf::<SparkMapFromArrays>(&decoded, "map_from_arrays")?;
+                assert_eq!(decoded.last_value_wins(), last_value_wins);
+                assert_eq!(decoded.value_contains_null(), value_contains_null);
+            }
+        }
+        // Old messages contain only field 1; absence must not become Some(false).
+        let legacy = r#gen::SparkMapFromArraysUdf::decode(&[0x08, 0x01][..])
+            .map_err(|error| plan_datafusion_err!("{error}"))?;
+        assert!(legacy.last_value_wins);
+        assert_eq!(legacy.value_contains_null, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_overlay_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(OverlayFunc::new()))?;
+        assert!(decoded.inner().downcast_ref::<OverlayFunc>().is_some());
+        assert_eq!(decoded.name(), "overlay");
+        Ok(())
+    }
+
+    #[test]
     fn test_round_trip_vector_avg_udaf() -> Result<()> {
         let decoded = round_trip_udaf(AggregateUDF::from(VectorAvg::new()))?;
 
@@ -6842,42 +6886,284 @@ mod tests {
         Ok(())
     }
 
+    fn partitioned_top_k_ranking_fields() -> [Option<Arc<Field>>; 3] {
+        let field = |nullable| {
+            Arc::new(
+                Field::new("ranking", DataType::UInt64, nullable).with_metadata(HashMap::from([(
+                    "label".to_string(),
+                    "partition ranking".to_string(),
+                )])),
+            )
+        };
+        [None, Some(field(false)), Some(field(true))]
+    }
+
+    fn assert_partitioned_top_k_ordering(
+        plan: &PartitionedTopKExec,
+        ordering: &LexOrdering,
+    ) -> Result<()> {
+        assert_eq!(plan.expr(), ordering);
+        let properties = plan.properties().equivalence_properties();
+        assert!(properties.ordering_satisfy(ordering.iter().cloned())?);
+        if let Some(field) = plan.ranking_field() {
+            let ranking_sort = PhysicalSortExpr::new(
+                Arc::new(Column::new(field.name(), 2)),
+                SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                },
+            );
+            assert!(properties.ordering_satisfy([ordering[0].clone(), ranking_sort.clone()])?);
+            // Ranks restart in each partition, so this is not a global ordering.
+            assert!(!properties.ordering_satisfy([ranking_sort])?);
+        }
+        Ok(())
+    }
+
     #[test]
-    fn test_round_trip_partitioned_top_k_preserves_window_fn_kind() -> Result<()> {
+    fn test_round_trip_partitioned_top_k_preserves_window_fn_kind_and_ranking_field() -> Result<()>
+    {
         use datafusion::physical_plan::empty::EmptyExec;
+
+        use crate::proto::converter::RemotePhysicalProtoConverter;
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("partition", DataType::Int64, false),
+                Field::new("value", DataType::Int64, false),
+            ],
+            HashMap::from([("source".to_string(), "top-k input".to_string())]),
+        ));
+        let ordering = LexOrdering::new([
+            PhysicalSortExpr::new_default(Arc::new(Column::new("partition", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("value", 1))),
+        ])
+        .ok_or_else(|| plan_datafusion_err!("expected non-empty top-k ordering"))?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let codec = RemoteExecutionCodec;
+
+        for (window_fn_kind, wire_value) in [
+            (WindowFnKind::RowNumber, 1),
+            (WindowFnKind::Rank, 2),
+            (WindowFnKind::DenseRank, 3),
+        ] {
+            assert_eq!(
+                RemoteExecutionCodec::try_encode_partitioned_top_k_window_fn_kind(window_fn_kind),
+                wire_value
+            );
+            for ranking_field in partitioned_top_k_ranking_fields() {
+                let mut plan = PartitionedTopKExec::try_new(
+                    Arc::clone(&input),
+                    ordering.clone(),
+                    1,
+                    3,
+                    window_fn_kind,
+                )?;
+                let mut expected_fields = schema.fields().to_vec();
+                if let Some(field) = &ranking_field {
+                    plan = plan.with_ranking_field(Arc::clone(field))?;
+                    expected_fields.push(Arc::clone(field));
+                }
+                let expected_schema = Arc::new(Schema::new_with_metadata(
+                    expected_fields,
+                    schema.metadata().clone(),
+                ));
+                let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
+                let mut extension = vec![];
+                codec.try_encode(
+                    Arc::clone(&plan),
+                    &mut extension,
+                    &RemotePhysicalProtoConverter::default(),
+                )?;
+                let node = try_decode_message::<ExtendedPhysicalPlanNode>(&extension)?;
+                let Some(NodeKind::PartitionedTopK(node)) = node.node_kind else {
+                    return plan_err!("expected a PartitionedTopK codec node");
+                };
+                // None omits the optional field, as in payloads without tag 5.
+                assert_eq!(node.ranking_field.is_some(), ranking_field.is_some());
+                let bytes = try_encode_physical_plan(&codec, plan)?;
+                let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
+                let decoded = decoded
+                    .downcast_ref::<PartitionedTopKExec>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("decoded plan is not a PartitionedTopKExec")
+                    })?;
+
+                assert_eq!(decoded.fn_kind(), window_fn_kind);
+                assert_eq!(decoded.partition_prefix_len(), 1);
+                assert_eq!(decoded.fetch(), 3);
+                assert_eq!(decoded.ranking_field(), ranking_field.as_ref());
+                assert_eq!(decoded.schema(), expected_schema);
+                assert_partitioned_top_k_ordering(decoded, &ordering)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_round_trip_partitioned_top_k_executes_boundary_ties() -> Result<()> {
+        use datafusion::arrow::array::{Int64Array, UInt64Array};
+        use datafusion::arrow::compute::concat_batches;
+        use datafusion::execution::config::SessionConfig;
+        use datafusion::physical_plan::{collect, displayable};
+
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("partition", DataType::Int64, false),
+                Field::new("value", DataType::Int64, false),
+            ],
+            HashMap::from([("source".to_string(), "top-k input".to_string())]),
+        ));
+        let batch = |partitions: Vec<i64>, values: Vec<i64>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(partitions)),
+                    Arc::new(Int64Array::from(values)),
+                ],
+            )
+        };
+        let input: Arc<dyn ExecutionPlan> =
+            DataSourceExec::from_data_source(MemorySourceConfig::try_new(
+                &[vec![
+                    batch(vec![1, 2, 1, 2, 1, 2, 1], vec![30, 9, 10, 7, 20, 5, 10])?,
+                    batch(vec![2, 1, 1, 1], vec![7, 20, 10, 40])?,
+                ]],
+                Arc::clone(&schema),
+                None,
+            )?);
+        let ordering = LexOrdering::new([
+            PhysicalSortExpr::new_default(Arc::new(Column::new("partition", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("value", 1))),
+        ])
+        .ok_or_else(|| plan_datafusion_err!("expected non-empty top-k ordering"))?;
+        let codec = RemoteExecutionCodec;
+        let ctx = Arc::new(
+            TaskContext::default().with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+
+        // DF d4c2a329: topk ranking-column, heavy_ties_coalesced and cross_batch_same_key tests.
+        // With K=2, three rows at 10 put 20 at rank 4 but dense_rank 2.
+        for (window_fn_kind, expected, ranks) in [
+            (
+                WindowFnKind::RowNumber,
+                batch(vec![1, 1, 2, 2], vec![10, 10, 5, 7])?,
+                vec![1, 2, 1, 2],
+            ),
+            (
+                WindowFnKind::Rank,
+                batch(vec![1, 1, 1, 2, 2, 2], vec![10, 10, 10, 5, 7, 7])?,
+                vec![1, 1, 1, 1, 2, 2],
+            ),
+            (
+                WindowFnKind::DenseRank,
+                batch(
+                    vec![1, 1, 1, 1, 1, 2, 2, 2],
+                    vec![10, 10, 10, 20, 20, 5, 7, 7],
+                )?,
+                vec![1, 1, 1, 2, 2, 1, 2, 2],
+            ),
+        ] {
+            for ranking_field in partitioned_top_k_ranking_fields() {
+                let mut plan = PartitionedTopKExec::try_new(
+                    Arc::clone(&input),
+                    ordering.clone(),
+                    1,
+                    2,
+                    window_fn_kind,
+                )?;
+                let mut expected_fields = schema.fields().to_vec();
+                let mut expected_columns = expected.columns().to_vec();
+                if let Some(field) = &ranking_field {
+                    plan = plan.with_ranking_field(Arc::clone(field))?;
+                    expected_fields.push(Arc::clone(field));
+                    expected_columns.push(Arc::new(UInt64Array::from(ranks.clone())));
+                }
+                let expected_schema = Arc::new(Schema::new_with_metadata(
+                    expected_fields,
+                    schema.metadata().clone(),
+                ));
+                let expected =
+                    RecordBatch::try_new(Arc::clone(&expected_schema), expected_columns)?;
+                assert_eq!(plan.schema(), expected_schema);
+                assert_partitioned_top_k_ordering(&plan, &ordering)?;
+                let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
+                let bytes = crate::proto::encode_remote_physical_plan(&codec, Arc::clone(&plan))?;
+                let decoded = try_decode_physical_plan(&ctx, &codec, &bytes)?;
+                let top_k = decoded
+                    .downcast_ref::<PartitionedTopKExec>()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("decoded plan is not a PartitionedTopKExec")
+                    })?;
+                assert_eq!(top_k.fn_kind(), window_fn_kind);
+                assert_eq!(top_k.partition_prefix_len(), 1);
+                assert_eq!(top_k.fetch(), 2);
+                assert_eq!(top_k.ranking_field(), ranking_field.as_ref());
+                assert_eq!(decoded.schema(), expected_schema);
+                assert_partitioned_top_k_ordering(top_k, &ordering)?;
+
+                for (path, plan) in [("upstream", plan), ("decoded", decoded)] {
+                    println!("{path}:\n{}", displayable(plan.as_ref()).indent(true));
+                    let actual = collect(plan, Arc::clone(&ctx)).await?;
+                    assert!(actual.len() > 1, "expected multiple output batches");
+                    for batch in &actual {
+                        assert!(batch.num_rows() <= 2);
+                        assert_eq!(batch.schema(), expected_schema);
+                    }
+                    assert_eq!(
+                        concat_batches(&expected_schema, &actual)?,
+                        expected,
+                        "{path} {window_fn_kind:?} {ranking_field:?}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_partitioned_top_k_rejects_invalid_ranking_field() -> Result<()> {
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        use crate::proto::converter::RemotePhysicalProtoConverter;
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("partition", DataType::Int64, false),
             Field::new("value", DataType::Int64, false),
         ]));
-        let partition = Arc::new(Column::new("partition", 0)) as Arc<dyn PhysicalExpr>;
-        let value = Arc::new(Column::new("value", 1)) as Arc<dyn PhysicalExpr>;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
         let ordering = LexOrdering::new([
-            PhysicalSortExpr::new_default(partition),
-            PhysicalSortExpr::new_default(value),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("partition", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("value", 1))),
         ])
         .ok_or_else(|| plan_datafusion_err!("expected non-empty top-k ordering"))?;
-        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
         let codec = RemoteExecutionCodec;
-
-        for window_fn_kind in [WindowFnKind::RowNumber, WindowFnKind::Rank] {
-            let plan = Arc::new(PartitionedTopKExec::try_new(
-                Arc::clone(&input),
-                ordering.clone(),
-                1,
-                3,
-                window_fn_kind,
-            )?);
-            let bytes = try_encode_physical_plan(&codec, plan)?;
-            let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
-            let decoded = decoded
-                .downcast_ref::<PartitionedTopKExec>()
-                .ok_or_else(|| plan_datafusion_err!("decoded plan is not a PartitionedTopKExec"))?;
-
-            assert_eq!(decoded.fn_kind(), window_fn_kind);
-            assert_eq!(decoded.partition_prefix_len(), 1);
-            assert_eq!(decoded.fetch(), 3);
-            assert_eq!(decoded.expr().len(), 2);
+        let converter = RemotePhysicalProtoConverter::default();
+        let mut node = r#gen::PartitionedTopKExecNode {
+            expr: Some(codec.try_encode_lex_ordering(&ordering, &converter)?),
+            partition_prefix_len: 1,
+            fetch: 2,
+            window_fn_kind: r#gen::PartitionedTopKWindowFnKind::RowNumber as i32,
+            ranking_field: None,
+        };
+        for ranking_field in [None, Some(vec![]), Some(vec![0xff])] {
+            node.ranking_field = ranking_field;
+            let bytes = ExtendedPhysicalPlanNode {
+                node_kind: Some(NodeKind::PartitionedTopK(node.clone())),
+            }
+            .encode_to_vec();
+            let decoded = codec.try_decode(
+                &bytes,
+                &[Arc::clone(&input)],
+                &TaskContext::default(),
+                &converter,
+            );
+            if node.ranking_field.is_none() {
+                assert_eq!(decoded?.schema(), input.schema());
+            } else {
+                // Present-but-empty is not absence: it lacks an Arrow type.
+                assert!(decoded.is_err(), "invalid ranking field must be rejected");
+            }
         }
         Ok(())
     }
@@ -8041,6 +8327,13 @@ mod tests {
     fn test_round_trip_distributed_filter_higher_order_expr() -> Result<()> {
         let (physical, schema_ref, list) = build_filter()?;
         as_hof(&physical)?;
+        let proto = crate::proto::encode::physical_expr_to_proto(&RemoteExecutionCodec, &physical)?;
+        let Some(datafusion_proto::protobuf::physical_expr_node::ExprType::Extension(extension)) =
+            proto.expr_type
+        else {
+            return plan_err!("higher-order expression must use the extension codec");
+        };
+        assert!(extension.expr_name.is_none());
 
         let decoded = round_trip_expr(&physical, &schema_ref)?;
         as_hof(&decoded)?;

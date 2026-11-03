@@ -186,7 +186,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | true   |
 
-    @sail-bug
     Scenario: try_parse_json scientific notation preserves decimal
       When query
         """

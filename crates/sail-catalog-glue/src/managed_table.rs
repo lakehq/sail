@@ -229,9 +229,7 @@ fn alter_columns(
                 true,
             );
             if let Some(comment) = &column.comment {
-                field
-                    .metadata_mut()
-                    .insert("comment".into(), comment.clone());
+                field.metadata_mut().insert("comment", comment.clone());
             }
             field
                 .metadata_mut()

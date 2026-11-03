@@ -309,7 +309,6 @@ Feature: map_filter with lambda
         | {b -> 1} |
 
     # Shared Boolean CASE evaluation can evaluate division in a skipped branch.
-    @sail-bug
     Scenario: A Boolean CASE predicate skips division for zero-valued entries
       When query
         """

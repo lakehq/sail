@@ -25,7 +25,6 @@ Feature: equal_null output schema
          |-- result: boolean (nullable = false)
         """
 
-    @sail-bug
     Scenario: a nullable column input to equal_null stays nullable
       When query
         """

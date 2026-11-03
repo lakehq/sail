@@ -96,7 +96,7 @@ impl TreeNodeRewriter for StreamingRewriter {
             LogicalPlan::Sort(_) => {
                 plan_err!("sort is not supported for streaming: {plan:?}")
             }
-            LogicalPlan::Join(_) => {
+            LogicalPlan::Join(_) | LogicalPlan::AsOfJoin(_) => {
                 not_impl_err!("streaming join: {plan:?}")
             }
             LogicalPlan::Repartition(_) => {
@@ -113,8 +113,16 @@ impl TreeNodeRewriter for StreamingRewriter {
                             projected_schema: _,
                             filters,
                             fetch,
+                            skip,
                             statistics_requests: _,
                         } = scan;
+                        // Stream sources do not support skip pushdown. Reject unexpected
+                        // pushed offsets rather than silently dropping them in the wrapper.
+                        if skip.is_some_and(|skip| skip > 0) {
+                            return not_impl_err!(
+                                "streaming table scan with pushed-down skip: {skip:?}"
+                            );
+                        }
                         Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                             node: Arc::new(StreamSourceWrapperNode::try_new(
                                 table_name.clone(),
@@ -165,6 +173,9 @@ impl TreeNodeRewriter for StreamingRewriter {
             LogicalPlan::RecursiveQuery(_) => {
                 not_impl_err!("recursive streaming query: {plan:?}")
             }
+            LogicalPlan::MaterializedCte(_) => {
+                not_impl_err!("streaming materialized CTE: {plan:?}")
+            }
             LogicalPlan::Subquery(_) | LogicalPlan::Distinct(_) => {
                 internal_err!("not rewritten before streaming rewriter: {plan:?}")
             }
@@ -182,7 +193,7 @@ impl TreeNodeRewriter for StreamingRewriter {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => {
+            | LogicalPlan::Show(_) => {
                 internal_err!("unexpected command for streaming rewriter: {plan:?}")
             }
         }
@@ -260,5 +271,227 @@ pub fn rewrite_streaming_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
         }))
     } else {
         Ok(plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::catalog::Session;
+    use datafusion::datasource::empty::EmptyTable;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::physical_plan::ExecutionPlan;
+    use datafusion_common::{DFSchema, DataFusionError, internal_datafusion_err};
+    use datafusion_expr::logical_plan::information_schema::ColumnsDetail;
+    use datafusion_expr::{
+        AsOfJoin, AsOfMatch, Expr, JoinConstraint, LogicalPlanBuilder, LogicalTableSource,
+        MaterializedCte, MaterializedCteId, MaterializedCtePlan, MaterializedCteScan, Operator,
+        Show, ShowKind, TableScanBuilder, TableSource, lit,
+    };
+    use datafusion_expr_common::statistics::StatisticsRequest;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestStreamSource(SchemaRef);
+
+    #[async_trait::async_trait]
+    impl StreamSource for TestStreamSource {
+        fn data_schema(&self) -> SchemaRef {
+            Arc::clone(&self.0)
+        }
+
+        async fn scan(
+            &self,
+            _state: &dyn Session,
+            _projection: Option<&Vec<usize>>,
+            _filters: &[Expr],
+            _limit: Option<usize>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            internal_err!("planning test must not execute a stream source")
+        }
+    }
+
+    fn data_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, true),
+        ]))
+    }
+
+    fn table_scan(
+        source: Arc<dyn TableSource>,
+        skip: Option<usize>,
+        filter_column: &str,
+    ) -> Result<TableScan> {
+        TableScanBuilder::new("t", source)
+            .with_projection(Some(vec![1]))
+            .with_filters(vec![col(filter_column).gt(lit(1i64))])
+            .with_fetch(Some(8))
+            .with_skip(skip)
+            .with_statistics_requests([StatisticsRequest::RowCount].into_iter().collect())
+            .build()
+    }
+
+    fn extension<T: UserDefinedLogicalNode + 'static>(plan: &LogicalPlan) -> Result<&T> {
+        let LogicalPlan::Extension(extension) = plan else {
+            return internal_err!("expected extension node, got {plan:?}");
+        };
+        extension
+            .node
+            .as_any()
+            .downcast_ref::<T>()
+            .ok_or_else(|| internal_datafusion_err!("expected {}", std::any::type_name::<T>()))
+    }
+
+    #[test]
+    fn stream_scan_skip_preserves_options_or_is_rejected() -> Result<()> {
+        for renamed in [false, true] {
+            let source: Arc<dyn StreamSource> = Arc::new(TestStreamSource(data_schema()));
+            let provider: Arc<dyn TableProvider> =
+                Arc::new(StreamSourceTableProvider::new(Arc::clone(&source)));
+            let names = renamed.then(|| vec!["x".to_string(), "y".to_string()]);
+            let provider: Arc<dyn TableProvider> = match &names {
+                Some(names) => Arc::new(RenameTableProvider::try_new(provider, names.clone())?),
+                None => provider,
+            };
+            assert!(!provider.supports_skip_pushdown());
+            for skip in [None, Some(0), Some(1)] {
+                let scan = table_scan(
+                    provider_as_source(Arc::clone(&provider)),
+                    skip,
+                    if renamed { "x" } else { "a" },
+                )?;
+                // The residual limit owns the offset; the wrapper must not apply it again.
+                let plan = LogicalPlanBuilder::from(LogicalPlan::TableScan(scan))
+                    .limit(2, Some(3))?
+                    .build()?;
+                let result = rewrite_streaming_plan(plan);
+                if skip == Some(1) {
+                    assert!(
+                        matches!(result, Err(DataFusionError::NotImplemented(message))
+                        if message == "streaming table scan with pushed-down skip: Some(1)")
+                    );
+                    continue;
+                }
+                let plan = result?;
+                let collector = extension::<StreamCollectorNode>(&plan)?;
+                let limit = extension::<StreamLimitNode>(collector.inputs()[0])?;
+                assert_eq!(limit.skip(), 2);
+                assert_eq!(limit.fetch(), Some(3));
+                let wrapper = extension::<StreamSourceWrapperNode>(limit.input())?;
+                assert!(Arc::ptr_eq(wrapper.source(), &source));
+                assert_eq!(wrapper.names(), names.as_ref());
+                assert_eq!(wrapper.projection(), Some(&vec![1]));
+                assert_eq!(wrapper.filters(), &vec![col("a").gt(lit(1i64))]);
+                assert_eq!(wrapper.fetch(), Some(8));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn non_stream_scan_adapter_preserves_original_scan() -> Result<()> {
+        let schema = data_schema();
+        let sources: [Arc<dyn TableSource>; 2] = [
+            provider_as_source(Arc::new(EmptyTable::new(Arc::clone(&schema)))),
+            Arc::new(LogicalTableSource::new(schema)),
+        ];
+        for source in sources {
+            for skip in [None, Some(0), Some(1)] {
+                let scan = table_scan(Arc::clone(&source), skip, "a")?;
+                let original = LogicalPlan::TableScan(scan.clone());
+                let plan = rewrite_streaming_plan(original.clone())?;
+                let collector = extension::<StreamCollectorNode>(&plan)?;
+                let adapter = extension::<StreamSourceAdapterNode>(collector.inputs()[0])?;
+                let input = adapter.inputs()[0];
+                assert_eq!(input, &original);
+                let LogicalPlan::TableScan(actual) = input else {
+                    return internal_err!("expected original table scan");
+                };
+                // TableScan equality does not compare skip, statistics requests or source.
+                assert_eq!(actual.skip, skip);
+                assert_eq!(actual.statistics_requests, scan.statistics_requests);
+                assert!(Arc::ptr_eq(&actual.source, &source));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn show_commands_are_rejected() {
+        for kind in [
+            ShowKind::Describe {
+                schema: data_schema(),
+            },
+            ShowKind::Tables,
+            ShowKind::Columns {
+                table_ref: "t".into(),
+                detail: ColumnsDetail::Describe,
+            },
+            ShowKind::CreateTable {
+                table_ref: "t".into(),
+            },
+            ShowKind::Variables {
+                name: None,
+                verbose: false,
+            },
+            ShowKind::Functions { filter: None },
+        ] {
+            let plan = LogicalPlan::Show(Show {
+                kind,
+                output_schema: Arc::clone(DFSchema::empty_ref()),
+            });
+            assert!(
+                matches!(rewrite_streaming_plan(plan), Err(DataFusionError::Internal(message))
+                if message.starts_with("unexpected command for streaming rewriter: "))
+            );
+        }
+    }
+
+    #[test]
+    fn materialized_cte_nodes_are_not_supported() -> Result<()> {
+        let id = MaterializedCteId::next();
+        let input = Arc::new(LogicalPlan::default());
+        let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+            MaterializedCteScan::new(id, "cte", Arc::clone(input.schema())),
+        ));
+        let cte = LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte::try_new(
+            id,
+            "cte",
+            input,
+            Arc::new(scan.clone()),
+        )?));
+        for plan in [scan, cte] {
+            for result in [
+                StreamingRewriter.f_up(plan.clone()).map(|x| x.data),
+                rewrite_streaming_plan(plan),
+            ] {
+                assert!(
+                    matches!(result, Err(DataFusionError::NotImplemented(message))
+                    if message.starts_with("streaming materialized CTE: "))
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn asof_join_is_not_supported() -> Result<()> {
+        let source = Arc::new(LogicalTableSource::new(data_schema()));
+        let left = LogicalPlan::TableScan(TableScanBuilder::new("l", source.clone()).build()?);
+        let right = LogicalPlan::TableScan(TableScanBuilder::new("r", source).build()?);
+        let plan = LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+            Arc::new(left),
+            Arc::new(right),
+            vec![],
+            AsOfMatch::new(col("l.a"), Operator::GtEq, col("r.a")),
+            JoinConstraint::On,
+        )?);
+        assert!(
+            matches!(rewrite_streaming_plan(plan), Err(DataFusionError::NotImplemented(message))
+            if message.starts_with("streaming join: "))
+        );
+        Ok(())
     }
 }

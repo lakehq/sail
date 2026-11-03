@@ -92,15 +92,11 @@ fn rewrite_projection(
                 let scaled: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
                     Arc::clone(cast.expr()),
                     DataType::Timestamp(unit, None),
-                    Some(cast.cast_options().clone()),
+                    None,
                 ));
                 let integer: Arc<dyn PhysicalExpr> =
                     Arc::new(CastExpr::new(scaled, DataType::Int64, None));
-                Arc::new(CastExpr::new_with_target_field(
-                    integer,
-                    cast.return_field(&schema)?,
-                    Some(cast.cast_options().clone()),
-                ))
+                Arc::new(cast.with_new_expr_and_target_field(integer, cast.return_field(&schema)?))
             } else if CorrelationCast::supports(&from, cast.cast_type()) {
                 let field = cast.return_field(&schema)?;
                 // Scalar-function serialization must preserve both native field contracts.
@@ -170,9 +166,11 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::array::{Array, ArrayRef, Date32Array, Int64Array};
-    use datafusion::arrow::compute::{CastOptions, cast_with_options};
+    use datafusion::arrow::compute::{CastOptions, SortOptions, cast_with_options};
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion::arrow::error::ArrowError;
     use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::common::DataFusionError;
     use datafusion::physical_expr::expressions::{CastExpr, Column, TryCastExpr};
     use datafusion::physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
     use datafusion::physical_plan::ExecutionPlan;
@@ -181,6 +179,14 @@ mod tests {
     use datafusion::physical_plan::sorts::sort::SortExec;
 
     const KEY: &str = "__sail_correlation_key_1";
+    fn unit_name(unit: TimeUnit) -> &'static str {
+        match unit {
+            TimeUnit::Second => "s",
+            TimeUnit::Millisecond => "ms",
+            TimeUnit::Microsecond => "us",
+            TimeUnit::Nanosecond => "ns",
+        }
+    }
     fn mult(unit: &TimeUnit) -> i64 {
         match unit {
             TimeUnit::Second => 1,
@@ -200,11 +206,17 @@ mod tests {
         )
         .unwrap()
     }
+    fn assert_integer_values(array: &ArrayRef, raw: &ArrayRef, expected: i64) {
+        let expected = Int64Array::from_iter(
+            (0..raw.len()).map(|index| (!raw.is_null(index)).then_some(expected)),
+        );
+        assert_eq!(cast(array, &DataType::Int64).to_data(), expected.to_data());
+    }
     fn projection(
         source: DataType,
         target: DataType,
         alias: &str,
-        ordered: bool,
+        ordering: Option<SortOptions>,
         try_cast: bool,
         duplicate: bool,
     ) -> Arc<dyn ExecutionPlan> {
@@ -214,9 +226,9 @@ mod tests {
         ));
         let mut input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("raw", 0));
-        if ordered {
+        if let Some(options) = ordering {
             input = Arc::new(SortExec::new(
-                LexOrdering::new([PhysicalSortExpr::new_default(Arc::clone(&column))]).unwrap(),
+                LexOrdering::new([PhysicalSortExpr::new(Arc::clone(&column), options)]).unwrap(),
                 input,
             ));
         }
@@ -239,16 +251,33 @@ mod tests {
             ProjectionExec::try_new_with_schema_metadata(exprs, input, &output_schema).unwrap(),
         )
     }
+    fn bridge_projection(
+        original: &ProjectionExec,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        let cast = original.expr()[0].expr.downcast_ref::<CastExpr>().unwrap();
+        let DataType::Timestamp(unit, _) = cast.cast_type() else {
+            return datafusion::common::internal_err!("expected timestamp target");
+        };
+        let scaled = Arc::new(CastExpr::new(
+            Arc::clone(cast.expr()),
+            DataType::Timestamp(*unit, None),
+            None,
+        ));
+        let integer = Arc::new(CastExpr::new(scaled, DataType::Int64, None));
+        let mut expressions = original.expr().to_vec();
+        expressions[0].expr = Arc::new(cast.with_new_expr_and_target_field(
+            integer,
+            cast.return_field(&original.input().schema())?,
+        ));
+        Ok(Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            expressions,
+            Arc::clone(original.input()),
+            &original.schema(),
+        )?))
+    }
+
     #[test]
-    fn preserves_units_overflow_fields_and_physical_properties()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let units = [
-            TimeUnit::Second,
-            TimeUnit::Millisecond,
-            TimeUnit::Microsecond,
-            TimeUnit::Nanosecond,
-        ];
-        let zones = ["UTC", "Etc/UTC", "+00:00", "-00:00", "Z", "UT"];
+    fn preserves_utc_fields_and_physical_properties() -> Result<(), Box<dyn std::error::Error>> {
         let mut properties = 0;
         for source in [
             DataType::Date32,
@@ -256,18 +285,62 @@ mod tests {
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         ] {
             for target in [TimeUnit::Microsecond, TimeUnit::Nanosecond] {
-                for ordered in [false, true] {
+                let orderings =
+                    std::iter::once(None).chain([false, true].into_iter().flat_map(|descending| {
+                        [false, true].into_iter().map(move |nulls_first| {
+                            Some(SortOptions {
+                                descending,
+                                nulls_first,
+                            })
+                        })
+                    }));
+                for options in orderings {
                     let old = projection(
                         source.clone(),
                         DataType::Timestamp(target, Some("UTC".into())),
                         KEY,
-                        ordered,
+                        options,
                         false,
                         false,
                     );
+                    let native = old.downcast_ref::<ProjectionExec>().unwrap();
+                    let input_ordering = options.map(|options| {
+                        LexOrdering::new([PhysicalSortExpr::new(column(), options)]).unwrap()
+                    });
+                    assert_eq!(
+                        native.input().properties().output_ordering(),
+                        input_ordering.as_ref()
+                    );
+                    let native_ordering =
+                        options
+                            .filter(|_| source != DataType::Date32)
+                            .map(|options| {
+                                LexOrdering::new([PhysicalSortExpr::new(
+                                    Arc::new(Column::new(KEY, 0)),
+                                    options,
+                                )])
+                                .unwrap()
+                            });
+                    assert_eq!(old.properties().output_ordering(), native_ordering.as_ref());
+                    let bridge = bridge_projection(native)?;
+                    assert_eq!(bridge.schema(), old.schema());
+                    assert_eq!(bridge.properties().output_ordering(), None);
+                    let eligible = native_ordering.is_none();
+                    assert_eq!(
+                        super::same_properties(old.properties(), bridge.properties()),
+                        eligible
+                    );
                     let result = super::rewrite_projection(Arc::clone(&old), &Arc::default())?;
-                    assert_eq!(result.transformed, !ordered);
+                    assert_eq!(
+                        result.transformed, eligible,
+                        "{source:?}->{target:?} {options:?}"
+                    );
                     assert_eq!(old.schema(), result.data.schema());
+                    assert!(super::same_properties(
+                        old.properties(),
+                        result.data.properties()
+                    ));
+                    assert_eq!(Arc::ptr_eq(&old, &result.data), !eligible);
                     properties += 1;
                 }
             }
@@ -288,16 +361,131 @@ mod tests {
             (base.clone(), utc.clone(), KEY, true, false),
             (base.clone(), utc.clone(), KEY, false, true),
         ] {
-            let old = projection(source, target, alias, false, try_cast, duplicate);
+            let old = projection(source, target, alias, None, try_cast, duplicate);
             let result = super::rewrite_projection(Arc::clone(&old), &Arc::default())?;
             assert!(!result.transformed);
             assert!(Arc::ptr_eq(&old, &result.data));
             properties += 1;
         }
+        assert_eq!(properties, 36);
+        Ok(())
+    }
+
+    #[test]
+    fn precision_loss_does_not_inherit_subsequent_sort_keys() -> datafusion::common::Result<()> {
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let options = SortOptions {
+                    descending,
+                    nulls_first,
+                };
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("raw", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+                    Field::new("suffix", DataType::Int64, false),
+                ]));
+                let suffix: Arc<dyn PhysicalExpr> = Arc::new(Column::new("suffix", 1));
+                let input_ordering = LexOrdering::new([
+                    PhysicalSortExpr::new(column(), options),
+                    PhysicalSortExpr::new(Arc::clone(&suffix), options),
+                ])
+                .unwrap();
+                let input: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
+                    input_ordering.clone(),
+                    Arc::new(EmptyExec::new(Arc::clone(&schema))),
+                ));
+                assert_eq!(input.properties().output_ordering(), Some(&input_ordering));
+                let native: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+                    vec![
+                        (
+                            Arc::new(CastExpr::new(
+                                column(),
+                                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                                None,
+                            )) as Arc<dyn PhysicalExpr>,
+                            KEY.into(),
+                        ),
+                        (Arc::clone(&suffix), "suffix".into()),
+                    ],
+                    input,
+                )?);
+                let key = PhysicalSortExpr::new(Arc::new(Column::new(KEY, 0)), options);
+                let native_ordering = LexOrdering::new([key.clone()]).unwrap();
+                assert_eq!(
+                    native.properties().output_ordering(),
+                    Some(&native_ordering)
+                );
+                assert!(
+                    !native
+                        .properties()
+                        .eq_properties
+                        .ordering_satisfy([key, PhysicalSortExpr::new(suffix, options),])?
+                );
+                let projection = native.downcast_ref::<ProjectionExec>().unwrap();
+                let bridge = bridge_projection(projection)?;
+                assert_eq!(bridge.schema(), native.schema());
+                assert_eq!(bridge.properties().output_ordering(), None);
+                assert!(!super::same_properties(
+                    native.properties(),
+                    bridge.properties()
+                ));
+                let result = super::rewrite_projection(Arc::clone(&native), &Arc::default())?;
+                assert!(!result.transformed);
+                assert!(Arc::ptr_eq(&native, &result.data));
+                assert_eq!(result.data.schema(), native.schema());
+                assert!(super::same_properties(
+                    native.properties(),
+                    result.data.properties()
+                ));
+
+                // Distinct source keys collapse to a tie with the suffix in the wrong order.
+                let (mut raw, mut suffix) = if descending {
+                    (vec![Some(1001), Some(1000)], vec![1, 2])
+                } else {
+                    (vec![Some(1000), Some(1001)], vec![2, 1])
+                };
+                let null_index = if nulls_first { 0 } else { 2 };
+                raw.insert(null_index, None);
+                suffix.insert(null_index, 0);
+                let raw = cast(
+                    &(Arc::new(Int64Array::from(raw)) as ArrayRef),
+                    schema.field(0).data_type(),
+                );
+                let suffix: ArrayRef = Arc::new(Int64Array::from(suffix));
+                let batch = RecordBatch::try_new(schema, vec![raw, Arc::clone(&suffix)])?;
+                let output = projection.expr()[0].expr.evaluate(&batch)?.into_array(3)?;
+                let mut expected = vec![Some(1), Some(1)];
+                expected.insert(null_index, None);
+                assert_eq!(
+                    cast(&output, &DataType::Int64).to_data(),
+                    Int64Array::from(expected).to_data()
+                );
+                assert_eq!(
+                    projection.expr()[1]
+                        .expr
+                        .evaluate(&batch)?
+                        .into_array(3)?
+                        .to_data(),
+                    suffix.to_data()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_units_and_overflow_values() -> Result<(), Box<dyn std::error::Error>> {
+        let units = [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ];
+        let zones = ["UTC", "Etc/UTC", "+00:00", "-00:00", "Z", "UT"];
         let mut cases = 0;
         let mut same = 0;
         let mut improved = 0;
         let mut overflow = 0;
+        let mut kernel_overflow = 0;
         for zone in zones {
             for target in units {
                 for source in std::iter::once(DataType::Date32)
@@ -307,7 +495,7 @@ mod tests {
                         source.clone(),
                         DataType::Timestamp(target, Some(zone.into())),
                         KEY,
-                        false,
+                        None,
                         false,
                         false,
                     );
@@ -384,16 +572,7 @@ mod tests {
                             match (before, after, expected) {
                                 (Ok(a), Ok(b), Some(expected)) => {
                                     assert_eq!(a.to_data(), b.to_data());
-                                    let bits = cast(&b, &DataType::Int64);
-                                    for v in bits
-                                        .as_any()
-                                        .downcast_ref::<Int64Array>()
-                                        .unwrap()
-                                        .iter()
-                                        .flatten()
-                                    {
-                                        assert_eq!(v, expected);
-                                    }
+                                    assert_integer_values(&b, &raw, expected);
                                     same += 1;
                                 }
                                 (Err(e), Ok(b), Some(expected)) => {
@@ -401,20 +580,82 @@ mod tests {
                                         e.to_string().contains("Cannot cast timezone")
                                             || e.to_string().contains("Invalid timezone")
                                     );
-                                    let bits = cast(&b, &DataType::Int64);
-                                    for v in bits
-                                        .as_any()
-                                        .downcast_ref::<Int64Array>()
-                                        .unwrap()
-                                        .iter()
-                                        .flatten()
-                                    {
-                                        assert_eq!(v, expected);
-                                    }
+                                    assert_integer_values(&b, &raw, expected);
                                     improved += 1;
                                 }
                                 (Err(a), Err(b), None) => {
-                                    assert_eq!(a.to_string(), b.to_string());
+                                    let multiplier = match source {
+                                        DataType::Date32 => 86_400 * mult(&target),
+                                        DataType::Timestamp(from, None) => {
+                                            mult(&target) / mult(&from)
+                                        }
+                                        _ => return Err("unexpected overflow source type".into()),
+                                    };
+                                    assert!(value.checked_mul(multiplier).is_none());
+                                    let from = match source {
+                                        DataType::Date32 => "Date32".to_owned(),
+                                        DataType::Timestamp(unit, None) => {
+                                            format!(
+                                                "Timestamp({})",
+                                                if unit == TimeUnit::Microsecond {
+                                                    "µs"
+                                                } else {
+                                                    unit_name(unit)
+                                                }
+                                            )
+                                        }
+                                        _ => return Err("unexpected overflow source type".into()),
+                                    };
+                                    let to = format!("Timestamp({})", unit_name(target));
+                                    let expected = format!(
+                                        "Cannot cast {from} value {value} to {to}: converted value exceeds the representable i64 range"
+                                    );
+                                    // Context uses Arrow's display spelling; the bounds error uses ASCII units.
+                                    let display_unit = if target == TimeUnit::Microsecond {
+                                        "µs"
+                                    } else {
+                                        unit_name(target)
+                                    };
+                                    let native_target =
+                                        format!("Timestamp({display_unit}, {zone:?})");
+                                    let bridge_target = format!("Timestamp({display_unit})");
+                                    for (error, target_name) in
+                                        [(&a, native_target), (&b, bridge_target)]
+                                    {
+                                        let DataFusionError::Context(context, _) = error else {
+                                            return Err(format!(
+                                                "expected cast context, got {error:?}"
+                                            )
+                                            .into());
+                                        };
+                                        assert_eq!(
+                                            context,
+                                            &format!(
+                                                "Failed to cast field 'raw' from {from} to {target_name}"
+                                            )
+                                        );
+                                        let DataFusionError::Execution(payload) = error.find_root()
+                                        else {
+                                            return Err(format!(
+                                                "expected execution overflow, got {error:?}"
+                                            )
+                                            .into());
+                                        };
+                                        assert_eq!(payload, &expected);
+                                    }
+                                    // DataFusion checks bounds before Arrow; verify the kernel contract separately.
+                                    let expected =
+                                        format!("Overflow happened on: {value} * {multiplier}");
+                                    for target_type in [
+                                        DataType::Timestamp(target, Some(zone.into())),
+                                        DataType::Timestamp(target, None),
+                                    ] {
+                                        match cast_with_options(&raw, &target_type, &CastOptions { safe: false, ..Default::default() }) {
+                                            Err(ArrowError::ArithmeticOverflow(payload)) => assert_eq!(payload, expected),
+                                            other => return Err(format!("expected kernel arithmetic overflow for {source:?}->{target_type:?} {value}, got {other:?}").into()),
+                                        }
+                                        kernel_overflow += 1;
+                                    }
                                     overflow += 1;
                                 }
                                 x => {
@@ -430,8 +671,9 @@ mod tests {
                 }
             }
         }
-        println!(
-            "PASS actual staged helper: property/decline cases={properties}; runtime cases={cases}; exact={same}; valid improvements={improved}; identical overflow errors={overflow}"
+        assert_eq!(
+            (cases, same + improved, overflow, kernel_overflow),
+            (4680, 4032, 648, 1296)
         );
         Ok(())
     }
@@ -496,6 +738,72 @@ mod tests {
             exprs, input, &out,
         )?))
     }
+    #[test]
+    fn utc_bridge_preserves_cast_options_and_explicit_fields() -> datafusion::common::Result<()> {
+        let from = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let to = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+        for case in [
+            "regular",
+            "notnull",
+            "metadata",
+            "mismatch",
+            "safe",
+            "custom",
+            "try",
+            "indirect",
+            "ordinary",
+            "duplicate",
+        ] {
+            let old = correlation_projection(from.clone(), to.clone(), case)?;
+            let result = super::rewrite_projection(Arc::clone(&old), &Arc::default())?;
+            let eligible = matches!(case, "regular" | "notnull" | "metadata" | "mismatch");
+            assert_eq!(result.transformed, eligible, "{case}");
+            assert_eq!(old.schema(), result.data.schema(), "{case}");
+            assert!(super::same_properties(
+                old.properties(),
+                result.data.properties()
+            ));
+            if !eligible {
+                assert!(Arc::ptr_eq(&old, &result.data), "{case}");
+                continue;
+            }
+
+            let before = old.downcast_ref::<ProjectionExec>().unwrap();
+            let after = result.data.downcast_ref::<ProjectionExec>().unwrap();
+            let schema = before.input().schema();
+            let original = before.expr()[0].expr.downcast_ref::<CastExpr>().unwrap();
+            let outer = after.expr()[0].expr.downcast_ref::<CastExpr>().unwrap();
+            assert_eq!(outer.cast_options(), original.cast_options());
+            assert_eq!(
+                outer.return_field(&schema)?,
+                original.return_field(&schema)?
+            );
+            assert_eq!(outer.nullable(&schema)?, original.nullable(&schema)?);
+            assert!(outer.has_explicit_metadata());
+            assert!(outer.has_explicit_nullability());
+            assert_eq!(outer.cast_type(), &to);
+
+            let integer = outer.expr().downcast_ref::<CastExpr>().unwrap();
+            assert_eq!(integer.cast_type(), &DataType::Int64);
+            let scaled = integer.expr().downcast_ref::<CastExpr>().unwrap();
+            assert_eq!(
+                scaled.cast_type(),
+                &DataType::Timestamp(TimeUnit::Nanosecond, None)
+            );
+            for bridge in [integer, scaled] {
+                assert!(!bridge.cast_options().safe);
+                assert_eq!(
+                    bridge.cast_options().format_options,
+                    datafusion::common::format::DEFAULT_FORMAT_OPTIONS
+                );
+                assert!(!bridge.has_explicit_metadata());
+                assert!(!bridge.has_explicit_nullability());
+            }
+            assert!(Arc::ptr_eq(scaled.expr(), original.expr()));
+        }
+        Ok(())
+    }
+
     #[test]
     fn correlation_cast_preserves_fields_and_declines_unsupported_contracts()
     -> datafusion::common::Result<()> {
@@ -751,11 +1059,16 @@ mod codec_contracts {
                                     );
                                 }
                             }
-                            assert_eq!(
-                                roundtrip(original, &context)?.schema(),
-                                roundtrip(candidate, &context)?.schema(),
-                                "wire {from:?}->{to:?} metadata={source_metadata}/{target_metadata} nullable={source_nullable}/{target_nullable}"
-                            );
+                            let original_schema = original.schema();
+                            let native_wire = roundtrip(original, &context)?;
+                            let candidate_wire = roundtrip(candidate, &context)?;
+                            for wire in [native_wire, candidate_wire] {
+                                assert_eq!(
+                                    wire.schema(),
+                                    original_schema,
+                                    "wire {from:?}->{to:?} metadata={source_metadata}/{target_metadata} nullable={source_nullable}/{target_nullable}"
+                                );
+                            }
                             checked += 1;
                         }
                     }
@@ -826,14 +1139,19 @@ mod codec_contracts {
                 let native_wire = roundtrip(Arc::clone(&original), &context)?;
                 let candidate_wire = roundtrip(candidate, &context)?;
                 assert_ne!(
-                    native_wire.schema(),
                     original.schema(),
-                    "fixture must exercise the native codec's override loss"
+                    derived.schema(),
+                    "fixture must contain a projection metadata override"
                 );
                 assert_eq!(
                     native_wire.schema(),
+                    original.schema(),
+                    "native {from:?}->{to:?} override={changed}"
+                );
+                assert_eq!(
                     candidate_wire.schema(),
-                    "{from:?}->{to:?} override={changed}"
+                    original.schema(),
+                    "candidate {from:?}->{to:?} override={changed}"
                 );
             }
         }

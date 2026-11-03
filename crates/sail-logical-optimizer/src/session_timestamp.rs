@@ -36,7 +36,7 @@ pub(crate) fn convert_session_timestamp_casts(
     plan: LogicalPlan,
     config: &ConfigOptions,
 ) -> Result<LogicalPlan> {
-    let Some(timezone) = config.execution.time_zone.as_deref() else {
+    let Some(timezone) = config.execution.time_zone.as_ref().map(|tz| tz.as_str()) else {
         return Ok(plan);
     };
     let timezone = &arrow_timezone_label(timezone);

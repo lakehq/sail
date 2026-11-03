@@ -74,16 +74,6 @@ fn build_like_expr(input: ScalarFunctionInput, case_insensitive: bool) -> PlanRe
     }
 }
 
-fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
-    expr::Expr::SimilarTo(expr::Like {
-        negated: false,
-        expr: Box::new(expr),
-        pattern: Box::new(pattern),
-        case_insensitive: false,
-        escape_char: None,
-    })
-}
-
 fn is_in_list(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let (value, list) = arguments.at_least_one()?;
@@ -123,8 +113,60 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
         ("like", F::custom(|input| build_like_expr(input, false))),
         ("not", F::unary(not)),
         ("or", F::binary_op(Operator::Or)),
-        ("regexp", F::binary(rlike)),
-        ("regexp_like", F::binary(rlike)),
-        ("rlike", F::binary(rlike)),
+        ("regexp", F::binary_op(Operator::RegexMatch)),
+        ("regexp_like", F::binary_op(Operator::RegexMatch)),
+        ("rlike", F::binary_op(Operator::RegexMatch)),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::SessionContext;
+    use datafusion_common::DFSchema;
+    use datafusion_expr::{BinaryExpr, col};
+
+    use super::*;
+    use crate::config::PlanConfig;
+    use crate::function::common::FunctionContextInput;
+
+    #[test]
+    fn pattern_predicates_use_distinct_regex_and_like_expressions() -> PlanResult<()> {
+        let functions = list_built_in_predicate_functions();
+        let plan_config = Arc::new(PlanConfig::default());
+        let session_context = SessionContext::new();
+        let schema = Arc::new(DFSchema::empty());
+
+        for name in ["regexp", "regexp_like", "rlike", "like", "ilike"] {
+            let (_, function) = functions
+                .iter()
+                .find(|(registered, _)| *registered == name)
+                .ok_or_else(|| PlanError::invalid(format!("missing predicate: {name}")))?;
+            let actual = function(ScalarFunctionInput {
+                arguments: vec![col("value"), col("pattern")],
+                function_context: FunctionContextInput {
+                    argument_display_names: &[],
+                    plan_config: &plan_config,
+                    session_context: &session_context,
+                    schema: &schema,
+                },
+            })?;
+            let expected = if matches!(name, "like" | "ilike") {
+                expr::Expr::Like(expr::Like {
+                    negated: false,
+                    expr: Box::new(col("value")),
+                    pattern: Box::new(col("pattern")),
+                    case_insensitive: name == "ilike",
+                    escape_char: None,
+                })
+            } else {
+                expr::Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(col("value")),
+                    Operator::RegexMatch,
+                    Box::new(col("pattern")),
+                ))
+            };
+            assert_eq!(actual, expected, "{name}");
+        }
+        Ok(())
+    }
 }

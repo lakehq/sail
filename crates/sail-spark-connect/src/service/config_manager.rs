@@ -3,20 +3,27 @@ use std::sync::Arc;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::config::ConfigTimeZone;
 use datafusion::prelude::SessionContext;
 use log::warn;
 use sail_common::spec;
 use sail_common::utils::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::utils::datetime::arrow_timezone_label;
+use sail_plan::config::PlanConfig;
 use sail_plan::resolver::PlanResolver;
 use sail_sql_analyzer::parser::parse_native_config_value;
 
-use crate::config::ConfigKeyValue;
+use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult};
 use crate::service::time_zone::is_valid_time_zone;
 use crate::session::SparkSession;
 use crate::spark::config::SparkConfigKey;
 use crate::spark::connect::{ConfigResponse, KeyValue};
+
+#[cfg(test)]
+#[path = "config_manager_tests.rs"]
+mod tests;
 
 const DATAFUSION_TIME_ZONE_KEY: &str = "datafusion.execution.time_zone";
 
@@ -185,24 +192,33 @@ pub(crate) fn handle_config_set(
     let spark = ctx.extension::<SparkSession>()?;
     let kv: Vec<ConfigKeyValue> = kv.into_iter().map(Into::into).collect();
     let warnings = spark.get_config_warnings(&kv)?;
-    let sets_session_timezone = {
-        let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
-        kv.iter().any(|pair| pair.key == key)
-    };
-    spark.set_config(kv)?;
-    if sets_session_timezone {
-        // Mirror `spark.sql.session.timeZone` onto the DataFusion session configuration. Parquet
-        // listing-table schema inference reads `execution.time_zone` to reconcile mixed-timezone
-        // timestamps and to render adjusted timestamps in the session zone; Sail otherwise keeps
-        // the session timezone only in `PlanConfig`, leaving `execution.time_zone` unset. The
-        // optimizer rules read it as the session time zone.
-        let session_timezone = spark.plan_config()?.session_timezone.to_string();
-        ctx.state_ref()
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .time_zone = Some(session_timezone);
+    // Parse before storing any values. Spark keeps the original spelling; DataFusion needs
+    // the Arrow label, just like the timestamp types produced by the resolver.
+    let kv = kv
+        .into_iter()
+        .map(|pair| {
+            let time_zone = if pair.key == SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE {
+                pair.value
+                    .as_deref()
+                    .map(|value| arrow_timezone_label(value).parse::<ConfigTimeZone>())
+                    .transpose()?
+            } else {
+                None
+            };
+            Ok((pair, time_zone))
+        })
+        .collect::<SparkResult<Vec<_>>>()?;
+    {
+        let state = ctx.state_ref();
+        let mut state = state.write();
+        for (pair, time_zone) in kv {
+            spark.set_config(vec![pair])?;
+            if let Some(time_zone) = time_zone {
+                // Mirror each successful change even if a later pair fails. Parquet inference
+                // and optimizer rules read this setting rather than Spark's PlanConfig.
+                state.config_mut().options_mut().execution.time_zone = Some(time_zone);
+            }
+        }
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
@@ -271,18 +287,23 @@ pub(crate) fn handle_config_unset(
         let key = SparkConfigKey::SPARK_SQL_SESSION_TIME_ZONE.to_string();
         keys.iter().any(|k| k == &key)
     };
-    spark.unset_config(keys)?;
-    if unsets_session_timezone {
-        // Unsetting `spark.sql.session.timeZone` reverts it toward the default, so re-sync
-        // `execution.time_zone` to the now-effective session zone instead of leaving the last
-        // explicitly-set value behind. Mirrors the sync in `handle_config_set`.
-        let session_timezone = spark.plan_config()?.session_timezone.to_string();
-        ctx.state_ref()
-            .write()
-            .config_mut()
-            .options_mut()
-            .execution
-            .time_zone = Some(session_timezone);
+    // Resolve and parse the effective default before removing Spark's override.
+    let time_zone = if unsets_session_timezone {
+        Some(
+            PlanConfig::try_from(&SparkRuntimeConfig::try_new()?)?
+                .session_timezone_label()
+                .parse::<ConfigTimeZone>()?,
+        )
+    } else {
+        None
+    };
+    {
+        let state = ctx.state_ref();
+        let mut state = state.write();
+        spark.unset_config(keys)?;
+        if let Some(time_zone) = time_zone {
+            state.config_mut().options_mut().execution.time_zone = Some(time_zone);
+        }
     }
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),

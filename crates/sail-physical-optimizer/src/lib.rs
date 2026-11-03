@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
+use datafusion::physical_optimizer::eliminate_constant_join::EliminateConstantJoin;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
@@ -34,6 +35,8 @@ use crate::select_semi_join_build_side::SelectSemiJoinBuildSide;
 
 mod barrier;
 mod collect_left;
+#[cfg(test)]
+mod constant_join_tests;
 mod correlation_cast;
 mod explicit_repartition;
 mod filter_pushdown;
@@ -60,6 +63,7 @@ pub fn get_physical_optimizers(
     // FIXME: DataFusion's CAST statistics can retain invalid exact bounds/null
     // counts. Fix their propagation for non-order-preserving and fallible casts.
     rules.push(Arc::new(AggregateStatistics::new()));
+    rules.push(Arc::new(EliminateConstantJoin::new()));
     if options.enable_join_reorder {
         rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
@@ -120,6 +124,20 @@ mod tests {
                 ..Default::default()
             });
             let names: Vec<_> = optimizers.iter().map(|rule| rule.name()).collect();
+            let mut prefix = vec![
+                OutputRequirements::new_add_mode().name().to_owned(),
+                AggregateStatistics::new().name().to_owned(),
+                EliminateConstantJoin::new().name().to_owned(),
+            ];
+            if enable_join_reorder {
+                prefix.push(
+                    JoinReorder::new(JoinReorderOptions::default())
+                        .name()
+                        .to_owned(),
+                );
+            }
+            prefix.push(JoinSelection::new().name().to_owned());
+            assert_eq!(&names[..prefix.len()], prefix.as_slice());
             assert!(names.windows(3).any(|rules| rules
                 == [
                     PostFilterPushdown.name(),

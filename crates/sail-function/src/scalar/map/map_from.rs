@@ -1,4 +1,8 @@
-use datafusion::arrow::array::{Array, ArrayRef, NullArray, NullBufferBuilder, StructArray};
+use std::sync::Arc;
+
+use datafusion::arrow::array::{
+    Array, ArrayRef, MapArray, NullArray, NullBufferBuilder, StructArray,
+};
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
@@ -11,6 +15,10 @@ use datafusion_functions::utils::make_scalar_function;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 
+#[cfg(test)]
+#[path = "map_from_tests.rs"]
+mod tests;
+
 use crate::scalar::map::utils::{
     get_element_type, get_list_offsets, get_list_values, map_from_keys_values_offsets_nulls,
     map_type_from_key_value_types,
@@ -20,6 +28,7 @@ use crate::scalar::map::utils::{
 pub struct SparkMapFromArrays {
     delegate: MapFromArrays,
     last_value_wins: bool,
+    value_contains_null: Option<bool>,
 }
 
 impl SparkMapFromArrays {
@@ -27,11 +36,21 @@ impl SparkMapFromArrays {
         Self {
             delegate: MapFromArrays::new(),
             last_value_wins,
+            value_contains_null: None,
         }
     }
 
     pub fn last_value_wins(&self) -> bool {
         self.last_value_wins
+    }
+
+    pub fn with_value_contains_null(mut self, value_contains_null: Option<bool>) -> Self {
+        self.value_contains_null = value_contains_null;
+        self
+    }
+
+    pub fn value_contains_null(&self) -> Option<bool> {
+        self.value_contains_null
     }
 }
 
@@ -49,13 +68,30 @@ impl ScalarUDFImpl for SparkMapFromArrays {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        self.delegate.return_field_from_args(args)
+        let arg_fields = args.arg_fields;
+        let field = self.delegate.return_field_from_args(args)?;
+        let derived = match arg_fields[1].data_type() {
+            DataType::List(element)
+            | DataType::LargeList(element)
+            | DataType::FixedSizeList(element, _) => element.is_nullable(),
+            DataType::Null => true,
+            other => return exec_err!("map_from_arrays: expected list, got {other:?}"),
+        };
+        let data_type = with_map_value_nullability(
+            field.data_type(),
+            self.value_contains_null.unwrap_or(derived),
+        )?;
+        Ok(Arc::new(field.as_ref().clone().with_data_type(data_type)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let last_value_wins = self.last_value_wins;
+        let return_field = args.return_field;
         make_scalar_function(
-            move |args| map_from_arrays_inner(args, last_value_wins),
+            move |args| {
+                let map = map_from_arrays_inner(args, last_value_wins)?;
+                retype_map_value_nullability(map, return_field.data_type())
+            },
             vec![],
         )(&args.args)
     }
@@ -118,16 +154,90 @@ impl ScalarUDFImpl for SparkMapFromEntries {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        self.delegate.return_field_from_args(args)
+        let arg_fields = args.arg_fields;
+        let field = self.delegate.return_field_from_args(args)?;
+        let element = get_element_type(arg_fields[0].data_type())?;
+        let DataType::Struct(fields) = element else {
+            return exec_err!("map_from_entries: expected struct, got {element:?}");
+        };
+        let data_type = with_map_value_nullability(field.data_type(), fields[1].is_nullable())?;
+        Ok(Arc::new(field.as_ref().clone().with_data_type(data_type)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let last_value_wins = self.last_value_wins;
+        let return_field = args.return_field;
         make_scalar_function(
-            move |args| map_from_entries_inner(args, last_value_wins),
+            move |args| {
+                let map = map_from_entries_inner(args, last_value_wins)?;
+                retype_map_value_nullability(map, return_field.data_type())
+            },
             vec![],
         )(&args.args)
     }
+}
+
+fn with_map_value_nullability(data_type: &DataType, nullable: bool) -> Result<DataType> {
+    let DataType::Map(entries, sorted) = data_type else {
+        return exec_err!("expected map type, got {data_type:?}");
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return exec_err!("expected map entries struct, got {entries:?}");
+    };
+    let [key, value] = fields.as_ref() else {
+        return exec_err!("expected two map entry fields, got {fields:?}");
+    };
+    let fields = vec![
+        key.clone(),
+        Arc::new(value.as_ref().clone().with_nullable(nullable)),
+    ];
+    Ok(DataType::Map(
+        Arc::new(
+            entries
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Struct(fields.into())),
+        ),
+        *sorted,
+    ))
+}
+
+/// Retype only the map value field's nullability, without casting nested values.
+fn retype_map_value_nullability(array: ArrayRef, target: &DataType) -> Result<ArrayRef> {
+    let Some(map) = array.as_any().downcast_ref::<MapArray>() else {
+        return exec_err!("expected map array, got {:?}", array.data_type());
+    };
+    let DataType::Map(entries, sorted) = target else {
+        return exec_err!("expected map return type, got {target:?}");
+    };
+    let DataType::Struct(fields) = entries.data_type() else {
+        return exec_err!("expected map entries struct, got {entries:?}");
+    };
+    let [_, value] = fields.as_ref() else {
+        return exec_err!("expected two map entry fields, got {fields:?}");
+    };
+    if with_map_value_nullability(map.data_type(), value.is_nullable())? != *target {
+        return exec_err!(
+            "map retype may only change value nullability: {:?} to {target:?}",
+            map.data_type()
+        );
+    }
+    if map.data_type() == target {
+        return Ok(array);
+    }
+    // No entry validity mask may hide a NULL value when narrowing the value field.
+    let values = StructArray::try_new(
+        fields.clone(),
+        vec![map.keys().clone(), map.values().clone()],
+        None,
+    )?;
+    Ok(Arc::new(MapArray::try_new(
+        entries.clone(),
+        map.offsets().clone(),
+        values,
+        map.nulls().cloned(),
+        *sorted,
+    )?))
 }
 
 fn map_from_entries_inner(args: &[ArrayRef], last_value_wins: bool) -> Result<ArrayRef> {

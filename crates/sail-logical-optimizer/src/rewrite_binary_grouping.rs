@@ -21,10 +21,6 @@ impl OptimizerRule for RewriteBinaryGrouping {
         Some(ApplyOrder::BottomUp)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     fn rewrite(
         &self,
         plan: LogicalPlan,
