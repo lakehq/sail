@@ -13,6 +13,7 @@ use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use datafusion_common::stats::Precision;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, plan_datafusion_err};
 use datafusion_datasource::file::FileSource;
 use sail_common_datafusion::scan::{ParquetScanMetadata, load_parquet_scan_metadata};
@@ -22,6 +23,7 @@ use sail_common_datafusion::schema_evolution::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::datasource::scan::IcebergScan;
 use crate::datasource::type_converter::{iceberg_field_id, iceberg_type_to_arrow};
 use crate::spec::{DataFile, PartitionSpec, Transform};
 use crate::utils::conversions::to_scalar;
@@ -243,13 +245,22 @@ pub(crate) fn create_data_scan_with_partition_defaults(
         };
         let unknown =
             datafusion_common::Statistics::new_unknown(source.table_schema().table_schema());
-        let statistics = sail_common_datafusion::statistics::aggregate_statistics(
+        let mut statistics = sail_common_datafusion::statistics::aggregate_statistics(
             source.table_schema().table_schema(),
             file_groups
                 .iter()
                 .flat_map(|group| group.files())
                 .map(|file| file.statistics.as_deref().unwrap_or(&unknown)),
         );
+        // These statistics replace the ones the scan narrowed to its projection.
+        let projection = source
+            .projection()
+            .map(|projection| projection.column_indices())
+            .filter(|indices| indices.len() < statistics.column_statistics.len());
+        if let Some(byte_size) = IcebergScan::projected_byte_size(&statistics, projection.as_ref())
+        {
+            statistics.total_byte_size = Precision::Inexact(byte_size);
+        }
         let scan = FileScanConfigBuilder::from(config.clone())
             .with_source(source)
             .with_file_groups(file_groups)
