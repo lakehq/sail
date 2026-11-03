@@ -505,22 +505,21 @@ impl PlanResolver<'_> {
         if let Some(having) = having.as_ref() {
             aggregate_candidates.push(having.clone());
         }
-        let aggregate_exprs = Self::disambiguate_aggregate_expressions(
-            find_aggregate_exprs(&aggregate_candidates),
-            state,
-        );
+        let aggregate_exprs =
+            Self::disambiguate_expression_names(find_aggregate_exprs(&aggregate_candidates), state);
+        let group_exprs = Self::disambiguate_expression_names(group_exprs, state);
         let plan = LogicalPlanBuilder::from(input)
-            .aggregate(group_exprs, aggregate_exprs.clone())?
+            .aggregate(group_exprs.clone(), aggregate_exprs.clone())?
             .build()?;
         let (grouping_exprs, aggregate_or_grouping_exprs) = {
             let mut grouping_exprs = vec![];
             let mut aggregate_or_grouping_exprs = aggregate_exprs;
-            for expr in grouping {
+            for (named, expr) in grouping.into_iter().zip(group_exprs) {
                 let NamedExpr {
                     name,
-                    expr,
+                    expr: _,
                     metadata,
-                } = expr;
+                } = named;
                 let exprs = match expr {
                     Expr::GroupingSet(g) => g.distinct_expr().into_iter().cloned().collect(),
                     expr => vec![expr],
@@ -1486,10 +1485,12 @@ impl PlanResolver<'_> {
             .data()?)
     }
 
-    /// Casts are invisible in DataFusion schema names, so distinct aggregate expressions
-    /// can claim the same output name: `min(x)` and `min(to_date(x))` are both `min(x)`.
-    /// Such expressions get an internal alias, which keeps the aggregate schema unique.
-    fn disambiguate_aggregate_expressions(
+    /// Casts are invisible in DataFusion schema names, so distinct expressions of an
+    /// aggregate can claim the same name: `min(x)` and `min(to_date(x))` are both
+    /// `min(x)`, and `x` and `to_date(x)` are both `x`. Such expressions get an internal
+    /// alias, which keeps the aggregate schema unique and lets the rules that rebuild a
+    /// projection from the grouping expressions name each of them.
+    fn disambiguate_expression_names(
         expressions: Vec<Expr>,
         state: &mut PlanResolverState,
     ) -> Vec<Expr> {
