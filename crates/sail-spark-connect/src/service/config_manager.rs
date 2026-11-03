@@ -363,6 +363,7 @@ mod tests {
     use std::time::Duration;
 
     use datafusion::prelude::SessionConfig;
+    use pyo3::Python;
 
     use super::*;
     use crate::session::SparkSessionOptions;
@@ -370,6 +371,10 @@ mod tests {
     const KEY: &str = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING;
 
     fn test_context(parquet_binary_as_string: bool) -> SparkResult<SessionContext> {
+        // The session configuration reads the PySpark version through the Python interpreter,
+        // which a test binary has to initialize itself. Each test runs in its own process under
+        // `cargo nextest`, so no other test can have initialized it.
+        Python::initialize();
         let spark = Arc::new(SparkSession::try_new(
             "session".to_string(),
             "user".to_string(),
@@ -378,9 +383,11 @@ mod tests {
                 parquet_binary_as_string,
             },
         )?);
-        Ok(SessionContext::new_with_config(
-            SessionConfig::new().with_extension(spark),
-        ))
+        let mut config = SessionConfig::new().with_extension(spark);
+        // The session factory seeds the DataFusion option from the Sail configuration, so the
+        // mirror starts out agreeing with `SparkSessionOptions`.
+        config.options_mut().execution.parquet.binary_as_string = parquet_binary_as_string;
+        Ok(SessionContext::new_with_config(config))
     }
 
     fn set(ctx: &SessionContext, value: &str) -> SparkResult<ConfigResponse> {
