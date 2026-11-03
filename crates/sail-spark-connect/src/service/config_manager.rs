@@ -167,14 +167,20 @@ async fn reset_native_config(
 /// Spark session only, so setting it has no effect on reads. The value set in the session overrides
 /// the Sail `parquet.binary_as_string` option, and unsetting it restores that option. A read option
 /// still overrides both, since option layers are merged after the session defaults.
+///
+/// The DataFusion write lock is taken before the Spark session value is read, so that two
+/// concurrent requests cannot interleave their read and their write and leave the mirror holding
+/// the value of whichever request read first. The Spark session has its own lock, which is only
+/// ever taken while holding the DataFusion one, never the other way round.
 fn sync_parquet_binary_as_string(ctx: &SessionContext, spark: &SparkSession) -> SparkResult<()> {
     let key = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING;
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
     let value = match spark.get_config_if_set(key)? {
         Some(value) => value.trim().to_lowercase().parse::<bool>()?,
         None => spark.options().parquet_binary_as_string,
     };
-    ctx.state_ref()
-        .write()
+    state
         .config_mut()
         .options_mut()
         .execution
@@ -350,4 +356,86 @@ pub(crate) fn handle_config_is_modifiable(
         pairs,
         warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use datafusion::prelude::SessionConfig;
+
+    use super::*;
+    use crate::session::SparkSessionOptions;
+
+    const KEY: &str = SparkConfigKey::SPARK_SQL_PARQUET_BINARY_AS_STRING;
+
+    fn test_context(parquet_binary_as_string: bool) -> SparkResult<SessionContext> {
+        let spark = Arc::new(SparkSession::try_new(
+            "session".to_string(),
+            "user".to_string(),
+            SparkSessionOptions {
+                execution_heartbeat_interval: Duration::from_secs(60),
+                parquet_binary_as_string,
+            },
+        )?);
+        Ok(SessionContext::new_with_config(
+            SessionConfig::new().with_extension(spark),
+        ))
+    }
+
+    fn set(ctx: &SessionContext, value: &str) -> SparkResult<ConfigResponse> {
+        handle_config_set(
+            ctx,
+            vec![KeyValue {
+                key: KEY.to_string(),
+                value: Some(value.to_string()),
+            }],
+        )
+    }
+
+    fn session_value(ctx: &SessionContext) -> SparkResult<Option<String>> {
+        ctx.extension::<SparkSession>()?.get_config_if_set(KEY)
+    }
+
+    fn mirrored_value(ctx: &SessionContext) -> bool {
+        ctx.state_ref()
+            .read()
+            .config()
+            .options()
+            .execution
+            .parquet
+            .binary_as_string
+    }
+
+    #[test]
+    fn test_set_and_unset_mirror_the_session_value() -> SparkResult<()> {
+        let ctx = test_context(true)?;
+        set(&ctx, "false")?;
+        assert!(!mirrored_value(&ctx));
+        set(&ctx, " TRUE ")?;
+        assert!(mirrored_value(&ctx));
+        handle_config_unset(&ctx, vec![KEY.to_string()])?;
+        assert!(mirrored_value(&ctx));
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_boolean_value_changes_neither_configuration() -> SparkResult<()> {
+        let ctx = test_context(false)?;
+        set(&ctx, "true")?;
+        assert!(set(&ctx, "yes").is_err());
+        assert_eq!(session_value(&ctx)?, Some("true".to_string()));
+        assert!(mirrored_value(&ctx));
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_boolean_value_of_an_unset_key_changes_neither_configuration() -> SparkResult<()> {
+        let ctx = test_context(true)?;
+        let mirrored = mirrored_value(&ctx);
+        assert!(set(&ctx, "yes").is_err());
+        assert_eq!(session_value(&ctx)?, None);
+        assert_eq!(mirrored_value(&ctx), mirrored);
+        Ok(())
+    }
 }

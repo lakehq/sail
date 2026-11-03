@@ -221,6 +221,19 @@ def test_parquet_session_binary_as_string(spark, tmp_path):
     assert spark.read.parquet(path).dtypes == [("value", "binary")]
 
 
+def test_parquet_invalid_session_binary_as_string(spark, tmp_path):
+    key = "spark.sql.parquet.binaryAsString"
+    path = write_unannotated_binary(tmp_path / "invalid_session_binary_as_string")
+    try:
+        spark.conf.set(key, "true")
+        with pytest.raises(Exception, match=r"INVALID_CONF_VALUE\.TYPE_MISMATCH"):
+            spark.conf.set(key, "yes")
+        assert spark.conf.get(key) == "true"
+        assert spark.read.parquet(path).dtypes == [("value", "string")]
+    finally:
+        spark.conf.unset(key)
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="`binaryAsString` is a Sail-only read option")
 def test_parquet_read_option_overrides_session_binary_as_string(spark, tmp_path):
     key = "spark.sql.parquet.binaryAsString"
