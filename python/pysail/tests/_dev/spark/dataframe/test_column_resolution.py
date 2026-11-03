@@ -749,8 +749,8 @@ def test_wide_set_operation_struct_coercion(spark, temporal, array_wrapped):
         # A lateral alias stages the aggregate values in a projection above the aggregate.
         ("lateral", [(1,), (2,)], "s", True),
         # Spark expands rollup and cube into `Expand`, whose grouping column is a new nullable
-        # attribute. It keeps the qualifier, so `t1.k` resolves, but a reference to the original
-        # DataFrame column does not.
+        # attribute. It keeps the qualifier, so `t1.k` resolves, while a reference to the original
+        # DataFrame column is rejected.
         ("rollup", [(1,), (2,), (None,)], "count", False),
         ("cube", [(1,), (2,), (None,)], "count", False),
         # The pivot values become the column names `10`, `20` and `30`.
@@ -771,6 +771,9 @@ def test_aggregate_keeps_qualified_grouping_key(spark, operation, keys, value, i
     assert Counter(aggregated.select("t1.k").collect()) == Counter(keys)
     if identity:
         assert Counter(aggregated.select(source.k).collect()) == Counter(keys)
+    else:
+        with pytest.raises(PySparkException, match=r"(?i)(cannot resolve|missing|unresolved|not found)"):
+            aggregated.select(source.k).collect()
 
     result = aggregated.select("t1.*")
     assert result.columns == ["k"]

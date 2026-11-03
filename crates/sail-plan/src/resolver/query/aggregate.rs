@@ -630,7 +630,14 @@ impl PlanResolver<'_> {
                 };
                 match source {
                     Some((field_id, relation)) => {
-                        let field_id = state.register_identity_field(name, &field_id)?;
+                        // Spark expands a grouping set into `Expand`, whose grouping column is a
+                        // new nullable attribute: the qualifier survives, but a reference to the
+                        // input column no longer resolves against it.
+                        let field_id = if has_grouping_set {
+                            state.register_field_name(name)
+                        } else {
+                            state.register_identity_field(name, &field_id)?
+                        };
                         let qualifier = relation
                             .filter(|relation| relation.table() != datafusion_expr::UNNAMED_TABLE);
                         Ok(expr.alias_qualified(qualifier, field_id))
