@@ -17,6 +17,7 @@ jobs:
     env:
       HATCH_ENV: "test.spark-4.1.3"
       PYSAIL_INTEGRATION_SUITE: ${{ matrix.suite }}
+      PYSAIL_SOURCE_PATH: ${{ github.workspace }}/python/pysail
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-catalog-it-%p-%m.profraw
@@ -63,7 +64,7 @@ jobs:
 
       - name: Run Catalog Integration Tests
         run: |
-          hatch run pytest -m integration --pyargs pysail.tests -v \
+          hatch run pytest -m integration --pyargs pysail.tests._dev -v \
             --durations=20 --junitxml=target/test-results/catalog-${{ matrix.suite }}.xml
 
       # Generate coverage report after catalog IT tests
