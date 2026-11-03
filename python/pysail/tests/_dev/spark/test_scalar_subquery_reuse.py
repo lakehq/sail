@@ -280,6 +280,21 @@ def test_repeated_dataframe_aggregate_scalar_subqueries(spark, tables):
         assert scalar_subquery_slots(df) == [2]
 
 
+def test_dataframe_scalar_subquery_column_used_twice(spark, tables):
+    from pyspark.sql import functions as F  # noqa: N812
+
+    from pysail.testing.spark.utils.common import pyspark_version
+
+    if pyspark_version() < (4,):
+        pytest.skip("DataFrame.scalar requires PySpark 4+")
+    # The client sends the subquery plan once for each use of the column.
+    column = spark.table(tables["t"]).select(F.max("x")).scalar()
+    df = spark.range(1).select(column.alias("a"), (column + 1).alias("b"))
+    assert [tuple(row) for row in df.collect()] == [(MAX_X, MAX_X + 1)]
+    if not is_jvm_spark():
+        assert scalar_subquery_slots(df) == [1]
+
+
 @pytest.fixture(scope="module")
 def self_join_table(spark, tmp_path_factory):
     name = f"aggregate_reuse_sj_{uuid.uuid4().hex[:8]}"
