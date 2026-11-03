@@ -4286,8 +4286,8 @@ data:
 name: "test_derived_tpcds_query_result[61]"
 data:
   |-
-    | promotions | total | ((promotions / total) * 100) |
-    | NULL       | NULL  | NULL                         |
+    | promotions | total | ((CAST(promotions AS DECIMAL(15,4)) / CAST(total AS DECIMAL(15,4))) * 100) |
+    | NULL       | NULL  | NULL                                                                       |
 ---
 name: "test_derived_tpcds_query_result[62]"
 data:

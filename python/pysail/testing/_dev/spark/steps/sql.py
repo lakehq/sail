@@ -191,7 +191,17 @@ def query_column_types(datatable, query, spark):
 @when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
 def dataframe_for(case, spark):
     """Builds a DataFrame for a named BDD case."""
+
+    def cast_input():
+        return spark.range(1).select(F.col("id").cast("int").alias("k"))
+
     cases = {
+        "cast of a column": lambda: cast_input().select(F.col("k").cast("bigint")),
+        "chained casts of a column": lambda: cast_input().select(F.col("k").cast("bigint").cast("string")),
+        "cast of a column in arithmetic": lambda: cast_input().select(F.col("k").cast("bigint") + 1),
+        "chained casts of a column from a string expression": lambda: cast_input().selectExpr(
+            "CAST(CAST(k AS BIGINT) AS STRING)"
+        ),
         "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
         "null literal alias projection": lambda: (
             spark.range(1).select(F.lit(None).alias("value")).select(F.col("value").alias("result"))

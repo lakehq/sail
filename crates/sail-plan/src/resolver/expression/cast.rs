@@ -38,7 +38,7 @@ impl PlanResolver<'_> {
         &self,
         expr: spec::Expr,
         cast_to_type: spec::DataType,
-        _rename: bool,
+        naming: spec::CastNaming,
         is_try: bool,
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
@@ -81,7 +81,7 @@ impl PlanResolver<'_> {
         if matches!(cast_to_type, spec::DataType::Variant) {
             let NamedExpr { expr, name, .. } =
                 self.resolve_named_expression(expr, schema, state).await?;
-            let name = if need_rename_cast(&expr) {
+            let name = if need_rename_cast(naming, &expr) {
                 let prefix = if is_try { "TRY_" } else { "" };
                 vec![format!("{}CAST({} AS VARIANT)", prefix, name.one()?)]
             } else {
@@ -120,7 +120,7 @@ impl PlanResolver<'_> {
         let expr_field = expr.to_field(schema)?.1;
         let expr_type = expr_field.data_type().clone();
         let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
-        let name = if need_rename_cast(&expr) {
+        let name = if need_rename_cast(naming, &expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
                 .plan_formatter()
@@ -494,13 +494,26 @@ fn day_time_field_to_microseconds(field: spec::IntervalFieldType) -> i64 {
     }
 }
 
-fn need_rename_cast(expr: &expr::Expr) -> bool {
-    match expr {
-        expr::Expr::Alias(_) | expr::Expr::Column(_) | expr::Expr::OuterReferenceColumn(..) => {
-            false
-        }
-        expr::Expr::Cast(cast) => need_rename_cast(cast.expr.as_ref()),
-        expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
-        _ => true,
+/// Whether the cast is named `CAST(... AS ...)` rather than after its child expression.
+///
+/// Spark keeps the name of the child only for a cast at the top of a projection item, and
+/// the DataFrame API looks through a whole chain of casts for the named expression while
+/// SQL looks through a single cast.
+fn need_rename_cast(naming: spec::CastNaming, expr: &expr::Expr) -> bool {
+    match naming {
+        spec::CastNaming::Cast => true,
+        spec::CastNaming::SqlProjectionItem => !is_named_expression(expr),
+        spec::CastNaming::DataFrameProjectionItem => match expr {
+            expr::Expr::Cast(cast) => need_rename_cast(naming, cast.expr.as_ref()),
+            expr::Expr::TryCast(try_cast) => need_rename_cast(naming, try_cast.expr.as_ref()),
+            _ => !is_named_expression(expr),
+        },
     }
+}
+
+fn is_named_expression(expr: &expr::Expr) -> bool {
+    matches!(
+        expr,
+        expr::Expr::Alias(_) | expr::Expr::Column(_) | expr::Expr::OuterReferenceColumn(..)
+    )
 }

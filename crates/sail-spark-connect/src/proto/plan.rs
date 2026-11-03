@@ -249,7 +249,11 @@ impl TryFrom<RelType> for RelationNode {
                     .transpose()?;
                 let expressions = expressions
                     .into_iter()
-                    .map(|e| e.try_into())
+                    .map(|e| {
+                        Ok(spec::Expr::try_from(e)?.with_projection_item_cast_naming(
+                            spec::CastNaming::DataFrameProjectionItem,
+                        ))
+                    })
                     .collect::<SparkResult<Vec<_>>>()?;
                 Ok(RelationNode::Query(spec::QueryNode::Project {
                     input,

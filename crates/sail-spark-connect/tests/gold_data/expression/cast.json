@@ -172,7 +172,7 @@
                 "nullable": true
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": false
           }
         }
@@ -193,7 +193,7 @@
               }
             },
             "castToType": "int32",
-            "rename": true,
+            "naming": "cast",
             "isTry": false
           }
         }
@@ -219,7 +219,7 @@
                 "timestampType": "configured"
               }
             },
-            "rename": true,
+            "naming": "cast",
             "isTry": false
           }
         }
@@ -242,12 +242,12 @@
                   }
                 },
                 "castToType": "int32",
-                "rename": true,
+                "naming": "cast",
                 "isTry": false
               }
             },
             "castToType": "int64",
-            "rename": true,
+            "naming": "cast",
             "isTry": false
           }
         }

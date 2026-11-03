@@ -138,10 +138,10 @@ impl PlanResolver<'_> {
             Expr::Cast {
                 expr,
                 cast_to_type,
-                rename,
+                naming,
                 is_try,
             } => {
-                self.resolve_expression_cast(*expr, cast_to_type, rename, is_try, schema, state)
+                self.resolve_expression_cast(*expr, cast_to_type, naming, is_try, schema, state)
                     .await
             }
             Expr::UnresolvedRegex { col_name, plan_id } => {
