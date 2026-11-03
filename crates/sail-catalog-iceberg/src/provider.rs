@@ -4012,6 +4012,60 @@ mod tests {
         assert_eq!(session.context.scan, ScanAuthority::ClientLakeSource);
     }
 
+    async fn begin_table_access_with_access_delegation(
+        access_delegation: &str,
+        expected_header: Option<&str>,
+    ) {
+        let ctx = TestContext::new_with_properties(
+            Some("test"),
+            HashMap::from([(
+                REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
+                access_delegation.to_string(),
+            )]),
+        )
+        .await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let expected_header = expected_header.map(ToOwned::to_owned);
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .and(move |request: &Request| {
+                request
+                    .headers
+                    .get("X-Iceberg-Access-Delegation")
+                    .and_then(|value| value.to_str().ok())
+                    == expected_header.as_deref()
+            })
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(create_table_response_with_access_session_hints()),
+            )
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        ctx.catalog
+            .begin_table_access(&namespace, "table1", table_read_access_request())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn begin_table_access_omits_access_delegation_header_when_blank() {
+        for access_delegation in ["", "   "] {
+            begin_table_access_with_access_delegation(access_delegation, None).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn begin_table_access_sends_custom_access_delegation_header() {
+        begin_table_access_with_access_delegation(
+            "vended-credentials,remote-signing",
+            Some("vended-credentials,remote-signing"),
+        )
+        .await;
+    }
+
     async fn test_get_view_impl(name: Option<&str>) {
         let ctx = TestContext::new(name).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
