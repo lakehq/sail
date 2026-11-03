@@ -6,6 +6,7 @@ use sail_common_datafusion::datasource::{DataSourceRegistry, DeleteInfo};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::lakesource::RowLevelOperation;
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_lineage::{LineageDataset, LineageOperation};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
@@ -42,6 +43,21 @@ impl PlanResolver<'_> {
             None => None,
         };
 
+        self.record_lineage_output(
+            LineageOperation::Delete,
+            LineageDataset {
+                identifier: None,
+                location: Some(target.location.clone()),
+                table: target
+                    .lakehouse_table
+                    .as_ref()
+                    // Path-based targets (e.g. `delta.`/path``) are not catalog tables.
+                    .map(|x| x.catalog_table().to_vec()),
+                format: Some(target_format.clone()),
+                schema: None,
+                lifecycle: None,
+            },
+        );
         let delete_info = DeleteInfo {
             target_plan: Arc::new(target_plan),
             target,

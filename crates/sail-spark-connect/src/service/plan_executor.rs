@@ -11,7 +11,8 @@ use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
-use sail_plan::resolve_and_execute_plan;
+use sail_lineage::execute_with_lineage;
+use sail_plan::{ExecutablePlan, resolve_and_execute_plan_with_lineage};
 use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 
@@ -119,18 +120,29 @@ async fn handle_execute_plan(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let span = Span::root("handle_execute_plan", SpanContext::random());
     let spark = ctx.extension::<SparkSession>()?;
-    let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let plan = if let Some(batch) = handle_sql_config(ctx, &plan).await? {
-        ctx.read_batch(batch)?.create_physical_plan().await?
+    // SQL configuration commands are answered without planning, so they have no lineage.
+    let (plan, lineage) = if let Some(batch) = handle_sql_config(ctx, &plan).await? {
+        (ctx.read_batch(batch)?.create_physical_plan().await?, None)
     } else {
-        resolve_and_execute_plan(ctx, spark.plan_config()?, plan)
-            .await?
-            .0
+        let ExecutablePlan { plan, lineage, .. } =
+            resolve_and_execute_plan_with_lineage(ctx, spark.plan_config()?, plan).await?;
+        (plan, Some(lineage))
     };
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
-        service.runner().execute(ctx, plan).in_span(span).await?
+        match lineage {
+            Some(lineage) => {
+                let options = spark.lineage_options()?;
+                execute_with_lineage(ctx, plan, lineage, &options)
+                    .in_span(span)
+                    .await?
+            }
+            None => {
+                let service = ctx.extension::<JobService>()?;
+                service.runner().execute(ctx, plan).in_span(span).await?
+            }
+        }
     };
     let _guard = span.set_local_parent();
     let executor = Executor::new(
@@ -286,13 +298,17 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = ctx.extension::<SparkSession>()?;
-    let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
     let reattachable = metadata.reattachable;
     let query_name = start.query_name.clone();
     let plan = spec::Plan::Command(spec::CommandPlan::new(start.try_into()?));
-    let (plan, info) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
-    let stream = service.runner().execute(ctx, plan).await?;
+    let ExecutablePlan {
+        plan,
+        info,
+        lineage,
+    } = resolve_and_execute_plan_with_lineage(ctx, spark.plan_config()?, plan).await?;
+    let options = spark.lineage_options()?;
+    let stream = execute_with_lineage(ctx, plan, lineage, &options).await?;
     let id = spark.start_streaming_query(query_name.clone(), info, stream)?;
     let result = WriteStreamOperationStartResult {
         query_id: Some(id.into()),

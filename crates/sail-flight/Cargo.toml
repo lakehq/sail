@@ -17,6 +17,7 @@ sail-plan = { path = "../sail-plan" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-sql-parser = { path = "../sail-sql-parser" }
 sail-session = { path = "../sail-session" }
+sail-lineage = { path = "../sail-lineage" }
 sail-telemetry = { path = "../sail-telemetry" }
 
 arrow = { workspace = true }

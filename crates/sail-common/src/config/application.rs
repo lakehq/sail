@@ -9,7 +9,8 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::config::loader::{
-    ConfigDefinition, deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit,
+    ConfigDefinition, deserialize_non_empty_secret, deserialize_non_empty_string,
+    deserialize_non_zero, deserialize_unknown_unit,
 };
 use crate::config::observer::{
     serialize_non_empty_string, serialize_non_zero, serialize_optional_secret,
@@ -34,6 +35,7 @@ pub struct AppConfig {
     pub flight: FlightConfig,
     pub python: PythonConfig,
     pub telemetry: TelemetryConfig,
+    pub lineage: LineageConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
     /// can only be used for internal configuration.
@@ -1015,6 +1017,61 @@ pub enum OtlpProtocol {
     HttpBinary,
     #[serde(alias = "http-json")]
     HttpJson,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineageConfig {
+    pub enabled: bool,
+    pub transport: LineageTransportType,
+    pub namespace: String,
+    pub shutdown_timeout_secs: u64,
+    pub http: LineageHttpConfig,
+    pub file: LineageFileConfig,
+    pub object_store: LineageObjectStoreConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineageTransportType {
+    Console,
+    Http,
+    File,
+    ObjectStore,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineageHttpConfig {
+    pub url: String,
+    pub endpoint: String,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_secret",
+        deserialize_with = "deserialize_non_empty_secret"
+    )]
+    pub api_key: Option<SecretString>,
+    pub timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineageFileConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineageObjectStoreConfig {
+    #[serde(
+        serialize_with = "serialize_non_empty_string",
+        deserialize_with = "deserialize_non_empty_string"
+    )]
+    pub url: Option<String>,
 }
 
 /// Environment variables for application execution configuration.

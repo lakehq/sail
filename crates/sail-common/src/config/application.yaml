@@ -1103,6 +1103,85 @@
     if the number of queued log records exceeds the batch size.
   experimental: true
 
+- key: lineage.enabled
+  type: boolean
+  default: "false"
+  description: |
+    Whether to emit [OpenLineage](https://openlineage.io/) run events for executed queries.
+    When enabled, a `START` event is emitted when a query starts, and a `COMPLETE`, `FAIL`,
+    or `ABORT` event is emitted when the query finishes, fails, or is cancelled.
+    Events are dropped with a warning if they cannot be sent fast enough,
+    so that lineage emission never blocks query execution.
+  experimental: true
+
+- key: lineage.transport
+  type: string
+  default: "console"
+  description: |
+    The transport for OpenLineage events.
+    Valid values are `console`, `http`, `file`, and `object_store`.
+    The `console` transport writes events to the application log at the `INFO` level.
+  experimental: true
+
+- key: lineage.namespace
+  type: string
+  default: "sail"
+  description: |
+    The OpenLineage namespace for jobs.
+    This namespace is also used for catalog tables that do not have a location.
+  experimental: true
+
+- key: lineage.shutdown_timeout_secs
+  type: number
+  default: "10"
+  description: |
+    The maximum time in seconds to wait for queued OpenLineage events to be sent
+    when the server shuts down. Events that are not sent within this time are dropped.
+  experimental: true
+
+- key: lineage.http.url
+  type: string
+  default: "http://localhost:5000"
+  description: The base URL of the OpenLineage HTTP backend (e.g. Marquez) for the `http` transport.
+  experimental: true
+
+- key: lineage.http.endpoint
+  type: string
+  default: "api/v1/lineage"
+  description: The endpoint path, relative to the base URL, for the `http` transport.
+  experimental: true
+
+- key: lineage.http.api_key
+  type: string
+  default: ""
+  description: |
+    The API key sent as a bearer token in the `Authorization` header for the `http` transport.
+    No authentication is used if the value is empty.
+  experimental: true
+
+- key: lineage.http.timeout_secs
+  type: number
+  default: "5"
+  description: The timeout in seconds for each request of the `http` transport.
+  experimental: true
+
+- key: lineage.file.path
+  type: string
+  default: ""
+  description: |
+    The path of the file that OpenLineage events are appended to for the `file` transport.
+    Each event is written as a single line of JSON.
+  experimental: true
+
+- key: lineage.object_store.url
+  type: string
+  default: ""
+  description: |
+    The URL of the directory (e.g. `s3://bucket/lineage/`) that OpenLineage events are written to
+    for the `object_store` transport. Each event is written as a separate JSON object.
+    The same object stores and credentials as for reading and writing data are supported.
+  experimental: true
+
 - key: python.data_source_write_channel_capacity
   type: number
   default: "8"

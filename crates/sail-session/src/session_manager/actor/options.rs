@@ -1,7 +1,9 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use sail_common::runtime::RuntimeHandle;
 use sail_execution::driver::DriverGateway;
+use sail_lineage::LineageService;
 use sail_telemetry::events::SystemEventReporter;
 
 use crate::session_factory::{ServerSessionInfo, SessionFactory, SessionJobRunnerFactory};
@@ -13,6 +15,8 @@ pub struct SessionManagerOptions {
     /// The application configuration options as key-value pairs,
     /// used to populate the `system.session.options` table.
     pub options: Vec<(String, String)>,
+    /// The lineage service shared by all sessions, if lineage is enabled.
+    pub lineage_service: Option<Arc<LineageService>>,
 }
 
 pub struct SessionManagerComponents {
@@ -28,6 +32,7 @@ impl SessionManagerOptions {
             session_timeout: Duration::MAX,
             runtime,
             options: Vec::new(),
+            lineage_service: None,
         }
     }
 
@@ -38,6 +43,11 @@ impl SessionManagerOptions {
 
     pub fn with_options(mut self, options: Vec<(String, String)>) -> Self {
         self.options = options;
+        self
+    }
+
+    pub fn with_lineage_service(mut self, service: Option<Arc<LineageService>>) -> Self {
+        self.lineage_service = service;
         self
     }
 }

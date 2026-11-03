@@ -15,10 +15,9 @@ use futures::{Stream, StreamExt, stream};
 use log::{debug, info};
 use prost::Message;
 use sail_common::spec;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::job::JobService;
+use sail_lineage::execute_with_lineage;
 use sail_plan::config::PlanConfig;
-use sail_plan::resolve_and_execute_plan;
+use sail_plan::{ExecutablePlan, resolve_and_execute_plan_with_lineage};
 use sail_session::session_manager::SessionManager;
 use sail_sql_analyzer::parser::parse_one_statement;
 use sail_sql_analyzer::statement::from_ast_statement;
@@ -121,16 +120,12 @@ impl FlightSqlService for SailFlightSqlService {
             }),
             None => self.config.clone(),
         };
-        let (plan, _) = resolve_and_execute_plan(&ctx, config, plan)
-            .await
-            .map_err(|e| Status::internal(format!("plan error: {e}")))?;
+        let ExecutablePlan { plan, lineage, .. } =
+            resolve_and_execute_plan_with_lineage(&ctx, config, plan)
+                .await
+                .map_err(|e| Status::internal(format!("plan error: {e}")))?;
         let schema = plan.schema();
-        let service = ctx
-            .extension::<JobService>()
-            .map_err(|e| Status::internal(format!("job service not found: {e}")))?;
-        let stream = service
-            .runner()
-            .execute(&ctx, plan)
+        let stream = execute_with_lineage(&ctx, plan, lineage, &Default::default())
             .await
             .map_err(|e| Status::internal(format!("execution error: {e}")))?;
 

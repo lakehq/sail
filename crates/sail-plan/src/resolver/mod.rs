@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::prelude::SessionContext;
 
@@ -10,6 +10,7 @@ mod data_type;
 mod expression;
 mod function;
 mod lakehouse;
+mod lineage;
 mod literal;
 pub mod plan;
 mod query;
@@ -20,10 +21,15 @@ mod tree;
 pub struct PlanResolver<'a> {
     ctx: &'a SessionContext,
     config: Arc<PlanConfig>,
+    lineage_outputs: Mutex<lineage::LineageOutputs>,
 }
 
 impl<'a> PlanResolver<'a> {
     pub fn new(ctx: &'a SessionContext, config: Arc<PlanConfig>) -> Self {
-        Self { ctx, config }
+        Self {
+            ctx,
+            config,
+            lineage_outputs: Mutex::new(Default::default()),
+        }
     }
 }

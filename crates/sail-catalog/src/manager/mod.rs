@@ -75,6 +75,20 @@ impl CatalogManager {
             .map_err(|e| CatalogError::Internal(e.to_string()))
     }
 
+    /// Returns the fully qualified name (catalog, database, and object name)
+    /// of an object reference, using the current catalog and database for
+    /// unqualified references.
+    pub fn qualify_object_reference<T: AsRef<str>>(
+        &self,
+        reference: &[T],
+    ) -> CatalogResult<Vec<String>> {
+        let (catalog, database, name) = self.state()?.resolve_object_reference(reference)?;
+        let mut result = vec![catalog.to_string()];
+        result.extend(Vec::<String>::from(database));
+        result.push(name.to_string());
+        Ok(result)
+    }
+
     pub(super) fn resolve_default_database(
         &self,
     ) -> CatalogResult<(Arc<dyn CatalogProvider>, Namespace)> {

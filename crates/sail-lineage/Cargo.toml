@@ -1,0 +1,31 @@
+[package]
+name = "sail-lineage"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-object-store = { path = "../sail-object-store" }
+sail-sql-analyzer = { path = "../sail-sql-analyzer" }
+sail-sql-parser = { path = "../sail-sql-parser" }
+
+thiserror = { workspace = true }
+datafusion = { workspace = true }
+object_store = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+secrecy = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

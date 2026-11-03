@@ -39,6 +39,7 @@ use sail_function::scalar::datetime::timestamp_cast::session_wall_clock;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_lineage::{LineageDataset, LineageOperation};
 use sail_logical_plan::barrier::BarrierNode;
 
 use super::delta::parse_delta_generation_expr;
@@ -273,6 +274,9 @@ impl PlanResolver<'_> {
             lakehouse_table: None,
         };
         let mut preconditions = vec![];
+        // The catalog table name and whether the table is created by the write, for lineage.
+        let mut lineage_table = None;
+        let mut lineage_created = false;
         match target {
             WriteTarget::DataSource => {
                 if !table_properties.is_empty() {
@@ -311,6 +315,8 @@ impl PlanResolver<'_> {
                 column_match,
             } => {
                 let info = self.resolve_table_info(&table).await?;
+                lineage_table = Some(Vec::<String>::from(table.clone()));
+                lineage_created = info.is_none();
 
                 // Return early if the target exists and the mode says to skip
                 if matches!(mode, WriteMode::IgnoreIfExists) && info.is_some() {
@@ -573,6 +579,20 @@ impl PlanResolver<'_> {
             }
         }
         sink_info.input = input;
+        self.record_lineage_output(
+            LineageOperation::Write,
+            LineageDataset {
+                identifier: None,
+                location: find_path_in_options(&sink_info.options),
+                table: sink_info
+                    .catalog_table()
+                    .map(|x| x.to_vec())
+                    .or(lineage_table),
+                format: Some(write_format.clone()),
+                schema: Some(sink_info.input.schema().inner().clone()),
+                lifecycle: Self::lineage_lifecycle(&sink_info.mode, lineage_created),
+            },
+        );
         let registry = self.ctx.extension::<DataSourceRegistry>()?;
         let plan = registry
             .get_data_source(&write_format)?

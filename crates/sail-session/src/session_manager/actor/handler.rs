@@ -12,6 +12,7 @@ use sail_common_datafusion::session::job::JobService;
 use sail_execution::DriverId;
 use sail_execution::driver::DriverHandle;
 use sail_execution::error::ExecutionResult;
+use sail_lineage::LineageService;
 use sail_system_store::SystemEvent;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -122,6 +123,7 @@ impl SessionManagerActor {
             user_id: user_id.clone(),
             session_manager: ctx.handle().clone(),
             job_runner: Some(runner),
+            lineage_service: self.options.lineage_service.clone(),
         };
         let context = match self.session_factory.create(info) {
             Ok(context) => context,
@@ -371,6 +373,9 @@ impl SessionManagerActor {
     }
 
     fn delete_session(ctx: &mut ActorContext<Self>, session_id: String, context: &SessionContext) {
+        if let Ok(lineage) = context.extension::<LineageService>() {
+            lineage.finish_application(&context.session_id());
+        }
         let Ok(service) = context.extension::<JobService>() else {
             warn!("job service not found for session {session_id}");
             return;
