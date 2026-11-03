@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 
 use base64::Engine as _;
@@ -48,9 +48,18 @@ impl CatalogCredentials for StaticCatalogCredentials {
 /// Credentials for a server that accepts only HTTP Basic authentication, such
 /// as Apache Gravitino. The user name and password are joined and encoded as
 /// `base64(username:password)` for the `Authorization` header.
-#[derive(Debug)]
 pub struct BasicCatalogCredentials {
     credential: String,
+}
+
+// Base64 is reversible, so the encoded credential is kept out of the debug
+// output, which would otherwise expose the password.
+impl Debug for BasicCatalogCredentials {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BasicCatalogCredentials")
+            .field("credential", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl BasicCatalogCredentials {
@@ -136,6 +145,16 @@ mod tests {
             Some("dXNlcjpwYXNz".to_string())
         );
         assert_eq!(credentials.scheme(), "Basic");
+    }
+
+    #[test]
+    fn debug_output_hides_the_basic_credential() {
+        let credentials = BasicCatalogCredentials::new("user", "s3cr3t-pass");
+        let output = format!("{credentials:?}");
+        assert!(
+            !output.contains("s3cr3t-pass") && !output.contains("dXNlcjpzM2NyM3QtcGFzcw"),
+            "unexpected debug output: {output}"
+        );
     }
 
     #[tokio::test]
