@@ -508,6 +508,49 @@ def test_cdf_merge_duplicate_deletes_and_by_source(spark, tmp_path):
     assert _changes(spark, path, 3, 3) == [(4, "new", "insert")]
 
 
+@pytest.mark.parametrize("deletion_vectors", [False, True], ids=["cow", "dv"])
+@pytest.mark.parametrize("column_mapping", ["none", "name"])
+@pytest.mark.parametrize("column", ["ID", "a.b"])
+def test_cdf_update_merge_preserve_column_names(spark, tmp_path, deletion_vectors, column_mapping, column):
+    path = tmp_path / "cdf_column_names"
+    quoted = f"`{escape_sql_identifier(column)}`"
+    spark.createDataFrame(
+        [(1, "a", "x", "p1"), (2, "b", "y", "p2")], f"{quoted} LONG, value STRING, Other STRING, P STRING"
+    ).coalesce(1).write.format("delta").partitionBy("P").option("delta.enableChangeDataFeed", "true").option(
+        "delta.enableDeletionVectors", str(deletion_vectors).lower()
+    ).option("delta.columnMapping.mode", column_mapping).save(str(path))
+    target = f"delta.`{escape_sql_identifier(str(path))}`"
+
+    def changes(version):
+        rows = _feed(spark, path, version, version).select(quoted, "value", "Other", "P", "_change_type").collect()
+        return sorted(tuple(row) for row in rows)
+
+    assert spark.sql(f"UPDATE {target} SET value = 'updated' WHERE {quoted} = 1").collect() == [(1,)]  # noqa: S608
+    assert changes(1) == [
+        (1, "a", "x", "p1", "update_preimage"),
+        (1, "updated", "x", "p1", "update_postimage"),
+    ]
+    spark.sql(
+        f"""MERGE INTO {target} t
+        USING (SELECT * FROM VALUES (2L, 'merged'), (3L, 'new') AS v({quoted}, value)) s
+        ON t.{quoted} = s.{quoted}
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN INSERT ({quoted}, value, Other, P) VALUES (s.{quoted}, s.value, 'z', 'p3')
+        """  # noqa: S608
+    )
+    assert changes(2) == [
+        (2, "b", "y", "p2", "update_preimage"),
+        (2, "merged", "y", "p2", "update_postimage"),
+        (3, "new", "z", "p3", "insert"),
+    ]
+    assert spark.read.format("delta").load(str(path)).columns == [column, "value", "Other", "P"]
+    assert sorted(tuple(row) for row in spark.read.format("delta").load(str(path)).collect()) == [
+        (1, "updated", "x", "p1"),
+        (2, "merged", "y", "p2"),
+        (3, "new", "z", "p3"),
+    ]
+
+
 def test_cdf_in_commit_timestamps(spark, tmp_path):
     path = tmp_path / "cdf_ict"
     spark.range(1).write.format("delta").option("delta.enableChangeDataFeed", "true").option(
@@ -581,3 +624,22 @@ def test_cdf_generated_columns(spark, tmp_path):
         ) == [(1, 2, "update_preimage"), (3, 6, "update_postimage")]
     finally:
         spark.sql("DROP TABLE cdf_generated")
+
+
+def test_cdf_generated_columns_preserve_column_names(spark, tmp_path):
+    path = tmp_path / "cdf_generated_names"
+    spark.sql(f"""CREATE TABLE cdf_generated_names (ID BIGINT, Doubled BIGINT GENERATED ALWAYS AS (ID * 2))
+        USING DELTA LOCATION '{escape_sql_string_literal(str(path))}' TBLPROPERTIES ('delta.enableChangeDataFeed'='true')""")
+    try:
+        spark.sql("INSERT INTO cdf_generated_names (ID) VALUES (1), (2)")
+        spark.sql("UPDATE cdf_generated_names SET ID = 3 WHERE ID = 1")
+        assert sorted(
+            tuple(row) for row in _feed(spark, path, 2, 2).select("ID", "Doubled", "_change_type").collect()
+        ) == [(1, 2, "update_preimage"), (3, 6, "update_postimage")]
+        spark.sql("""MERGE INTO cdf_generated_names t USING (SELECT 2L ID, 5L replacement) s ON t.ID = s.ID
+            WHEN MATCHED THEN UPDATE SET ID = s.replacement""")
+        assert sorted(
+            tuple(row) for row in _feed(spark, path, 3, 3).select("ID", "Doubled", "_change_type").collect()
+        ) == [(2, 4, "update_preimage"), (5, 10, "update_postimage")]
+    finally:
+        spark.sql("DROP TABLE cdf_generated_names")
