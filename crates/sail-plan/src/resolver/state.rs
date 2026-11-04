@@ -2,13 +2,34 @@ use std::sync::Arc;
 
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
 use datafusion_common::{DFSchemaRef, HashMap, HashSet, ScalarValue, TableReference};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{LogicalPlan, TableSource};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::query::{CteInfo, CteKind, MissingInputBoundaries, MissingInputResolution};
+
+/// Identifies what a catalog table read scans.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub(super) struct TableSourceKey {
+    pub catalog: Option<String>,
+    pub database: Vec<String>,
+    pub name: String,
+    pub format: String,
+    pub location: Option<String>,
+    pub properties: Vec<(String, String)>,
+    pub options: Vec<(String, String)>,
+    pub temporal_options: Vec<(String, String)>,
+}
+
+struct SharedTableSource(Arc<dyn TableSource>);
+
+impl std::fmt::Debug for SharedTableSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SharedTableSource").finish_non_exhaustive()
+    }
+}
 
 /// The field information for fields in the logical plan.
 #[derive(Debug, Clone)]
@@ -121,6 +142,9 @@ pub(super) struct PlanResolverState {
     lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
     /// The named windows defined in the current query, keyed by window name.
     windows: std::collections::HashMap<String, spec::Window>,
+    /// The sources of the catalog tables read so far, shared by repeated references to
+    /// the same table within the query.
+    table_sources: HashMap<TableSourceKey, SharedTableSource>,
 }
 
 impl Default for PlanResolverState {
@@ -151,6 +175,7 @@ impl PlanResolverState {
             positional_param_values: Vec::new(),
             lambda_param_scopes: Vec::new(),
             windows: std::collections::HashMap::new(),
+            table_sources: HashMap::new(),
         }
     }
 
@@ -433,6 +458,16 @@ impl PlanResolverState {
 
     pub fn ctes(&self) -> impl Iterator<Item = &Arc<CteInfo>> {
         self.ctes.values()
+    }
+
+    pub fn get_table_source(&self, key: &TableSourceKey) -> Option<Arc<dyn TableSource>> {
+        self.table_sources
+            .get(key)
+            .map(|source| Arc::clone(&source.0))
+    }
+
+    pub fn insert_table_source(&mut self, key: TableSourceKey, source: Arc<dyn TableSource>) {
+        self.table_sources.insert(key, SharedTableSource(source));
     }
 
     /// Returns the output attributes of the CTE definitions referenced so far.
