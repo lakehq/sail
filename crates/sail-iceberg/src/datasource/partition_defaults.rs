@@ -255,8 +255,7 @@ pub(crate) fn create_data_scan_with_partition_defaults(
         // These statistics replace the ones the scan narrowed to its projection.
         let projection = source
             .projection()
-            .map(|projection| projection.column_indices())
-            .filter(|indices| indices.len() < statistics.column_statistics.len());
+            .map(|projection| projection.column_indices());
         if let Some(byte_size) = IcebergScan::projected_byte_size(&statistics, projection.as_ref())
         {
             statistics.total_byte_size = Precision::Inexact(byte_size);

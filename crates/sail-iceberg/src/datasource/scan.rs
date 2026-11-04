@@ -914,9 +914,11 @@ impl IcebergScan {
                             }),
                             min_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar.clone()) },
                             max_value: if matches!(scalar, ScalarValue::Float32(Some(value)) if value.is_nan()) || matches!(scalar, ScalarValue::Float64(Some(value)) if value.is_nan()) { Precision::Absent } else { Precision::Exact(scalar) },
-                            // An identity partition column that the file does not store
-                            // costs nothing to read: its value comes from the partition
-                            // tuple, and a file that does store it has a recorded size.
+                            // An identity partition column costs next to nothing to read: a
+                            // file either does not store it, or stores one value for every
+                            // row. So a missing size counts as nothing, whichever of the two
+                            // or a metrics mode of `none` is behind it, and reading the column
+                            // does not send the scan back to the size of the whole file.
                             byte_size: Precision::Inexact(
                                 Self::column_byte_size(data_file.column_sizes(), field)
                                     .unwrap_or_default() as usize,
@@ -997,7 +999,8 @@ impl IcebergScan {
         })
     }
 
-    /// Size of the columns a projected scan reads, or `None` when the manifest does
+    /// Size of the columns a projected scan reads, or `None` when the scan reads every
+    /// column, which is the whole file including its overhead, or when the manifest does
     /// not record all of them.
     ///
     /// DataFusion projects column statistics but derives `total_byte_size` from the
@@ -1009,7 +1012,11 @@ impl IcebergScan {
         statistics: &Statistics,
         projection: Option<&Vec<usize>>,
     ) -> Option<usize> {
-        projection?.iter().try_fold(0usize, |total, index| {
+        let projection = projection?;
+        if projection.len() >= statistics.column_statistics.len() {
+            return None;
+        }
+        projection.iter().try_fold(0usize, |total, index| {
             statistics
                 .column_statistics
                 .get(*index)?
@@ -2121,6 +2128,51 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn a_projection_of_every_column_is_not_narrowed() -> Result<()> {
+        let (read_scan, file) = wide_column_fixture()?;
+        let statistics = read_scan.create_file_statistics(&file);
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![0, 1, 2])),
+            Some(1_020_000)
+        );
+        assert_eq!(
+            IcebergScan::projected_byte_size(&statistics, Some(&vec![3, 2, 1, 0])),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn column_byte_size_sums_the_leaves_of_nested_types() {
+        use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+
+        let leaf = |name: &str, id: i32| {
+            Field::new(name, DataType::Int64, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                id.to_string(),
+            )]))
+        };
+        let list = Field::new_list("list", leaf("element", 1), true);
+        let map = Field::new_map(
+            "map",
+            "entries",
+            leaf("key", 2),
+            leaf("value", 3),
+            false,
+            true,
+        );
+        let sizes = HashMap::from([(1, 10), (2, 20), (3, 30)]);
+
+        assert_eq!(IcebergScan::column_byte_size(&sizes, &list), Some(10));
+        assert_eq!(IcebergScan::column_byte_size(&sizes, &map), Some(50));
+        // One leaf without a recorded size leaves the whole field unknown.
+        assert_eq!(
+            IcebergScan::column_byte_size(&HashMap::from([(2, 20)]), &map),
+            None
+        );
+    }
+
     /// Serves one data file of `read_scan` whose manifest sizes are fractions of the
     /// real file, and returns the byte size the planned scan estimates for `projection`
     /// together with the file size the manifest reports.
@@ -2201,6 +2253,20 @@ mod tests {
             whole,
             Precision::Inexact(file_size as usize),
             "a scan of every column is sized as the whole file"
+        );
+
+        let (read_scan, file) = wide_column_fixture()?;
+        let (whole, file_size) = planned_byte_size(
+            read_scan,
+            file,
+            PartitionSpec::unpartitioned_spec(),
+            Some(&vec![0, 1, 2, 3]),
+        )
+        .await?;
+        assert_eq!(
+            whole,
+            Precision::Inexact(file_size as usize),
+            "listing every column is still a scan of every column"
         );
 
         let (read_scan, file) = wide_column_fixture()?;
