@@ -7002,6 +7002,7 @@ name = "sail-catalog"
 version = "0.7.3"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
