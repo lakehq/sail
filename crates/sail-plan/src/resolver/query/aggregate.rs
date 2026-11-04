@@ -541,10 +541,30 @@ impl PlanResolver<'_> {
         };
         let projections = if with_grouping_expressions {
             if !lateral_columns.is_empty() {
+                // The lateral aliases are staged in a projection above the aggregate, and the
+                // grouping columns are carried along it. A fresh unqualified field would drop
+                // the qualifier and the attribute identity of the aggregate's grouping column,
+                // so stage it under a field that keeps both.
                 let mut columns = grouping_exprs
                     .iter()
-                    .map(|_| Column::new_unqualified(state.register_field_name("")))
-                    .collect::<Vec<_>>();
+                    .map(|x| {
+                        let source = match &x.expr {
+                            Expr::Column(column) => state
+                                .get_field_info(&column.name)
+                                .is_ok()
+                                .then(|| (column.name.clone(), column.relation.clone())),
+                            _ => None,
+                        };
+                        match source {
+                            Some((field_id, relation)) => {
+                                let field_id =
+                                    state.register_identity_field(String::new(), &field_id)?;
+                                Ok(Column::new(relation, field_id))
+                            }
+                            None => Ok(Column::new_unqualified(state.register_field_name(""))),
+                        }
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
                 columns.extend(lateral_columns);
                 lateral_columns = columns;
             }
@@ -600,7 +620,33 @@ impl PlanResolver<'_> {
                     expr,
                     metadata: _,
                 } = x;
-                Ok(expr.alias(state.register_field_name(name.one()?)))
+                let name = name.one()?;
+                // A grouping column stays the aggregate's own attribute, so it keeps the
+                // qualifier and the field identity. An aggregate value is named after its
+                // DataFusion schema name, which is not a registered field.
+                let source = match &expr {
+                    Expr::Column(column) => state
+                        .get_field_info(&column.name)
+                        .is_ok()
+                        .then(|| (column.name.clone(), column.relation.clone())),
+                    _ => None,
+                };
+                match source {
+                    Some((field_id, relation)) => {
+                        // Spark expands a grouping set into `Expand`, whose grouping column is a
+                        // new nullable attribute: the qualifier survives, but a reference to the
+                        // input column no longer resolves against it.
+                        let field_id = if has_grouping_set {
+                            state.register_field_name(name)
+                        } else {
+                            state.register_identity_field(name, &field_id)?
+                        };
+                        let qualifier = relation
+                            .filter(|relation| relation.table() != datafusion_expr::UNNAMED_TABLE);
+                        Ok(expr.alias_qualified(qualifier, field_id))
+                    }
+                    None => Ok(expr.alias(state.register_field_name(name))),
+                }
             })
             .collect::<PlanResult<Vec<_>>>()?;
         Ok(LogicalPlanBuilder::from(plan)

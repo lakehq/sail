@@ -739,3 +739,61 @@ def test_wide_set_operation_struct_coercion(spark, temporal, array_wrapped):
     finally:
         spark.conf.set("spark.sql.ansi.enabled", ansi)
         spark.conf.set("spark.sql.session.timeZone", timezone)
+
+
+@pytest.mark.parametrize(
+    ("operation", "keys", "value", "identity"),
+    [
+        ("agg", [(1,), (2,)], "s", True),
+        ("count", [(1,), (2,)], "count", True),
+        # A lateral alias stages the aggregate values in a projection above the aggregate.
+        ("lateral", [(1,), (2,)], "s", True),
+        # Spark expands rollup and cube into `Expand`, whose grouping column is a new nullable
+        # attribute. It keeps the qualifier, so `t1.k` resolves, while a reference to the original
+        # DataFrame column is rejected.
+        ("rollup", [(1,), (2,), (None,)], "count", False),
+        ("cube", [(1,), (2,), (None,)], "count", False),
+        # The pivot values become the column names `10`, `20` and `30`.
+        ("pivot", [(1,), (2,)], None, True),
+    ],
+)
+def test_aggregate_keeps_qualified_grouping_key(spark, operation, keys, value, identity):
+    source = spark.sql("SELECT * FROM VALUES (1, 10), (1, 20), (2, 30) AS t(k, v)").alias("t1")
+    aggregated = {
+        "agg": lambda: source.groupBy("k").agg(f.sum("v").alias("s")),
+        "count": lambda: source.groupBy("k").count(),
+        "lateral": lambda: source.groupBy("k").agg(f.sum("v").alias("s"), (f.col("s") + 1).alias("n")),
+        "rollup": lambda: source.rollup("k").count(),
+        "cube": lambda: source.cube("k").count(),
+        "pivot": lambda: source.groupBy("k").pivot("v").count(),
+    }[operation]()
+
+    assert Counter(aggregated.select("t1.k").collect()) == Counter(keys)
+    if identity:
+        assert Counter(aggregated.select(source.k).collect()) == Counter(keys)
+    else:
+        with pytest.raises(PySparkException, match=r"(?i)(cannot resolve|missing|unresolved|not found)"):
+            aggregated.select(source.k).collect()
+
+    result = aggregated.select("t1.*")
+    assert result.columns == ["k"]
+    assert Counter(result.collect()) == Counter(keys)
+
+    projected = aggregated.withColumn("w", f.lit(1)).select("t1.k", "w")
+    assert Counter(projected.collect()) == Counter([(*key, 1) for key in keys])
+
+    # The aggregate value is a new unqualified attribute on both engines.
+    if value is not None:
+        with pytest.raises(PySparkException, match=r"(?i)(cannot resolve|unresolved|not found)"):
+            aggregated.select(f"t1.{value}").collect()
+
+
+@pytest.mark.parametrize("projection", ["with_column", "select_all", "select_one"])
+def test_projection_keeps_qualifier_for_later_reference(spark, projection):
+    source = spark.sql("SELECT * FROM VALUES (1, 10) AS t(k, v)").alias("t1")
+    projected = {
+        "with_column": lambda: source.withColumn("w", f.lit(1)),
+        "select_all": lambda: source.select("k", "v"),
+        "select_one": lambda: source.select(f.col("v")),
+    }[projection]()
+    assert projected.select(f.col("t1.v")).collect() == [(10,)]
