@@ -20,6 +20,7 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 use sail_physical_plan::repartition::RowRoundRobinPartitioner;
 
+use crate::stream::error::TaskStreamError;
 use crate::stream::writer::{TaskStreamWriteState, TaskStreamWriter};
 
 enum ShufflePartitioner {
@@ -213,7 +214,8 @@ impl ExecutionPlan for ShuffleWriteExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let writer = self.writer.clone();
-        let stream = self.plan.execute(partition, context)?;
+        // Even an error creating the input stream must reach the output sink.
+        let stream = self.plan.execute(partition, context);
         // TODO: Support metrics in batch partitioner
         let num_input_partitions = self
             .plan
@@ -264,13 +266,14 @@ impl ExecutionPlan for ShuffleWriteExec {
 
 async fn shuffle_write(
     writer: Arc<dyn TaskStreamWriter>,
-    mut stream: SendableRecordBatchStream,
+    stream: Result<SendableRecordBatchStream>,
     partition: usize,
     channels: usize,
     mut partitioner: ShufflePartitioner,
 ) -> Result<()> {
     let mut sink = writer.open(partition).await?;
     let result = async {
+        let mut stream = stream?;
         while let Some(batch) = stream.next().await {
             let batch = batch?;
             if batch.num_rows() == 0 {
@@ -289,13 +292,12 @@ async fn shuffle_write(
     }
     .await;
     match result {
-        Ok(true) => sink.commit().await,
-        Ok(false) => {
-            // TODO: model successful early-stop separately from error-triggered aborts
-            sink.abort().await
-        }
+        // Closed means all consumers have stopped reading. Closed channels are
+        // already released by the sink, so finalizing is also successful here.
+        Ok(_) => sink.commit().await,
         Err(error) => {
-            let _ = sink.abort().await;
+            let cause = TaskStreamError::from_execution_error(&error);
+            let _ = sink.abort(cause).await;
             Err(error)
         }
     }

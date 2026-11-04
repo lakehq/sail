@@ -330,12 +330,25 @@ def test_optimize_failed_bin_does_not_commit(spark, maintenance_table):
         spark.sql(f"INSERT INTO {name} VALUES ({i}, 'a'), ({i}, 'b')")  # noqa: S608
     files = _active_files(path)
     missing = next(row for row in files if "b" in row.partitionValues.values())
-    (path / unquote(missing.path)).unlink()
+    missing_path = path / unquote(missing.path)
+    original = missing_path.read_bytes()
+    missing_path.unlink()
     before = _commits(path)
-    with pytest.raises(Exception, match=r"(?i)(not found|no such file)"):
-        spark.sql(f"OPTIMIZE {name}").collect()
+    try:
+        with pytest.raises(Exception, match=r"(?i)(not found|no such file)"):
+            spark.sql(f"OPTIMIZE {name}").collect()
+        assert _commits(path) == before
+        assert {row.path for row in _active_files(path)} == {row.path for row in files}
+    finally:
+        missing_path.write_bytes(original)
+    # Reopen after restoring the injected fault; failed rewrites must not lose rows.
+    assert sorted((row.id, row.part) for row in spark.read.format("delta").load(str(path)).collect()) == [
+        (0, "a"),
+        (0, "b"),
+        (1, "a"),
+        (1, "b"),
+    ]
     assert _commits(path) == before
-    assert {row.path for row in _active_files(path)} == {row.path for row in files}
 
 
 @pytest.mark.integration

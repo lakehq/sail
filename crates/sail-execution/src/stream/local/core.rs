@@ -1,18 +1,15 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common::actor::ActorContext;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
-use tokio::sync::mpsc;
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskStreamKey, TaskStreamKeyDisplay};
-use crate::stream::error::{TaskStreamError, TaskStreamResult};
-use crate::stream::local::memory::MemoryStream;
+use crate::stream::error::TaskStreamError;
+use crate::stream::local::memory::{MemoryStream, MemoryStreamSender, memory_stream_channel};
 use crate::stream::local::options::LocalStreamManagerOptions;
 use crate::stream::local::{LocalStreamManager, LocalStreamState};
 use crate::stream::reader::TaskStreamSource;
@@ -57,14 +54,13 @@ impl LocalStreamManager {
                         )));
                     }
                 };
-                match create(senders.clone()) {
+                match create(std::mem::take(senders)) {
                     Ok((stream, sink)) => {
                         *entry.into_mut() = LocalStreamState::Created { stream };
                         Ok(sink)
                     }
                     Err(e) => {
                         let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
-                        Self::fail_senders(senders, &cause);
                         *entry.into_mut() = LocalStreamState::Failed { cause };
                         Err(e)
                     }
@@ -93,10 +89,10 @@ impl LocalStreamManager {
             Entry::Occupied(mut entry) => match entry.get_mut() {
                 LocalStreamState::Created { stream } => stream.subscribe(),
                 LocalStreamState::Pending { senders } => {
-                    let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
+                    let (tx, rx) = memory_stream_channel(self.options.task_stream_buffer);
                     senders.push(tx);
                     // There is no need to probe the pending stream again.
-                    Ok(Box::pin(ReceiverStream::new(rx)))
+                    Ok(rx)
                 }
                 LocalStreamState::Failed { cause } => Err(ExecutionError::InternalError(format!(
                     "local stream creation has failed for {}: {}",
@@ -105,13 +101,13 @@ impl LocalStreamManager {
                 ))),
             },
             Entry::Vacant(entry) => {
-                let (tx, rx) = mpsc::channel(self.options.task_stream_buffer);
+                let (tx, rx) = memory_stream_channel(self.options.task_stream_buffer);
                 entry.insert(LocalStreamState::Pending { senders: vec![tx] });
                 ctx.send_with_delay(
                     TaskRunnerMessage::ProbePendingLocalStream { key: key.clone() },
                     self.options.task_stream_creation_timeout,
                 );
-                Ok(Box::pin(ReceiverStream::new(rx)))
+                Ok(rx)
             }
         }
     }
@@ -132,28 +128,101 @@ impl LocalStreamManager {
         if let LocalStreamState::Pending { senders } = value {
             let message = "local stream is not created within the expected time".to_string();
             let cause = CommonErrorCause::Execution(message);
-            Self::fail_senders(senders, &cause);
+            Self::fail_senders(std::mem::take(senders), &cause);
             *value = LocalStreamState::Failed { cause };
         }
     }
 
-    pub fn fail_senders(
-        senders: &[mpsc::Sender<TaskStreamResult<RecordBatch>>],
-        cause: &CommonErrorCause,
-    ) {
+    pub fn fail_senders(senders: Vec<MemoryStreamSender>, cause: &CommonErrorCause) {
         for tx in senders {
-            // `try_send` would not fail due to full buffer because we have
-            // never sent any data to the channel.
-            // So we do not need to spawn a task to send the error asynchronously.
-            let _ = tx.try_send(Err(TaskStreamError::from(cause.clone())));
+            tx.finish(Err(TaskStreamError::from(cause.clone())));
         }
     }
 
     fn create_stream_with_senders(
         replicas: usize,
-        senders: Vec<mpsc::Sender<TaskStreamResult<RecordBatch>>>,
+        senders: Vec<MemoryStreamSender>,
         options: &LocalStreamManagerOptions,
     ) -> MemoryStream {
         MemoryStream::new(options.task_stream_buffer, replicas, senders)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::Schema;
+    use futures::TryStreamExt;
+    use sail_common::config::AppConfig;
+    use sail_common::runtime::RuntimeHandle;
+
+    use super::*;
+    use crate::driver::DriverOptions;
+
+    #[tokio::test]
+    #[expect(clippy::expect_used)]
+    async fn pending_cleanup_timeout_and_retry_are_not_successful_eof()
+    -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut config = AppConfig::load()?;
+        config.cluster.task_stream_buffer = 1;
+        let handle = tokio::runtime::Handle::current();
+        let options = DriverOptions::try_new(
+            &config,
+            RuntimeHandle::new(handle.clone(), handle),
+            "stream-completion".into(),
+            1.into(),
+            0,
+        )?;
+        let mut manager = LocalStreamManager::new(LocalStreamManagerOptions::from(&options));
+        let key = TaskStreamKey {
+            job_id: 1.into(),
+            stage: 0,
+            partition: 0,
+            attempt: 0,
+            channel: 0,
+        };
+        for timeout in [false, true] {
+            let (sender, mut source) = memory_stream_channel(1);
+            manager.streams.insert(
+                key.clone(),
+                LocalStreamState::Pending {
+                    senders: vec![sender],
+                },
+            );
+            if timeout {
+                manager.fail_stream_if_pending(&key);
+            } else {
+                manager.remove_streams(key.job_id, None);
+            }
+            assert!(source.try_next().await.is_err());
+            manager.remove_streams(key.job_id, None);
+        }
+        let (sender, mut failed) = memory_stream_channel(1);
+        manager.streams.insert(
+            key.clone(),
+            LocalStreamState::Pending {
+                senders: vec![sender],
+            },
+        );
+        let first = manager.create_stream(key.clone(), 1, Arc::new(Schema::empty()))?;
+        let retry_key = TaskStreamKey { attempt: 1, ..key };
+        let (sender, mut retry) = memory_stream_channel(1);
+        manager.streams.insert(
+            retry_key.clone(),
+            LocalStreamState::Pending {
+                senders: vec![sender],
+            },
+        );
+        let second = manager.create_stream(retry_key, 1, Arc::new(Schema::empty()))?;
+        first
+            .abort(CommonErrorCause::Io("missing file".into()).into())
+            .await?;
+        second.commit().await?;
+        assert!(
+            matches!(CommonErrorCause::from(failed.try_next().await.expect_err("failed attempt")), CommonErrorCause::Io(s) if s == "missing file")
+        );
+        assert!(retry.try_next().await?.is_none());
+        Ok(())
     }
 }

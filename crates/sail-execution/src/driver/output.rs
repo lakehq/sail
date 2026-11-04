@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, mem};
@@ -76,6 +76,8 @@ struct JobOutputStream {
     state: JobOutputState,
     /// Keep output history after completed streams have been removed from `SelectAll`.
     emitted: HashSet<OutputPartition>,
+    /// Failed attempts may be replaced before they emit any output.
+    incomplete: HashMap<OutputPartition, TaskStreamError>,
 }
 
 impl JobOutputStream {
@@ -86,6 +88,7 @@ impl JobOutputStream {
                 inner: Box::pin(SelectAll::new()),
             },
             emitted: HashSet::new(),
+            incomplete: HashMap::new(),
         }
     }
 }
@@ -190,6 +193,7 @@ impl Stream for JobOutputStream {
                             )),
                         )))));
                     }
+                    self.incomplete.remove(&OutputPartition::from(&key));
                     inner.iter_mut().for_each(|s| s.mute_if_needed(&key));
                     inner.push(TaskStreamWrapper::new(key, stream));
                     self.state = JobOutputState::Active { receiver, inner };
@@ -228,6 +232,33 @@ impl Stream for JobOutputStream {
                 Poll::Ready(Some(result)) => Poll::Ready(Some(result)),
             },
             JobOutputState::Completed | JobOutputState::Failed => Poll::Ready(None),
+        };
+        // Only producer termination guarantees a control-plane update/replacement.
+        // Reader/connect/decode failures must terminate output so cleanup can release
+        // a healthy producer blocked on an unread stream. A canceled attempt must
+        // still not race the original producer cause.
+        let poll = match poll {
+            Poll::Ready(Some((partition, Err(error))))
+                if error.is_retryable_producer_failure()
+                    && (!self.emitted.contains(&partition)
+                        || matches!(error, TaskStreamError::ProducerDropped)) =>
+            {
+                self.incomplete.insert(partition, error);
+                cx.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            Poll::Ready(None)
+                if matches!(self.state, JobOutputState::Completed)
+                    && !self.incomplete.is_empty() =>
+            {
+                self.state = JobOutputState::Failed;
+                let error = mem::take(&mut self.incomplete)
+                    .into_values()
+                    .max_by_key(|error| !matches!(error, TaskStreamError::ProducerDropped))
+                    .unwrap_or(TaskStreamError::ProducerDropped);
+                return Poll::Ready(Some(Err(DataFusionError::External(Box::new(error)))));
+            }
+            poll => poll,
         };
         poll.map(|item| {
             item.map(|(partition, result)| {
@@ -356,6 +387,192 @@ mod tests {
             Pin::new(&mut output).poll_next(&mut cx),
             Poll::Ready(Some(Err(_)))
         ));
+    }
+
+    #[test]
+    #[expect(clippy::panic)]
+    fn retryable_attempt_waits_for_failure_or_replacement_but_never_succeeds() {
+        use sail_python_udf::error::PyErrExtractor;
+
+        for (outcome, error) in (0..3).flat_map(|outcome| {
+            [
+                (outcome, TaskStreamError::ProducerDropped),
+                (
+                    outcome,
+                    TaskStreamError::from(CommonErrorCause::Execution("transient failure".into()))
+                        .into_producer_failure(),
+                ),
+            ]
+        }) {
+            let (sender, receiver) = mpsc::channel(2);
+            assert!(
+                sender
+                    .try_send(JobOutputItem::Stream {
+                        key: stream_key(),
+                        stream: Box::pin(futures::stream::iter([Err(error)])),
+                    })
+                    .is_ok()
+            );
+            let mut output = JobOutputStream::new(receiver);
+            let waker = futures::task::noop_waker();
+            let mut cx = Context::from_waker(&waker);
+            assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+            match outcome {
+                0 => {
+                    assert!(
+                        sender
+                            .try_send(JobOutputItem::Error {
+                                cause: CommonErrorCause::InvalidArgument(
+                                    "original producer error".into()
+                                ),
+                            })
+                            .is_ok()
+                    );
+                    let Poll::Ready(Some(Err(error))) = Pin::new(&mut output).poll_next(&mut cx)
+                    else {
+                        panic!("expected original error");
+                    };
+                    assert!(matches!(CommonErrorCause::new::<PyErrExtractor>(&error),
+                        CommonErrorCause::InvalidArgument(s) if s == "original producer error"));
+                    assert!(matches!(
+                        Pin::new(&mut output).poll_next(&mut cx),
+                        Poll::Ready(None)
+                    ));
+                }
+                1 => {
+                    assert!(
+                        sender
+                            .try_send(JobOutputItem::Stream {
+                                key: TaskStreamKey {
+                                    attempt: 1,
+                                    ..stream_key()
+                                },
+                                stream: Box::pin(futures::stream::empty()),
+                            })
+                            .is_ok()
+                    );
+                    drop(sender);
+                    assert!(Pin::new(&mut output).poll_next(&mut cx).is_pending());
+                    assert!(matches!(
+                        Pin::new(&mut output).poll_next(&mut cx),
+                        Poll::Ready(None)
+                    ));
+                }
+                _ => {
+                    drop(sender);
+                    assert!(matches!(
+                        Pin::new(&mut output).poll_next(&mut cx),
+                        Poll::Ready(Some(Err(_)))
+                    ));
+                    assert!(matches!(
+                        Pin::new(&mut output).poll_next(&mut cx),
+                        Poll::Ready(None)
+                    ));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reader_failure_terminates_with_live_sender_and_blocked_producer()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use std::time::Duration;
+
+        use futures::FutureExt;
+        use sail_common::config::AppConfig;
+        use sail_common::runtime::RuntimeHandle;
+        use tokio::time::timeout;
+
+        use crate::driver::DriverOptions;
+        use crate::stream::local::{LocalStreamManager, LocalStreamManagerOptions};
+
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        let mut config = AppConfig::load()?;
+        config.cluster.task_stream_buffer = 1;
+        let runtime = tokio::runtime::Handle::current();
+        let options = DriverOptions::try_new(
+            &config,
+            RuntimeHandle::new(runtime.clone(), runtime),
+            "reader-failure".into(),
+            1.into(),
+            0,
+        )?;
+        let mut streams = LocalStreamManager::new(LocalStreamManagerOptions::from(&options));
+        let mut sink = streams.create_stream(stream_key(), 1, batch.schema())?;
+        sink.write(batch.clone()).await?;
+        sink.write(batch).await?;
+        // The queue has no subscriber, and its second batch cannot be committed.
+        let mut commit = sink.commit();
+        assert!((&mut commit).now_or_never().is_none());
+
+        let (sender, receiver) = mpsc::channel(1);
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::iter([Err(TaskStreamError::from(
+                        tonic::Status::unavailable("fetch failed before subscription"),
+                    ))])),
+                })
+                .is_ok()
+        );
+        let (tx, mut rx) = mpsc::channel(1);
+        let outcome = timeout(
+            Duration::from_secs(1),
+            forward_job_output(JobOutputStream::new(receiver), &tx),
+        )
+        .await?;
+        assert_eq!(outcome, JobOutputOutcome::Failed);
+        assert!(matches!(rx.recv().await, Some(Err(_))));
+        // Neither sender closure nor producer completion caused the output to finish.
+        assert!(sender.is_closed());
+        assert!((&mut commit).now_or_never().is_none());
+        streams.remove_streams(stream_key().job_id, None);
+        timeout(Duration::from_secs(1), commit).await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn producer_failure_after_output_cannot_retry()
+    -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use sail_python_udf::error::PyErrExtractor;
+
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+        )])?;
+        let (sender, receiver) = mpsc::channel(1);
+        assert!(
+            sender
+                .try_send(JobOutputItem::Stream {
+                    key: stream_key(),
+                    stream: Box::pin(futures::stream::iter([
+                        Ok(batch.clone()),
+                        Err(
+                            TaskStreamError::from(CommonErrorCause::Io("producer failed".into()))
+                                .into_producer_failure()
+                        ),
+                    ])),
+                })
+                .is_ok()
+        );
+        let mut output = JobOutputStream::new(receiver);
+        assert_eq!(output.next().await.transpose()?, Some(batch));
+        let (tx, mut rx) = mpsc::channel(1);
+        assert_eq!(
+            forward_job_output(output, &tx).await,
+            JobOutputOutcome::Failed
+        );
+        let Some(Err(error)) = rx.recv().await else {
+            return Err("missing producer error".into());
+        };
+        assert!(matches!(CommonErrorCause::new::<PyErrExtractor>(&error),
+            CommonErrorCause::Io(s) if s == "producer failed"));
+        assert!(sender.is_closed());
+        Ok(())
     }
 
     #[test]
@@ -530,7 +747,9 @@ mod tests {
             );
             let (tx, mut rx) = mpsc::channel(1);
 
+            // Reader failure must not depend on channel closure or task failure.
             let outcome = forward_job_output(JobOutputStream::new(receiver), &tx).await;
+            assert!(sender.is_closed());
             state.finish_output(outcome);
 
             assert_eq!(state.status(), "FAILED");
