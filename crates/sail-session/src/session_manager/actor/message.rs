@@ -72,7 +72,7 @@ impl SpanAssociation for SessionManagerMessage {
                 result: _,
             } => {
                 p.push((
-                    SpanAttribute::SESSION_CLIENT_SESSION_ID,
+                    SpanAttribute::SESSION_CLIENT_SIDE_ID,
                     client_session_id.clone(),
                 ));
             }

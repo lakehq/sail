@@ -55,7 +55,7 @@ impl SpanAttribute {
     pub const EXECUTION_TASK_MESSAGE: &'static str = "execution.task.message";
     pub const EXECUTION_TASK_ERROR_CAUSE: &'static str = "execution.task.error_cause";
     pub const SESSION_ID: &'static str = "session.id";
-    pub const SESSION_CLIENT_SESSION_ID: &'static str = "session.client_session_id";
+    pub const SESSION_CLIENT_SIDE_ID: &'static str = "session.client_side_id";
 }
 
 /// The OpenTelemetry span kinds.

@@ -75,7 +75,7 @@ impl SessionManagerActor {
         .with_property(|| (SpanAttribute::SESSION_ID, session_id.clone()))
         .with_property(|| {
             (
-                SpanAttribute::SESSION_CLIENT_SESSION_ID,
+                SpanAttribute::SESSION_CLIENT_SIDE_ID,
                 session_key.client_session_id.clone(),
             )
         });
