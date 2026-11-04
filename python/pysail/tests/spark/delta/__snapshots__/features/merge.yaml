@@ -2823,7 +2823,7 @@ data:
       CoalescePartitionsExec
         DeltaWriterExec(table_path=file://<tmp>/merge_insert_only/)
           UnionExec
-            ProjectionExec: expr=[CAST(id@0 AS Int32) as id, CAST(value@1 AS Utf8) as value, __sail_operation_type@2 as __sail_operation_type]
+            ProjectionExec: expr=[CAST(id@0 AS Int32;N) as id, CAST(value@1 AS Utf8;N) as value, __sail_operation_type@2 as __sail_operation_type]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                 ProjectionExec: expr=[__sail_src_id@0 as id, __sail_src_value@1 as value, 3 as __sail_operation_type]
                   HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, __sail_src_id@0)]
@@ -2844,7 +2844,7 @@ data:
       CoalescePartitionsExec
         DeltaWriterExec(table_path=file://<tmp>/merge_dv/)
           UnionExec
-            ProjectionExec: expr=[CAST(id@0 AS Int32) as id, CAST(value@1 AS Utf8) as value, CAST(flag@2 AS Utf8) as flag, __sail_operation_type@3 as __sail_operation_type]
+            ProjectionExec: expr=[CAST(id@0 AS Int32;N) as id, CAST(value@1 AS Utf8;N) as value, CAST(flag@2 AS Utf8;N) as flag, __sail_operation_type@3 as __sail_operation_type]
               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
                 ProjectionExec: expr=[__sail_src_id@0 as id, __sail_src_value@1 as value, __sail_src_flag@2 as flag, 3 as __sail_operation_type]
                   HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, __sail_src_id@0)]
@@ -2881,7 +2881,7 @@ data:
                               ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
               FilterExec: __sail_file_path@3 IS NULL, projection=[id@0, value@1, flag@2, __sail_operation_type@4, __sail_merge_source_metric@5]
-                ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64) as __sail_merge_source_metric]
+                ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64;N) as __sail_merge_source_metric]
                   PlaceholderRowExec
           DeletionVectorRowsWriterExec: path_column=__sail_file_path, row_index_column=__sail_file_row_index
             SortExec: expr=[__sail_file_path@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -2942,7 +2942,7 @@ data:
                             ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
                               DataSourceExec: partitions=1, partition_sizes=[1]
               FilterExec: __sail_file_path@3 IS NULL OR __sail_operation_type@4 = 6 OR __sail_operation_type@4 = 8, projection=[id@0, value@1, flag@2, __sail_operation_type@4, __sail_merge_source_metric@5]
-                ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64) as __sail_merge_source_metric]
+                ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64;N) as __sail_merge_source_metric]
                   PlaceholderRowExec
           DeletionVectorRowsWriterExec: path_column=__sail_file_path, row_index_column=__sail_file_row_index
             SortExec: expr=[__sail_file_path@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -3078,7 +3078,7 @@ data:
                             ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, true as __sail_merge_source_row_present]
                               DataSourceExec: partitions=1, partition_sizes=[1]
                 FilterExec: __sail_file_path@2 IS NULL, projection=[id@0, value@1, __sail_operation_type@3, __sail_merge_source_metric@4]
-                  ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64) as __sail_merge_source_metric]
+                  ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64;N) as __sail_merge_source_metric]
                     PlaceholderRowExec
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@2)], projection=[id@1, value@2, __sail_operation_type@4, __sail_merge_source_metric@5]
                 CoalescePartitionsExec
@@ -3106,7 +3106,7 @@ data:
                                 DataSourceExec: file_groups={1 group: [[<tmp>/delta_merge_matched_only_cow/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
                             ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, true as __sail_merge_source_row_present]
                               DataSourceExec: partitions=1, partition_sizes=[1]
-                  ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64) as __sail_merge_source_metric]
+                  ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64;N) as __sail_merge_source_metric]
                     PlaceholderRowExec
           DeltaRemoveActionsExec
             CoalescePartitionsExec
@@ -3395,7 +3395,7 @@ data:
         UnionExec
           DeltaWriterExec(table_path=file://<tmp>/merge_dv/)
             UnionExec
-              ProjectionExec: expr=[CAST(id@1 AS Int32) as id, CASE WHEN __common_expr_1@0 THEN __sail_src_value@5 WHEN (__sail_merge_source_row_present@6 IS NULL AND id@1 = 3) IS NOT DISTINCT FROM true THEN spark_concat(value@2, _stale) ELSE value@2 END as value, CAST(flag@3 AS Utf8) as flag, CASE WHEN __common_expr_1@0 THEN 6 WHEN (__sail_merge_source_row_present@6 IS NULL AND id@1 = 3) IS NOT DISTINCT FROM true THEN 8 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
+              ProjectionExec: expr=[CAST(id@1 AS Int32;N) as id, CASE WHEN __common_expr_1@0 THEN __sail_src_value@5 WHEN (__sail_merge_source_row_present@6 IS NULL AND id@1 = 3) IS NOT DISTINCT FROM true THEN spark_concat(value@2, _stale) ELSE value@2 END as value, CAST(flag@3 AS Utf8;N) as flag, CASE WHEN __common_expr_1@0 THEN 6 WHEN (__sail_merge_source_row_present@6 IS NULL AND id@1 = 3) IS NOT DISTINCT FROM true THEN 8 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric]
                 ProjectionExec: expr=[__sail_merge_source_row_present@0 IS NOT NULL IS NOT DISTINCT FROM true as __common_expr_1, id@1 as id, value@2 as value, flag@3 as flag, __sail_file_path@4 as __sail_file_path, __sail_src_value@5 as __sail_src_value, __sail_merge_source_row_present@0 as __sail_merge_source_row_present]
                   FilterExec: (__sail_file_path@4 IS NULL OR CASE WHEN __sail_merge_source_row_present@6 IS NOT NULL IS NOT DISTINCT FROM true THEN 6 WHEN (__sail_merge_source_row_present@6 IS NULL AND id@1 = 3) IS NOT DISTINCT FROM true THEN 8 ELSE 0 END = 6 OR CASE WHEN __sail_merge_source_row_present@6 IS NOT NULL IS NOT DISTINCT FROM true THEN 6 WHEN (__sail_merge_source_row_present@6 IS NULL AND id@1 = 3) IS NOT DISTINCT FROM true THEN 8 ELSE 0 END = 8) AND CASE WHEN CASE WHEN __common_expr_4@0 THEN 6 WHEN (__sail_merge_source_row_present@6 IS NULL AND id@1 = 3) IS NOT DISTINCT FROM true THEN 8 ELSE 0 END IN (SET) ([0, 3, 2, 6, 8]) THEN CASE WHEN CASE WHEN __common_expr_4@0 THEN __sail_src_value@5 WHEN (__sail_merge_source_row_present@6 IS NULL AND id@1 = 3) IS NOT DISTINCT FROM true THEN spark_concat(value@2, _stale) ELSE value@2 END IS NOT NULL IS NOT DISTINCT FROM true THEN 1 ELSE CAST(raise_error([DELTA_NOT_NULL_CONSTRAINT_VIOLATED] NOT NULL constraint violated for column: value) AS Int8) END ELSE 1 END = 1, projection=[__sail_merge_source_row_present@6, id@1, value@2, flag@3, __sail_file_path@4, __sail_src_value@5]
                     ProjectionExec: expr=[__sail_merge_source_row_present@10 IS NOT NULL IS NOT DISTINCT FROM true as __common_expr_4, id@0 as id, value@1 as value, flag@2 as flag, __sail_file_path@3 as __sail_file_path, __sail_src_value@8 as __sail_src_value, __sail_merge_source_row_present@10 as __sail_merge_source_row_present]
@@ -3409,7 +3409,7 @@ data:
                             ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
                               DataSourceExec: partitions=1, partition_sizes=[1]
               FilterExec: __sail_file_path@3 IS NULL OR __sail_operation_type@4 = 6 OR __sail_operation_type@4 = 8, projection=[id@0, value@1, flag@2, __sail_operation_type@4, __sail_merge_source_metric@5]
-                ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64) as __sail_merge_source_metric]
+                ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64;N) as __sail_merge_source_metric]
                   PlaceholderRowExec
           DeletionVectorRowsWriterExec: path_column=__sail_file_path, row_index_column=__sail_file_row_index
             SortExec: expr=[__sail_file_path@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -3517,7 +3517,7 @@ data:
                               ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value, column3@2 as __sail_src_flag, true as __sail_merge_source_row_present]
                                 DataSourceExec: partitions=1, partition_sizes=[1]
               FilterExec: __sail_file_path@3 IS NULL OR __sail_operation_type@4 = 6 OR __sail_operation_type@4 = 8, projection=[id@0, value@1, flag@2, __sail_operation_type@4, __sail_merge_source_metric@5]
-                ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64) as __sail_merge_source_metric]
+                ProjectionExec: expr=[NULL as id, NULL as value, NULL as flag, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS Int64;N) as __sail_merge_source_metric]
                   PlaceholderRowExec
           DeletionVectorRowsWriterExec: path_column=__sail_file_path, row_index_column=__sail_file_row_index
             SortExec: expr=[__sail_file_path@0 ASC NULLS LAST], preserve_partitioning=[true]

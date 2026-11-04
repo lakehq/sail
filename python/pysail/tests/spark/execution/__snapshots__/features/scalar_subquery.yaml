@@ -628,9 +628,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#9@0 as k, #10@1 as v]
       SortPreservingMergeExec: [#9@0 ASC]
@@ -1209,9 +1206,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#9@0 as k, #10@1 as v, #11@2 as mx]
       SortPreservingMergeExec: [#9@0 ASC, #10@1 ASC]
@@ -1788,9 +1782,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -2637,9 +2628,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#12@0 as k, #13@1 as v]
       ScalarSubqueryExec: subqueries=1
@@ -3352,9 +3340,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#12@0 as k, #13@1 as v, #14@2 as shifted]
       ScalarSubqueryExec: subqueries=1
@@ -3865,9 +3850,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#3@0 as v, #4@1 as shifted]
       ScalarSubqueryExec: subqueries=1
@@ -4348,9 +4330,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -4875,9 +4854,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -5451,9 +5427,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#8@0 as v, #9@1 as shifted]
       ScalarSubqueryExec: subqueries=1
@@ -5960,9 +5933,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#5@0 as v, #6@1 as maybe_shifted]
       ScalarSubqueryExec: subqueries=1
@@ -6445,9 +6415,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -6996,9 +6963,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#7@0 as joined]
       ScalarSubqueryExec: subqueries=1
@@ -7531,9 +7495,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#7@0 as k, #8@1 as total]
       ScalarSubqueryExec: subqueries=1
@@ -8047,9 +8008,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#5@0 as g, #6@1 as n]
       ScalarSubqueryExec: subqueries=1
@@ -8548,9 +8506,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -9076,9 +9031,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -9673,9 +9625,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#7@0 as v, #8@1 as w]
       ScalarSubqueryExec: subqueries=1
@@ -10223,9 +10172,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#7@0 as v, #8@1 as w]
       ScalarSubqueryExec: subqueries=1
@@ -10749,9 +10695,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#9@0 as k, #10@1 as total]
       ScalarSubqueryExec: subqueries=1
@@ -11239,9 +11182,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     ProjectionExec: expr=[#2@0 as v]
       ScalarSubqueryExec: subqueries=1
@@ -11707,9 +11647,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -12197,9 +12134,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -12690,9 +12624,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -13212,9 +13143,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:

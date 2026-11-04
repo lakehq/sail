@@ -5,17 +5,19 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#2@0 as count(1), #3@1 as count(value), #4@2 as MIN(id), #5@3 as MAX(id)]
-      ProjectionExec: expr=[3 as #2, 2 as #3, 1 as #4, 3 as #5]
-        PlaceholderRowExec
+      ProjectionExec: expr=[count(Int64(1))@0 as #2, count(agg_table.#1)@1 as #3, min(agg_table.#0)@2 as #4, max(agg_table.#0)@3 as #5]
+        ProjectionExec: expr=[3 as count(Int64(1)), 2 as count(agg_table.#1), 1 as min(agg_table.#0), 3 as max(agg_table.#0)]
+          PlaceholderRowExec
 ---
 name: "test_exact_and_residual_aggregates_share_iceberg_file_selection.1"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#2@0 as rows, #3@1 as minimum, #4@2 as total]
-      ProjectionExec: expr=[3 as #2, 1 as #3, __sail_residual_aggregate_2@0 as #4]
-        AggregateExec: mode=Single, gby=[], aggr=[sum(agg_table.#1) as __sail_residual_aggregate_2]
-          DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_agg/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[value@1 as #1], file_type=parquet
+      ProjectionExec: expr=[count(Int64(1))@0 as #2, min(agg_table.#0)@1 as #3, sum(agg_table.#1)@2 as #4]
+        ProjectionExec: expr=[3 as count(Int64(1)), 1 as min(agg_table.#0), __sail_residual_aggregate_2@0 as sum(agg_table.#1)]
+          AggregateExec: mode=Single, gby=[], aggr=[sum(agg_table.#1) as __sail_residual_aggregate_2]
+            DataSourceExec: file_groups={1 group: [[<tmp>/iceberg_explain_agg/data/part-<uuid>-00000000000000000000.parquet]]}, projection=[value@1 as #1], file_type=parquet
 ---
 name: "test_explain_for_andor_predicates"
 data:

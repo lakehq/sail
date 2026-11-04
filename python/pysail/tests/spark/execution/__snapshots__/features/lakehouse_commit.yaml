@@ -370,9 +370,6 @@ data:
     physical_plan after EnforceBarrierPartitioning:
     SAME TEXT AS ABOVE
 
-    physical_plan after SanityCheckPlan:
-    SAME TEXT AS ABOVE
-
     physical_plan:
     DeltaCommitExec(table_path=file://<tmp>/distributed_delta_commit/)
       CoalescePartitionsExec
@@ -788,9 +785,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
@@ -2999,9 +2993,6 @@ data:
     SAME TEXT AS ABOVE
 
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-
-    physical_plan after SanityCheckPlan:
     SAME TEXT AS ABOVE
 
     physical_plan:
